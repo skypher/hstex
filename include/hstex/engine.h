@@ -29,6 +29,7 @@ enum hstex_command {
     HSTEX_COMMAND_LET,
     HSTEX_COMMAND_FUTURE_LET,
     HSTEX_COMMAND_AFTER_ASSIGNMENT,
+    HSTEX_COMMAND_AFTER_GROUP,
     HSTEX_COMMAND_LONG,
     HSTEX_COMMAND_OUTER,
     HSTEX_COMMAND_GLOBAL,
@@ -112,6 +113,9 @@ enum hstex_command {
     HSTEX_COMMAND_BOX,
     HSTEX_COMMAND_SET_BOX,
     HSTEX_COMMAND_HBOX,
+    HSTEX_COMMAND_VBOX,
+    HSTEX_COMMAND_VSKIP,
+    HSTEX_COMMAND_PENALTY,
     HSTEX_COMMAND_VRULE,
     HSTEX_COMMAND_MATH_GROUP,
     HSTEX_COMMAND_LANGUAGE,
@@ -143,6 +147,10 @@ enum hstex_command {
     HSTEX_COMMAND_HYPHEN_CHAR,
     HSTEX_COMMAND_SKEW_CHAR,
     HSTEX_COMMAND_FONT_NAME,
+    HSTEX_COMMAND_PREV_DEPTH,
+    HSTEX_COMMAND_MATH_PRIMITIVE,
+    HSTEX_COMMAND_PENALTY_ARRAY,
+    HSTEX_COMMAND_ENGINE_STATE_INTEGER,
 };
 
 enum hstex_integer_parameter {
@@ -293,6 +301,7 @@ enum hstex_save_kind {
     HSTEX_SAVE_TOKEN_REGISTER,
     HSTEX_SAVE_TOKEN_PARAMETER,
     HSTEX_SAVE_BOX,
+    HSTEX_SAVE_AFTER_GROUP,
 };
 
 struct hstex_glue {
@@ -351,6 +360,9 @@ struct hstex_box {
 enum hstex_node_kind {
     HSTEX_NODE_RULE = 0,
     HSTEX_NODE_CHARACTER,
+    HSTEX_NODE_GLUE,
+    HSTEX_NODE_PENALTY,
+    HSTEX_NODE_LIST,
 };
 
 struct hstex_node {
@@ -358,11 +370,28 @@ struct hstex_node {
     int32_t width;
     int32_t height;
     int32_t depth;
-    uint32_t font;
-    uint32_t character;
+    union {
+        struct {
+            uint32_t font;
+            uint32_t character;
+        } character;
+        struct {
+            int32_t stretch;
+            int32_t shrink;
+            uint8_t stretch_order;
+            uint8_t shrink_order;
+        } glue;
+        struct {
+            uint32_t node_start;
+            uint32_t node_count;
+            enum hstex_box_kind box_kind;
+        } list;
+        int32_t penalty;
+    } value;
 };
 
 struct hstex_hbox_builder;
+struct hstex_vbox_builder;
 
 struct hstex_save_entry {
     enum hstex_save_kind kind;
@@ -376,6 +405,10 @@ struct hstex_save_entry {
         struct hstex_glue glue;
         struct hstex_box box;
         uint32_t token_list_identifier;
+        struct {
+            hstex_token token;
+            struct hstex_source_location location;
+        } after_group;
     } previous;
 };
 
@@ -471,6 +504,7 @@ struct hstex_engine {
     char *output_directory;
     char *job_name;
     enum hstex_mode mode;
+    int32_t prev_depth;
     enum hstex_interaction_mode interaction_mode;
     bool inner_mode;
     hstex_token after_assignment_token;
@@ -487,6 +521,8 @@ struct hstex_engine {
     uint32_t output_group_floor;
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;
+    struct hstex_vbox_builder *page_builder;
+    struct hstex_vbox_builder *active_vbox_builder;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

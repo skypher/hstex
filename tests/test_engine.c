@@ -519,6 +519,8 @@ static int test_file_streams(void)
 static int test_dimensions_and_glue(void)
 {
     const char source[] =
+        "\\dimen14=\\prevdepth {\\prevdepth=2pt} \\dimen15=\\prevdepth "
+        "\\advance\\prevdepth by 1pt \\dimen16=\\prevdepth "
         "\\dimendef\\d=5 \\d=1.5pt {\\d=2pt} "
         "\\dimendef\\twice=6 \\twice=2\\d "
         "\\dimendef\\largest=7 \\largest=16383.99999pt "
@@ -559,6 +561,9 @@ static int test_dimensions_and_glue(void)
     const struct hstex_glue arithmetic_glue = engine.glues[4];
     const struct hstex_glue arithmetic_muglue = engine.muglues[4];
     int status = result != HSTEX_ENGINE_EOF || engine.dimens[5] != 98304 ||
+                 engine.dimens[14] != -65536000 ||
+                 engine.dimens[15] != 131072 ||
+                 engine.dimens[16] != 196608 ||
                  engine.dimens[6] != 196608 ||
                  engine.dimens[7] != 1073741823 ||
                  engine.dimens[8] != 3 || engine.dimens[9] != -3 ||
@@ -653,6 +658,70 @@ static int test_empty_hboxes(void)
                  rule->depth != 267387;
     if (status != 0) {
         (void)fprintf(stderr, "empty hbox test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+static int test_vertical_lists(void)
+{
+    const char source[] =
+        "\\setbox9=\\vbox{\\vskip2pt plus1fil\\penalty50\\vfil}"
+        "\\vbox{}\\hbox{}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    const struct hstex_box box = engine.boxes[9];
+    const struct hstex_node *glue = engine.node_count >= 1U
+                                        ? &engine.nodes[0]
+                                        : NULL;
+    const struct hstex_node *penalty = engine.node_count >= 2U
+                                           ? &engine.nodes[1]
+                                           : NULL;
+    const struct hstex_node *fil = engine.node_count >= 3U
+                                       ? &engine.nodes[2]
+                                       : NULL;
+    const struct hstex_node *standalone_vbox = engine.node_count >= 4U
+                                                   ? &engine.nodes[3]
+                                                   : NULL;
+    const struct hstex_node *standalone_hbox = engine.node_count >= 5U
+                                                   ? &engine.nodes[4]
+                                                   : NULL;
+    int status =
+        result != HSTEX_ENGINE_EOF || box.kind != HSTEX_BOX_VLIST ||
+        box.width != 0 || box.height != 131072 || box.depth != 0 ||
+        box.node_count != 3U || engine.list_item_count != 3U ||
+        engine.node_count != 5U || glue == NULL ||
+        glue->kind != HSTEX_NODE_GLUE || glue->width != 131072 ||
+        glue->value.glue.stretch != 65536 ||
+        glue->value.glue.stretch_order != 1U || penalty == NULL ||
+        penalty->kind != HSTEX_NODE_PENALTY ||
+        penalty->value.penalty != 50 || fil == NULL ||
+        fil->kind != HSTEX_NODE_GLUE || fil->width != 0 ||
+        fil->value.glue.stretch != 65536 ||
+        fil->value.glue.stretch_order != 1U || standalone_vbox == NULL ||
+        standalone_vbox->kind != HSTEX_NODE_LIST ||
+        standalone_vbox->value.list.box_kind != HSTEX_BOX_VLIST ||
+        standalone_hbox == NULL ||
+        standalone_hbox->kind != HSTEX_NODE_LIST ||
+        standalone_hbox->value.list.box_kind != HSTEX_BOX_HLIST;
+    if (status != 0) {
+        (void)fprintf(stderr, "vertical-list test failed: %s\n", error);
     }
     hstex_engine_destroy(&engine);
     (void)unlink(path);
@@ -1063,6 +1132,22 @@ int main(void)
             "X") != 0 ||
         run_snippet("\\catcode`\\@=11 \\def\\word@word{X}\\word@word%",
                     "X") != 0 ||
+        run_snippet("\\ifdefined\\widowpenalties T\\else F\\fi%", "T") !=
+            0 ||
+        run_snippet("{\\aftergroup A\\aftergroup B}C"
+                    "{\\aftergroup D{\\aftergroup E}\\aftergroup F}G%",
+                    "ABCEDFG") != 0 ||
+        run_snippet("\\ifnum\\currentgrouplevel=0 T\\else F\\fi"
+                    "{\\ifnum\\currentgrouplevel=1 T\\else F\\fi}"
+                    "\\ifnum\\currentgrouplevel=0 T\\else F\\fi%",
+                    "TTT") != 0 ||
+        run_snippet("\\edef\\a{\\meaning\\over}"
+                    "\\edef\\b{\\string\\over}"
+                    "\\ifx\\a\\b T\\else F\\fi "
+                    "\\let\\savedover\\over "
+                    "\\edef\\c{\\meaning\\savedover}"
+                    "\\ifx\\b\\c T\\else F\\fi%",
+                    "TT") != 0 ||
         expect_failure("\\endcsname%", "extra endcsname") != 0 ||
         expect_failure("\\unknown%",
                        "undefined control sequence: \\unknown") != 0 ||
@@ -1081,7 +1166,8 @@ int main(void)
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
         test_dimensions_and_glue() != 0 || test_token_lists() != 0 ||
-        test_empty_hboxes() != 0 || test_pdf_file_size() != 0) {
+        test_empty_hboxes() != 0 || test_vertical_lists() != 0 ||
+        test_pdf_file_size() != 0) {
         return 1;
     }
     return 0;

@@ -26,6 +26,7 @@ enum {
     HSTEX_INITIAL_NODE_CAPACITY = 256,
     HSTEX_INITIAL_LIST_ITEM_CAPACITY = 256,
     HSTEX_INITIAL_HBOX_ITEM_CAPACITY = 16,
+    HSTEX_INITIAL_VBOX_ITEM_CAPACITY = 16,
     HSTEX_INITIAL_HYPHEN_NODE_CAPACITY = 1024,
     HSTEX_INITIAL_HYPHEN_VALUE_CAPACITY = 4096,
     HSTEX_INITIAL_HYPHEN_EXCEPTION_CAPACITY = 32,
@@ -51,6 +52,14 @@ struct hstex_hbox_builder {
     int64_t width;
     int32_t height;
     int32_t depth;
+};
+
+struct hstex_vbox_builder {
+    uint32_t *node_identifiers;
+    size_t count;
+    size_t capacity;
+    int64_t extent;
+    int32_t width;
 };
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
@@ -1338,13 +1347,15 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         calloc(engine->count_capacity, sizeof(*engine->box_levels));
     engine->hyphen_roots =
         calloc(engine->count_capacity, sizeof(*engine->hyphen_roots));
+    engine->page_builder = calloc(1U, sizeof(*engine->page_builder));
     if (engine->counts == NULL || engine->count_levels == NULL ||
         engine->dimens == NULL || engine->dimen_levels == NULL ||
         engine->glues == NULL || engine->glue_levels == NULL ||
         engine->muglues == NULL || engine->muglue_levels == NULL ||
         engine->token_registers == NULL ||
         engine->token_register_levels == NULL || engine->boxes == NULL ||
-        engine->box_levels == NULL || engine->hyphen_roots == NULL) {
+        engine->box_levels == NULL || engine->hyphen_roots == NULL ||
+        engine->page_builder == NULL) {
         (void)set_error(error, error_capacity,
                         "register allocation failed");
         hstex_engine_destroy(engine);
@@ -1356,6 +1367,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR] = 45;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR] = -1;
     engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES] = 25;
+    engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
+    engine->active_vbox_builder = engine->page_builder;
     engine->interaction_mode = HSTEX_INTERACTION_ERROR_STOP;
     for (size_t character = 0U; character < 256U; ++character) {
         engine->code_tables[0][character] = 1000;
@@ -1398,6 +1411,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"let", HSTEX_COMMAND_LET},
         {"futurelet", HSTEX_COMMAND_FUTURE_LET},
         {"afterassignment", HSTEX_COMMAND_AFTER_ASSIGNMENT},
+        {"aftergroup", HSTEX_COMMAND_AFTER_GROUP},
         {"long", HSTEX_COMMAND_LONG},
         {"outer", HSTEX_COMMAND_OUTER},
         {"protected", HSTEX_COMMAND_PROTECTED},
@@ -1489,18 +1503,100 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"box", HSTEX_COMMAND_BOX},
         {"setbox", HSTEX_COMMAND_SET_BOX},
         {"hbox", HSTEX_COMMAND_HBOX},
+        {"vbox", HSTEX_COMMAND_VBOX},
+        {"penalty", HSTEX_COMMAND_PENALTY},
         {"vrule", HSTEX_COMMAND_VRULE},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
         {"skewchar", HSTEX_COMMAND_SKEW_CHAR},
         {"fontname", HSTEX_COMMAND_FONT_NAME},
+        {"prevdepth", HSTEX_COMMAND_PREV_DEPTH},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
          ++index) {
         if (register_primitive(engine, primitives[index].name,
                                primitives[index].command, error,
                                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        int32_t subtype;
+    } vertical_glue_primitives[] = {
+        {"vskip", 0},
+        {"vfil", 1},
+        {"vfill", 2},
+        {"vss", 3},
+        {"vfilneg", 4},
+    };
+    for (size_t index = 0U;
+         index < sizeof(vertical_glue_primitives) /
+                     sizeof(vertical_glue_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, vertical_glue_primitives[index].name,
+                HSTEX_COMMAND_VSKIP,
+                vertical_glue_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const char *math_primitives[] = {
+        "over",
+        "atop",
+        "above",
+        "overwithdelims",
+        "atopwithdelims",
+        "abovewithdelims",
+        "overline",
+    };
+    for (size_t index = 0U;
+         index < sizeof(math_primitives) / sizeof(math_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, math_primitives[index], HSTEX_COMMAND_MATH_PRIMITIVE,
+                (int32_t)index, error, error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const char *penalty_array_primitives[] = {
+        "interlinepenalties",
+        "clubpenalties",
+        "widowpenalties",
+        "displaywidowpenalties",
+    };
+    for (size_t index = 0U;
+         index < sizeof(penalty_array_primitives) /
+                     sizeof(penalty_array_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, penalty_array_primitives[index],
+                HSTEX_COMMAND_PENALTY_ARRAY, (int32_t)index, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const char *engine_state_integer_primitives[] = {
+        "currentgrouplevel",
+        "currentgrouptype",
+        "currentiflevel",
+        "currentiftype",
+        "currentifbranch",
+    };
+    for (size_t index = 0U;
+         index < sizeof(engine_state_integer_primitives) /
+                     sizeof(engine_state_integer_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, engine_state_integer_primitives[index],
+                HSTEX_COMMAND_ENGINE_STATE_INTEGER, (int32_t)index, error,
+                error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
         }
@@ -1792,6 +1888,10 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->hyphen_values);
     free(engine->hyphen_exceptions);
     free(engine->hyphen_exception_data);
+    if (engine->page_builder != NULL) {
+        free(engine->page_builder->node_identifiers);
+    }
+    free(engine->page_builder);
     free(engine->output_directory);
     free(engine->job_name);
     hstex_lexical_state_destroy(&engine->lexical_state);
@@ -1868,6 +1968,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     free(engine->job_name);
     engine->job_name = NULL;
     engine->mode = HSTEX_MODE_VERTICAL;
+    engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
     engine->inner_mode = false;
     engine->interaction_mode = HSTEX_INTERACTION_ERROR_STOP;
     engine->after_assignment_token = 0U;
@@ -1884,6 +1985,10 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->output_group_floor = 0U;
     engine->output_conditional_floor = 0U;
     engine->active_hbox_builder = NULL;
+    engine->page_builder->count = 0U;
+    engine->page_builder->extent = 0;
+    engine->page_builder->width = 0;
+    engine->active_vbox_builder = engine->page_builder;
     if (hstex_engine_push_file(engine, path, error, error_capacity) != 0) {
         return -1;
     }
@@ -2004,6 +2109,34 @@ static int scan_after_assignment(struct hstex_engine *engine, char *error,
     engine->after_assignment_token = token;
     engine->after_assignment_location = location;
     engine->has_after_assignment = true;
+    return 0;
+}
+
+static int scan_after_group(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    if (engine->group_level == 0U || engine->pending_global ||
+        engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "aftergroup requires an unprefixed active group");
+    }
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    if (raw_next(engine, &token, &location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input after aftergroup");
+    }
+    if (reserve_saves(engine, engine->save_count + 1U, error,
+                      error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_save_entry *save = &engine->saves[engine->save_count++];
+    memset(save, 0, sizeof(*save));
+    save->kind = HSTEX_SAVE_AFTER_GROUP;
+    save->level = engine->group_level;
+    save->previous.after_group.token = token;
+    save->previous.after_group.location = location;
     return 0;
 }
 
@@ -2505,11 +2638,42 @@ static int integer_from_control_sequence(
     }
     case HSTEX_COMMAND_NUM_EXPR:
         return scan_num_expression(engine, value, error, error_capacity);
+    case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
+        switch (meaning->value.integer) {
+        case 0:
+            *value = engine->group_level > (uint32_t)INT32_MAX
+                         ? INT32_MAX
+                         : (int32_t)engine->group_level;
+            return 0;
+        case 1:
+            *value = engine->group_level == 0U ? 0 : 1;
+            return 0;
+        case 2:
+            *value = engine->conditional_count > (size_t)INT32_MAX
+                         ? INT32_MAX
+                         : (int32_t)engine->conditional_count;
+            return 0;
+        case 3:
+            *value = engine->conditional_count == 0U ? 0 : 1;
+            return 0;
+        case 4:
+            *value = engine->conditional_count == 0U
+                         ? 0
+                         : (engine->conditionals[engine->conditional_count - 1U]
+                                    .branch_true
+                                ? 1
+                                : 0);
+            return 0;
+        default:
+            return set_error(error, error_capacity,
+                             "invalid engine-state integer subtype");
+        }
     case HSTEX_COMMAND_DIMEN_REGISTER:
     case HSTEX_COMMAND_DIMEN_PARAMETER:
     case HSTEX_COMMAND_DIMEN:
     case HSTEX_COMMAND_DIM_EXPR:
     case HSTEX_COMMAND_FONT_DIMEN:
+    case HSTEX_COMMAND_PREV_DEPTH:
     case HSTEX_COMMAND_SKIP_REGISTER:
     case HSTEX_COMMAND_GLUE_PARAMETER:
     case HSTEX_COMMAND_SKIP:
@@ -2978,6 +3142,14 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                               int32_t *value, char *error,
                               size_t error_capacity)
 {
+    if (meaning->command == HSTEX_COMMAND_PREV_DEPTH) {
+        if (engine->mode != HSTEX_MODE_VERTICAL) {
+            return set_error(error, error_capacity,
+                             "prevdepth is only available in vertical mode");
+        }
+        *value = engine->prev_depth;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_DIMEN_REGISTER) {
         int32_t index = meaning->value.integer;
         if (index < 0 || (size_t)index >= engine->count_capacity) {
@@ -3046,6 +3218,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_INTEGER_PARAMETER:
     case HSTEX_COMMAND_COUNT:
     case HSTEX_COMMAND_NUM_EXPR:
+    case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
     case HSTEX_COMMAND_LC_CODE:
@@ -6279,6 +6452,58 @@ static int reserve_hbox_items(struct hstex_hbox_builder *builder,
     return 0;
 }
 
+static int reserve_vbox_items(struct hstex_vbox_builder *builder,
+                              size_t required, char *error,
+                              size_t error_capacity)
+{
+    if (required <= builder->capacity) {
+        return 0;
+    }
+    size_t capacity = builder->capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_VBOX_ITEM_CAPACITY
+                          : builder->capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "vbox item capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*builder->node_identifiers)) {
+        return set_error(error, error_capacity,
+                         "vbox item allocation overflow");
+    }
+    void *allocation = realloc(
+        builder->node_identifiers,
+        capacity * sizeof(*builder->node_identifiers));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "vbox item allocation failed");
+    }
+    builder->node_identifiers = allocation;
+    builder->capacity = capacity;
+    return 0;
+}
+
+static int store_node(struct hstex_engine *engine,
+                      const struct hstex_node *node, uint32_t *identifier,
+                      char *error, size_t error_capacity)
+{
+    if (node == NULL || identifier == NULL ||
+        engine->node_count >= (size_t)UINT32_MAX ||
+        reserve_nodes(engine, engine->node_count + 1U, error,
+                      error_capacity) != 0) {
+        return node == NULL || identifier == NULL
+                   ? set_error(error, error_capacity,
+                               "invalid typesetting node")
+                   : -1;
+    }
+    engine->nodes[engine->node_count] = *node;
+    *identifier = (uint32_t)engine->node_count + 1U;
+    ++engine->node_count;
+    return 0;
+}
+
 static int append_hbox_node(struct hstex_engine *engine,
                             const struct hstex_node *node, char *error,
                             size_t error_capacity)
@@ -6288,28 +6513,60 @@ static int append_hbox_node(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "horizontal node used outside an hbox");
     }
-    if (engine->node_count >= (size_t)UINT32_MAX ||
-        reserve_hbox_items(builder, builder->count + 1U, error,
-                           error_capacity) != 0 ||
-        reserve_nodes(engine, engine->node_count + 1U, error,
-                      error_capacity) != 0) {
-        return -1;
-    }
     int64_t width = builder->width + (int64_t)node->width;
     if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
         return set_error(error, error_capacity,
                          "hbox width exceeds TeX's dimension range");
     }
-    engine->nodes[engine->node_count] = *node;
-    builder->node_identifiers[builder->count++] =
-        (uint32_t)engine->node_count + 1U;
-    ++engine->node_count;
+    uint32_t identifier = 0U;
+    if (reserve_hbox_items(builder, builder->count + 1U, error,
+                           error_capacity) != 0 ||
+        store_node(engine, node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->node_identifiers[builder->count++] = identifier;
     builder->width = width;
     if (node->height > builder->height) {
         builder->height = node->height;
     }
     if (node->depth > builder->depth) {
         builder->depth = node->depth;
+    }
+    return 0;
+}
+
+static int append_vbox_node(struct hstex_engine *engine,
+                            const struct hstex_node *node, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_vbox_builder *builder = engine->active_vbox_builder;
+    if (builder == NULL || node == NULL) {
+        return set_error(error, error_capacity,
+                         "vertical node used outside a vbox or page");
+    }
+    int64_t extent = builder->extent;
+    if (node->kind == HSTEX_NODE_GLUE) {
+        extent += node->width;
+    } else if (node->kind == HSTEX_NODE_RULE ||
+               node->kind == HSTEX_NODE_CHARACTER ||
+               node->kind == HSTEX_NODE_LIST) {
+        extent += (int64_t)node->height + node->depth;
+    }
+    if (extent < INT64_MIN / 2 || extent > INT64_MAX / 2) {
+        return set_error(error, error_capacity, "vertical extent overflow");
+    }
+    uint32_t identifier = 0U;
+    if (reserve_vbox_items(builder, builder->count + 1U, error,
+                           error_capacity) != 0 ||
+        store_node(engine, node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->node_identifiers[builder->count++] = identifier;
+    builder->extent = extent;
+    if ((node->kind == HSTEX_NODE_RULE ||
+         node->kind == HSTEX_NODE_LIST) &&
+        node->width > builder->width) {
+        builder->width = node->width;
     }
     return 0;
 }
@@ -6322,8 +6579,7 @@ static int execute_vrule(struct hstex_engine *engine, char *error,
         .width = 26214,
         .height = 0,
         .depth = 0,
-        .font = 0U,
-        .character = 0U,
+        .value.penalty = 0,
     };
     for (;;) {
         bool matched = false;
@@ -6361,6 +6617,92 @@ static int execute_vrule(struct hstex_engine *engine, char *error,
         break;
     }
     return append_hbox_node(engine, &rule, error, error_capacity);
+}
+
+static int append_current_list_node(struct hstex_engine *engine,
+                                    const struct hstex_node *node,
+                                    char *error, size_t error_capacity)
+{
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        return append_hbox_node(engine, node, error, error_capacity);
+    }
+    if (engine->mode == HSTEX_MODE_VERTICAL) {
+        return append_vbox_node(engine, node, error, error_capacity);
+    }
+    return set_error(error, error_capacity,
+                     "list node is not supported in math mode");
+}
+
+static int execute_vertical_glue(struct hstex_engine *engine, int32_t subtype,
+                                 char *error, size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_VERTICAL ||
+        engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "vertical glue requires unprefixed vertical mode");
+    }
+    struct hstex_glue glue = {0};
+    if (subtype == 0) {
+        if (scan_glue(engine, &glue, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else if (subtype == 1) {
+        glue.stretch = INT32_C(65536);
+        glue.stretch_order = 1U;
+    } else if (subtype == 2) {
+        glue.stretch = INT32_C(65536);
+        glue.stretch_order = 2U;
+    } else if (subtype == 3) {
+        glue.stretch = INT32_C(65536);
+        glue.shrink = INT32_C(65536);
+        glue.stretch_order = 1U;
+        glue.shrink_order = 1U;
+    } else if (subtype == 4) {
+        glue.stretch = -INT32_C(65536);
+        glue.stretch_order = 1U;
+    } else {
+        return set_error(error, error_capacity,
+                         "invalid vertical-glue subtype");
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .height = 0,
+        .depth = 0,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+        },
+    };
+    return append_vbox_node(engine, &node, error, error_capacity);
+}
+
+static int execute_penalty(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "penalty does not accept definition prefixes");
+    }
+    int32_t penalty = 0;
+    if (scan_integer(engine, &penalty, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (penalty > 10000) {
+        penalty = 10000;
+    } else if (penalty < -10000) {
+        penalty = -10000;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_PENALTY,
+        .width = 0,
+        .height = 0,
+        .depth = 0,
+        .value.penalty = penalty,
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 static int evaluate_hbox_contents(struct hstex_engine *engine,
@@ -6537,6 +6879,222 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
     return status;
 }
 
+static int evaluate_vbox_contents(struct hstex_engine *engine,
+                                  struct token_vector *contents,
+                                  struct hstex_vbox_builder *builder,
+                                  char *error, size_t error_capacity)
+{
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (push_owned_vector(engine, contents, (struct hstex_source_location){0},
+                          error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        return -1;
+    }
+
+    uint32_t base_group_level = engine->group_level;
+    uint32_t previous_group_floor = engine->output_group_floor;
+    size_t previous_conditional_floor = engine->output_conditional_floor;
+    struct hstex_hbox_builder *previous_hbox_builder =
+        engine->active_hbox_builder;
+    struct hstex_vbox_builder *previous_vbox_builder =
+        engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    bool previous_inner_mode = engine->inner_mode;
+    int32_t previous_depth = engine->prev_depth;
+    if (begin_group(engine, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        return -1;
+    }
+    engine->output_group_floor = engine->group_level;
+    engine->output_conditional_floor = engine->conditional_count;
+    engine->active_hbox_builder = NULL;
+    engine->active_vbox_builder = builder;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = true;
+    engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
+
+    int status = 0;
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            status = -1;
+            break;
+        }
+        if (token_is_space(token)) {
+            continue;
+        }
+        if (hstex_token_is_control_sequence(token) &&
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(token))
+                    ->command == HSTEX_COMMAND_PAR) {
+            continue;
+        }
+        status = set_error(error, error_capacity,
+                           "paragraph construction inside vbox is not implemented");
+        break;
+    }
+
+    engine->active_hbox_builder = previous_hbox_builder;
+    engine->active_vbox_builder = previous_vbox_builder;
+    engine->mode = previous_mode;
+    engine->inner_mode = previous_inner_mode;
+    engine->prev_depth = previous_depth;
+    engine->output_group_floor = previous_group_floor;
+    engine->output_conditional_floor = previous_conditional_floor;
+    if (hstex_source_pop_boundary(&engine->sources, error, error_capacity) != 0) {
+        status = -1;
+    }
+    while (engine->group_level > base_group_level) {
+        if (end_group(engine, error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+    }
+    if (engine->group_level != base_group_level) {
+        status = set_error(error, error_capacity,
+                           "vbox content closed an outer group");
+    }
+    return status;
+}
+
+static int finalize_vbox(struct hstex_engine *engine,
+                         struct hstex_vbox_builder *builder,
+                         bool matched_to, bool matched_spread,
+                         int32_t requested_height, struct hstex_box *box,
+                         char *error, size_t error_capacity)
+{
+    if (builder->count > (size_t)UINT32_MAX ||
+        engine->list_item_count > (size_t)UINT32_MAX - builder->count ||
+        reserve_list_items(engine, engine->list_item_count + builder->count,
+                           error, error_capacity) != 0) {
+        return -1;
+    }
+    int64_t height = builder->extent;
+    if (matched_to) {
+        height = requested_height;
+    } else if (matched_spread) {
+        height += requested_height;
+    }
+    if (height < -INT64_C(1073741823) ||
+        height > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "vbox height exceeds TeX's dimension range");
+    }
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_VLIST;
+    box->width = builder->width;
+    box->height = (int32_t)height;
+    if (builder->count != 0U) {
+        box->node_start = (uint32_t)engine->list_item_count;
+        box->node_count = (uint32_t)builder->count;
+        memcpy(engine->list_items + engine->list_item_count,
+               builder->node_identifiers,
+               builder->count * sizeof(*engine->list_items));
+        engine->list_item_count += builder->count;
+    }
+    return 0;
+}
+
+static int scan_vbox(struct hstex_engine *engine, struct hstex_box *box,
+                     char *error, size_t error_capacity)
+{
+    bool matched_to = false;
+    bool matched_spread = false;
+    int32_t requested_height = 0;
+    if (try_keyword(engine, "to", &matched_to, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched_to) {
+        if (scan_dimension(engine, &requested_height, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+    } else {
+        if (try_keyword(engine, "spread", &matched_spread, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        if (matched_spread &&
+            scan_dimension(engine, &requested_height, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+    }
+
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
+        engine, &opening, &location, error, error_capacity);
+    if (result != HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        return set_error(error, error_capacity,
+                         "vbox requires a braced token list");
+    }
+    struct token_vector contents = {0};
+    if (scan_balanced_group(engine, &contents, true, error, error_capacity) !=
+        0) {
+        vector_destroy(&contents);
+        return -1;
+    }
+    struct hstex_vbox_builder builder = {0};
+    int status = evaluate_vbox_contents(engine, &contents, &builder, error,
+                                        error_capacity);
+    vector_destroy(&contents);
+    if (status == 0) {
+        status = finalize_vbox(engine, &builder, matched_to, matched_spread,
+                              requested_height, box, error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    return status;
+}
+
+static int append_box_node(struct hstex_engine *engine,
+                           const struct hstex_box *box, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {
+            .node_start = box->node_start,
+            .node_count = box->node_count,
+            .box_kind = box->kind,
+        },
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+static int execute_box_constructor(struct hstex_engine *engine,
+                                   enum hstex_command command, char *error,
+                                   size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "box construction does not accept prefixes");
+    }
+    struct hstex_box box;
+    int status = command == HSTEX_COMMAND_HBOX
+                     ? scan_hbox(engine, &box, error, error_capacity)
+                     : scan_vbox(engine, &box, error, error_capacity);
+    return status == 0
+               ? append_box_node(engine, &box, error, error_capacity)
+               : -1;
+}
+
 static int execute_set_box(struct hstex_engine *engine, char *error,
                            size_t error_capacity)
 {
@@ -6569,11 +7127,15 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
     const struct hstex_meaning *meaning = hstex_engine_meaning(
         engine, hstex_token_control_sequence_id(constructor));
     struct hstex_box value;
-    if (meaning->command != HSTEX_COMMAND_HBOX) {
+    if (meaning->command != HSTEX_COMMAND_HBOX &&
+        meaning->command != HSTEX_COMMAND_VBOX) {
         return set_error(error, error_capacity,
                          "unsupported setbox box specification");
     }
-    if (scan_hbox(engine, &value, error, error_capacity) != 0) {
+    int scan_status = meaning->command == HSTEX_COMMAND_HBOX
+                          ? scan_hbox(engine, &value, error, error_capacity)
+                          : scan_vbox(engine, &value, error, error_capacity);
+    if (scan_status != 0) {
         return -1;
     }
     return assign_box(engine, (uint32_t)register_index, value,
@@ -7317,6 +7879,24 @@ static int scan_dimen_parameter_assignment(struct hstex_engine *engine,
                                   requested_global, error, error_capacity);
 }
 
+static int scan_prev_depth_assignment(struct hstex_engine *engine,
+                                      char *error, size_t error_capacity)
+{
+    int32_t value = 0;
+    if (engine->mode != HSTEX_MODE_VERTICAL) {
+        return set_error(error, error_capacity,
+                         "prevdepth is only assignable in vertical mode");
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_dimension(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    engine->prev_depth = value;
+    return 0;
+}
+
 static int scan_glue_parameter_assignment(struct hstex_engine *engine,
                                           int32_t parameter, char *error,
                                           size_t error_capacity)
@@ -7445,6 +8025,7 @@ enum arithmetic_variable_kind {
     ARITHMETIC_VARIABLE_INTEGER_PARAMETER,
     ARITHMETIC_VARIABLE_DIMEN,
     ARITHMETIC_VARIABLE_DIMEN_PARAMETER,
+    ARITHMETIC_VARIABLE_PREV_DEPTH,
     ARITHMETIC_VARIABLE_GLUE,
     ARITHMETIC_VARIABLE_GLUE_PARAMETER,
     ARITHMETIC_VARIABLE_MUGLUE,
@@ -7521,6 +8102,15 @@ static int scan_arithmetic_variable(struct hstex_engine *engine,
         meaning->value.integer < (int32_t)HSTEX_DIMEN_PARAMETER_COUNT) {
         variable->kind = ARITHMETIC_VARIABLE_DIMEN_PARAMETER;
         variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_PREV_DEPTH) {
+        if (engine->mode != HSTEX_MODE_VERTICAL) {
+            return set_error(error, error_capacity,
+                             "prevdepth arithmetic requires vertical mode");
+        }
+        variable->kind = ARITHMETIC_VARIABLE_PREV_DEPTH;
+        variable->index = 0U;
         return 0;
     }
     if (meaning->command == HSTEX_COMMAND_SKIP_REGISTER &&
@@ -7623,7 +8213,8 @@ static bool arithmetic_variable_is_integer(
 static bool arithmetic_variable_is_dimen(enum arithmetic_variable_kind kind)
 {
     return kind == ARITHMETIC_VARIABLE_DIMEN ||
-           kind == ARITHMETIC_VARIABLE_DIMEN_PARAMETER;
+           kind == ARITHMETIC_VARIABLE_DIMEN_PARAMETER ||
+           kind == ARITHMETIC_VARIABLE_PREV_DEPTH;
 }
 
 static bool arithmetic_variable_is_glue(enum arithmetic_variable_kind kind)
@@ -7754,6 +8345,8 @@ static int execute_arithmetic(struct hstex_engine *engine,
             current = engine->integer_parameters[variable.index];
         } else if (variable.kind == ARITHMETIC_VARIABLE_DIMEN) {
             current = engine->dimens[variable.index];
+        } else if (variable.kind == ARITHMETIC_VARIABLE_PREV_DEPTH) {
+            current = engine->prev_depth;
         } else {
             current = engine->dimen_parameters[variable.index];
         }
@@ -7785,6 +8378,9 @@ static int execute_arithmetic(struct hstex_engine *engine,
             return assign_dimen_parameter(engine, variable.index, result,
                                           requested_global, error,
                                           error_capacity);
+        case ARITHMETIC_VARIABLE_PREV_DEPTH:
+            engine->prev_depth = result;
+            return 0;
         default:
             return set_error(error, error_capacity,
                              "internal scalar arithmetic target mismatch");
@@ -8789,6 +9385,10 @@ static bool meanings_equal(const struct hstex_engine *engine,
     case HSTEX_COMMAND_TOKEN_PARAMETER:
     case HSTEX_COMMAND_FONT_GIVEN:
     case HSTEX_COMMAND_INTERACTION_MODE:
+    case HSTEX_COMMAND_VSKIP:
+    case HSTEX_COMMAND_MATH_PRIMITIVE:
+    case HSTEX_COMMAND_PENALTY_ARRAY:
+    case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
         return left->value.integer == right->value.integer;
     default:
         return true;
@@ -9417,6 +10017,13 @@ static int end_group(struct hstex_engine *engine, char *error,
                 engine->box_levels[save.index] = save.previous_level;
             }
             break;
+        case HSTEX_SAVE_AFTER_GROUP:
+            if (push_one(engine, save.previous.after_group.token,
+                         save.previous.after_group.location, error,
+                         error_capacity) != 0) {
+                return -1;
+            }
+            break;
         }
     }
     --engine->group_level;
@@ -9600,6 +10207,11 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_AFTER_GROUP:
+            if (scan_after_group(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_LONG:
             engine->pending_macro_flags |= (uint8_t)HSTEX_MACRO_LONG;
             continue;
@@ -9769,6 +10381,24 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_HBOX:
+        case HSTEX_COMMAND_VBOX:
+            if (execute_box_constructor(engine, meaning->command, error,
+                                        error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_VSKIP:
+            if (execute_vertical_glue(engine, meaning->value.integer, error,
+                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PENALTY:
+            if (execute_penalty(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_VRULE:
             if (execute_vrule(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -9900,6 +10530,14 @@ handle_token:
                     engine,
                     scan_dimen_parameter_assignment(
                         engine, meaning->value.integer, error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PREV_DEPTH:
+            if (finish_assignment(
+                    engine,
+                    scan_prev_depth_assignment(engine, error, error_capacity),
                     error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -10082,6 +10720,7 @@ handle_token:
         case HSTEX_COMMAND_MATH_CHAR_GIVEN:
         case HSTEX_COMMAND_RADICAL:
         case HSTEX_COMMAND_MARKS:
+        case HSTEX_COMMAND_MATH_PRIMITIVE:
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_FONT_GIVEN:
             if (meaning->value.integer <= 0 ||
@@ -10144,6 +10783,7 @@ handle_token:
                 engine, error, error_capacity);
         case HSTEX_COMMAND_INPUT_LINE_NUMBER:
         case HSTEX_COMMAND_INTEGER_CONSTANT:
+        case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "integer primitive used outside an integer context");
@@ -10163,13 +10803,10 @@ handle_token:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "muexpr used outside a math-glue context");
-        case HSTEX_COMMAND_HBOX:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "standalone hbox construction is not implemented");
         case HSTEX_COMMAND_BOX:
         case HSTEX_COMMAND_MATH_GROUP:
         case HSTEX_COMMAND_LANGUAGE:
+        case HSTEX_COMMAND_PENALTY_ARRAY:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "non-integer register execution is not implemented");
