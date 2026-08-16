@@ -46,3 +46,10 @@ arithmetic, integer serialization, `the`, conditionals inside `edef`, and
 ```text
 ARITH=-46 EDEF=07 NOEXPAND=B
 ```
+
+The `meaning` delimiter probe defined a macro with replacement text `./`,
+removed the textual `macro:->` prefix using a delimited macro, and recorded:
+
+```text
+MEANING=[./]
+```

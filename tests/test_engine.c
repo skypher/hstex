@@ -310,6 +310,30 @@ static int test_input_primitive(void)
     return status;
 }
 
+static int test_file_streams(void)
+{
+    char stream_path[64];
+    if (open_snippet("", stream_path) != 0 || unlink(stream_path) != 0) {
+        return 1;
+    }
+    char source[768];
+    int length = snprintf(
+        source, sizeof(source),
+        "\\chardef\\stream=3 \\openout\\stream=%s \\def\\expected{abc}"
+        "\\write\\stream{\\expected}\\closeout\\stream "
+        "\\openin\\stream=%s \\ifeof\\stream F\\else "
+        "\\read\\stream to \\actual "
+        "\\ifx\\actual\\expected T\\else F\\fi\\fi "
+        "\\closein\\stream%%",
+        stream_path, stream_path);
+    if (length < 0 || (size_t)length >= sizeof(source)) {
+        return 1;
+    }
+    int status = run_snippet(source, "T");
+    (void)unlink(stream_path);
+    return status;
+}
+
 int main(void)
 {
     if (run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
@@ -339,6 +363,8 @@ int main(void)
                     "T") != 0 ||
         run_snippet("\\chardef\\A=65 \\ifnum\\A=65 \\A\\else X\\fi%",
                     "A") != 0 ||
+        run_snippet("\\mathchardef\\M=1000 \\ifnum\\M=1000 T\\else F\\fi%",
+                    "T") != 0 ||
         run_snippet("\\countdef\\n=7 \\n=1 {\\n=2 \\ifnum\\n=2 L\\fi}"
                     "\\ifnum\\n=1 G\\fi%",
                     "LG") != 0 ||
@@ -352,12 +378,22 @@ int main(void)
         run_snippet("\\def\\a{A}\\edef\\saved{\\noexpand\\a}"
                     "\\def\\a{B}\\saved%",
                     "B") != 0 ||
+        run_snippet("\\def\\a{./}\\def\\strip#1>{}"
+                    "\\edef\\saved{\\expandafter\\strip\\meaning\\a}"
+                    "\\saved%",
+                    "./") != 0 ||
+        run_snippet("{\\catcode`\\^=7 \\catcode`\\^^J=13 "
+                    "\\xdef\\saved{\\string^^J}}"
+                    "\\saved%",
+                    "^^J") != 0 ||
+        run_snippet("\\if AAT\\else F\\fi\\if ABF\\else T\\fi%",
+                    "TT") != 0 ||
         run_snippet("\\catcode`\\@=11 \\def\\word@word{X}\\word@word%",
                     "X") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
-        test_input_primitive() != 0) {
+        test_input_primitive() != 0 || test_file_streams() != 0) {
         return 1;
     }
     return 0;

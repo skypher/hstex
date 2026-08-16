@@ -92,6 +92,13 @@ TeX Live inputs; resolved files enter the same owned source stack. This fallback
 is a compatibility bridge to be replaced by an in-process indexed path cache
 before performance measurements.
 
+The bootstrap stream layer owns sixteen input and output `FILE` handles inside
+the engine context. Immediate writes expand a sentinel-terminated token frame,
+serialize characters and control sequences, and flush deterministically; line
+reads tokenize through the same mutable mouth before defining the destination
+macro. Diagnostic INITEX runs isolate generated files under the ignored build
+tree.
+
 The SIMD scanner recognizes the default lexical-boundary bytes and selects AVX2
 at runtime on supported x86-64 CPUs. It is a batching substrate for the mouth;
 the semantic path remains authoritative at mutable boundaries. Scalar and

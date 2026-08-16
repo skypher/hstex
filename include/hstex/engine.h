@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 enum hstex_engine_result {
@@ -55,6 +56,34 @@ enum hstex_command {
     HSTEX_COMMAND_DIVIDE,
     HSTEX_COMMAND_THE,
     HSTEX_COMMAND_NUMBER,
+    HSTEX_COMMAND_IMMEDIATE,
+    HSTEX_COMMAND_OPEN_OUT,
+    HSTEX_COMMAND_WRITE,
+    HSTEX_COMMAND_CLOSE_OUT,
+    HSTEX_COMMAND_OPEN_IN,
+    HSTEX_COMMAND_READ,
+    HSTEX_COMMAND_CLOSE_IN,
+    HSTEX_COMMAND_IF_EOF,
+    HSTEX_COMMAND_MEANING,
+    HSTEX_COMMAND_STRING,
+    HSTEX_COMMAND_IF_CHAR,
+    HSTEX_COMMAND_INPUT_LINE_NUMBER,
+    HSTEX_COMMAND_MESSAGE,
+    HSTEX_COMMAND_MATH_CHAR_DEF,
+    HSTEX_COMMAND_MATH_CHAR_GIVEN,
+    HSTEX_COMMAND_DIMEN_DEF,
+    HSTEX_COMMAND_DIMEN_REGISTER,
+    HSTEX_COMMAND_SKIP_DEF,
+    HSTEX_COMMAND_SKIP_REGISTER,
+    HSTEX_COMMAND_TOKS_DEF,
+    HSTEX_COMMAND_TOKS_REGISTER,
+    HSTEX_COMMAND_DIMEN,
+    HSTEX_COMMAND_SKIP,
+    HSTEX_COMMAND_MUSKIP,
+    HSTEX_COMMAND_TOKS,
+    HSTEX_COMMAND_BOX,
+    HSTEX_COMMAND_MATH_GROUP,
+    HSTEX_COMMAND_LANGUAGE,
 };
 
 enum hstex_integer_parameter {
@@ -137,6 +166,9 @@ struct hstex_engine {
     int32_t integer_parameters[HSTEX_INTEGER_PARAMETER_COUNT];
     uint32_t integer_parameter_levels[HSTEX_INTEGER_PARAMETER_COUNT];
     uint32_t catcode_levels[256];
+    FILE *write_streams[16];
+    FILE *read_streams[16];
+    char *output_directory;
     uint32_t group_level;
     uint8_t pending_macro_flags;
     bool pending_global;
@@ -148,6 +180,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
 void hstex_engine_destroy(struct hstex_engine *engine);
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
+int hstex_engine_set_output_directory(struct hstex_engine *engine,
+                                      const char *path, char *error,
+                                      size_t error_capacity);
 enum hstex_engine_result hstex_engine_next_expanded(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,

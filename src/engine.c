@@ -520,6 +520,30 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"divide", HSTEX_COMMAND_DIVIDE},
         {"the", HSTEX_COMMAND_THE},
         {"number", HSTEX_COMMAND_NUMBER},
+        {"immediate", HSTEX_COMMAND_IMMEDIATE},
+        {"openout", HSTEX_COMMAND_OPEN_OUT},
+        {"write", HSTEX_COMMAND_WRITE},
+        {"closeout", HSTEX_COMMAND_CLOSE_OUT},
+        {"openin", HSTEX_COMMAND_OPEN_IN},
+        {"read", HSTEX_COMMAND_READ},
+        {"closein", HSTEX_COMMAND_CLOSE_IN},
+        {"ifeof", HSTEX_COMMAND_IF_EOF},
+        {"meaning", HSTEX_COMMAND_MEANING},
+        {"string", HSTEX_COMMAND_STRING},
+        {"if", HSTEX_COMMAND_IF_CHAR},
+        {"inputlineno", HSTEX_COMMAND_INPUT_LINE_NUMBER},
+        {"message", HSTEX_COMMAND_MESSAGE},
+        {"mathchardef", HSTEX_COMMAND_MATH_CHAR_DEF},
+        {"dimendef", HSTEX_COMMAND_DIMEN_DEF},
+        {"skipdef", HSTEX_COMMAND_SKIP_DEF},
+        {"toksdef", HSTEX_COMMAND_TOKS_DEF},
+        {"dimen", HSTEX_COMMAND_DIMEN},
+        {"skip", HSTEX_COMMAND_SKIP},
+        {"muskip", HSTEX_COMMAND_MUSKIP},
+        {"toks", HSTEX_COMMAND_TOKS},
+        {"box", HSTEX_COMMAND_BOX},
+        {"mathgroup", HSTEX_COMMAND_MATH_GROUP},
+        {"language", HSTEX_COMMAND_LANGUAGE},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
          ++index) {
@@ -561,6 +585,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         hstex_engine_destroy(engine);
         return -1;
     }
+    engine->output_directory = strdup(".");
+    if (engine->output_directory == NULL) {
+        (void)set_error(error, error_capacity,
+                        "output-directory allocation failed");
+        hstex_engine_destroy(engine);
+        return -1;
+    }
     struct hstex_meaning paragraph = {
         .command = HSTEX_COMMAND_PAR,
         .level = 0U,
@@ -580,6 +611,14 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         return;
     }
     hstex_source_stack_destroy(&engine->sources);
+    for (size_t index = 0U; index < 16U; ++index) {
+        if (engine->write_streams[index] != NULL) {
+            (void)fclose(engine->write_streams[index]);
+        }
+        if (engine->read_streams[index] != NULL) {
+            (void)fclose(engine->read_streams[index]);
+        }
+    }
     for (size_t index = 0U; index < engine->macro_count; ++index) {
         free(engine->macros[index].parameter_text);
         free(engine->macros[index].replacement);
@@ -590,6 +629,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->conditionals);
     free(engine->counts);
     free(engine->count_levels);
+    free(engine->output_directory);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
 }
@@ -601,6 +641,24 @@ int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
         return set_error(error, error_capacity, "null engine file input");
     }
     return hstex_source_push_file(&engine->sources, path, error, error_capacity);
+}
+
+int hstex_engine_set_output_directory(struct hstex_engine *engine,
+                                      const char *path, char *error,
+                                      size_t error_capacity)
+{
+    if (engine == NULL || path == NULL || path[0] == '\0') {
+        return set_error(error, error_capacity,
+                         "invalid output-directory request");
+    }
+    char *copy = strdup(path);
+    if (copy == NULL) {
+        return set_error(error, error_capacity,
+                         "output-directory allocation failed");
+    }
+    free(engine->output_directory);
+    engine->output_directory = copy;
+    return 0;
 }
 
 static enum hstex_engine_result raw_next(
@@ -779,6 +837,31 @@ static char *join_directory_filename(const char *source_path,
     return candidate;
 }
 
+static char *join_path(const char *directory, const char *filename)
+{
+    size_t directory_length = strlen(directory);
+    size_t filename_length = strlen(filename);
+    bool needs_separator = directory_length != 0U &&
+                           directory[directory_length - 1U] != '/';
+    size_t separator_length = needs_separator ? 1U : 0U;
+    if (directory_length >
+        SIZE_MAX - separator_length - filename_length - 1U) {
+        return NULL;
+    }
+    char *path = malloc(directory_length + separator_length + filename_length +
+                        1U);
+    if (path == NULL) {
+        return NULL;
+    }
+    memcpy(path, directory, directory_length);
+    if (needs_separator) {
+        path[directory_length] = '/';
+    }
+    memcpy(path + directory_length + separator_length, filename,
+           filename_length + 1U);
+    return path;
+}
+
 static char *resolve_with_kpsewhich(const char *filename)
 {
     int descriptors[2];
@@ -881,6 +964,14 @@ static char *resolve_input_path(struct hstex_engine *engine,
     }
     for (size_t index = 0U; index < 2U && variants[index] != NULL; ++index) {
         const char *variant = variants[index];
+        if (engine->output_directory != NULL && filename[0] != '/') {
+            char *candidate = join_path(engine->output_directory, variant);
+            if (candidate != NULL && access(candidate, R_OK) == 0) {
+                free(extended);
+                return candidate;
+            }
+            free(candidate);
+        }
         if (access(variant, R_OK) == 0) {
             char *resolved = strdup(variant);
             free(extended);
@@ -970,7 +1061,20 @@ static int integer_from_control_sequence(
     int32_t *value, char *error, size_t error_capacity)
 {
     switch (meaning->command) {
+    case HSTEX_COMMAND_INPUT_LINE_NUMBER:
+        for (size_t index = engine->sources.count; index > 0U; --index) {
+            const struct hstex_source_frame *frame =
+                &engine->sources.frames[index - 1U];
+            if (frame->kind == HSTEX_SOURCE_FILE) {
+                uint32_t line = frame->value.file.mouth.line_number;
+                *value = line > (uint32_t)INT32_MAX ? INT32_MAX : (int32_t)line;
+                return 0;
+            }
+        }
+        *value = 0;
+        return 0;
     case HSTEX_COMMAND_CHAR_GIVEN:
+    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
         *value = meaning->value.integer;
         return 0;
     case HSTEX_COMMAND_COUNT_REGISTER: {
@@ -1413,6 +1517,10 @@ static int scan_if_num(struct hstex_engine *engine, char *error,
                        size_t error_capacity);
 static int scan_if_x(struct hstex_engine *engine, char *error,
                      size_t error_capacity);
+static int scan_if_char(struct hstex_engine *engine, char *error,
+                        size_t error_capacity);
+static int scan_if_eof(struct hstex_engine *engine, char *error,
+                       size_t error_capacity);
 static int start_conditional(struct hstex_engine *engine, bool condition,
                              char *error, size_t error_capacity);
 static int skip_conditional(struct hstex_engine *engine, bool stop_at_else,
@@ -1421,6 +1529,12 @@ static int execute_else(struct hstex_engine *engine, char *error,
                         size_t error_capacity);
 static int execute_fi(struct hstex_engine *engine, char *error,
                       size_t error_capacity);
+static int expand_meaning(struct hstex_engine *engine,
+                          struct hstex_source_location location, char *error,
+                          size_t error_capacity);
+static int expand_string(struct hstex_engine *engine,
+                         struct hstex_source_location location, char *error,
+                         size_t error_capacity);
 
 static int expand_after(struct hstex_engine *engine,
                         struct hstex_source_location location, char *error,
@@ -1491,11 +1605,23 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
         meaning->command == HSTEX_COMMAND_NUMBER) {
         return expand_integer_primitive(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_MEANING) {
+        return expand_meaning(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_STRING) {
+        return expand_string(engine, location, error, error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_IF_NUM) {
         return scan_if_num(engine, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_IF_X) {
         return scan_if_x(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_CHAR) {
+        return scan_if_char(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_EOF) {
+        return scan_if_eof(engine, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_IF_TRUE ||
         meaning->command == HSTEX_COMMAND_IF_FALSE) {
@@ -1579,6 +1705,18 @@ enum hstex_engine_result hstex_engine_next_expanded(
             }
             continue;
         }
+        if (meaning->command == HSTEX_COMMAND_MEANING) {
+            if (expand_meaning(engine, *location, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_STRING) {
+            if (expand_string(engine, *location, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
         if (meaning->command == HSTEX_COMMAND_IF_NUM) {
             if (scan_if_num(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -1587,6 +1725,18 @@ enum hstex_engine_result hstex_engine_next_expanded(
         }
         if (meaning->command == HSTEX_COMMAND_IF_X) {
             if (scan_if_x(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_CHAR) {
+            if (scan_if_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_EOF) {
+            if (scan_if_eof(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -1851,6 +2001,55 @@ static int scan_char_definition(struct hstex_engine *engine, char *error,
                        error_capacity);
 }
 
+static int scan_math_char_definition(struct hstex_engine *engine, char *error,
+                                     size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    int32_t value = 0;
+    if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0 || value < 0 ||
+        value > 32767) {
+        return set_error(error, error_capacity,
+                         "mathchardef value outside 0..32767");
+    }
+    struct hstex_meaning meaning = {
+        .command = HSTEX_COMMAND_MATH_CHAR_GIVEN,
+        .level = 0U,
+        .value = {.integer = value},
+    };
+    bool global = assignment_is_global(engine, engine->pending_global);
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return set_meaning(engine, identifier, meaning, global, error,
+                       error_capacity);
+}
+
+static int scan_register_definition(struct hstex_engine *engine,
+                                    enum hstex_command register_command,
+                                    char *error, size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    int32_t index = 0;
+    if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        index >= 32768) {
+        return set_error(error, error_capacity,
+                         "register definition outside supported range");
+    }
+    struct hstex_meaning meaning = {
+        .command = register_command,
+        .level = 0U,
+        .value = {.integer = index},
+    };
+    bool global = assignment_is_global(engine, engine->pending_global);
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return set_meaning(engine, identifier, meaning, global, error,
+                       error_capacity);
+}
+
 static int scan_count_definition(struct hstex_engine *engine, char *error,
                                  size_t error_capacity)
 {
@@ -2069,11 +2268,665 @@ static int execute_arithmetic(struct hstex_engine *engine,
                                     requested_global, error, error_capacity);
 }
 
+static int scan_stream_number(struct hstex_engine *engine, int32_t *stream,
+                              char *error, size_t error_capacity)
+{
+    if (scan_integer(engine, stream, error, error_capacity) != 0 || *stream < -1 ||
+        *stream > 17) {
+        return set_error(error, error_capacity,
+                         "stream number outside supported range -1..17");
+    }
+    return 0;
+}
+
+static char *output_path(struct hstex_engine *engine, const char *filename)
+{
+    if (filename[0] == '/') {
+        return strdup(filename);
+    }
+    return join_path(engine->output_directory == NULL ? "."
+                                                     : engine->output_directory,
+                     filename);
+}
+
+static int execute_open_out(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    int32_t stream = 0;
+    char *filename = NULL;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        free(filename);
+        return -1;
+    }
+    if (stream < 0 || stream >= 16) {
+        free(filename);
+        return 0;
+    }
+    char *path = output_path(engine, filename);
+    free(filename);
+    if (path == NULL) {
+        return set_error(error, error_capacity,
+                         "output path allocation failed");
+    }
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        int saved_errno = errno;
+        int status = set_error(error, error_capacity, "cannot open %s: %s", path,
+                               strerror(saved_errno));
+        free(path);
+        return status;
+    }
+    free(path);
+    if (engine->write_streams[(size_t)stream] != NULL) {
+        (void)fclose(engine->write_streams[(size_t)stream]);
+    }
+    engine->write_streams[(size_t)stream] = file;
+    return 0;
+}
+
+static int execute_close_out(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    int32_t stream = 0;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (stream >= 0 && stream < 16 &&
+        engine->write_streams[(size_t)stream] != NULL) {
+        if (fclose(engine->write_streams[(size_t)stream]) != 0) {
+            engine->write_streams[(size_t)stream] = NULL;
+            return set_error(error, error_capacity,
+                             "failed to close output stream");
+        }
+        engine->write_streams[(size_t)stream] = NULL;
+    }
+    return 0;
+}
+
+static int serialize_control_sequence(struct hstex_engine *engine,
+                                      hstex_token token, uint8_t **bytes,
+                                      size_t *count, size_t *capacity,
+                                      char *error, size_t error_capacity)
+{
+    enum hstex_symbol_kind kind;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&engine->lexical_state.symbols,
+                          hstex_token_control_sequence_id(token), &kind, &name,
+                          &length) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid control sequence in write text");
+    }
+    int32_t escape =
+        engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+    if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255 &&
+        append_byte(bytes, count, capacity, (uint8_t)escape, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < length; ++index) {
+        if (append_byte(bytes, count, capacity, name[index], error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (kind == HSTEX_SYMBOL_REGULAR && length > 1U &&
+        append_byte(bytes, count, capacity, (uint8_t)' ', error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int append_text_bytes(uint8_t **bytes, size_t *count, size_t *capacity,
+                             const char *text, char *error,
+                             size_t error_capacity)
+{
+    for (size_t index = 0U; text[index] != '\0'; ++index) {
+        if (append_byte(bytes, count, capacity, (uint8_t)text[index], error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int append_token_description(struct hstex_engine *engine,
+                                    hstex_token token, uint8_t **bytes,
+                                    size_t *count, size_t *capacity, char *error,
+                                    size_t error_capacity)
+{
+    if (hstex_token_is_character(token)) {
+        return append_byte(bytes, count, capacity,
+                           hstex_token_character_code(token), error,
+                           error_capacity);
+    }
+    if (hstex_token_is_parameter(token)) {
+        if (append_byte(bytes, count, capacity, (uint8_t)'#', error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        return append_byte(bytes, count, capacity,
+                           (uint8_t)('0' +
+                                     hstex_token_parameter_number(token)),
+                           error, error_capacity);
+    }
+    if (hstex_token_is_control_sequence(token)) {
+        return serialize_control_sequence(engine, token, bytes, count, capacity,
+                                          error, error_capacity);
+    }
+    return set_error(error, error_capacity,
+                     "internal token in meaning description");
+}
+
+static int append_string_character(uint8_t **bytes, size_t *count,
+                                   size_t *capacity, uint8_t character,
+                                   char *error, size_t error_capacity)
+{
+    if (character >= UINT8_C(32) && character <= UINT8_C(126)) {
+        return append_byte(bytes, count, capacity, character, error,
+                           error_capacity);
+    }
+    if (append_byte(bytes, count, capacity, (uint8_t)'^', error,
+                    error_capacity) != 0 ||
+        append_byte(bytes, count, capacity, (uint8_t)'^', error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if (character < UINT8_C(128)) {
+        uint8_t visible = character < UINT8_C(64)
+                              ? (uint8_t)(character + UINT8_C(64))
+                              : (uint8_t)(character - UINT8_C(64));
+        return append_byte(bytes, count, capacity, visible, error,
+                           error_capacity);
+    }
+    static const uint8_t hexadecimal[] = "0123456789abcdef";
+    if (append_byte(bytes, count, capacity, hexadecimal[character >> 4U], error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    return append_byte(bytes, count, capacity,
+                       hexadecimal[character & UINT8_C(0x0f)], error,
+                       error_capacity);
+}
+
+static int expand_string(struct hstex_engine *engine,
+                         struct hstex_source_location location, char *error,
+                         size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location subject_location;
+    if (raw_next(engine, &subject, &subject_location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input after string");
+    }
+    (void)subject_location;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    if (hstex_token_is_character(subject)) {
+        if (append_string_character(&bytes, &count, &capacity,
+                                    hstex_token_character_code(subject), error,
+                                    error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+    } else if (hstex_token_is_control_sequence(subject)) {
+        enum hstex_symbol_kind kind;
+        const uint8_t *name = NULL;
+        size_t length = 0U;
+        if (hstex_symbol_name(&engine->lexical_state.symbols,
+                              hstex_token_control_sequence_id(subject), &kind,
+                              &name, &length) != 0) {
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "invalid control sequence after string");
+        }
+        if (kind == HSTEX_SYMBOL_ACTIVE && length == 1U) {
+            if (append_string_character(&bytes, &count, &capacity, name[0],
+                                        error, error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+        } else {
+            int32_t escape =
+                engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+            if (escape >= 0 && escape <= 255 &&
+                append_string_character(&bytes, &count, &capacity,
+                                        (uint8_t)escape, error,
+                                        error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            for (size_t index = 0U; index < length; ++index) {
+                if (append_string_character(&bytes, &count, &capacity,
+                                            name[index], error,
+                                            error_capacity) != 0) {
+                    free(bytes);
+                    return -1;
+                }
+            }
+        }
+    } else {
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "internal token after string");
+    }
+    struct token_vector expansion = {0};
+    for (size_t index = 0U; index < count; ++index) {
+        uint8_t category = bytes[index] == (uint8_t)' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
+        if (vector_push(&expansion,
+                        hstex_token_character(category, bytes[index]), error,
+                        error_capacity) != 0) {
+            free(bytes);
+            vector_destroy(&expansion);
+            return -1;
+        }
+    }
+    free(bytes);
+    if (push_owned_vector(engine, &expansion, location, error, error_capacity) !=
+        0) {
+        vector_destroy(&expansion);
+        return -1;
+    }
+    return 0;
+}
+
+static int expand_meaning(struct hstex_engine *engine,
+                          struct hstex_source_location location, char *error,
+                          size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location subject_location;
+    if (raw_next(engine, &subject, &subject_location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input after meaning");
+    }
+    (void)subject_location;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    if (hstex_token_is_character(subject)) {
+        if (append_text_bytes(&bytes, &count, &capacity, "the character ", error,
+                              error_capacity) != 0 ||
+            append_token_description(engine, subject, &bytes, &count, &capacity,
+                                     error, error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+    } else if (hstex_token_is_control_sequence(subject)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(subject));
+        if (meaning->command == HSTEX_COMMAND_MACRO &&
+            meaning->value.macro_identifier != 0U &&
+            (size_t)meaning->value.macro_identifier <= engine->macro_count) {
+            const struct hstex_macro *macro =
+                &engine->macros[meaning->value.macro_identifier - 1U];
+            if ((macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U &&
+                append_text_bytes(&bytes, &count, &capacity, "long ", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            if ((macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U &&
+                append_text_bytes(&bytes, &count, &capacity, "outer ", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            if (append_text_bytes(&bytes, &count, &capacity, "macro:", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            for (size_t index = 0U; index < macro->parameter_count_tokens;
+                 ++index) {
+                if (append_token_description(
+                        engine, macro->parameter_text[index], &bytes, &count,
+                        &capacity, error, error_capacity) != 0) {
+                    free(bytes);
+                    return -1;
+                }
+            }
+            if (append_text_bytes(&bytes, &count, &capacity, "->", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            for (size_t index = 0U; index < macro->replacement_count; ++index) {
+                if (append_token_description(
+                        engine, macro->replacement[index], &bytes, &count,
+                        &capacity, error, error_capacity) != 0) {
+                    free(bytes);
+                    return -1;
+                }
+            }
+        } else if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
+            if (append_text_bytes(&bytes, &count, &capacity, "undefined", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+        } else if (serialize_control_sequence(engine, subject, &bytes, &count,
+                                              &capacity, error,
+                                              error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+    } else {
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "internal token after meaning");
+    }
+
+    struct token_vector expansion = {0};
+    for (size_t index = 0U; index < count; ++index) {
+        uint8_t category = bytes[index] == (uint8_t)' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
+        if (vector_push(&expansion,
+                        hstex_token_character(category, bytes[index]), error,
+                        error_capacity) != 0) {
+            free(bytes);
+            vector_destroy(&expansion);
+            return -1;
+        }
+    }
+    free(bytes);
+    if (push_owned_vector(engine, &expansion, location, error, error_capacity) !=
+        0) {
+        vector_destroy(&expansion);
+        return -1;
+    }
+    return 0;
+}
+
+static int scan_expanded_general_text(struct hstex_engine *engine,
+                                      uint8_t **bytes, size_t *byte_count,
+                                      char *error, size_t error_capacity)
+{
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    if (raw_next_non_space(engine, &opening, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "write requires a braced token list");
+    }
+    struct token_vector text = {0};
+    if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0 ||
+        vector_push(&text, hstex_token_frozen_control_sequence(0U), error,
+                    error_capacity) != 0 ||
+        push_owned_vector(engine, &text, location, error, error_capacity) != 0) {
+        vector_destroy(&text);
+        return -1;
+    }
+
+    uint8_t *result = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    for (;;) {
+        hstex_token token = 0U;
+        enum hstex_engine_result expansion_result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (expansion_result != HSTEX_ENGINE_TOKEN) {
+            free(result);
+            return set_error(error, error_capacity,
+                             "end of input while expanding write text");
+        }
+        if (engine->returned_unexpanded &&
+            hstex_token_is_control_sequence(token) &&
+            hstex_token_control_sequence_id(token) == 0U) {
+            break;
+        }
+        if (hstex_token_is_character(token)) {
+            if (append_byte(&result, &count, &capacity,
+                            hstex_token_character_code(token), error,
+                            error_capacity) != 0) {
+                free(result);
+                return -1;
+            }
+        } else if (hstex_token_is_control_sequence(token)) {
+            if (serialize_control_sequence(engine, token, &result, &count,
+                                           &capacity, error,
+                                           error_capacity) != 0) {
+                free(result);
+                return -1;
+            }
+        } else {
+            free(result);
+            return set_error(error, error_capacity,
+                             "internal token in expanded write text");
+        }
+    }
+    *bytes = result;
+    *byte_count = count;
+    return 0;
+}
+
+static int execute_write(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    int32_t stream = 0;
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+        scan_expanded_general_text(engine, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    FILE *destination = NULL;
+    if (stream >= 0 && stream < 16) {
+        destination = engine->write_streams[(size_t)stream];
+    } else if (stream == -1 || stream == 17) {
+        destination = stdout;
+    }
+    int status = 0;
+    if (destination != NULL &&
+        ((byte_count != 0U &&
+          fwrite(bytes, 1U, byte_count, destination) != byte_count) ||
+         fputc('\n', destination) == EOF || fflush(destination) != 0)) {
+        status = set_error(error, error_capacity, "write stream failed");
+    }
+    free(bytes);
+    return status;
+}
+
+static int execute_message(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    int status = 0;
+    if ((byte_count != 0U &&
+         fwrite(bytes, 1U, byte_count, stdout) != byte_count) ||
+        fflush(stdout) != 0) {
+        status = set_error(error, error_capacity, "message output failed");
+    }
+    free(bytes);
+    return status;
+}
+
+static int execute_open_in(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    int32_t stream = 0;
+    char *filename = NULL;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        free(filename);
+        return -1;
+    }
+    if (stream < 0 || stream >= 16) {
+        free(filename);
+        return 0;
+    }
+    if (engine->read_streams[(size_t)stream] != NULL) {
+        (void)fclose(engine->read_streams[(size_t)stream]);
+        engine->read_streams[(size_t)stream] = NULL;
+    }
+    char *path = resolve_input_path(engine, filename);
+    free(filename);
+    if (path != NULL) {
+        engine->read_streams[(size_t)stream] = fopen(path, "rb");
+    }
+    free(path);
+    return 0;
+}
+
+static int execute_close_in(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    int32_t stream = 0;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (stream >= 0 && stream < 16 &&
+        engine->read_streams[(size_t)stream] != NULL) {
+        if (fclose(engine->read_streams[(size_t)stream]) != 0) {
+            engine->read_streams[(size_t)stream] = NULL;
+            return set_error(error, error_capacity,
+                             "failed to close input stream");
+        }
+        engine->read_streams[(size_t)stream] = NULL;
+    }
+    return 0;
+}
+
+static int scan_keyword_to(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    static const uint8_t keyword[] = {'t', 'o'};
+    for (size_t index = 0U; index < sizeof(keyword); ++index) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result =
+            index == 0U
+                ? expanded_next_non_space(engine, &token, &location, error,
+                                          error_capacity)
+                : hstex_engine_next_expanded(engine, &token, &location, error,
+                                             error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN ||
+            !token_has_character(token, keyword[index])) {
+            return set_error(error, error_capacity, "read requires keyword to");
+        }
+    }
+    return 0;
+}
+
+static int define_read_line(struct hstex_engine *engine, hstex_cs_id target,
+                            const uint8_t *line, size_t length, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_mouth mouth;
+    hstex_mouth_init(&mouth, line, length, &engine->lexical_state);
+    struct token_vector replacement = {0};
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_mouth_result result = hstex_mouth_next(
+            &mouth, &token, &location, error, error_capacity);
+        if (result == HSTEX_MOUTH_EOF) {
+            break;
+        }
+        if (result == HSTEX_MOUTH_ERROR ||
+            vector_push(&replacement, token, error, error_capacity) != 0) {
+            hstex_mouth_destroy(&mouth);
+            vector_destroy(&replacement);
+            return -1;
+        }
+    }
+    hstex_mouth_destroy(&mouth);
+    if (replacement.count != 0U &&
+        token_is_space(replacement.data[replacement.count - 1U])) {
+        --replacement.count;
+    }
+    if (reserve_macros(engine, engine->macro_count + 1U, error,
+                       error_capacity) != 0) {
+        vector_destroy(&replacement);
+        return -1;
+    }
+    struct hstex_macro *macro = &engine->macros[engine->macro_count];
+    memset(macro, 0, sizeof(*macro));
+    macro->replacement = replacement.data;
+    macro->replacement_count = replacement.count;
+    ++engine->macro_count;
+    struct hstex_meaning meaning = {
+        .command = HSTEX_COMMAND_MACRO,
+        .level = 0U,
+        .value = {.macro_identifier = (uint32_t)engine->macro_count},
+    };
+    return set_meaning(engine, target, meaning,
+                       assignment_is_global(engine, engine->pending_global),
+                       error, error_capacity);
+}
+
+static int execute_read(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    int32_t stream = 0;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+        scan_keyword_to(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_cs_id target = 0U;
+    if (scan_definition_target(engine, &target, error, error_capacity) != 0) {
+        return -1;
+    }
+    char *line = NULL;
+    size_t capacity = 0U;
+    ssize_t length = -1;
+    if (stream >= 0 && stream < 16 &&
+        engine->read_streams[(size_t)stream] != NULL) {
+        length = getline(&line, &capacity,
+                         engine->read_streams[(size_t)stream]);
+    }
+    if (length < 0) {
+        length = 0;
+    }
+    while (length > 0 &&
+           (line[length - 1] == '\n' || line[length - 1] == '\r')) {
+        --length;
+    }
+    int status = define_read_line(engine, target, (const uint8_t *)line,
+                                  (size_t)length, error, error_capacity);
+    free(line);
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return status;
+}
+
+static int scan_if_eof(struct hstex_engine *engine, char *error,
+                       size_t error_capacity)
+{
+    int32_t stream = 0;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    bool at_end = stream < 0 || stream >= 16 ||
+                  engine->read_streams[(size_t)stream] == NULL ||
+                  feof(engine->read_streams[(size_t)stream]) != 0;
+    return start_conditional(engine, at_end, error, error_capacity);
+}
+
 static bool command_starts_conditional(enum hstex_command command)
 {
     return command == HSTEX_COMMAND_IF_NUM || command == HSTEX_COMMAND_IF_X ||
+           command == HSTEX_COMMAND_IF_CHAR ||
            command == HSTEX_COMMAND_IF_TRUE ||
-           command == HSTEX_COMMAND_IF_FALSE;
+           command == HSTEX_COMMAND_IF_FALSE ||
+           command == HSTEX_COMMAND_IF_EOF;
 }
 
 static bool meanings_equal(const struct hstex_engine *engine,
@@ -2113,8 +2966,12 @@ static bool meanings_equal(const struct hstex_engine *engine,
     case HSTEX_COMMAND_TOKEN_ALIAS:
         return left->value.token == right->value.token;
     case HSTEX_COMMAND_CHAR_GIVEN:
+    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
     case HSTEX_COMMAND_COUNT_REGISTER:
     case HSTEX_COMMAND_INTEGER_PARAMETER:
+    case HSTEX_COMMAND_DIMEN_REGISTER:
+    case HSTEX_COMMAND_SKIP_REGISTER:
+    case HSTEX_COMMAND_TOKS_REGISTER:
         return left->value.integer == right->value.integer;
     default:
         return true;
@@ -2237,6 +3094,45 @@ static int scan_if_x(struct hstex_engine *engine, char *error,
     }
     return start_conditional(engine, ifx_tokens_equal(engine, left, right),
                              error, error_capacity);
+}
+
+static int if_character_code(const struct hstex_engine *engine,
+                             hstex_token token)
+{
+    if (hstex_token_is_character(token)) {
+        return (int)hstex_token_character_code(token);
+    }
+    if (!hstex_token_is_control_sequence(token)) {
+        return 256;
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN &&
+        meaning->value.integer >= 0 && meaning->value.integer <= 255) {
+        return (int)meaning->value.integer;
+    }
+    if (meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+        hstex_token_is_character(meaning->value.token)) {
+        return (int)hstex_token_character_code(meaning->value.token);
+    }
+    return 256;
+}
+
+static int scan_if_char(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    hstex_token left = 0U;
+    hstex_token right = 0U;
+    struct hstex_source_location location;
+    if (hstex_engine_next_expanded(engine, &left, &location, error,
+                                   error_capacity) != HSTEX_ENGINE_TOKEN ||
+        hstex_engine_next_expanded(engine, &right, &location, error,
+                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input in if");
+    }
+    return start_conditional(
+        engine, if_character_code(engine, left) == if_character_code(engine, right),
+        error, error_capacity);
 }
 
 static int begin_group(struct hstex_engine *engine, char *error,
@@ -2423,8 +3319,31 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_MATH_CHAR_DEF:
+            if (scan_math_char_definition(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_COUNT_DEF:
             if (scan_count_definition(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DIMEN_DEF:
+            if (scan_register_definition(engine, HSTEX_COMMAND_DIMEN_REGISTER,
+                                         error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SKIP_DEF:
+            if (scan_register_definition(engine, HSTEX_COMMAND_SKIP_REGISTER,
+                                         error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_TOKS_DEF:
+            if (scan_register_definition(engine, HSTEX_COMMAND_TOKS_REGISTER,
+                                         error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -2454,6 +3373,43 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_IMMEDIATE:
+            continue;
+        case HSTEX_COMMAND_MESSAGE:
+            if (execute_message(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_OPEN_OUT:
+            if (execute_open_out(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_WRITE:
+            if (execute_write(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_CLOSE_OUT:
+            if (execute_close_out(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_OPEN_IN:
+            if (execute_open_in(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_READ:
+            if (execute_read(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_CLOSE_IN:
+            if (execute_close_in(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_IF_NUM:
             if (scan_if_num(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -2461,6 +3417,16 @@ handle_token:
             continue;
         case HSTEX_COMMAND_IF_X:
             if (scan_if_x(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_CHAR:
+            if (scan_if_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_EOF:
+            if (scan_if_eof(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -2499,6 +3465,8 @@ handle_token:
             *token = hstex_token_character(
                 (uint8_t)HSTEX_CAT_OTHER, (uint8_t)meaning->value.integer);
             goto handle_token;
+        case HSTEX_COMMAND_MATH_CHAR_GIVEN:
+            return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_PAR:
             if (engine->pending_global || engine->pending_macro_flags != 0U) {
                 (void)set_error(error, error_capacity,
@@ -2513,6 +3481,8 @@ handle_token:
         case HSTEX_COMMAND_NO_EXPAND:
         case HSTEX_COMMAND_THE:
         case HSTEX_COMMAND_NUMBER:
+        case HSTEX_COMMAND_MEANING:
+        case HSTEX_COMMAND_STRING:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "expandable primitive escaped expansion");
         case HSTEX_COMMAND_INPUT:
@@ -2529,6 +3499,23 @@ handle_token:
         case HSTEX_COMMAND_ERROR_MESSAGE:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "errmessage primitive was executed");
+        case HSTEX_COMMAND_INPUT_LINE_NUMBER:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity,
+                "inputlineno used outside an integer context");
+        case HSTEX_COMMAND_DIMEN_REGISTER:
+        case HSTEX_COMMAND_SKIP_REGISTER:
+        case HSTEX_COMMAND_TOKS_REGISTER:
+        case HSTEX_COMMAND_DIMEN:
+        case HSTEX_COMMAND_SKIP:
+        case HSTEX_COMMAND_MUSKIP:
+        case HSTEX_COMMAND_TOKS:
+        case HSTEX_COMMAND_BOX:
+        case HSTEX_COMMAND_MATH_GROUP:
+        case HSTEX_COMMAND_LANGUAGE:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity,
+                "non-integer register execution is not implemented");
         }
     }
 }

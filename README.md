@@ -21,7 +21,9 @@ count definitions, nested integer and meaning conditionals, scoped restoration,
 and nested file input. It currently bootstraps the installed `latex.ltx` through
 its first included configuration file and date calculation, including scoped
 integer arithmetic, serialization, expanded definitions, and conditionals
-inside expansions. File-stream primitives and typesetting remain under
+inside expansions. The bootstrap also has deterministic file-stream I/O, line
+reads, EOF conditionals, messages, printable `string`/`meaning` expansion, and
+the initial register allocators; scaled dimensions and typesetting remain under
 construction.
 
 ## Build

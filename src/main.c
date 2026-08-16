@@ -7,11 +7,13 @@
 #include "hstex/token.h"
 #include "hstex_config.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void print_usage(FILE *stream, const char *program)
 {
@@ -238,6 +240,18 @@ static int run_ini(const char *path)
     struct hstex_engine engine;
     if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    static const char output_directory[] = "build/ini-output";
+    if (mkdir(output_directory, 0700) != 0 && errno != EEXIST) {
+        (void)fprintf(stderr, "hstex: cannot create %s\n", output_directory);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    if (hstex_engine_set_output_directory(&engine, output_directory, error,
+                                          sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
         return 1;
     }
     if (hstex_engine_push_file(&engine, path, error, sizeof(error)) != 0) {
