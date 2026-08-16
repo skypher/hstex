@@ -11,9 +11,10 @@ fresh TeX → BibTeX → TeX → TeX build.
 ## Current status
 
 The repository contains the clean-room contract, benchmark snapshot and oracle
-runner, plus the first engine substrate: a regular-file loader and a
-runtime-dispatched scalar/AVX2 lexical-boundary scanner. It does not yet
-typeset TeX input.
+runner, plus the first engine substrate: regular-file loading, packed tokens,
+mutable catcodes, stable control-sequence interning, a line-aware TeX mouth,
+nested file/token sources, and a runtime-dispatched scalar/AVX2 lexical-boundary
+scanner. It does not yet expand or execute TeX tokens.
 
 ## Build
 
@@ -28,6 +29,7 @@ Inspect the selected scanner and probe an input file:
 ```sh
 ./build/hstex --cpu-features
 ./build/hstex --probe-input tests/corpus/document.tex
+./build/hstex --mouth-stats-latex tests/corpus/document.tex
 ```
 
 Generate a fresh pdfTeX oracle build in an ignored output directory:

@@ -35,8 +35,13 @@ generated_include = include_directories('.')
 core = static_library(
   'hstex_core',
   files(
+    'src/catcode.c',
     'src/input.c',
+    'src/lex.c',
+    'src/mouth.c',
     'src/scan.c',
+    'src/source.c',
+    'src/symbol.c',
   ),
   include_directories: [public_include, generated_include],
   install: false,
@@ -66,8 +71,46 @@ input_test = executable(
 )
 test('input', input_test)
 
+catcode_test = executable(
+  'test_catcode',
+  'tests/test_catcode.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('catcode', catcode_test)
+
+symbol_test = executable(
+  'test_symbol',
+  'tests/test_symbol.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('symbol', symbol_test)
+
+mouth_test = executable(
+  'test_mouth',
+  'tests/test_mouth.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('mouth', mouth_test)
+
+source_test = executable(
+  'test_source',
+  'tests/test_source.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('source', source_test)
+
 install_headers(
+  'include/hstex/catcode.h',
   'include/hstex/input.h',
+  'include/hstex/lex.h',
+  'include/hstex/mouth.h',
   'include/hstex/scan.h',
+  'include/hstex/source.h',
+  'include/hstex/symbol.h',
+  'include/hstex/token.h',
   subdir: 'hstex',
 )

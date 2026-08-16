@@ -1,5 +1,9 @@
 #include "hstex/input.h"
+#include "hstex/lex.h"
+#include "hstex/mouth.h"
 #include "hstex/scan.h"
+#include "hstex/symbol.h"
+#include "hstex/token.h"
 #include "hstex_config.h"
 
 #include <inttypes.h>
@@ -13,8 +17,10 @@ static void print_usage(FILE *stream, const char *program)
     (void)fprintf(stream,
                   "usage: %s --version\n"
                   "       %s --cpu-features\n"
-                  "       %s --probe-input FILE\n",
-                  program, program, program);
+                  "       %s --probe-input FILE\n"
+                  "       %s --trace-ini-mouth FILE\n"
+                  "       %s --mouth-stats-latex FILE\n",
+                  program, program, program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -60,6 +66,170 @@ static int probe_input(const char *path)
     return 0;
 }
 
+static void print_name_hex(const uint8_t *name, size_t length)
+{
+    for (size_t index = 0U; index < length; ++index) {
+        (void)printf("%02x", (unsigned int)name[index]);
+    }
+}
+
+static int trace_ini_mouth(const char *path)
+{
+    struct hstex_input input;
+    char error[512] = {0};
+    if (hstex_input_open(path, &input, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    struct hstex_lexical_state lexical_state;
+    if (hstex_lexical_state_init(&lexical_state, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_input_close(&input);
+        return 1;
+    }
+    struct hstex_mouth mouth;
+    hstex_mouth_init(&mouth, input.data, input.length, &lexical_state);
+
+    int exit_status = 0;
+    for (;;) {
+        hstex_token token;
+        struct hstex_source_location location;
+        enum hstex_mouth_result result = hstex_mouth_next(
+            &mouth, &token, &location, error, sizeof(error));
+        if (result == HSTEX_MOUTH_EOF) {
+            break;
+        }
+        if (result == HSTEX_MOUTH_ERROR) {
+            (void)fprintf(stderr, "hstex: %s\n", error);
+            exit_status = 1;
+            break;
+        }
+        (void)printf("%u:%u ", location.line, location.column);
+        if (hstex_token_is_character(token)) {
+            (void)printf("char cat=%u code=%u\n",
+                         (unsigned int)hstex_token_category(token),
+                         (unsigned int)hstex_token_character_code(token));
+            continue;
+        }
+        if (hstex_token_is_control_sequence(token)) {
+            enum hstex_symbol_kind kind;
+            const uint8_t *name = NULL;
+            size_t length = 0U;
+            hstex_cs_id identifier = hstex_token_control_sequence_id(token);
+            if (hstex_symbol_name(&lexical_state.symbols, identifier, &kind,
+                                  &name, &length) != 0) {
+                (void)fprintf(stderr, "hstex: invalid control-sequence token\n");
+                exit_status = 1;
+                break;
+            }
+            (void)printf("control id=%u kind=%s name_hex=",
+                         (unsigned int)identifier,
+                         kind == HSTEX_SYMBOL_ACTIVE ? "active" : "regular");
+            print_name_hex(name, length);
+            (void)putchar('\n');
+            continue;
+        }
+        (void)printf("parameter number=%u\n",
+                     (unsigned int)hstex_token_parameter_number(token));
+    }
+
+    hstex_mouth_destroy(&mouth);
+    hstex_lexical_state_destroy(&lexical_state);
+    hstex_input_close(&input);
+    return exit_status;
+}
+
+static int apply_latex_document_catcodes(struct hstex_catcode_table *catcodes)
+{
+    static const struct {
+        uint8_t character;
+        uint8_t category;
+    } assignments[] = {
+        {(uint8_t)'{', (uint8_t)HSTEX_CAT_BEGIN_GROUP},
+        {(uint8_t)'}', (uint8_t)HSTEX_CAT_END_GROUP},
+        {(uint8_t)'$', (uint8_t)HSTEX_CAT_MATH_SHIFT},
+        {(uint8_t)'&', (uint8_t)HSTEX_CAT_ALIGNMENT_TAB},
+        {(uint8_t)'#', (uint8_t)HSTEX_CAT_PARAMETER},
+        {(uint8_t)'^', (uint8_t)HSTEX_CAT_SUPERSCRIPT},
+        {UINT8_C(11), (uint8_t)HSTEX_CAT_SUPERSCRIPT},
+        {(uint8_t)'_', (uint8_t)HSTEX_CAT_SUBSCRIPT},
+        {UINT8_C(1), (uint8_t)HSTEX_CAT_SUBSCRIPT},
+        {(uint8_t)'\t', (uint8_t)HSTEX_CAT_SPACE},
+        {(uint8_t)'~', (uint8_t)HSTEX_CAT_ACTIVE},
+        {UINT8_C(12), (uint8_t)HSTEX_CAT_ACTIVE},
+    };
+    for (size_t index = 0U; index < sizeof(assignments) / sizeof(assignments[0]);
+         ++index) {
+        if (hstex_catcode_set(catcodes, assignments[index].character,
+                              assignments[index].category) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int mouth_stats_latex(const char *path)
+{
+    struct hstex_input input;
+    char error[512] = {0};
+    if (hstex_input_open(path, &input, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    struct hstex_lexical_state lexical_state;
+    if (hstex_lexical_state_init(&lexical_state, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_input_close(&input);
+        return 1;
+    }
+    if (apply_latex_document_catcodes(&lexical_state.catcodes) != 0) {
+        (void)fprintf(stderr, "hstex: could not install probe catcodes\n");
+        hstex_lexical_state_destroy(&lexical_state);
+        hstex_input_close(&input);
+        return 1;
+    }
+    struct hstex_mouth mouth;
+    hstex_mouth_init(&mouth, input.data, input.length, &lexical_state);
+
+    size_t token_count = 0U;
+    size_t character_count = 0U;
+    size_t control_count = 0U;
+    int exit_status = 0;
+    for (;;) {
+        hstex_token token;
+        struct hstex_source_location location;
+        enum hstex_mouth_result result = hstex_mouth_next(
+            &mouth, &token, &location, error, sizeof(error));
+        if (result == HSTEX_MOUTH_EOF) {
+            break;
+        }
+        if (result == HSTEX_MOUTH_ERROR) {
+            (void)fprintf(stderr, "hstex: %s\n", error);
+            exit_status = 1;
+            break;
+        }
+        ++token_count;
+        if (hstex_token_is_character(token)) {
+            ++character_count;
+        } else if (hstex_token_is_control_sequence(token)) {
+            ++control_count;
+        }
+    }
+    if (exit_status == 0) {
+        (void)printf(
+            "path=%s bytes=%zu lines=%u tokens=%zu characters=%zu controls=%zu "
+            "symbols=%zu\n",
+            path, input.length, (unsigned int)mouth.line_number, token_count,
+            character_count,
+            control_count, lexical_state.symbols.entry_count);
+    }
+
+    hstex_mouth_destroy(&mouth);
+    hstex_lexical_state_destroy(&lexical_state);
+    hstex_input_close(&input);
+    return exit_status;
+}
+
 int main(int argument_count, char **arguments)
 {
     if (argument_count == 2 && strcmp(arguments[1], "--version") == 0) {
@@ -72,6 +242,14 @@ int main(int argument_count, char **arguments)
     }
     if (argument_count == 3 && strcmp(arguments[1], "--probe-input") == 0) {
         return probe_input(arguments[2]);
+    }
+    if (argument_count == 3 &&
+        strcmp(arguments[1], "--trace-ini-mouth") == 0) {
+        return trace_ini_mouth(arguments[2]);
+    }
+    if (argument_count == 3 &&
+        strcmp(arguments[1], "--mouth-stats-latex") == 0) {
+        return mouth_stats_latex(arguments[2]);
     }
 
     print_usage(stderr, arguments[0]);

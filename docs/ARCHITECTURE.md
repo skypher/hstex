@@ -58,11 +58,16 @@ a fixed classification. Escape characters, grouping characters, comments,
 spaces, line endings, active characters, superscript notation, and any catcode
 mutation return control to the semantic path immediately.
 
-The initial scanner recognizes the default lexical-boundary bytes and selects
-AVX2 at runtime on supported x86-64 CPUs. It is a substrate and probe, not a
-complete tokenizer. The scalar implementation is authoritative for its current
-API and is tested against the dispatched implementation at every offset and
-length class.
+The mouth reads physical lines lazily, trims trailing byte-32 spaces, snapshots
+the current `endlinechar`, applies mutable catcodes and `^^` conversion as bytes
+are requested, and implements TeX's new-line/middle-line/skip-spaces automaton.
+It interns regular and active control sequences into separate namespaces and
+feeds the same source stack used by future macro replacement lists.
+
+The SIMD scanner recognizes the default lexical-boundary bytes and selects AVX2
+at runtime on supported x86-64 CPUs. It is a batching substrate for the mouth;
+the semantic path remains authoritative at mutable boundaries. Scalar and
+dispatched implementations are tested at every offset and length class.
 
 ## PDF backend
 
