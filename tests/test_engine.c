@@ -528,6 +528,40 @@ static int test_pdftex_identification(void)
                        "[140][25][1][614.295pt][794.96999pt][5]");
 }
 
+/* Box displacement and vertical packaging, all pinned to the reference; see
+   docs/DECISIONS.md, box-shift and vertical-packaging. */
+static int test_box_shift_and_packaging(void)
+{
+    return run_snippet(
+        "\\boxmaxdepth=16383.99998pt "
+        "\\baselineskip=12pt \\lineskip=1pt \\lineskiplimit=0pt "
+        "\\setbox1=\\hbox{\\vrule height5pt depth2pt width1pt}"
+        "\\setbox2=\\hbox{\\vrule height9pt depth1pt width1pt}"
+        /* \\lower and \\raise trade height for depth. */
+        "\\setbox0=\\hbox{\\lower3pt\\copy1}[\\the\\ht0|\\the\\dp0|\\the\\wd0]"
+        "\\setbox0=\\hbox{\\raise3pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\hbox{\\lower10pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        /* \\moveright widens a vertical list; neither dimension changes. */
+        "\\setbox0=\\vbox{\\moveright4pt\\copy1}[\\the\\wd0|\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vbox{\\moveleft4pt\\copy1}[\\the\\wd0]"
+        /* A vertical list keeps the last box's depth and separates baselines. */
+        "\\setbox0=\\vbox{\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vbox{\\copy1\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vbox{\\copy1\\copy2}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vbox{\\copy1\\vskip3pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\lineskiplimit=4pt"
+        "\\setbox0=\\vbox{\\copy1\\copy1}[\\the\\ht0|\\the\\dp0]"
+        /* \\boxmaxdepth moves surplus depth into the height. */
+        "\\boxmaxdepth=1pt \\lineskiplimit=0pt"
+        "\\setbox0=\\vbox{\\copy1}[\\the\\ht0|\\the\\dp0]"
+        /* \\box empties its register, \\copy does not. */
+        "\\setbox0=\\box1 [\\the\\wd0|\\the\\wd1]%",
+        "[2.0pt|5.0pt|1.0pt][8.0pt|0.0pt][0.0pt|12.0pt]"
+        "[5.0pt|5.0pt|2.0pt][0.0pt]"
+        "[5.0pt|2.0pt][17.0pt|2.0pt][17.0pt|1.0pt][20.0pt|2.0pt]"
+        "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
+}
+
 /* Page state is global rather than grouped, and an empty page reports a
    \maxdimen goal with zero totals; see docs/DECISIONS.md, page-state. */
 static int test_page_state(void)
@@ -787,14 +821,19 @@ static int test_vertical_lists(void)
     const struct hstex_node *standalone_vbox = engine.node_count >= 4U
                                                    ? &engine.nodes[3]
                                                    : NULL;
-    const struct hstex_node *standalone_hbox = engine.node_count >= 5U
-                                                   ? &engine.nodes[4]
+    /* The two top-level boxes are separated by interline glue, which the
+       reference also emits even when it measures zero. */
+    const struct hstex_node *interline = engine.node_count >= 5U
+                                             ? &engine.nodes[4]
+                                             : NULL;
+    const struct hstex_node *standalone_hbox = engine.node_count >= 6U
+                                                   ? &engine.nodes[5]
                                                    : NULL;
     int status =
         result != HSTEX_ENGINE_EOF || box.kind != HSTEX_BOX_VLIST ||
         box.width != 0 || box.height != 131072 || box.depth != 0 ||
         box.node_count != 3U || engine.list_item_count != 3U ||
-        engine.node_count != 5U || glue == NULL ||
+        engine.node_count != 6U || glue == NULL ||
         glue->kind != HSTEX_NODE_GLUE || glue->width != 131072 ||
         glue->value.glue.stretch != 65536 ||
         glue->value.glue.stretch_order != 1U || penalty == NULL ||
@@ -805,7 +844,8 @@ static int test_vertical_lists(void)
         fil->value.glue.stretch_order != 1U || standalone_vbox == NULL ||
         standalone_vbox->kind != HSTEX_NODE_LIST ||
         standalone_vbox->value.list.box_kind != HSTEX_BOX_VLIST ||
-        standalone_hbox == NULL ||
+        interline == NULL || interline->kind != HSTEX_NODE_GLUE ||
+        interline->width != 0 || standalone_hbox == NULL ||
         standalone_hbox->kind != HSTEX_NODE_LIST ||
         standalone_hbox->value.list.box_kind != HSTEX_BOX_HLIST;
     if (status != 0) {
@@ -1288,6 +1328,7 @@ int main(void)
         run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
                     "\\o{A}\\x{P}{Q}%",
                     "[P|Q|A]") != 0 ||
+        test_box_shift_and_packaging() != 0 ||
         test_page_state() != 0 || test_dimension_units() != 0 ||
         test_pdftex_identification() != 0 ||
         /* \typeout writes to an allocated but unopened stream, and \write

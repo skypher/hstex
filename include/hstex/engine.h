@@ -161,6 +161,22 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_ESCAPE_HEX,
     HSTEX_COMMAND_PDF_UNESCAPE_HEX,
     HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE,
+    HSTEX_COMMAND_COPY,
+    HSTEX_COMMAND_SHIFT_BOX,
+    HSTEX_COMMAND_BOX_DIMEN,
+};
+
+enum hstex_box_dimen {
+    HSTEX_BOX_DIMEN_WIDTH = 0,
+    HSTEX_BOX_DIMEN_HEIGHT,
+    HSTEX_BOX_DIMEN_DEPTH,
+};
+
+enum hstex_shift_box {
+    HSTEX_SHIFT_RAISE = 0,
+    HSTEX_SHIFT_LOWER,
+    HSTEX_SHIFT_MOVE_LEFT,
+    HSTEX_SHIFT_MOVE_RIGHT,
 };
 
 /* One \pdfglyphtounicode mapping. The PDF backend turns these into the
@@ -450,6 +466,10 @@ struct hstex_node {
     int32_t width;
     int32_t height;
     int32_t depth;
+    /* Displacement of a box from its list's baseline: down in a horizontal
+       list, right in a vertical one. Set by \raise, \lower, \moveleft, and
+       \moveright; see docs/DECISIONS.md, box-shift. */
+    int32_t shift;
     union {
         struct {
             uint32_t font;

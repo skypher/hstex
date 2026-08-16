@@ -56,11 +56,15 @@ struct hstex_hbox_builder {
     int32_t depth;
 };
 
+/* A vertical list is measured as TeX packages it: `extent` accumulates
+   everything above the trailing depth, and `trailing_depth` is the depth of
+   the last box or rule, which glue and penalties reset. */
 struct hstex_vbox_builder {
     uint32_t *node_identifiers;
     size_t count;
     size_t capacity;
     int64_t extent;
+    int32_t trailing_depth;
     int32_t width;
 };
 
@@ -1526,6 +1530,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"muskip", HSTEX_COMMAND_MUSKIP},
         {"toks", HSTEX_COMMAND_TOKS},
         {"box", HSTEX_COMMAND_BOX},
+        {"copy", HSTEX_COMMAND_COPY},
         {"setbox", HSTEX_COMMAND_SET_BOX},
         {"hbox", HSTEX_COMMAND_HBOX},
         {"vbox", HSTEX_COMMAND_VBOX},
@@ -1621,6 +1626,47 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         if (register_integer_primitive(
                 engine, engine_state_integer_primitives[index],
                 HSTEX_COMMAND_ENGINE_STATE_INTEGER, (int32_t)index, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_shift_box subtype;
+    } shift_box_primitives[] = {
+        {"raise", HSTEX_SHIFT_RAISE},
+        {"lower", HSTEX_SHIFT_LOWER},
+        {"moveleft", HSTEX_SHIFT_MOVE_LEFT},
+        {"moveright", HSTEX_SHIFT_MOVE_RIGHT},
+    };
+    for (size_t index = 0U;
+         index < sizeof(shift_box_primitives) / sizeof(shift_box_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, shift_box_primitives[index].name,
+                HSTEX_COMMAND_SHIFT_BOX,
+                (int32_t)shift_box_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_box_dimen subtype;
+    } box_dimen_primitives[] = {
+        {"wd", HSTEX_BOX_DIMEN_WIDTH},
+        {"ht", HSTEX_BOX_DIMEN_HEIGHT},
+        {"dp", HSTEX_BOX_DIMEN_DEPTH},
+    };
+    for (size_t index = 0U;
+         index < sizeof(box_dimen_primitives) / sizeof(box_dimen_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, box_dimen_primitives[index].name,
+                HSTEX_COMMAND_BOX_DIMEN,
+                (int32_t)box_dimen_primitives[index].subtype, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2087,6 +2133,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->active_hbox_builder = NULL;
     engine->page_builder->count = 0U;
     engine->page_builder->extent = 0;
+    engine->page_builder->trailing_depth = 0;
     engine->page_builder->width = 0;
     engine->active_vbox_builder = engine->page_builder;
     if (hstex_engine_push_file(engine, path, error, error_capacity) != 0) {
@@ -3302,6 +3349,26 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                              "invalid dimen-parameter meaning");
         }
         *value = engine->dimen_parameters[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_BOX_DIMEN) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "box register outside supported range");
+        }
+        const struct hstex_box *box = &engine->boxes[(size_t)index];
+        /* A void box measures zero in every direction. */
+        if (box->kind == HSTEX_BOX_VOID) {
+            *value = 0;
+            return 1;
+        }
+        *value = meaning->value.integer == (int32_t)HSTEX_BOX_DIMEN_HEIGHT
+                     ? box->height
+                     : meaning->value.integer == (int32_t)HSTEX_BOX_DIMEN_DEPTH
+                           ? box->depth
+                           : box->width;
         return 1;
     }
     if (meaning->command == HSTEX_COMMAND_PAGE_DIMEN) {
@@ -6986,13 +7053,67 @@ static int append_hbox_node(struct hstex_engine *engine,
     }
     builder->node_identifiers[builder->count++] = identifier;
     builder->width = width;
-    if (node->height > builder->height) {
-        builder->height = node->height;
+    /* A box shifted down reaches lower and rises less. */
+    int32_t raised = node->height - node->shift;
+    int32_t dropped = node->depth + node->shift;
+    if (raised > builder->height) {
+        builder->height = raised;
     }
-    if (node->depth > builder->depth) {
-        builder->depth = node->depth;
+    if (dropped > builder->depth) {
+        builder->depth = dropped;
     }
     return 0;
+}
+
+#define HSTEX_IGNORE_DEPTH (-INT32_C(1000) * INT32_C(65536))
+
+static int append_vbox_node(struct hstex_engine *engine,
+                            const struct hstex_node *node, char *error,
+                            size_t error_capacity);
+
+/* Boxes in a vertical list are separated so that their baselines sit
+   \baselineskip apart. When that would bring them closer than
+   \lineskiplimit, \lineskip is used instead. The first box on a list gets no
+   such glue, which \prevdepth records by staying at -1000pt. */
+static int append_interline_glue(struct hstex_engine *engine,
+                                 int32_t following_height, char *error,
+                                 size_t error_capacity)
+{
+    if (engine->prev_depth <= HSTEX_IGNORE_DEPTH) {
+        return 0;
+    }
+    struct hstex_glue baseline =
+        engine->glue_parameters[HSTEX_GLUE_BASELINE_SKIP];
+    int64_t separation = (int64_t)baseline.width -
+                         (int64_t)engine->prev_depth -
+                         (int64_t)following_height;
+    struct hstex_glue glue;
+    if (separation <
+        (int64_t)engine->dimen_parameters[HSTEX_DIMEN_LINE_SKIP_LIMIT]) {
+        glue = engine->glue_parameters[HSTEX_GLUE_LINE_SKIP];
+    } else {
+        if (separation < -INT64_C(1073741823) ||
+            separation > INT64_C(1073741823)) {
+            return set_error(error, error_capacity,
+                             "interline glue exceeds TeX's dimension range");
+        }
+        glue = baseline;
+        glue.width = (int32_t)separation;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .height = 0,
+        .depth = 0,
+        .shift = 0,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+        },
+    };
+    return append_vbox_node(engine, &node, error, error_capacity);
 }
 
 static int append_vbox_node(struct hstex_engine *engine,
@@ -7004,13 +7125,22 @@ static int append_vbox_node(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "vertical node used outside a vbox or page");
     }
+    if (node->kind == HSTEX_NODE_LIST &&
+        append_interline_glue(engine, node->height, error, error_capacity) !=
+            0) {
+        return -1;
+    }
+    builder = engine->active_vbox_builder;
     int64_t extent = builder->extent;
+    int32_t trailing_depth = builder->trailing_depth;
     if (node->kind == HSTEX_NODE_GLUE) {
-        extent += node->width;
+        extent += (int64_t)trailing_depth + node->width;
+        trailing_depth = 0;
     } else if (node->kind == HSTEX_NODE_RULE ||
                node->kind == HSTEX_NODE_CHARACTER ||
                node->kind == HSTEX_NODE_LIST) {
-        extent += (int64_t)node->height + node->depth;
+        extent += (int64_t)trailing_depth + node->height;
+        trailing_depth = node->depth;
     }
     if (extent < INT64_MIN / 2 || extent > INT64_MAX / 2) {
         return set_error(error, error_capacity, "vertical extent overflow");
@@ -7023,10 +7153,18 @@ static int append_vbox_node(struct hstex_engine *engine,
     }
     builder->node_identifiers[builder->count++] = identifier;
     builder->extent = extent;
-    if ((node->kind == HSTEX_NODE_RULE ||
-         node->kind == HSTEX_NODE_LIST) &&
-        node->width > builder->width) {
-        builder->width = node->width;
+    builder->trailing_depth = trailing_depth;
+    /* A box sets the reference for the next one; a rule suppresses it. */
+    if (node->kind == HSTEX_NODE_LIST) {
+        engine->prev_depth = node->depth;
+    } else if (node->kind == HSTEX_NODE_RULE) {
+        engine->prev_depth = HSTEX_IGNORE_DEPTH;
+    }
+    /* A box shifted right widens the list by the displacement. */
+    int32_t reach = node->width + node->shift;
+    if ((node->kind == HSTEX_NODE_RULE || node->kind == HSTEX_NODE_LIST) &&
+        reach > builder->width) {
+        builder->width = reach;
     }
     return 0;
 }
@@ -7438,7 +7576,15 @@ static int finalize_vbox(struct hstex_engine *engine,
                            error, error_capacity) != 0) {
         return -1;
     }
+    /* The trailing depth becomes the box's depth, but only up to
+       \boxmaxdepth; whatever exceeds it counts as height instead. */
     int64_t height = builder->extent;
+    int32_t depth = builder->trailing_depth;
+    int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
+    if (depth > limit) {
+        height += (int64_t)depth - limit;
+        depth = limit;
+    }
     if (matched_to) {
         height = requested_height;
     } else if (matched_spread) {
@@ -7453,6 +7599,7 @@ static int finalize_vbox(struct hstex_engine *engine,
     box->kind = HSTEX_BOX_VLIST;
     box->width = builder->width;
     box->height = (int32_t)height;
+    box->depth = depth;
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
         box->node_count = (uint32_t)builder->count;
@@ -7538,6 +7685,133 @@ static int append_box_node(struct hstex_engine *engine,
     return append_current_list_node(engine, &node, error, error_capacity);
 }
 
+/* TeX's <box>: an explicit \hbox or \vbox, or a register fetched with \box,
+   which voids it, or \copy, which does not. Registers hold immutable node
+   ranges, so a copy shares the range. */
+static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
+                            char *error, size_t error_capacity)
+{
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result =
+        expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity);
+    if (result == HSTEX_ENGINE_ERROR) {
+        return -1;
+    }
+    if (result != HSTEX_ENGINE_TOKEN ||
+        !hstex_token_is_control_sequence(token)) {
+        return set_error(error, error_capacity, "a box was expected here");
+    }
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (meaning->command == HSTEX_COMMAND_HBOX) {
+        return scan_hbox(engine, box, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_VBOX) {
+        return scan_vbox(engine, box, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_BOX ||
+        meaning->command == HSTEX_COMMAND_COPY) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "box register outside supported range");
+        }
+        *box = engine->boxes[(size_t)index];
+        if (meaning->command == HSTEX_COMMAND_BOX) {
+            struct hstex_box empty = {0};
+            empty.kind = HSTEX_BOX_VOID;
+            if (assign_box(engine, (uint32_t)index, empty, false, error,
+                           error_capacity) != 0) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+    return set_error(error, error_capacity, "a box was expected here");
+}
+
+/* \raise and \lower displace a box in a horizontal list, \moveleft and
+   \moveright in a vertical one. */
+static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
+                             char *error, size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "box displacement does not accept prefixes");
+    }
+    bool vertical = subtype == (int32_t)HSTEX_SHIFT_MOVE_LEFT ||
+                    subtype == (int32_t)HSTEX_SHIFT_MOVE_RIGHT;
+    if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
+                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         vertical
+                             ? "moveleft and moveright require vertical mode"
+                             : "raise and lower require horizontal mode");
+    }
+    int32_t amount = 0;
+    if (scan_dimension(engine, &amount, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box box;
+    if (scan_box_operand(engine, &box, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (box.kind == HSTEX_BOX_VOID) {
+        return 0;
+    }
+    /* \raise and \moveleft displace against the positive direction. */
+    int32_t shift = subtype == (int32_t)HSTEX_SHIFT_RAISE ||
+                            subtype == (int32_t)HSTEX_SHIFT_MOVE_LEFT
+                        ? -amount
+                        : amount;
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box.width,
+        .height = box.height,
+        .depth = box.depth,
+        .shift = shift,
+        .value.list = {
+            .node_start = box.node_start,
+            .node_count = box.node_count,
+            .box_kind = box.kind,
+        },
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+/* \box and \copy used on their own contribute the box to the current list. */
+static int execute_box_reference(struct hstex_engine *engine,
+                                 enum hstex_command command, char *error,
+                                 size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "box reference does not accept prefixes");
+    }
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    struct hstex_box box = engine->boxes[(size_t)index];
+    if (command == HSTEX_COMMAND_BOX) {
+        struct hstex_box empty = {0};
+        empty.kind = HSTEX_BOX_VOID;
+        if (assign_box(engine, (uint32_t)index, empty, false, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (box.kind == HSTEX_BOX_VOID) {
+        return 0;
+    }
+    return append_box_node(engine, &box, error, error_capacity);
+}
+
 static int execute_box_constructor(struct hstex_engine *engine,
                                    enum hstex_command command, char *error,
                                    size_t error_capacity)
@@ -7572,30 +7846,8 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
     if (scan_optional_equals(engine, error, error_capacity) != 0) {
         return -1;
     }
-    hstex_token constructor = 0U;
-    struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space(
-        engine, &constructor, &location, error, error_capacity);
-    if (result != HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(constructor)) {
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-        return set_error(error, error_capacity,
-                         "setbox requires a box specification");
-    }
-    const struct hstex_meaning *meaning = hstex_engine_meaning(
-        engine, hstex_token_control_sequence_id(constructor));
     struct hstex_box value;
-    if (meaning->command != HSTEX_COMMAND_HBOX &&
-        meaning->command != HSTEX_COMMAND_VBOX) {
-        return set_error(error, error_capacity,
-                         "unsupported setbox box specification");
-    }
-    int scan_status = meaning->command == HSTEX_COMMAND_HBOX
-                          ? scan_hbox(engine, &value, error, error_capacity)
-                          : scan_vbox(engine, &value, error, error_capacity);
-    if (scan_status != 0) {
+    if (scan_box_operand(engine, &value, error, error_capacity) != 0) {
         return -1;
     }
     return assign_box(engine, (uint32_t)register_index, value,
@@ -8403,6 +8655,41 @@ static int scan_page_dimen_assignment(struct hstex_engine *engine,
         engine->page_dimens[(size_t)index] = value;
     }
     return 0;
+}
+
+/* Setting a dimension of a void box has no effect; the value is still
+   scanned. */
+static int scan_box_dimen_assignment(struct hstex_engine *engine,
+                                     int32_t subtype, char *error,
+                                     size_t error_capacity)
+{
+    int32_t index = 0;
+    int32_t value = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_dimension(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    struct hstex_box box = engine->boxes[(size_t)index];
+    if (box.kind == HSTEX_BOX_VOID) {
+        return 0;
+    }
+    if (subtype == (int32_t)HSTEX_BOX_DIMEN_HEIGHT) {
+        box.height = value;
+    } else if (subtype == (int32_t)HSTEX_BOX_DIMEN_DEPTH) {
+        box.depth = value;
+    } else {
+        box.width = value;
+    }
+    return assign_box(engine, (uint32_t)index, box, requested_global, error,
+                      error_capacity);
 }
 
 static int scan_prev_depth_assignment(struct hstex_engine *engine,
@@ -11264,6 +11551,28 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_BOX_DIMEN:
+            if (finish_assignment(
+                    engine,
+                    scan_box_dimen_assignment(engine, meaning->value.integer,
+                                              error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SHIFT_BOX:
+            if (execute_shift_box(engine, meaning->value.integer, error,
+                                  error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_BOX:
+        case HSTEX_COMMAND_COPY:
+            if (execute_box_reference(engine, meaning->command, error,
+                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_VSKIP:
             if (execute_vertical_glue(engine, meaning->value.integer, error,
                                       error_capacity) != 0) {
@@ -11721,7 +12030,6 @@ handle_token:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "muexpr used outside a math-glue context");
-        case HSTEX_COMMAND_BOX:
         case HSTEX_COMMAND_MATH_GROUP:
         case HSTEX_COMMAND_LANGUAGE:
         case HSTEX_COMMAND_PENALTY_ARRAY:
