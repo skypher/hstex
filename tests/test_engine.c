@@ -337,11 +337,21 @@ int main(void)
         run_snippet("\\def\\a#1{[#1]}\\def\\b#1{[#1]}"
                     "\\ifx\\a\\b T\\else F\\fi%",
                     "T") != 0 ||
-        run_snippet("\\chardef\\A=65\\ifnum\\A=65 \\A\\else X\\fi%",
+        run_snippet("\\chardef\\A=65 \\ifnum\\A=65 \\A\\else X\\fi%",
                     "A") != 0 ||
         run_snippet("\\countdef\\n=7 \\n=1 {\\n=2 \\ifnum\\n=2 L\\fi}"
                     "\\ifnum\\n=1 G\\fi%",
                     "LG") != 0 ||
+        run_snippet("\\countdef\\n=1 \\n=100 \\divide\\n by 6 "
+                    "\\multiply\\n -3 \\advance\\n 2 \\number\\n%",
+                    "-46") != 0 ||
+        run_snippet("\\countdef\\n=2 \\n=7 "
+                    "\\def\\two#1{\\ifnum#1<10 0\\fi\\number#1}"
+                    "\\edef\\saved{\\two{\\the\\n}}\\n=42 \\saved%",
+                    "07") != 0 ||
+        run_snippet("\\def\\a{A}\\edef\\saved{\\noexpand\\a}"
+                    "\\def\\a{B}\\saved%",
+                    "B") != 0 ||
         run_snippet("\\catcode`\\@=11 \\def\\word@word{X}\\word@word%",
                     "X") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",

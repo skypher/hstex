@@ -19,8 +19,10 @@ global definitions, `let`, definition prefixes, `expandafter`, and `noexpand`.
 The executor supports mutable catcodes and integer/count state, character and
 count definitions, nested integer and meaning conditionals, scoped restoration,
 and nested file input. It currently bootstraps the installed `latex.ltx` through
-its first included configuration file; arithmetic, expanded definitions, and
-typesetting remain under construction.
+its first included configuration file and date calculation, including scoped
+integer arithmetic, serialization, expanded definitions, and conditionals
+inside expansions. File-stream primitives and typesetting remain under
+construction.
 
 ## Build
 

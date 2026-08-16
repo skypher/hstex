@@ -79,6 +79,13 @@ queries. Conditionals are tracked in a separate contiguous stack; false
 branches are skipped without macro expansion while nested conditionals remain
 balanced.
 
+Expanded definitions reuse the ordinary immutable macro representation but
+drive the replacement scanner through the expansion loop. Integer `the` and
+`number` expansions materialize compact other-character token arrays;
+conditionals execute inside that loop, so expanded definitions see the same
+branch semantics as ordinary execution. Checked 64-bit intermediates implement
+32-bit `advance`, `multiply`, and `divide` assignments.
+
 File input first checks the process and calling-file directories. During the
 bootstrap phase it uses `kpsewhich` as a safe argv-based lookup fallback for
 TeX Live inputs; resolved files enter the same owned source stack. This fallback

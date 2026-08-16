@@ -38,3 +38,11 @@ skipping. Its relevant transcript was:
 ```text
 LOCALCOUNT=T RESTORE=T MACROIFX=T NESTED=C
 ```
+
+The arithmetic/expanded-definition probe then composed count-register
+arithmetic, integer serialization, `the`, conditionals inside `edef`, and
+`noexpand` preservation. The relevant transcript was:
+
+```text
+ARITH=-46 EDEF=07 NOEXPAND=B
+```

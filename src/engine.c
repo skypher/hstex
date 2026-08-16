@@ -491,6 +491,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"relax", HSTEX_COMMAND_RELAX},
         {"def", HSTEX_COMMAND_DEF},
         {"gdef", HSTEX_COMMAND_GDEF},
+        {"edef", HSTEX_COMMAND_EDEF},
+        {"xdef", HSTEX_COMMAND_XDEF},
         {"let", HSTEX_COMMAND_LET},
         {"long", HSTEX_COMMAND_LONG},
         {"outer", HSTEX_COMMAND_OUTER},
@@ -513,6 +515,11 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"end", HSTEX_COMMAND_END},
         {"endinput", HSTEX_COMMAND_END_INPUT},
         {"errmessage", HSTEX_COMMAND_ERROR_MESSAGE},
+        {"advance", HSTEX_COMMAND_ADVANCE},
+        {"multiply", HSTEX_COMMAND_MULTIPLY},
+        {"divide", HSTEX_COMMAND_DIVIDE},
+        {"the", HSTEX_COMMAND_THE},
+        {"number", HSTEX_COMMAND_NUMBER},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
          ++index) {
@@ -1125,6 +1132,46 @@ static int scan_optional_equals(struct hstex_engine *engine, char *error,
     return push_one(engine, token, location, error, error_capacity);
 }
 
+static int push_integer_expansion(struct hstex_engine *engine, int32_t value,
+                                  struct hstex_source_location location,
+                                  char *error, size_t error_capacity)
+{
+    char digits[32];
+    int length = snprintf(digits, sizeof(digits), "%lld", (long long)value);
+    if (length <= 0 || (size_t)length >= sizeof(digits)) {
+        return set_error(error, error_capacity,
+                         "could not format integer expansion");
+    }
+    struct token_vector expansion = {0};
+    for (int index = 0; index < length; ++index) {
+        if (vector_push(&expansion,
+                        hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                              (uint8_t)digits[index]),
+                        error, error_capacity) != 0) {
+            vector_destroy(&expansion);
+            return -1;
+        }
+    }
+    if (push_owned_vector(engine, &expansion, location, error, error_capacity) !=
+        0) {
+        vector_destroy(&expansion);
+        return -1;
+    }
+    return 0;
+}
+
+static int expand_integer_primitive(struct hstex_engine *engine,
+                                    struct hstex_source_location location,
+                                    char *error, size_t error_capacity)
+{
+    int32_t value = 0;
+    if (scan_integer(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    return push_integer_expansion(engine, value, location, error,
+                                  error_capacity);
+}
+
 static bool token_is_paragraph(const struct hstex_engine *engine,
                                hstex_token token)
 {
@@ -1362,6 +1409,18 @@ cleanup:
 static int expand_token_once(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity);
+static int scan_if_num(struct hstex_engine *engine, char *error,
+                       size_t error_capacity);
+static int scan_if_x(struct hstex_engine *engine, char *error,
+                     size_t error_capacity);
+static int start_conditional(struct hstex_engine *engine, bool condition,
+                             char *error, size_t error_capacity);
+static int skip_conditional(struct hstex_engine *engine, bool stop_at_else,
+                            char *error, size_t error_capacity);
+static int execute_else(struct hstex_engine *engine, char *error,
+                        size_t error_capacity);
+static int execute_fi(struct hstex_engine *engine, char *error,
+                      size_t error_capacity);
 
 static int expand_after(struct hstex_engine *engine,
                         struct hstex_source_location location, char *error,
@@ -1428,6 +1487,28 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_NO_EXPAND) {
         return no_expand_once(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_THE ||
+        meaning->command == HSTEX_COMMAND_NUMBER) {
+        return expand_integer_primitive(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_NUM) {
+        return scan_if_num(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_X) {
+        return scan_if_x(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_TRUE ||
+        meaning->command == HSTEX_COMMAND_IF_FALSE) {
+        return start_conditional(engine,
+                                 meaning->command == HSTEX_COMMAND_IF_TRUE,
+                                 error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_ELSE) {
+        return execute_else(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_FI) {
+        return execute_fi(engine, error, error_capacity);
+    }
     return push_one(engine, token, location, error, error_capacity);
 }
 
@@ -1490,12 +1571,54 @@ enum hstex_engine_result hstex_engine_next_expanded(
             engine->returned_unexpanded = true;
             return HSTEX_ENGINE_TOKEN;
         }
+        if (meaning->command == HSTEX_COMMAND_THE ||
+            meaning->command == HSTEX_COMMAND_NUMBER) {
+            if (expand_integer_primitive(engine, *location, error,
+                                         error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_NUM) {
+            if (scan_if_num(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_X) {
+            if (scan_if_x(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_TRUE ||
+            meaning->command == HSTEX_COMMAND_IF_FALSE) {
+            if (start_conditional(
+                    engine, meaning->command == HSTEX_COMMAND_IF_TRUE, error,
+                    error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_ELSE) {
+            if (execute_else(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_FI) {
+            if (execute_fi(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
         return HSTEX_ENGINE_TOKEN;
     }
 }
 
 static int scan_definition(struct hstex_engine *engine, bool inherent_global,
-                           char *error, size_t error_capacity)
+                           bool expanded_replacement, char *error,
+                           size_t error_capacity)
 {
     hstex_token target = 0U;
     struct hstex_source_location target_location;
@@ -1546,8 +1669,12 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     while (depth != 0U) {
         hstex_token current = 0U;
         struct hstex_source_location location;
-        if (raw_next(engine, &current, &location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN) {
+        enum hstex_engine_result result =
+            expanded_replacement
+                ? hstex_engine_next_expanded(engine, &current, &location, error,
+                                             error_capacity)
+                : raw_next(engine, &current, &location, error, error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN) {
             vector_destroy(&parameter_text);
             vector_destroy(&replacement);
             return set_error(error, error_capacity,
@@ -1674,6 +1801,32 @@ static int scan_definition_target(struct hstex_engine *engine,
     return 0;
 }
 
+static int execute_else(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    if (engine->conditional_count == 0U) {
+        return set_error(error, error_capacity, "extra else");
+    }
+    struct hstex_conditional *conditional =
+        &engine->conditionals[engine->conditional_count - 1U];
+    if (conditional->else_seen) {
+        return set_error(error, error_capacity,
+                         "second else in one conditional");
+    }
+    conditional->else_seen = true;
+    return skip_conditional(engine, false, error, error_capacity);
+}
+
+static int execute_fi(struct hstex_engine *engine, char *error,
+                      size_t error_capacity)
+{
+    if (engine->conditional_count == 0U) {
+        return set_error(error, error_capacity, "extra fi");
+    }
+    --engine->conditional_count;
+    return 0;
+}
+
 static int scan_char_definition(struct hstex_engine *engine, char *error,
                                 size_t error_capacity)
 {
@@ -1782,6 +1935,137 @@ static int scan_integer_parameter_assignment(
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return assign_integer_parameter(engine, (uint32_t)parameter, value,
+                                    requested_global, error, error_capacity);
+}
+
+enum integer_variable_kind {
+    INTEGER_VARIABLE_COUNT = 0,
+    INTEGER_VARIABLE_PARAMETER,
+};
+
+struct integer_variable {
+    enum integer_variable_kind kind;
+    uint32_t index;
+};
+
+static int scan_integer_variable(struct hstex_engine *engine,
+                                 struct integer_variable *variable,
+                                 char *error, size_t error_capacity)
+{
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN ||
+        !hstex_token_is_control_sequence(token)) {
+        return set_error(error, error_capacity,
+                         "arithmetic operation requires an integer variable");
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    if (meaning->command == HSTEX_COMMAND_COUNT_REGISTER) {
+        if (meaning->value.integer < 0 ||
+            (size_t)meaning->value.integer >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "invalid count-register variable");
+        }
+        variable->kind = INTEGER_VARIABLE_COUNT;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_COUNT) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+            (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "count variable outside supported range");
+        }
+        variable->kind = INTEGER_VARIABLE_COUNT;
+        variable->index = (uint32_t)index;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_INTEGER_PARAMETER &&
+        meaning->value.integer >= 0 &&
+        meaning->value.integer < (int32_t)HSTEX_INTEGER_PARAMETER_COUNT) {
+        variable->kind = INTEGER_VARIABLE_PARAMETER;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    return set_error(error, error_capacity,
+                     "arithmetic target is not an integer variable");
+}
+
+static bool token_has_character(hstex_token token, uint8_t character)
+{
+    return hstex_token_is_character(token) &&
+           hstex_token_character_code(token) == character;
+}
+
+static int scan_optional_by(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    hstex_token first = 0U;
+    struct hstex_source_location first_location;
+    if (expanded_next_non_space(engine, &first, &first_location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input in arithmetic operation");
+    }
+    if (!token_has_character(first, (uint8_t)'b')) {
+        return push_one(engine, first, first_location, error, error_capacity);
+    }
+    hstex_token second = 0U;
+    struct hstex_source_location second_location;
+    if (hstex_engine_next_expanded(engine, &second, &second_location, error,
+                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input after arithmetic keyword prefix");
+    }
+    if (token_has_character(second, (uint8_t)'y')) {
+        return 0;
+    }
+    if (push_one(engine, second, second_location, error, error_capacity) != 0 ||
+        push_one(engine, first, first_location, error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int execute_arithmetic(struct hstex_engine *engine,
+                              enum hstex_command operation, char *error,
+                              size_t error_capacity)
+{
+    struct integer_variable variable = {0};
+    int32_t operand = 0;
+    if (scan_integer_variable(engine, &variable, error, error_capacity) != 0 ||
+        scan_optional_by(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &operand, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t current = variable.kind == INTEGER_VARIABLE_COUNT
+                          ? engine->counts[variable.index]
+                          : engine->integer_parameters[variable.index];
+    int64_t result = 0;
+    if (operation == HSTEX_COMMAND_ADVANCE) {
+        result = (int64_t)current + operand;
+    } else if (operation == HSTEX_COMMAND_MULTIPLY) {
+        result = (int64_t)current * operand;
+    } else {
+        if (operand == 0) {
+            return set_error(error, error_capacity, "division by zero");
+        }
+        result = (int64_t)current / operand;
+    }
+    if (result < INT32_MIN || result > INT32_MAX) {
+        return set_error(error, error_capacity, "arithmetic overflow");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    if (variable.kind == INTEGER_VARIABLE_COUNT) {
+        return assign_count(engine, variable.index, (int32_t)result,
+                            requested_global, error, error_capacity);
+    }
+    return assign_integer_parameter(engine, variable.index, (int32_t)result,
                                     requested_global, error, error_capacity);
 }
 
@@ -2082,12 +2366,26 @@ handle_token:
             engine->pending_macro_flags = 0U;
             continue;
         case HSTEX_COMMAND_DEF:
-            if (scan_definition(engine, false, error, error_capacity) != 0) {
+            if (scan_definition(engine, false, false, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
         case HSTEX_COMMAND_GDEF:
-            if (scan_definition(engine, true, error, error_capacity) != 0) {
+            if (scan_definition(engine, true, false, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_EDEF:
+            if (scan_definition(engine, false, true, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_XDEF:
+            if (scan_definition(engine, true, true, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -2148,6 +2446,14 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_ADVANCE:
+        case HSTEX_COMMAND_MULTIPLY:
+        case HSTEX_COMMAND_DIVIDE:
+            if (execute_arithmetic(engine, meaning->command, error,
+                                   error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_IF_NUM:
             if (scan_if_num(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -2169,29 +2475,15 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_ELSE: {
-            if (engine->conditional_count == 0U) {
-                (void)set_error(error, error_capacity, "extra else");
-                return HSTEX_ENGINE_ERROR;
-            }
-            struct hstex_conditional *conditional =
-                &engine->conditionals[engine->conditional_count - 1U];
-            if (conditional->else_seen) {
-                (void)set_error(error, error_capacity,
-                                "second else in one conditional");
-                return HSTEX_ENGINE_ERROR;
-            }
-            conditional->else_seen = true;
-            if (skip_conditional(engine, false, error, error_capacity) != 0) {
+            if (execute_else(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
         }
         case HSTEX_COMMAND_FI:
-            if (engine->conditional_count == 0U) {
-                (void)set_error(error, error_capacity, "extra fi");
+            if (execute_fi(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
-            --engine->conditional_count;
             continue;
         case HSTEX_COMMAND_TOKEN_ALIAS:
             *token = meaning->value.token;
@@ -2219,6 +2511,8 @@ handle_token:
                 error, error_capacity, "undefined control sequence");
         case HSTEX_COMMAND_EXPAND_AFTER:
         case HSTEX_COMMAND_NO_EXPAND:
+        case HSTEX_COMMAND_THE:
+        case HSTEX_COMMAND_NUMBER:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "expandable primitive escaped expansion");
         case HSTEX_COMMAND_INPUT:
