@@ -151,6 +151,28 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_PRIMITIVE,
     HSTEX_COMMAND_PENALTY_ARRAY,
     HSTEX_COMMAND_ENGINE_STATE_INTEGER,
+    HSTEX_COMMAND_PAGE_INTEGER,
+    HSTEX_COMMAND_PAGE_DIMEN,
+};
+
+/* Page-builder state. It belongs to the page rather than to a group, so it is
+   not saved or restored by grouping. */
+enum hstex_page_integer {
+    HSTEX_PAGE_DEAD_CYCLES = 0,
+    HSTEX_PAGE_INSERT_PENALTIES,
+    HSTEX_PAGE_INTEGER_COUNT,
+};
+
+enum hstex_page_dimen {
+    HSTEX_PAGE_GOAL = 0,
+    HSTEX_PAGE_TOTAL,
+    HSTEX_PAGE_STRETCH,
+    HSTEX_PAGE_FIL_STRETCH,
+    HSTEX_PAGE_FILL_STRETCH,
+    HSTEX_PAGE_FILLL_STRETCH,
+    HSTEX_PAGE_SHRINK,
+    HSTEX_PAGE_DEPTH,
+    HSTEX_PAGE_DIMEN_COUNT,
 };
 
 enum hstex_integer_parameter {
@@ -498,6 +520,8 @@ struct hstex_engine {
     uint32_t code_levels[5][256];
     int32_t integer_parameters[HSTEX_INTEGER_PARAMETER_COUNT];
     uint32_t integer_parameter_levels[HSTEX_INTEGER_PARAMETER_COUNT];
+    int32_t page_integers[HSTEX_PAGE_INTEGER_COUNT];
+    int32_t page_dimens[HSTEX_PAGE_DIMEN_COUNT];
     uint32_t catcode_levels[256];
     FILE *write_streams[16];
     FILE *read_streams[16];
@@ -518,6 +542,7 @@ struct hstex_engine {
     bool inhibit_protected_expansion;
     bool negate_next_conditional;
     bool dump_requested;
+    bool end_requested;
     uint32_t output_group_floor;
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;

@@ -26,9 +26,18 @@ reads, EOF conditionals, messages, printable `string`/`meaning` expansion, and
 the initial register allocators. Scaled dimensions, finite and infinite-order
 glue, dimension/glue parameters, character code tables, and protected macros
 are implemented with scoped restoration. Immutable token-list registers and
-parameters support copying, grouping, `the`, and expansion-safe insertion;
-dynamic control-sequence construction and typesetting remain under
-construction.
+parameters support copying, grouping, `the`, and expansion-safe insertion.
+Dimension units are matched as backtracking keywords and converted with the
+reference engine's scaled-point arithmetic, and TeX's page state and `\end` are
+in place, so the engine now runs a `\documentclass{article}` document from
+`\begin{document}` to `\end{document}` against the installed `latex.ltx`:
+
+```sh
+./build/hstex --run-latex "$(kpsewhich latex.ltx)" document.tex
+```
+
+Paragraph breaking, the page builder, the output routine, and PDF emission
+remain under construction.
 
 ## Build
 

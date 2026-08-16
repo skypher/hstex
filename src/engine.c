@@ -1605,6 +1605,39 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    static const char *page_integer_primitives[] = {
+        "deadcycles",
+        "insertpenalties",
+    };
+    for (size_t index = 0U;
+         index < sizeof(page_integer_primitives) /
+                     sizeof(page_integer_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(engine, page_integer_primitives[index],
+                                       HSTEX_COMMAND_PAGE_INTEGER,
+                                       (int32_t)index, error,
+                                       error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const char *page_dimen_primitives[] = {
+        "pagegoal",       "pagetotal",       "pagestretch",
+        "pagefilstretch", "pagefillstretch", "pagefilllstretch",
+        "pageshrink",     "pagedepth",
+    };
+    for (size_t index = 0U;
+         index < sizeof(page_dimen_primitives) /
+                     sizeof(page_dimen_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(engine, page_dimen_primitives[index],
+                                       HSTEX_COMMAND_PAGE_DIMEN,
+                                       (int32_t)index, error,
+                                       error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
     if (register_integer_primitive(engine, "pdfshellescape",
                                    HSTEX_COMMAND_INTEGER_CONSTANT, 0, error,
                                    error_capacity) != 0) {
@@ -2630,6 +2663,15 @@ static int integer_from_control_sequence(
         *value = engine->integer_parameters[(size_t)index];
         return 0;
     }
+    case HSTEX_COMMAND_PAGE_INTEGER: {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || index >= (int32_t)HSTEX_PAGE_INTEGER_COUNT) {
+            return set_error(error, error_capacity,
+                             "invalid page-integer meaning");
+        }
+        *value = engine->page_integers[(size_t)index];
+        return 0;
+    }
     case HSTEX_COMMAND_COUNT: {
         int32_t index = 0;
         if (scan_integer(engine, &index, error, error_capacity) != 0 ||
@@ -3136,6 +3178,8 @@ static int glue_from_meaning(struct hstex_engine *engine,
                              struct hstex_glue *value, char *error,
                              size_t error_capacity);
 
+static bool page_is_empty(const struct hstex_engine *engine);
+
 static int dimen_from_meaning(struct hstex_engine *engine,
                               const struct hstex_meaning *meaning,
                               int32_t *value, char *error,
@@ -3165,6 +3209,23 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                              "invalid dimen-parameter meaning");
         }
         *value = engine->dimen_parameters[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_PAGE_DIMEN) {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || index >= (int32_t)HSTEX_PAGE_DIMEN_COUNT) {
+            return set_error(error, error_capacity,
+                             "invalid page-dimen meaning");
+        }
+        /* While the page is empty the page dimensions read as a fixed pair:
+           the goal is \maxdimen and every other total is zero. Once a box has
+           reached the page the totals come from the page builder, which does
+           not exist yet; reporting the stored zeros would diverge silently. */
+        if (!page_is_empty(engine)) {
+            return set_error(error, error_capacity,
+                             "page totals require the page builder");
+        }
+        *value = index == (int32_t)HSTEX_PAGE_GOAL ? HSTEX_MAX_DIMEN : 0;
         return 1;
     }
     if (meaning->command == HSTEX_COMMAND_DIMEN) {
@@ -3218,6 +3279,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_COUNT:
     case HSTEX_COMMAND_NUM_EXPR:
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
+    case HSTEX_COMMAND_PAGE_INTEGER:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
     case HSTEX_COMMAND_LC_CODE:
@@ -7941,6 +8003,72 @@ static int scan_dimen_parameter_assignment(struct hstex_engine *engine,
                                   requested_global, error, error_capacity);
 }
 
+/* The page stays empty until a box or rule reaches the main vertical list;
+   glue and penalties contributed before that are discarded by the page
+   builder and leave the page totals untouched. */
+static bool page_is_empty(const struct hstex_engine *engine)
+{
+    const struct hstex_vbox_builder *page = engine->page_builder;
+    if (page == NULL) {
+        return true;
+    }
+    for (size_t index = 0U; index < page->count; ++index) {
+        uint32_t identifier = page->node_identifiers[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
+        if (kind == HSTEX_NODE_RULE || kind == HSTEX_NODE_LIST) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Page state is not saved by grouping, so these assignments bypass the save
+   stack and ignore \global. */
+static int scan_page_integer_assignment(struct hstex_engine *engine,
+                                        int32_t index, char *error,
+                                        size_t error_capacity)
+{
+    int32_t value = 0;
+    if (index < 0 || index >= (int32_t)HSTEX_PAGE_INTEGER_COUNT) {
+        return set_error(error, error_capacity,
+                         "invalid page-integer assignment");
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    engine->page_integers[(size_t)index] = value;
+    return 0;
+}
+
+static int scan_page_dimen_assignment(struct hstex_engine *engine,
+                                      int32_t index, char *error,
+                                      size_t error_capacity)
+{
+    int32_t value = 0;
+    if (index < 0 || index >= (int32_t)HSTEX_PAGE_DIMEN_COUNT) {
+        return set_error(error, error_capacity,
+                         "invalid page-dimen assignment");
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_dimension(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    /* An assignment to a page dimension is discarded while the page is empty;
+       the value is still scanned. */
+    if (!page_is_empty(engine)) {
+        engine->page_dimens[(size_t)index] = value;
+    }
+    return 0;
+}
+
 static int scan_prev_depth_assignment(struct hstex_engine *engine,
                                       char *error, size_t error_capacity)
 {
@@ -9451,6 +9579,8 @@ static bool meanings_equal(const struct hstex_engine *engine,
     case HSTEX_COMMAND_MATH_PRIMITIVE:
     case HSTEX_COMMAND_PENALTY_ARRAY:
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
+    case HSTEX_COMMAND_PAGE_INTEGER:
+    case HSTEX_COMMAND_PAGE_DIMEN:
         return left->value.integer == right->value.integer;
     default:
         return true;
@@ -10148,7 +10278,7 @@ enum hstex_engine_result hstex_engine_next_output(
     struct hstex_source_location *location, char *error,
     size_t error_capacity)
 {
-    if (engine->dump_requested) {
+    if (engine->dump_requested || engine->end_requested) {
         return HSTEX_ENGINE_EOF;
     }
     for (;;) {
@@ -10536,6 +10666,24 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_PAGE_INTEGER:
+            if (finish_assignment(
+                    engine,
+                    scan_page_integer_assignment(engine, meaning->value.integer,
+                                                 error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PAGE_DIMEN:
+            if (finish_assignment(
+                    engine,
+                    scan_page_dimen_assignment(engine, meaning->value.integer,
+                                               error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_DIMEN_REGISTER:
             if (finish_assignment(
                     engine,
@@ -10832,8 +10980,19 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_END:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity, "end primitive is not implemented");
+            /* \end finishes the job when the main vertical list is empty and
+               no output cycle is pending. Nothing reaches a main vertical list
+               yet, so that condition always holds; a non-empty list must
+               instead force one more output cycle once the page builder
+               exists. */
+            if (engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] != 0) {
+                return (enum hstex_engine_result)set_error(
+                    error, error_capacity,
+                    "end with a pending output cycle requires the page "
+                    "builder");
+            }
+            engine->end_requested = true;
+            return HSTEX_ENGINE_EOF;
         case HSTEX_COMMAND_END_INPUT:
             if (hstex_source_end_current_file(&engine->sources, error,
                                               error_capacity) != 0) {

@@ -84,7 +84,15 @@ fixed-point arithmetic for decimal factors, physical units, internal dimension
 values, and TeX's bounded range. Units are matched as backtracking keywords
 rather than as letter runs, and a decimal factor is quantized to scaled points
 before any unit conversion; `docs/DECISIONS.md` records the observations behind
-both rules. Glue stores width, stretch, shrink, and the two
+both rules.
+
+Page state — `\deadcycles`, `\insertpenalties`, and the page dimensions — lives
+directly on the engine context with no save-stack entries, because it belongs
+to the page rather than to a group. The page counts as empty until a box or
+rule reaches the main vertical list, and while it is empty the page dimensions
+report a fixed `\maxdimen` goal with zero totals. Reading them after that point
+requires the page builder and is refused rather than answered with a stored
+zero. Glue stores width, stretch, shrink, and the two
 infinite-order tags inline; registers and named dimension/glue parameters share
 the meaning and save-stack machinery used by integer state. Character code
 tables are flat 256-entry arrays with level tags, keeping assignments and

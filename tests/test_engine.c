@@ -516,6 +516,21 @@ static int test_file_streams(void)
     return status;
 }
 
+/* Page state is global rather than grouped, and an empty page reports a
+   \maxdimen goal with zero totals; see docs/DECISIONS.md, page-state. */
+static int test_page_state(void)
+{
+    return run_snippet("[\\number\\deadcycles]"
+                       "[\\number\\insertpenalties]"
+                       "{\\deadcycles=5 }[\\number\\deadcycles]"
+                       "\\deadcycles=7 [\\number\\deadcycles]"
+                       "[\\the\\pagegoal][\\the\\pagetotal][\\the\\pagedepth]"
+                       "\\vskip3pt [\\the\\pagegoal]"
+                       "\\pagegoal=50pt [\\the\\pagegoal]%",
+                       "[0][0][5][7][16383.99998pt][0.0pt][0.0pt]"
+                       "[16383.99998pt][16383.99998pt]");
+}
+
 /* Units are keywords, not maximal letter runs, and every conversion below is
    recorded in docs/DECISIONS.md under dimension-unit-arithmetic. */
 static int test_dimension_units(void)
@@ -1229,7 +1244,10 @@ int main(void)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
-        test_dimension_units() != 0 ||
+        test_page_state() != 0 || test_dimension_units() != 0 ||
+        run_snippet("A\\end B%", "A") != 0 ||
+        expect_failure("\\hbox{}\\the\\pagegoal%",
+                       "page totals require the page builder") != 0 ||
         test_dimensions_and_glue() != 0 || test_token_lists() != 0 ||
         test_empty_hboxes() != 0 || test_vertical_lists() != 0 ||
         test_pdf_file_size() != 0) {
