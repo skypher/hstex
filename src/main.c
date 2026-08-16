@@ -324,10 +324,16 @@ static int run_latex(const char *format_path, const char *document_path)
         return 1;
     }
     static const char output_directory[] = "build/document-output";
+    /* pdflatex.ini builds the format from pdftexconfig.tex followed by
+       latex.ltx. The format source is pushed first so that the configuration
+       stacked on top of it runs first. */
+    static const char config_name[] = "pdftexconfig.tex";
     if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
         hstex_engine_set_output_directory(&engine, output_directory, error,
                                           sizeof(error)) != 0 ||
-        hstex_engine_push_file(&engine, format_path, error, sizeof(error)) != 0) {
+        hstex_engine_push_file(&engine, format_path, error, sizeof(error)) != 0 ||
+        hstex_engine_push_input(&engine, config_name, error, sizeof(error)) !=
+            0) {
         (void)fprintf(stderr, "hstex: %s\n",
                       error[0] == '\0' ? "cannot prepare document output"
                                         : error);

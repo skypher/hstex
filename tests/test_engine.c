@@ -516,6 +516,18 @@ static int test_file_streams(void)
     return status;
 }
 
+/* expl3 selects its backend from these, so the values must match the engine
+   HSTeX reproduces; see docs/DECISIONS.md, pdftex-identification. */
+static int test_pdftex_identification(void)
+{
+    return run_snippet("[\\number\\pdftexversion][\\pdftexrevision]"
+                       "\\pdfoutput=1 [\\number\\pdfoutput]"
+                       "\\pdfpagewidth=8.5 true in [\\the\\pdfpagewidth]"
+                       "\\pdfpageheight=11 true in [\\the\\pdfpageheight]"
+                       "\\pdfminorversion=5 [\\number\\pdfminorversion]%",
+                       "[140][25][1][614.295pt][794.96999pt][5]");
+}
+
 /* Page state is global rather than grouped, and an empty page reports a
    \maxdimen goal with zero totals; see docs/DECISIONS.md, page-state. */
 static int test_page_state(void)
@@ -1245,6 +1257,12 @@ int main(void)
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
         test_page_state() != 0 || test_dimension_units() != 0 ||
+        test_pdftex_identification() != 0 ||
+        /* \typeout writes to an allocated but unopened stream, and \write
+           accepts any stream number. Neither may fail or consume output. */
+        run_snippet("\\immediate\\write5{A}\\immediate\\write200{B}"
+                    "\\immediate\\write-1{C}X%",
+                    "X") != 0 ||
         run_snippet("A\\end B%", "A") != 0 ||
         expect_failure("\\hbox{}\\the\\pagegoal%",
                        "page totals require the page builder") != 0 ||

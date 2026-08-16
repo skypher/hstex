@@ -153,7 +153,14 @@ enum hstex_command {
     HSTEX_COMMAND_ENGINE_STATE_INTEGER,
     HSTEX_COMMAND_PAGE_INTEGER,
     HSTEX_COMMAND_PAGE_DIMEN,
+    HSTEX_COMMAND_PDF_TEX_REVISION,
 };
+
+/* Packages and expl3 branch on the pdfTeX version. HSTeX reports the version
+   of the reference engine it reproduces so that those branches are taken the
+   same way; see docs/DECISIONS.md, pdftex-identification. */
+#define HSTEX_PDFTEX_VERSION 140
+#define HSTEX_PDFTEX_REVISION "25"
 
 /* Page-builder state. It belongs to the page rather than to a group, so it is
    not saved or restored by grouping. */
@@ -215,6 +222,15 @@ enum hstex_integer_parameter {
     HSTEX_INTEGER_RIGHT_HYPHEN_MIN,
     HSTEX_INTEGER_LANGUAGE,
     HSTEX_INTEGER_MATH_GROUP,
+    /* pdfTeX output configuration, set by pdftexconfig.tex. */
+    HSTEX_INTEGER_PDF_OUTPUT,
+    HSTEX_INTEGER_PDF_MAJOR_VERSION,
+    HSTEX_INTEGER_PDF_MINOR_VERSION,
+    HSTEX_INTEGER_PDF_COMPRESS_LEVEL,
+    HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL,
+    HSTEX_INTEGER_PDF_DECIMAL_DIGITS,
+    HSTEX_INTEGER_PDF_PK_RESOLUTION,
+    HSTEX_INTEGER_PDF_DRAFT_MODE,
     HSTEX_INTEGER_PARAMETER_COUNT,
 };
 
@@ -240,6 +256,11 @@ enum hstex_dimen_parameter {
     HSTEX_DIMEN_HOFFSET,
     HSTEX_DIMEN_VOFFSET,
     HSTEX_DIMEN_EMERGENCY_STRETCH,
+    /* pdfTeX page geometry, set by pdftexconfig.tex. */
+    HSTEX_DIMEN_PDF_PAGE_WIDTH,
+    HSTEX_DIMEN_PDF_PAGE_HEIGHT,
+    HSTEX_DIMEN_PDF_HORIGIN,
+    HSTEX_DIMEN_PDF_VORIGIN,
     HSTEX_DIMEN_PARAMETER_COUNT,
 };
 
@@ -555,6 +576,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
 void hstex_engine_destroy(struct hstex_engine *engine);
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
+/* Push a file named the way \input names it, resolved through the same
+   search order. */
+int hstex_engine_push_input(struct hstex_engine *engine, const char *name,
+                            char *error, size_t error_capacity);
 int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
 int hstex_engine_set_output_directory(struct hstex_engine *engine,

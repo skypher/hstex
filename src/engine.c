@@ -1461,6 +1461,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"else", HSTEX_COMMAND_ELSE},
         {"fi", HSTEX_COMMAND_FI},
         {"input", HSTEX_COMMAND_INPUT},
+        {"pdftexrevision", HSTEX_COMMAND_PDF_TEX_REVISION},
         {"pdffilesize", HSTEX_COMMAND_PDF_FILE_SIZE},
         {"pdfstrcmp", HSTEX_COMMAND_PDF_STRING_COMPARE},
         {"end", HSTEX_COMMAND_END},
@@ -1640,6 +1641,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     }
     if (register_integer_primitive(engine, "pdfshellescape",
                                    HSTEX_COMMAND_INTEGER_CONSTANT, 0, error,
+                                   error_capacity) != 0 ||
+        register_integer_primitive(engine, "pdftexversion",
+                                   HSTEX_COMMAND_INTEGER_CONSTANT,
+                                   HSTEX_PDFTEX_VERSION, error,
                                    error_capacity) != 0) {
         hstex_engine_destroy(engine);
         return -1;
@@ -1709,6 +1714,14 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"righthyphenmin", HSTEX_INTEGER_RIGHT_HYPHEN_MIN},
         {"language", HSTEX_INTEGER_LANGUAGE},
         {"mathgroup", HSTEX_INTEGER_MATH_GROUP},
+        {"pdfoutput", HSTEX_INTEGER_PDF_OUTPUT},
+        {"pdfmajorversion", HSTEX_INTEGER_PDF_MAJOR_VERSION},
+        {"pdfminorversion", HSTEX_INTEGER_PDF_MINOR_VERSION},
+        {"pdfcompresslevel", HSTEX_INTEGER_PDF_COMPRESS_LEVEL},
+        {"pdfobjcompresslevel", HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL},
+        {"pdfdecimaldigits", HSTEX_INTEGER_PDF_DECIMAL_DIGITS},
+        {"pdfpkresolution", HSTEX_INTEGER_PDF_PK_RESOLUTION},
+        {"pdfdraftmode", HSTEX_INTEGER_PDF_DRAFT_MODE},
     };
     for (size_t index = 0U;
          index < sizeof(integer_primitives) / sizeof(integer_primitives[0]);
@@ -1747,6 +1760,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"hoffset", HSTEX_DIMEN_HOFFSET},
         {"voffset", HSTEX_DIMEN_VOFFSET},
         {"emergencystretch", HSTEX_DIMEN_EMERGENCY_STRETCH},
+        {"pdfpagewidth", HSTEX_DIMEN_PDF_PAGE_WIDTH},
+        {"pdfpageheight", HSTEX_DIMEN_PDF_PAGE_HEIGHT},
+        {"pdfhorigin", HSTEX_DIMEN_PDF_HORIGIN},
+        {"pdfvorigin", HSTEX_DIMEN_PDF_VORIGIN},
     };
     for (size_t index = 0U;
          index < sizeof(dimen_primitives) / sizeof(dimen_primitives[0]);
@@ -2467,6 +2484,22 @@ static char *resolve_input_path(struct hstex_engine *engine,
     }
     free(extended);
     return NULL;
+}
+
+int hstex_engine_push_input(struct hstex_engine *engine, const char *name,
+                            char *error, size_t error_capacity)
+{
+    if (engine == NULL || name == NULL) {
+        return set_error(error, error_capacity, "null engine input name");
+    }
+    char *path = resolve_input_path(engine, name);
+    if (path == NULL) {
+        return set_error(error, error_capacity, "input file not found: %s",
+                         name);
+    }
+    int status = hstex_engine_push_file(engine, path, error, error_capacity);
+    free(path);
+    return status;
 }
 
 static int execute_input(struct hstex_engine *engine, char *error,
@@ -4579,6 +4612,16 @@ static int expand_job_name(struct hstex_engine *engine,
         error_capacity);
 }
 
+static int expand_pdf_tex_revision(struct hstex_engine *engine,
+                                   struct hstex_source_location location,
+                                   char *error, size_t error_capacity)
+{
+    static const char revision[] = HSTEX_PDFTEX_REVISION;
+    return push_other_character_expansion(engine, revision,
+                                          sizeof(revision) - 1U, location,
+                                          error, error_capacity);
+}
+
 static int push_dimension_expansion(struct hstex_engine *engine, int32_t value,
                                     struct hstex_source_location location,
                                     char *error, size_t error_capacity)
@@ -5818,6 +5861,9 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_JOB_NAME) {
         return expand_job_name(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_PDF_TEX_REVISION) {
+        return expand_pdf_tex_revision(engine, location, error, error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_FONT_NAME) {
         return expand_font_name(engine, location, error, error_capacity);
     }
@@ -6039,6 +6085,13 @@ enum hstex_engine_result hstex_engine_next_expanded(
         }
         if (meaning->command == HSTEX_COMMAND_JOB_NAME) {
             if (expand_job_name(engine, *location, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_TEX_REVISION) {
+            if (expand_pdf_tex_revision(engine, *location, error,
+                                        error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -9171,17 +9224,21 @@ static int execute_write(struct hstex_engine *engine, char *error,
     int32_t stream = 0;
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+    /* \write accepts any stream number; only 0..15 can name an open file. */
+    if (scan_integer(engine, &stream, error, error_capacity) != 0 ||
         scan_expanded_general_text(engine, &bytes, &byte_count, error,
                                    error_capacity) != 0) {
         free(bytes);
         return -1;
     }
-    FILE *destination = NULL;
-    if (stream >= 0 && stream < 16) {
+    /* A write to a stream that is not open goes to the log, and also to the
+       terminal unless the stream number is negative. \typeout relies on this:
+       it writes to an allocated but never opened stream. HSTeX has one
+       diagnostic surface so far, so both destinations are stdout. */
+    FILE *destination = stdout;
+    if (stream >= 0 && stream < 16 &&
+        engine->write_streams[(size_t)stream] != NULL) {
         destination = engine->write_streams[(size_t)stream];
-    } else if (stream == -1 || stream == 17) {
-        destination = stdout;
     }
     int status = 0;
     if (destination != NULL &&
@@ -10962,6 +11019,7 @@ handle_token:
         case HSTEX_COMMAND_DETOKENIZE:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:
+        case HSTEX_COMMAND_PDF_TEX_REVISION:
         case HSTEX_COMMAND_THE:
         case HSTEX_COMMAND_NUMBER:
         case HSTEX_COMMAND_ROMAN_NUMERAL:

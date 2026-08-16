@@ -36,6 +36,12 @@ in place, so the engine now runs a `\documentclass{article}` document from
 ./build/hstex --run-latex "$(kpsewhich latex.ltx)" document.tex
 ```
 
+The format is built from `pdftexconfig.tex` and the given source, the way
+`pdflatex.ini` does, and the engine reports pdfTeX's version, so `expl3`
+selects its pdfTeX backend. The resulting message stream is a subsequence of
+the `pdflatex` log for the same document; what is missing is the file-open
+notation and everything downstream of the page builder.
+
 Paragraph breaking, the page builder, the output routine, and PDF emission
 remain under construction.
 
