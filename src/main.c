@@ -1,4 +1,5 @@
 #include "hstex/input.h"
+#include "hstex/engine.h"
 #include "hstex/lex.h"
 #include "hstex/mouth.h"
 #include "hstex/scan.h"
@@ -19,8 +20,9 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --cpu-features\n"
                   "       %s --probe-input FILE\n"
                   "       %s --trace-ini-mouth FILE\n"
-                  "       %s --mouth-stats-latex FILE\n",
-                  program, program, program, program, program);
+                  "       %s --mouth-stats-latex FILE\n"
+                  "       %s --run-ini FILE\n",
+                  program, program, program, program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -230,6 +232,49 @@ static int mouth_stats_latex(const char *path)
     return exit_status;
 }
 
+static int run_ini(const char *path)
+{
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    if (hstex_engine_push_file(&engine, path, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t output_tokens = 0U;
+    struct hstex_source_location last_location = {0};
+    int status = 0;
+    for (;;) {
+        hstex_token token = 0U;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            &engine, &token, &last_location, error, sizeof(error));
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            const char *source = hstex_source_current_name(&engine.sources);
+            (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
+                          source == NULL ? path : source, last_location.line,
+                          last_location.column, error);
+            status = 1;
+            break;
+        }
+        ++output_tokens;
+    }
+    if (status == 0) {
+        (void)printf("path=%s output_tokens=%zu symbols=%zu macros=%zu\n", path,
+                     output_tokens,
+                     engine.lexical_state.symbols.entry_count,
+                     engine.macro_count);
+    }
+    hstex_engine_destroy(&engine);
+    return status;
+}
+
 int main(int argument_count, char **arguments)
 {
     if (argument_count == 2 && strcmp(arguments[1], "--version") == 0) {
@@ -250,6 +295,9 @@ int main(int argument_count, char **arguments)
     if (argument_count == 3 &&
         strcmp(arguments[1], "--mouth-stats-latex") == 0) {
         return mouth_stats_latex(arguments[2]);
+    }
+    if (argument_count == 3 && strcmp(arguments[1], "--run-ini") == 0) {
+        return run_ini(arguments[2]);
     }
 
     print_usage(stderr, arguments[0]);

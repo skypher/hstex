@@ -16,8 +16,11 @@ mutable catcodes, stable control-sequence interning, a line-aware TeX mouth,
 nested file/token sources, and a runtime-dispatched scalar/AVX2 lexical-boundary
 scanner. The expansion core supports ordinary and delimited macros, local and
 global definitions, `let`, definition prefixes, `expandafter`, and `noexpand`.
-It does not yet execute the assignment and typesetting primitives required to
-load LaTeX.
+The executor supports mutable catcodes and integer/count state, character and
+count definitions, nested integer and meaning conditionals, scoped restoration,
+and nested file input. It currently bootstraps the installed `latex.ltx` through
+its first included configuration file; arithmetic, expanded definitions, and
+typesetting remain under construction.
 
 ## Build
 

@@ -72,6 +72,19 @@ texts, strips one enclosing argument group, and substitutes parameter token
 arrays without linked lists. A compact save stack restores local meanings at
 group exit; global assignments supersede pending local restores by level.
 
+Integer parameters, count registers, and catcodes use the same level-tagged
+save discipline. Numeric scanning expands only while acquiring a value and
+supports decimal, character constants, register aliases, and internal catcode
+queries. Conditionals are tracked in a separate contiguous stack; false
+branches are skipped without macro expansion while nested conditionals remain
+balanced.
+
+File input first checks the process and calling-file directories. During the
+bootstrap phase it uses `kpsewhich` as a safe argv-based lookup fallback for
+TeX Live inputs; resolved files enter the same owned source stack. This fallback
+is a compatibility bridge to be replaced by an in-process indexed path cache
+before performance measurements.
+
 The SIMD scanner recognizes the default lexical-boundary bytes and selects AVX2
 at runtime on supported x86-64 CPUs. It is a batching substrate for the mouth;
 the semantic path remains authoritative at mutable boundaries. Scalar and

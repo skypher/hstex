@@ -29,3 +29,12 @@ Direct unit tests additionally cover undelimited and delimited parameters,
 literal parameter markers, literal prefix matching, nested brace stripping,
 local/global definitions, meaning-copying `let`, `long` paragraph arguments,
 and expansion ordering.
+
+The integer, conditional, and register checkpoint used a second INITEX probe
+covering a locally assigned count register, restoration at group exit, `ifnum`,
+deep `ifx` comparison of separately defined macros, and nested false-branch
+skipping. Its relevant transcript was:
+
+```text
+LOCALCOUNT=T RESTORE=T MACROIFX=T NESTED=C
+```

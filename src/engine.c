@@ -2,6 +2,7 @@
 
 #include "hstex/catcode.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -9,11 +10,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 enum {
     HSTEX_INITIAL_MEANING_CAPACITY = 64,
     HSTEX_INITIAL_MACRO_CAPACITY = 32,
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
+    HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
+    HSTEX_COUNT_REGISTER_CAPACITY = 32768,
     HSTEX_MAX_PARAMETERS = 9,
 };
 
@@ -209,6 +215,37 @@ static int reserve_saves(struct hstex_engine *engine, size_t required,
     return 0;
 }
 
+static int reserve_conditionals(struct hstex_engine *engine, size_t required,
+                                char *error, size_t error_capacity)
+{
+    if (required <= engine->conditional_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->conditional_capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_CONDITIONAL_CAPACITY
+                          : engine->conditional_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "conditional-stack capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*engine->conditionals)) {
+        return set_error(error, error_capacity,
+                         "conditional-stack allocation overflow");
+    }
+    void *allocation = realloc(
+        engine->conditionals, capacity * sizeof(*engine->conditionals));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "conditional-stack allocation failed");
+    }
+    engine->conditionals = allocation;
+    engine->conditional_capacity = capacity;
+    return 0;
+}
+
 const struct hstex_meaning *hstex_engine_meaning(
     const struct hstex_engine *engine, hstex_cs_id identifier)
 {
@@ -242,15 +279,153 @@ static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
             return -1;
         }
         struct hstex_save_entry *save = &engine->saves[engine->save_count++];
-        save->identifier = identifier;
+        save->kind = HSTEX_SAVE_MEANING;
+        save->index = identifier;
         save->level = engine->group_level;
-        save->previous = *destination;
+        save->previous_level = destination->level;
+        save->previous.meaning = *destination;
         meaning.level = engine->group_level;
     } else {
         meaning.level = 0U;
     }
     *destination = meaning;
     return 0;
+}
+
+static bool assignment_is_global(const struct hstex_engine *engine,
+                                 bool requested_global)
+{
+    int32_t global_defs =
+        engine->integer_parameters[HSTEX_INTEGER_GLOBAL_DEFS];
+    if (global_defs > 0) {
+        return true;
+    }
+    if (global_defs < 0) {
+        return false;
+    }
+    return requested_global;
+}
+
+static int save_value(struct hstex_engine *engine, enum hstex_save_kind kind,
+                      uint32_t index, uint32_t previous_level,
+                      int32_t previous_integer, uint8_t previous_category,
+                      char *error, size_t error_capacity)
+{
+    if (reserve_saves(engine, engine->save_count + 1U, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    struct hstex_save_entry *save = &engine->saves[engine->save_count++];
+    memset(save, 0, sizeof(*save));
+    save->kind = kind;
+    save->index = index;
+    save->level = engine->group_level;
+    save->previous_level = previous_level;
+    if (kind == HSTEX_SAVE_CAT_CODE) {
+        save->previous.category = previous_category;
+    } else {
+        save->previous.integer = previous_integer;
+    }
+    return 0;
+}
+
+static int assign_catcode(struct hstex_engine *engine, uint32_t character,
+                          uint32_t category, bool requested_global, char *error,
+                          size_t error_capacity)
+{
+    if (character > UINT32_C(255) ||
+        category > (uint32_t)HSTEX_CAT_INVALID) {
+        return set_error(error, error_capacity,
+                         "catcode assignment outside 0..255 or 0..15");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    uint32_t *level = &engine->catcode_levels[character];
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_CAT_CODE, character, *level, 0,
+                       hstex_catcode_get(&engine->lexical_state.catcodes,
+                                         (uint8_t)character),
+                       error, error_capacity) != 0) {
+            return -1;
+        }
+        *level = engine->group_level;
+    } else {
+        *level = 0U;
+    }
+    return hstex_catcode_set(&engine->lexical_state.catcodes, character,
+                             category);
+}
+
+static int assign_count(struct hstex_engine *engine, uint32_t index,
+                        int32_t value, bool requested_global, char *error,
+                        size_t error_capacity)
+{
+    if ((size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "count register outside supported range");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_COUNT, index,
+                       engine->count_levels[index], engine->counts[index], 0U,
+                       error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->count_levels[index] = engine->group_level;
+    } else {
+        engine->count_levels[index] = 0U;
+    }
+    engine->counts[index] = value;
+    return 0;
+}
+
+static int assign_integer_parameter(struct hstex_engine *engine,
+                                    uint32_t index, int32_t value,
+                                    bool requested_global, char *error,
+                                    size_t error_capacity)
+{
+    if (index >= (uint32_t)HSTEX_INTEGER_PARAMETER_COUNT) {
+        return set_error(error, error_capacity,
+                         "invalid integer parameter assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_INTEGER_PARAMETER, index,
+                       engine->integer_parameter_levels[index],
+                       engine->integer_parameters[index], 0U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+        engine->integer_parameter_levels[index] = engine->group_level;
+    } else {
+        engine->integer_parameter_levels[index] = 0U;
+    }
+    engine->integer_parameters[index] = value;
+    if (index == (uint32_t)HSTEX_INTEGER_END_LINE_CHARACTER) {
+        engine->lexical_state.end_line_character = value;
+    }
+    return 0;
+}
+
+static int register_integer_primitive(struct hstex_engine *engine,
+                                      const char *name,
+                                      enum hstex_command command,
+                                      int32_t value, char *error,
+                                      size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    size_t length = strlen(name);
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, (const uint8_t *)name, length,
+                            &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_meaning meaning = {
+        .command = command,
+        .level = 0U,
+        .value = {.integer = value},
+    };
+    return set_meaning(engine, identifier, meaning, true, error,
+                       error_capacity);
 }
 
 static int register_primitive(struct hstex_engine *engine, const char *name,
@@ -285,6 +460,30 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         return -1;
     }
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
+    engine->count_capacity = (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
+    engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
+    engine->count_levels =
+        calloc(engine->count_capacity, sizeof(*engine->count_levels));
+    if (engine->counts == NULL || engine->count_levels == NULL) {
+        (void)set_error(error, error_capacity,
+                        "count-register allocation failed");
+        hstex_engine_destroy(engine);
+        return -1;
+    }
+    engine->integer_parameters[HSTEX_INTEGER_END_LINE_CHARACTER] = 13;
+    engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER] = -1;
+    engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER] = 92;
+
+    time_t now = time(NULL);
+    struct tm broken_down;
+    if (now != (time_t)-1 && localtime_r(&now, &broken_down) != NULL) {
+        engine->integer_parameters[HSTEX_INTEGER_TIME] =
+            (int32_t)(broken_down.tm_hour * 60 + broken_down.tm_min);
+        engine->integer_parameters[HSTEX_INTEGER_DAY] = broken_down.tm_mday;
+        engine->integer_parameters[HSTEX_INTEGER_MONTH] = broken_down.tm_mon + 1;
+        engine->integer_parameters[HSTEX_INTEGER_YEAR] =
+            broken_down.tm_year + 1900;
+    }
     static const struct {
         const char *name;
         enum hstex_command command;
@@ -300,6 +499,20 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"noexpand", HSTEX_COMMAND_NO_EXPAND},
         {"begingroup", HSTEX_COMMAND_BEGIN_GROUP},
         {"endgroup", HSTEX_COMMAND_END_GROUP},
+        {"catcode", HSTEX_COMMAND_CAT_CODE},
+        {"chardef", HSTEX_COMMAND_CHAR_DEF},
+        {"countdef", HSTEX_COMMAND_COUNT_DEF},
+        {"count", HSTEX_COMMAND_COUNT},
+        {"ifnum", HSTEX_COMMAND_IF_NUM},
+        {"ifx", HSTEX_COMMAND_IF_X},
+        {"iftrue", HSTEX_COMMAND_IF_TRUE},
+        {"iffalse", HSTEX_COMMAND_IF_FALSE},
+        {"else", HSTEX_COMMAND_ELSE},
+        {"fi", HSTEX_COMMAND_FI},
+        {"input", HSTEX_COMMAND_INPUT},
+        {"end", HSTEX_COMMAND_END},
+        {"endinput", HSTEX_COMMAND_END_INPUT},
+        {"errmessage", HSTEX_COMMAND_ERROR_MESSAGE},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
          ++index) {
@@ -309,6 +522,37 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             hstex_engine_destroy(engine);
             return -1;
         }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_integer_parameter parameter;
+    } integer_primitives[] = {
+        {"endlinechar", HSTEX_INTEGER_END_LINE_CHARACTER},
+        {"newlinechar", HSTEX_INTEGER_NEW_LINE_CHARACTER},
+        {"escapechar", HSTEX_INTEGER_ESCAPE_CHARACTER},
+        {"globaldefs", HSTEX_INTEGER_GLOBAL_DEFS},
+        {"time", HSTEX_INTEGER_TIME},
+        {"day", HSTEX_INTEGER_DAY},
+        {"month", HSTEX_INTEGER_MONTH},
+        {"year", HSTEX_INTEGER_YEAR},
+    };
+    for (size_t index = 0U;
+         index < sizeof(integer_primitives) / sizeof(integer_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, integer_primitives[index].name,
+                HSTEX_COMMAND_INTEGER_PARAMETER,
+                (int32_t)integer_primitives[index].parameter, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    if (register_integer_primitive(engine, "eTeXversion",
+                                   HSTEX_COMMAND_CHAR_GIVEN, 2, error,
+                                   error_capacity) != 0) {
+        hstex_engine_destroy(engine);
+        return -1;
     }
     struct hstex_meaning paragraph = {
         .command = HSTEX_COMMAND_PAR,
@@ -336,6 +580,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->meanings);
     free(engine->macros);
     free(engine->saves);
+    free(engine->conditionals);
+    free(engine->counts);
+    free(engine->count_levels);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
 }
@@ -401,6 +648,481 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
     allocation[0] = token;
     return hstex_source_push_owned_tokens(&engine->sources, allocation, 1U,
                                           location, error, error_capacity);
+}
+
+static enum hstex_engine_result expanded_next_non_space(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity);
+
+static int append_byte(uint8_t **bytes, size_t *count, size_t *capacity,
+                       uint8_t byte, char *error, size_t error_capacity)
+{
+    if (*count == *capacity) {
+        size_t new_capacity = *capacity == 0U ? 64U : *capacity;
+        if (new_capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "filename capacity overflow");
+        }
+        new_capacity *= 2U;
+        void *allocation = realloc(*bytes, new_capacity);
+        if (allocation == NULL) {
+            return set_error(error, error_capacity,
+                             "filename allocation failed");
+        }
+        *bytes = allocation;
+        *capacity = new_capacity;
+    }
+    (*bytes)[(*count)++] = byte;
+    return 0;
+}
+
+static int scan_input_filename(struct hstex_engine *engine, char **filename,
+                               char *error, size_t error_capacity)
+{
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a filename");
+    }
+    bool braced = token_is_category(token, HSTEX_CAT_BEGIN_GROUP);
+    size_t depth = braced ? 1U : 0U;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+
+    if (braced) {
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input in braced filename");
+        }
+    }
+    for (;;) {
+        if (braced && token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            ++depth;
+        } else if (braced && token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            --depth;
+            if (depth == 0U) {
+                break;
+            }
+        } else if (!braced && token_is_space(token)) {
+            break;
+        } else if (hstex_token_is_character(token)) {
+            if (append_byte(&bytes, &count, &capacity,
+                            hstex_token_character_code(token), error,
+                            error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+        } else {
+            if (!braced &&
+                push_one(engine, token, location, error, error_capacity) == 0) {
+                break;
+            }
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "non-character token in filename");
+        }
+
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_EOF) {
+            if (braced) {
+                free(bytes);
+                return set_error(error, error_capacity,
+                                 "end of input in braced filename");
+            }
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            free(bytes);
+            return -1;
+        }
+    }
+    if (count == 0U || append_byte(&bytes, &count, &capacity, 0U, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return set_error(error, error_capacity, "empty input filename");
+    }
+    *filename = (char *)bytes;
+    return 0;
+}
+
+static char *join_directory_filename(const char *source_path,
+                                     const char *filename)
+{
+    const char *slash = strrchr(source_path, '/');
+    if (slash == NULL) {
+        return NULL;
+    }
+    size_t directory_length = (size_t)(slash - source_path) + 1U;
+    size_t filename_length = strlen(filename);
+    if (directory_length > SIZE_MAX - filename_length - 1U) {
+        return NULL;
+    }
+    char *candidate = malloc(directory_length + filename_length + 1U);
+    if (candidate == NULL) {
+        return NULL;
+    }
+    memcpy(candidate, source_path, directory_length);
+    memcpy(candidate + directory_length, filename, filename_length + 1U);
+    return candidate;
+}
+
+static char *resolve_with_kpsewhich(const char *filename)
+{
+    int descriptors[2];
+    if (pipe(descriptors) != 0) {
+        return NULL;
+    }
+    pid_t child = fork();
+    if (child < 0) {
+        (void)close(descriptors[0]);
+        (void)close(descriptors[1]);
+        return NULL;
+    }
+    if (child == 0) {
+        (void)close(descriptors[0]);
+        if (dup2(descriptors[1], STDOUT_FILENO) < 0) {
+            _exit(127);
+        }
+        (void)close(descriptors[1]);
+        execlp("kpsewhich", "kpsewhich", filename, (char *)NULL);
+        _exit(127);
+    }
+    (void)close(descriptors[1]);
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    uint8_t buffer[512];
+    for (;;) {
+        ssize_t received = read(descriptors[0], buffer, sizeof(buffer));
+        if (received < 0 && errno == EINTR) {
+            continue;
+        }
+        if (received <= 0) {
+            break;
+        }
+        for (ssize_t index = 0; index < received; ++index) {
+            if (append_byte(&bytes, &count, &capacity, buffer[index], NULL,
+                            0U) != 0) {
+                free(bytes);
+                bytes = NULL;
+                count = 0U;
+                break;
+            }
+        }
+        if (bytes == NULL && count == 0U) {
+            break;
+        }
+    }
+    (void)close(descriptors[0]);
+    int child_status = 0;
+    while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {
+    }
+    if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0) {
+        free(bytes);
+        return NULL;
+    }
+    while (count != 0U &&
+           (bytes[count - 1U] == (uint8_t)'\n' ||
+            bytes[count - 1U] == (uint8_t)'\r')) {
+        --count;
+    }
+    if (count == 0U || append_byte(&bytes, &count, &capacity, 0U, NULL, 0U) !=
+                           0) {
+        free(bytes);
+        return NULL;
+    }
+    return (char *)bytes;
+}
+
+static bool filename_has_extension(const char *filename)
+{
+    const char *slash = strrchr(filename, '/');
+    const char *dot = strrchr(filename, '.');
+    return dot != NULL && (slash == NULL || dot > slash);
+}
+
+static char *append_tex_extension(const char *filename)
+{
+    size_t length = strlen(filename);
+    if (length > SIZE_MAX - 5U) {
+        return NULL;
+    }
+    char *extended = malloc(length + 5U);
+    if (extended == NULL) {
+        return NULL;
+    }
+    memcpy(extended, filename, length);
+    memcpy(extended + length, ".tex", 5U);
+    return extended;
+}
+
+static char *resolve_input_path(struct hstex_engine *engine,
+                                const char *filename)
+{
+    const char *current_source = hstex_source_current_name(&engine->sources);
+    const char *variants[2] = {filename, NULL};
+    char *extended = NULL;
+    if (!filename_has_extension(filename)) {
+        extended = append_tex_extension(filename);
+        variants[1] = extended;
+    }
+    for (size_t index = 0U; index < 2U && variants[index] != NULL; ++index) {
+        const char *variant = variants[index];
+        if (access(variant, R_OK) == 0) {
+            char *resolved = strdup(variant);
+            free(extended);
+            return resolved;
+        }
+        if (current_source != NULL && filename[0] != '/') {
+            char *candidate = join_directory_filename(current_source, variant);
+            if (candidate != NULL && access(candidate, R_OK) == 0) {
+                free(extended);
+                return candidate;
+            }
+            free(candidate);
+        }
+        char *resolved = resolve_with_kpsewhich(variant);
+        if (resolved != NULL) {
+            free(extended);
+            return resolved;
+        }
+    }
+    free(extended);
+    return NULL;
+}
+
+static int execute_input(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    char *filename = NULL;
+    if (scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        return -1;
+    }
+    char *path = resolve_input_path(engine, filename);
+    if (path == NULL) {
+        int status = set_error(error, error_capacity, "input file not found: %s",
+                               filename);
+        free(filename);
+        return status;
+    }
+    int status = hstex_source_push_file(&engine->sources, path, error,
+                                        error_capacity);
+    free(path);
+    free(filename);
+    return status;
+}
+
+static enum hstex_engine_result expanded_next_non_space(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity)
+{
+    for (;;) {
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, token, location, error, error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN || !token_is_space(*token)) {
+            return result;
+        }
+    }
+}
+
+static int token_character_constant(struct hstex_engine *engine,
+                                    hstex_token token, int32_t *value)
+{
+    if (hstex_token_is_character(token)) {
+        *value = (int32_t)hstex_token_character_code(token);
+        return 0;
+    }
+    if (!hstex_token_is_control_sequence(token)) {
+        return -1;
+    }
+    enum hstex_symbol_kind kind;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&engine->lexical_state.symbols,
+                          hstex_token_control_sequence_id(token), &kind, &name,
+                          &length) != 0 ||
+        length != 1U) {
+        return -1;
+    }
+    (void)kind;
+    *value = (int32_t)name[0];
+    return 0;
+}
+
+static int scan_integer(struct hstex_engine *engine, int32_t *value,
+                        char *error, size_t error_capacity);
+
+static int integer_from_control_sequence(
+    struct hstex_engine *engine, const struct hstex_meaning *meaning,
+    int32_t *value, char *error, size_t error_capacity)
+{
+    switch (meaning->command) {
+    case HSTEX_COMMAND_CHAR_GIVEN:
+        *value = meaning->value.integer;
+        return 0;
+    case HSTEX_COMMAND_COUNT_REGISTER: {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "invalid count-register meaning");
+        }
+        *value = engine->counts[(size_t)index];
+        return 0;
+    }
+    case HSTEX_COMMAND_INTEGER_PARAMETER: {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || index >= (int32_t)HSTEX_INTEGER_PARAMETER_COUNT) {
+            return set_error(error, error_capacity,
+                             "invalid integer-parameter meaning");
+        }
+        *value = engine->integer_parameters[(size_t)index];
+        return 0;
+    }
+    case HSTEX_COMMAND_COUNT: {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "count register outside supported range");
+        }
+        *value = engine->counts[(size_t)index];
+        return 0;
+    }
+    case HSTEX_COMMAND_CAT_CODE: {
+        int32_t character = 0;
+        if (scan_integer(engine, &character, error, error_capacity) != 0 ||
+            character < 0 || character > 255) {
+            return set_error(error, error_capacity,
+                             "catcode query outside 0..255");
+        }
+        *value = (int32_t)hstex_catcode_get(
+            &engine->lexical_state.catcodes, (uint8_t)character);
+        return 0;
+    }
+    case HSTEX_COMMAND_TOKEN_ALIAS:
+        if (hstex_token_is_character(meaning->value.token)) {
+            *value = (int32_t)hstex_token_character_code(meaning->value.token);
+            return 0;
+        }
+        break;
+    default:
+        break;
+    }
+    return set_error(error, error_capacity, "missing integer");
+}
+
+static bool token_is_decimal_digit(hstex_token token)
+{
+    return token_is_category(token, HSTEX_CAT_OTHER) &&
+           hstex_token_character_code(token) >= (uint8_t)'0' &&
+           hstex_token_character_code(token) <= (uint8_t)'9';
+}
+
+static int scan_integer(struct hstex_engine *engine, int32_t *value,
+                        char *error, size_t error_capacity)
+{
+    int sign = 1;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    for (;;) {
+        if (expanded_next_non_space(engine, &token, &location, error,
+                                    error_capacity) != HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input while scanning an integer");
+        }
+        if (token_is_other_character(token, (uint8_t)'+')) {
+            continue;
+        }
+        if (token_is_other_character(token, (uint8_t)'-')) {
+            sign = -sign;
+            continue;
+        }
+        break;
+    }
+
+    int32_t magnitude = 0;
+    if (token_is_other_character(token, (uint8_t)'`')) {
+        hstex_token character_token = 0U;
+        struct hstex_source_location character_location;
+        if (raw_next(engine, &character_token, &character_location, error,
+                     error_capacity) != HSTEX_ENGINE_TOKEN ||
+            token_character_constant(engine, character_token, &magnitude) != 0) {
+            return set_error(error, error_capacity,
+                             "invalid alphabetic character constant");
+        }
+    } else if (token_is_decimal_digit(token)) {
+        int64_t accumulated = 0;
+        for (;;) {
+            accumulated = accumulated * 10 +
+                          (int64_t)(hstex_token_character_code(token) -
+                                    (uint8_t)'0');
+            if (accumulated > (int64_t)INT32_MAX + 1) {
+                return set_error(error, error_capacity,
+                                 "integer constant overflow");
+            }
+            enum hstex_engine_result result = hstex_engine_next_expanded(
+                engine, &token, &location, error, error_capacity);
+            if (result == HSTEX_ENGINE_EOF) {
+                break;
+            }
+            if (result == HSTEX_ENGINE_ERROR) {
+                return -1;
+            }
+            if (token_is_decimal_digit(token)) {
+                continue;
+            }
+            if (!token_is_space(token) &&
+                push_one(engine, token, location, error, error_capacity) != 0) {
+                return -1;
+            }
+            break;
+        }
+        if ((sign > 0 && accumulated > INT32_MAX) ||
+            (sign < 0 && accumulated > (int64_t)INT32_MAX + 1)) {
+            return set_error(error, error_capacity, "integer constant overflow");
+        }
+        *value = sign > 0 ? (int32_t)accumulated : (int32_t)(-accumulated);
+        return 0;
+    } else if (hstex_token_is_control_sequence(token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        if (integer_from_control_sequence(engine, meaning, &magnitude, error,
+                                          error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        return set_error(error, error_capacity, "missing integer");
+    }
+
+    int64_t signed_value = sign > 0 ? (int64_t)magnitude : -(int64_t)magnitude;
+    if (signed_value < INT32_MIN || signed_value > INT32_MAX) {
+        return set_error(error, error_capacity, "integer value overflow");
+    }
+    *value = (int32_t)signed_value;
+    return 0;
+}
+
+static int scan_optional_equals(struct hstex_engine *engine, char *error,
+                                size_t error_capacity)
+{
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space(
+        engine, &token, &location, error, error_capacity);
+    if (result != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning an assignment");
+    }
+    if (token_is_other_character(token, (uint8_t)'=')) {
+        return 0;
+    }
+    return push_one(engine, token, location, error, error_capacity);
 }
 
 static bool token_is_paragraph(const struct hstex_engine *engine,
@@ -889,7 +1611,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         .level = 0U,
         .value = {.macro_identifier = (uint32_t)engine->macro_count},
     };
-    bool global = inherent_global || engine->pending_global;
+    bool global = assignment_is_global(
+        engine, inherent_global || engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     (void)target_location;
@@ -928,11 +1651,308 @@ static int scan_let(struct hstex_engine *engine, char *error,
         meaning.level = 0U;
         meaning.value.token = source;
     }
-    bool global = engine->pending_global;
+    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, hstex_token_control_sequence_id(target), meaning,
                        global, error, error_capacity);
+}
+
+static int scan_definition_target(struct hstex_engine *engine,
+                                  hstex_cs_id *identifier, char *error,
+                                  size_t error_capacity)
+{
+    hstex_token target = 0U;
+    struct hstex_source_location location;
+    if (raw_next_non_space(engine, &target, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        !hstex_token_is_control_sequence(target)) {
+        return set_error(error, error_capacity,
+                         "definition requires a control-sequence target");
+    }
+    *identifier = hstex_token_control_sequence_id(target);
+    return 0;
+}
+
+static int scan_char_definition(struct hstex_engine *engine, char *error,
+                                size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    int32_t value = 0;
+    if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0 || value < 0 ||
+        value > 255) {
+        return set_error(error, error_capacity,
+                         "chardef value outside 0..255");
+    }
+    struct hstex_meaning meaning = {
+        .command = HSTEX_COMMAND_CHAR_GIVEN,
+        .level = 0U,
+        .value = {.integer = value},
+    };
+    bool global = assignment_is_global(engine, engine->pending_global);
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return set_meaning(engine, identifier, meaning, global, error,
+                       error_capacity);
+}
+
+static int scan_count_definition(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    int32_t index = 0;
+    if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "countdef register outside supported range");
+    }
+    struct hstex_meaning meaning = {
+        .command = HSTEX_COMMAND_COUNT_REGISTER,
+        .level = 0U,
+        .value = {.integer = index},
+    };
+    bool global = assignment_is_global(engine, engine->pending_global);
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return set_meaning(engine, identifier, meaning, global, error,
+                       error_capacity);
+}
+
+static int scan_catcode_assignment(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    int32_t character = 0;
+    int32_t category = 0;
+    if (scan_integer(engine, &character, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &category, error, error_capacity) != 0 ||
+        character < 0 || category < 0) {
+        return set_error(error, error_capacity, "invalid catcode assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_catcode(engine, (uint32_t)character, (uint32_t)category,
+                          requested_global, error, error_capacity);
+}
+
+static int scan_count_assignment(struct hstex_engine *engine, int32_t index,
+                                 char *error, size_t error_capacity)
+{
+    int32_t value = 0;
+    if (index < 0 || (size_t)index >= engine->count_capacity ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid count assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_count(engine, (uint32_t)index, value, requested_global, error,
+                        error_capacity);
+}
+
+static int scan_count_family_assignment(struct hstex_engine *engine, char *error,
+                                        size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    return scan_count_assignment(engine, index, error, error_capacity);
+}
+
+static int scan_integer_parameter_assignment(
+    struct hstex_engine *engine, int32_t parameter, char *error,
+    size_t error_capacity)
+{
+    int32_t value = 0;
+    if (parameter < 0 ||
+        parameter >= (int32_t)HSTEX_INTEGER_PARAMETER_COUNT ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid integer-parameter assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_integer_parameter(engine, (uint32_t)parameter, value,
+                                    requested_global, error, error_capacity);
+}
+
+static bool command_starts_conditional(enum hstex_command command)
+{
+    return command == HSTEX_COMMAND_IF_NUM || command == HSTEX_COMMAND_IF_X ||
+           command == HSTEX_COMMAND_IF_TRUE ||
+           command == HSTEX_COMMAND_IF_FALSE;
+}
+
+static bool meanings_equal(const struct hstex_engine *engine,
+                           const struct hstex_meaning *left,
+                           const struct hstex_meaning *right)
+{
+    if (left->command != right->command) {
+        return false;
+    }
+    switch (left->command) {
+    case HSTEX_COMMAND_MACRO: {
+        uint32_t left_identifier = left->value.macro_identifier;
+        uint32_t right_identifier = right->value.macro_identifier;
+        if (left_identifier == 0U || right_identifier == 0U ||
+            (size_t)left_identifier > engine->macro_count ||
+            (size_t)right_identifier > engine->macro_count) {
+            return left_identifier == right_identifier;
+        }
+        const struct hstex_macro *left_macro =
+            &engine->macros[left_identifier - 1U];
+        const struct hstex_macro *right_macro =
+            &engine->macros[right_identifier - 1U];
+        return left_macro->flags == right_macro->flags &&
+               left_macro->parameter_count == right_macro->parameter_count &&
+               left_macro->parameter_count_tokens ==
+                   right_macro->parameter_count_tokens &&
+               left_macro->replacement_count == right_macro->replacement_count &&
+               (left_macro->parameter_count_tokens == 0U ||
+                memcmp(left_macro->parameter_text, right_macro->parameter_text,
+                       left_macro->parameter_count_tokens *
+                           sizeof(*left_macro->parameter_text)) == 0) &&
+               (left_macro->replacement_count == 0U ||
+                memcmp(left_macro->replacement, right_macro->replacement,
+                       left_macro->replacement_count *
+                           sizeof(*left_macro->replacement)) == 0);
+    }
+    case HSTEX_COMMAND_TOKEN_ALIAS:
+        return left->value.token == right->value.token;
+    case HSTEX_COMMAND_CHAR_GIVEN:
+    case HSTEX_COMMAND_COUNT_REGISTER:
+    case HSTEX_COMMAND_INTEGER_PARAMETER:
+        return left->value.integer == right->value.integer;
+    default:
+        return true;
+    }
+}
+
+static bool ifx_tokens_equal(const struct hstex_engine *engine,
+                             hstex_token left, hstex_token right)
+{
+    if (hstex_token_is_character(left) || hstex_token_is_character(right)) {
+        return left == right;
+    }
+    if (!hstex_token_is_control_sequence(left) ||
+        !hstex_token_is_control_sequence(right)) {
+        return false;
+    }
+    return meanings_equal(
+        engine,
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(left)),
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(right)));
+}
+
+static int skip_conditional(struct hstex_engine *engine, bool stop_at_else,
+                            char *error, size_t error_capacity)
+{
+    size_t depth = 0U;
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        if (raw_next(engine, &token, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input while skipping a conditional");
+        }
+        if (!hstex_token_is_control_sequence(token)) {
+            continue;
+        }
+        enum hstex_command command =
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(token))
+                ->command;
+        if (command_starts_conditional(command)) {
+            ++depth;
+        } else if (command == HSTEX_COMMAND_FI) {
+            if (depth != 0U) {
+                --depth;
+                continue;
+            }
+            if (engine->conditional_count == 0U) {
+                return set_error(error, error_capacity,
+                                 "conditional stack underflow");
+            }
+            --engine->conditional_count;
+            return 0;
+        } else if (command == HSTEX_COMMAND_ELSE && depth == 0U &&
+                   stop_at_else) {
+            struct hstex_conditional *conditional =
+                &engine->conditionals[engine->conditional_count - 1U];
+            conditional->else_seen = true;
+            return 0;
+        }
+    }
+}
+
+static int start_conditional(struct hstex_engine *engine, bool condition,
+                             char *error, size_t error_capacity)
+{
+    if (reserve_conditionals(engine, engine->conditional_count + 1U, error,
+                             error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_conditional *entry =
+        &engine->conditionals[engine->conditional_count++];
+    entry->branch_true = condition;
+    entry->else_seen = false;
+    if (!condition) {
+        return skip_conditional(engine, true, error, error_capacity);
+    }
+    return 0;
+}
+
+static int scan_if_num(struct hstex_engine *engine, char *error,
+                       size_t error_capacity)
+{
+    int32_t left = 0;
+    int32_t right = 0;
+    hstex_token relation = 0U;
+    struct hstex_source_location location;
+    if (scan_integer(engine, &left, error, error_capacity) != 0 ||
+        expanded_next_non_space(engine, &relation, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN ||
+        scan_integer(engine, &right, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid ifnum comparison");
+    }
+    bool condition;
+    if (token_is_other_character(relation, (uint8_t)'<')) {
+        condition = left < right;
+    } else if (token_is_other_character(relation, (uint8_t)'=')) {
+        condition = left == right;
+    } else if (token_is_other_character(relation, (uint8_t)'>')) {
+        condition = left > right;
+    } else {
+        return set_error(error, error_capacity,
+                         "ifnum requires <, =, or >");
+    }
+    return start_conditional(engine, condition, error, error_capacity);
+}
+
+static int scan_if_x(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    hstex_token left = 0U;
+    hstex_token right = 0U;
+    struct hstex_source_location location;
+    if (raw_next(engine, &left, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        raw_next(engine, &right, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input in ifx");
+    }
+    return start_conditional(engine, ifx_tokens_equal(engine, left, right),
+                             error, error_capacity);
 }
 
 static int begin_group(struct hstex_engine *engine, char *error,
@@ -955,10 +1975,44 @@ static int end_group(struct hstex_engine *engine, char *error,
     while (engine->save_count != 0U &&
            engine->saves[engine->save_count - 1U].level == leaving_level) {
         struct hstex_save_entry save = engine->saves[--engine->save_count];
-        struct hstex_meaning *current =
-            &engine->meanings[save.identifier - 1U];
-        if (current->level == leaving_level) {
-            *current = save.previous;
+        switch (save.kind) {
+        case HSTEX_SAVE_MEANING: {
+            struct hstex_meaning *current =
+                &engine->meanings[save.index - 1U];
+            if (current->level == leaving_level) {
+                *current = save.previous.meaning;
+            }
+            break;
+        }
+        case HSTEX_SAVE_CAT_CODE:
+            if (engine->catcode_levels[save.index] == leaving_level) {
+                if (hstex_catcode_set(&engine->lexical_state.catcodes,
+                                      save.index,
+                                      save.previous.category) != 0) {
+                    return set_error(error, error_capacity,
+                                     "failed to restore catcode");
+                }
+                engine->catcode_levels[save.index] = save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_COUNT:
+            if (engine->count_levels[save.index] == leaving_level) {
+                engine->counts[save.index] = save.previous.integer;
+                engine->count_levels[save.index] = save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_INTEGER_PARAMETER:
+            if (engine->integer_parameter_levels[save.index] == leaving_level) {
+                engine->integer_parameters[save.index] = save.previous.integer;
+                engine->integer_parameter_levels[save.index] =
+                    save.previous_level;
+                if (save.index ==
+                    (uint32_t)HSTEX_INTEGER_END_LINE_CHARACTER) {
+                    engine->lexical_state.end_line_character =
+                        save.previous.integer;
+                }
+            }
+            break;
         }
     }
     --engine->group_level;
@@ -977,6 +2031,11 @@ enum hstex_engine_result hstex_engine_next_output(
             if (engine->group_level != 0U) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a group");
+                return HSTEX_ENGINE_ERROR;
+            }
+            if (engine->conditional_count != 0U) {
+                (void)set_error(error, error_capacity,
+                                "end of input inside a conditional");
                 return HSTEX_ENGINE_ERROR;
             }
             return result;
@@ -1056,11 +2115,98 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_CAT_CODE:
+            if (scan_catcode_assignment(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_CHAR_DEF:
+            if (scan_char_definition(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_COUNT_DEF:
+            if (scan_count_definition(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_COUNT:
+            if (scan_count_family_assignment(engine, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_COUNT_REGISTER:
+            if (scan_count_assignment(engine, meaning->value.integer, error,
+                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_INTEGER_PARAMETER:
+            if (scan_integer_parameter_assignment(
+                    engine, meaning->value.integer, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_NUM:
+            if (scan_if_num(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_X:
+            if (scan_if_x(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_TRUE:
+            if (start_conditional(engine, true, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_FALSE:
+            if (start_conditional(engine, false, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_ELSE: {
+            if (engine->conditional_count == 0U) {
+                (void)set_error(error, error_capacity, "extra else");
+                return HSTEX_ENGINE_ERROR;
+            }
+            struct hstex_conditional *conditional =
+                &engine->conditionals[engine->conditional_count - 1U];
+            if (conditional->else_seen) {
+                (void)set_error(error, error_capacity,
+                                "second else in one conditional");
+                return HSTEX_ENGINE_ERROR;
+            }
+            conditional->else_seen = true;
+            if (skip_conditional(engine, false, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        case HSTEX_COMMAND_FI:
+            if (engine->conditional_count == 0U) {
+                (void)set_error(error, error_capacity, "extra fi");
+                return HSTEX_ENGINE_ERROR;
+            }
+            --engine->conditional_count;
+            continue;
         case HSTEX_COMMAND_TOKEN_ALIAS:
             *token = meaning->value.token;
             goto handle_token;
         case HSTEX_COMMAND_MACRO:
             return HSTEX_ENGINE_TOKEN;
+        case HSTEX_COMMAND_CHAR_GIVEN:
+            if (meaning->value.integer < 0 || meaning->value.integer > 255) {
+                (void)set_error(error, error_capacity,
+                                "invalid chardef meaning");
+                return HSTEX_ENGINE_ERROR;
+            }
+            *token = hstex_token_character(
+                (uint8_t)HSTEX_CAT_OTHER, (uint8_t)meaning->value.integer);
+            goto handle_token;
         case HSTEX_COMMAND_PAR:
             if (engine->pending_global || engine->pending_macro_flags != 0U) {
                 (void)set_error(error, error_capacity,
@@ -1075,6 +2221,20 @@ handle_token:
         case HSTEX_COMMAND_NO_EXPAND:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "expandable primitive escaped expansion");
+        case HSTEX_COMMAND_INPUT:
+            if (execute_input(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_END:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "end primitive is not implemented");
+        case HSTEX_COMMAND_END_INPUT:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "endinput primitive is not implemented");
+        case HSTEX_COMMAND_ERROR_MESSAGE:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "errmessage primitive was executed");
         }
     }
 }

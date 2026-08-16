@@ -31,6 +31,35 @@ enum hstex_command {
     HSTEX_COMMAND_NO_EXPAND,
     HSTEX_COMMAND_BEGIN_GROUP,
     HSTEX_COMMAND_END_GROUP,
+    HSTEX_COMMAND_CAT_CODE,
+    HSTEX_COMMAND_CHAR_DEF,
+    HSTEX_COMMAND_CHAR_GIVEN,
+    HSTEX_COMMAND_COUNT_DEF,
+    HSTEX_COMMAND_COUNT,
+    HSTEX_COMMAND_COUNT_REGISTER,
+    HSTEX_COMMAND_INTEGER_PARAMETER,
+    HSTEX_COMMAND_IF_NUM,
+    HSTEX_COMMAND_IF_X,
+    HSTEX_COMMAND_IF_TRUE,
+    HSTEX_COMMAND_IF_FALSE,
+    HSTEX_COMMAND_ELSE,
+    HSTEX_COMMAND_FI,
+    HSTEX_COMMAND_INPUT,
+    HSTEX_COMMAND_END,
+    HSTEX_COMMAND_END_INPUT,
+    HSTEX_COMMAND_ERROR_MESSAGE,
+};
+
+enum hstex_integer_parameter {
+    HSTEX_INTEGER_END_LINE_CHARACTER = 0,
+    HSTEX_INTEGER_NEW_LINE_CHARACTER,
+    HSTEX_INTEGER_ESCAPE_CHARACTER,
+    HSTEX_INTEGER_GLOBAL_DEFS,
+    HSTEX_INTEGER_TIME,
+    HSTEX_INTEGER_DAY,
+    HSTEX_INTEGER_MONTH,
+    HSTEX_INTEGER_YEAR,
+    HSTEX_INTEGER_PARAMETER_COUNT,
 };
 
 enum hstex_macro_flag {
@@ -53,13 +82,32 @@ struct hstex_meaning {
     union {
         uint32_t macro_identifier;
         hstex_token token;
+        int32_t integer;
     } value;
 };
 
+enum hstex_save_kind {
+    HSTEX_SAVE_MEANING = 0,
+    HSTEX_SAVE_CAT_CODE,
+    HSTEX_SAVE_COUNT,
+    HSTEX_SAVE_INTEGER_PARAMETER,
+};
+
 struct hstex_save_entry {
-    hstex_cs_id identifier;
+    enum hstex_save_kind kind;
+    uint32_t index;
     uint32_t level;
-    struct hstex_meaning previous;
+    uint32_t previous_level;
+    union {
+        struct hstex_meaning meaning;
+        int32_t integer;
+        uint8_t category;
+    } previous;
+};
+
+struct hstex_conditional {
+    bool branch_true;
+    bool else_seen;
 };
 
 struct hstex_engine {
@@ -73,6 +121,15 @@ struct hstex_engine {
     struct hstex_save_entry *saves;
     size_t save_count;
     size_t save_capacity;
+    struct hstex_conditional *conditionals;
+    size_t conditional_count;
+    size_t conditional_capacity;
+    int32_t *counts;
+    uint32_t *count_levels;
+    size_t count_capacity;
+    int32_t integer_parameters[HSTEX_INTEGER_PARAMETER_COUNT];
+    uint32_t integer_parameter_levels[HSTEX_INTEGER_PARAMETER_COUNT];
+    uint32_t catcode_levels[256];
     uint32_t group_level;
     uint8_t pending_macro_flags;
     bool pending_global;
