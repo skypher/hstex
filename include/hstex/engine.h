@@ -245,6 +245,7 @@ enum hstex_integer_parameter {
     HSTEX_INTEGER_RIGHT_HYPHEN_MIN,
     HSTEX_INTEGER_LANGUAGE,
     HSTEX_INTEGER_MATH_GROUP,
+    HSTEX_INTEGER_MAGNIFICATION,
     /* pdfTeX output configuration, set by pdftexconfig.tex. */
     HSTEX_INTEGER_PDF_OUTPUT,
     HSTEX_INTEGER_PDF_MAJOR_VERSION,

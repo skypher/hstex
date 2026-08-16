@@ -1378,6 +1378,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER] = 92;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR] = 45;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR] = -1;
+    engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION] = 1000;
     /* pdfTeX defaults that are not zero: one big point of pixel size and a
        72 dpi image resolution. */
     engine->integer_parameters[HSTEX_INTEGER_PDF_IMAGE_RESOLUTION] = 72;
@@ -1733,6 +1734,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"righthyphenmin", HSTEX_INTEGER_RIGHT_HYPHEN_MIN},
         {"language", HSTEX_INTEGER_LANGUAGE},
         {"mathgroup", HSTEX_INTEGER_MATH_GROUP},
+        {"mag", HSTEX_INTEGER_MAGNIFICATION},
         {"pdfoutput", HSTEX_INTEGER_PDF_OUTPUT},
         {"pdfmajorversion", HSTEX_INTEGER_PDF_MAJOR_VERSION},
         {"pdfminorversion", HSTEX_INTEGER_PDF_MINOR_VERSION},
@@ -3729,10 +3731,40 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
                                     error_capacity);
     }
 
-    /* `true` compensates for \mag, which is fixed at 1000 here, so the
-       prefixed unit is the ordinary unit. */
+    /* A `true` unit is measured before magnification, so the factor is
+       scaled by 1000/\mag before the unit conversion; see
+       docs/DECISIONS.md, dimension-unit-arithmetic. */
     if (try_keyword(engine, "true", &matched, error, error_capacity) != 0) {
         return -1;
+    }
+    if (matched) {
+        int32_t magnification =
+            engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION];
+        if (magnification <= 0) {
+            return set_error(error, error_capacity,
+                             "magnification must be positive");
+        }
+        if (magnification != 1000) {
+            if (factor.whole > (uint64_t)HSTEX_MAX_DIMEN) {
+                return set_error(error, error_capacity,
+                                 "dimension exceeds TeX's maximum");
+            }
+            uint64_t magnitude = (uint64_t)magnification;
+            uint64_t scaled_whole = factor.whole * UINT64_C(1000);
+            uint64_t whole = scaled_whole / magnitude;
+            uint64_t remainder = scaled_whole % magnitude;
+            uint64_t fraction =
+                (UINT64_C(1000) * scaled_fraction(&factor) +
+                 UINT64_C(65536) * remainder) /
+                magnitude;
+            whole += fraction / UINT64_C(65536);
+            fraction %= UINT64_C(65536);
+            /* Re-express the adjusted pair as an exact fraction of 65536 so
+               that the unit conversion below sees it unchanged. */
+            factor.whole = whole;
+            factor.fraction = fraction;
+            factor.denominator = UINT64_C(65536);
+        }
     }
 
     for (size_t index = 0U;
@@ -5617,6 +5649,37 @@ static int scan_delimited_argument(struct hstex_engine *engine,
     }
 }
 
+/* Report the expected and actual token so that a mismatch identifies the
+   delimiter that failed rather than only the macro. */
+static void describe_token(struct hstex_engine *engine, hstex_token token,
+                           char *buffer, size_t capacity)
+{
+    if (token == 0U) {
+        (void)snprintf(buffer, capacity, "end of input");
+        return;
+    }
+    token = normalize_frozen_control_sequence(token);
+    if (hstex_token_is_character(token)) {
+        (void)snprintf(buffer, capacity, "character '%c' of category %u",
+                       (char)hstex_token_character_code(token),
+                       (unsigned int)hstex_token_category(token));
+        return;
+    }
+    if (hstex_token_is_control_sequence(token)) {
+        enum hstex_symbol_kind kind;
+        const uint8_t *name = NULL;
+        size_t length = 0U;
+        if (hstex_symbol_name(&engine->lexical_state.symbols,
+                              hstex_token_control_sequence_id(token), &kind,
+                              &name, &length) == 0) {
+            (void)snprintf(buffer, capacity, "\\%.*s", (int)length,
+                           (const char *)name);
+            return;
+        }
+    }
+    (void)snprintf(buffer, capacity, "an internal token");
+}
+
 static int match_parameter_prefix(struct hstex_engine *engine,
                                   const hstex_token *tokens, size_t count,
                                   char *error, size_t error_capacity)
@@ -5629,8 +5692,15 @@ static int match_parameter_prefix(struct hstex_engine *engine,
         if (result != HSTEX_ENGINE_TOKEN ||
             normalize_one_shot_token(actual) !=
                 normalize_one_shot_token(tokens[index])) {
+            char expected[128];
+            char found[128];
+            describe_token(engine, tokens[index], expected, sizeof(expected));
+            describe_token(engine, result == HSTEX_ENGINE_TOKEN ? actual : 0U,
+                           found, sizeof(found));
             return set_error(error, error_capacity,
-                             "macro invocation does not match parameter text");
+                             "macro invocation does not match parameter text: "
+                             "expected %s, found %s",
+                             expected, found);
         }
     }
     return 0;
@@ -5899,7 +5969,18 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity)
 {
+    /* A control sequence inserted by \the carries a one-shot marker so that
+       an enclosing \edef or \write receives it verbatim. In ordinary
+       execution it is an ordinary token, so \expandafter expands it. A
+       \noexpand marker is not executable and still suppresses expansion. */
+    if (hstex_token_is_unexpanded_control_sequence(token)) {
+        token = hstex_token_control_sequence(
+            hstex_token_control_sequence_id(token));
+    }
     if (!hstex_token_is_control_sequence(token)) {
+        if (hstex_token_is_unexpanded_non_control(token)) {
+            token = hstex_token_normalize_unexpanded_non_control(token);
+        }
         return push_one(engine, token, location, error, error_capacity);
     }
     const struct hstex_meaning *meaning = hstex_engine_meaning(

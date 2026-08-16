@@ -1264,6 +1264,18 @@ int main(void)
                     "[\\pdfescapename{a b}][\\pdfescapehex{AB}]"
                     "[\\pdfunescapehex{4142}][\\the\\pdfpxdimen]%",
                     "[a\\040b\\(c\\)\\\\\\\\][a#20b][4142][AB][1.00375pt]") != 0 ||
+        /* A control sequence inserted by \the is ordinary in execution, so
+           \expandafter expands it. cleveref builds definitions this way. */
+        run_snippet("\\toks0={\\expandafter\\def\\csname AB\\endcsname}"
+                    "\\the\\toks0 {X}"
+                    "[\\expandafter\\meaning\\csname AB\\endcsname]%",
+                    "[macro:->X]") != 0 ||
+        /* A `true` unit is measured before magnification. */
+        run_snippet("\\mag=2000 \\dimen0=1truept \\dimen1=2.54truecm "
+                    "\\dimen2=1truein \\dimen3=1pt "
+                    "[\\number\\dimen0][\\number\\dimen1]"
+                    "[\\number\\dimen2][\\number\\dimen3]%",
+                    "[32768][2368122][2368143][65536]") != 0 ||
         /* \protected stops expansion while \edef builds a token list, but a
            csname is still expanded in full. */
         run_snippet("\\protected\\def\\PP{AB}\\def\\ABC{Z}"
