@@ -522,8 +522,22 @@ static int test_dimensions_and_glue(void)
         "\\dimendef\\d=5 \\d=1.5pt {\\d=2pt} "
         "\\dimendef\\twice=6 \\twice=2\\d "
         "\\dimendef\\largest=7 \\largest=16383.99999pt "
+        "\\dimen8=7sp \\divide\\dimen8 by 2 "
+        "\\dimen9=-7sp \\divide\\dimen9 by 2 "
+        "\\baselineskip=13.6pt \\dimen10=472pt "
+        "\\divide\\dimen10\\baselineskip \\count10=\\baselineskip "
+        "\\baselineskip=655361sp \\dimen11=.5\\baselineskip "
+        "\\font\\metricfont=cmr10 \\metricfont "
+        "\\dimen12=2.5em \\dimen13=3.25ex "
         "\\skipdef\\s=3 \\s=-1000pt plus 1fill minus 2pt "
-        "\\hfuzz=.1pt \\parskip=0pt plus 1pt%";
+        "\\skip4=1pt plus 2fil minus 3pt "
+        "\\skip5=2pt plus 4fill minus 1fil "
+        "\\advance\\skip4 by \\skip5 "
+        "\\multiply\\skip4 by 2 \\divide\\skip4 by 3 "
+        "\\muskip4=3mu plus 2fil "
+        "\\advance\\muskip4 by 2mu plus 1fil "
+        "\\hfuzz=.1pt \\advance\\hfuzz by .2pt "
+        "\\parskip=0pt plus 1pt \\advance\\parskip by 2pt%";
     char path[64];
     if (open_snippet(source, path) != 0) {
         return 1;
@@ -542,13 +556,29 @@ static int test_dimensions_and_glue(void)
                                           sizeof(error));
     } while (result == HSTEX_ENGINE_TOKEN);
     const struct hstex_glue glue = engine.glues[3];
+    const struct hstex_glue arithmetic_glue = engine.glues[4];
+    const struct hstex_glue arithmetic_muglue = engine.muglues[4];
     int status = result != HSTEX_ENGINE_EOF || engine.dimens[5] != 98304 ||
                  engine.dimens[6] != 196608 ||
                  engine.dimens[7] != 1073741823 ||
+                 engine.dimens[8] != 3 || engine.dimens[9] != -3 ||
+                 engine.dimens[10] != 34 || engine.counts[10] != 891290 ||
+                 engine.dimens[11] != 327680 ||
+                 engine.dimens[12] != 1638402 ||
+                 engine.dimens[13] != 917046 ||
                  glue.width != -65536000 || glue.stretch != 65536 ||
                  glue.stretch_order != 2U || glue.shrink != 131072 ||
                  glue.shrink_order != 0U ||
-                 engine.dimen_parameters[HSTEX_DIMEN_HFUZZ] != 6554 ||
+                 arithmetic_glue.width != 131072 ||
+                 arithmetic_glue.stretch != 174762 ||
+                 arithmetic_glue.stretch_order != 2U ||
+                 arithmetic_glue.shrink != 43690 ||
+                 arithmetic_glue.shrink_order != 1U ||
+                 arithmetic_muglue.width != 327680 ||
+                 arithmetic_muglue.stretch != 196608 ||
+                 arithmetic_muglue.stretch_order != 1U ||
+                 engine.dimen_parameters[HSTEX_DIMEN_HFUZZ] != 19661 ||
+                 engine.glue_parameters[HSTEX_GLUE_PAR_SKIP].width != 131072 ||
                  engine.glue_parameters[HSTEX_GLUE_PAR_SKIP].stretch != 65536;
     if (status != 0) {
         (void)fprintf(stderr, "dimension/glue test failed: %s\n", error);
@@ -574,9 +604,14 @@ static int test_token_lists(void)
 static int test_empty_hboxes(void)
 {
     const char source[] =
+        "\\count0=1 "
         "{\\setbox5=\\hbox{ }}"
         "\\setbox6=\\hbox to 2pt{}"
-        "{\\global\\setbox7=\\hbox spread 3sp{}}%";
+        "{\\global\\setbox7=\\hbox spread 3sp{}}"
+        "\\baselineskip=13.6pt "
+        "\\def\\H{height}\\def\\D{depth}\\def\\W{width}"
+        "\\setbox8=\\hbox{\\count0=2 "
+        "\\vrule\\H.7\\baselineskip\\D.3\\baselineskip\\W0pt}%";
     char path[64];
     if (open_snippet(source, path) != 0) {
         return 1;
@@ -594,13 +629,28 @@ static int test_empty_hboxes(void)
         result = hstex_engine_next_output(&engine, &token, &location, error,
                                           sizeof(error));
     } while (result == HSTEX_ENGINE_TOKEN);
-    int status = result != HSTEX_ENGINE_EOF ||
+    const struct hstex_box rule_box = engine.boxes[8];
+    uint32_t rule_identifier =
+        rule_box.node_count == 1U &&
+                (size_t)rule_box.node_start < engine.list_item_count
+            ? engine.list_items[rule_box.node_start]
+            : 0U;
+    const struct hstex_node *rule =
+        rule_identifier != 0U && (size_t)rule_identifier <= engine.node_count
+            ? &engine.nodes[rule_identifier - 1U]
+            : NULL;
+    int status = result != HSTEX_ENGINE_EOF || engine.counts[0] != 1 ||
                  engine.boxes[5].kind != HSTEX_BOX_VOID ||
                  engine.boxes[6].kind != HSTEX_BOX_HLIST ||
                  engine.boxes[6].width != 2 * 65536 ||
                  engine.boxes[6].height != 0 || engine.boxes[6].depth != 0 ||
                  engine.boxes[7].kind != HSTEX_BOX_HLIST ||
-                 engine.boxes[7].width != 3;
+                 engine.boxes[7].width != 3 ||
+                 rule_box.kind != HSTEX_BOX_HLIST || rule_box.width != 0 ||
+                 rule_box.height != 623903 || rule_box.depth != 267387 ||
+                 rule == NULL || rule->kind != HSTEX_NODE_RULE ||
+                 rule->width != 0 || rule->height != 623903 ||
+                 rule->depth != 267387;
     if (status != 0) {
         (void)fprintf(stderr, "empty hbox test failed: %s\n", error);
     }

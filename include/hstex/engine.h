@@ -112,6 +112,7 @@ enum hstex_command {
     HSTEX_COMMAND_BOX,
     HSTEX_COMMAND_SET_BOX,
     HSTEX_COMMAND_HBOX,
+    HSTEX_COMMAND_VRULE,
     HSTEX_COMMAND_MATH_GROUP,
     HSTEX_COMMAND_LANGUAGE,
     HSTEX_COMMAND_DIMEN_PARAMETER,
@@ -347,6 +348,22 @@ struct hstex_box {
     uint32_t node_count;
 };
 
+enum hstex_node_kind {
+    HSTEX_NODE_RULE = 0,
+    HSTEX_NODE_CHARACTER,
+};
+
+struct hstex_node {
+    enum hstex_node_kind kind;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    uint32_t font;
+    uint32_t character;
+};
+
+struct hstex_hbox_builder;
+
 struct hstex_save_entry {
     enum hstex_save_kind kind;
     uint32_t index;
@@ -409,6 +426,12 @@ struct hstex_engine {
     uint32_t *token_register_levels;
     struct hstex_box *boxes;
     uint32_t *box_levels;
+    struct hstex_node *nodes;
+    size_t node_count;
+    size_t node_capacity;
+    uint32_t *list_items;
+    size_t list_item_count;
+    size_t list_item_capacity;
     struct hstex_token_list *token_lists;
     size_t token_list_count;
     size_t token_list_capacity;
@@ -461,6 +484,9 @@ struct hstex_engine {
     bool inhibit_protected_expansion;
     bool negate_next_conditional;
     bool dump_requested;
+    uint32_t output_group_floor;
+    size_t output_conditional_floor;
+    struct hstex_hbox_builder *active_hbox_builder;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

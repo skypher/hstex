@@ -23,6 +23,9 @@ enum {
     HSTEX_INITIAL_TOKEN_LIST_CAPACITY = 32,
     HSTEX_INITIAL_FONT_CAPACITY = 16,
     HSTEX_INITIAL_FONT_DIMEN_CAPACITY = 8,
+    HSTEX_INITIAL_NODE_CAPACITY = 256,
+    HSTEX_INITIAL_LIST_ITEM_CAPACITY = 256,
+    HSTEX_INITIAL_HBOX_ITEM_CAPACITY = 16,
     HSTEX_INITIAL_HYPHEN_NODE_CAPACITY = 1024,
     HSTEX_INITIAL_HYPHEN_VALUE_CAPACITY = 4096,
     HSTEX_INITIAL_HYPHEN_EXCEPTION_CAPACITY = 32,
@@ -39,6 +42,15 @@ struct token_vector {
     hstex_token *data;
     size_t count;
     size_t capacity;
+};
+
+struct hstex_hbox_builder {
+    uint32_t *node_identifiers;
+    size_t count;
+    size_t capacity;
+    int64_t width;
+    int32_t height;
+    int32_t depth;
 };
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
@@ -318,6 +330,73 @@ static int reserve_fonts(struct hstex_engine *engine, size_t required,
     memset(engine->fonts + old_capacity, 0,
            (capacity - old_capacity) * sizeof(*engine->fonts));
     engine->font_capacity = capacity;
+    return 0;
+}
+
+static int reserve_nodes(struct hstex_engine *engine, size_t required,
+                         char *error, size_t error_capacity)
+{
+    if (required <= engine->node_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->node_capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_NODE_CAPACITY
+                          : engine->node_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "typesetting-node capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*engine->nodes) ||
+        capacity > (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity,
+                         "typesetting-node allocation overflow");
+    }
+    size_t old_capacity = engine->node_capacity;
+    void *allocation =
+        realloc(engine->nodes, capacity * sizeof(*engine->nodes));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "typesetting-node allocation failed");
+    }
+    engine->nodes = allocation;
+    memset(engine->nodes + old_capacity, 0,
+           (capacity - old_capacity) * sizeof(*engine->nodes));
+    engine->node_capacity = capacity;
+    return 0;
+}
+
+static int reserve_list_items(struct hstex_engine *engine, size_t required,
+                              char *error, size_t error_capacity)
+{
+    if (required <= engine->list_item_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->list_item_capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_LIST_ITEM_CAPACITY
+                          : engine->list_item_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "box-list capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*engine->list_items) ||
+        capacity > (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity,
+                         "box-list allocation overflow");
+    }
+    void *allocation =
+        realloc(engine->list_items, capacity * sizeof(*engine->list_items));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "box-list allocation failed");
+    }
+    engine->list_items = allocation;
+    engine->list_item_capacity = capacity;
     return 0;
 }
 
@@ -1410,6 +1489,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"box", HSTEX_COMMAND_BOX},
         {"setbox", HSTEX_COMMAND_SET_BOX},
         {"hbox", HSTEX_COMMAND_HBOX},
+        {"vrule", HSTEX_COMMAND_VRULE},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
@@ -1703,6 +1783,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->token_register_levels);
     free(engine->boxes);
     free(engine->box_levels);
+    free(engine->nodes);
+    free(engine->list_items);
     free(engine->token_lists);
     free(engine->fonts);
     free(engine->hyphen_roots);
@@ -1799,6 +1881,9 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->inhibit_protected_expansion = false;
     engine->negate_next_conditional = false;
     engine->dump_requested = false;
+    engine->output_group_floor = 0U;
+    engine->output_conditional_floor = 0U;
+    engine->active_hbox_builder = NULL;
     if (hstex_engine_push_file(engine, path, error, error_capacity) != 0) {
         return -1;
     }
@@ -2424,7 +2509,11 @@ static int integer_from_control_sequence(
     case HSTEX_COMMAND_DIMEN_PARAMETER:
     case HSTEX_COMMAND_DIMEN:
     case HSTEX_COMMAND_DIM_EXPR:
-    case HSTEX_COMMAND_FONT_DIMEN: {
+    case HSTEX_COMMAND_FONT_DIMEN:
+    case HSTEX_COMMAND_SKIP_REGISTER:
+    case HSTEX_COMMAND_GLUE_PARAMETER:
+    case HSTEX_COMMAND_SKIP:
+    case HSTEX_COMMAND_GLUE_EXPR: {
         int result = dimen_from_meaning(engine, meaning, value, error,
                                         error_capacity);
         if (result < 0) {
@@ -3160,6 +3249,37 @@ static int scaled_rational(const struct decimal_factor *factor,
     return 0;
 }
 
+static int scaled_internal_dimension(const struct decimal_factor *factor,
+                                     int32_t unit, int32_t *value,
+                                     char *error, size_t error_capacity)
+{
+    if (factor->whole >
+        (UINT64_MAX - factor->fraction) / factor->denominator) {
+        return set_error(error, error_capacity, "dimension factor overflow");
+    }
+    uint64_t numerator =
+        factor->whole * factor->denominator + factor->fraction;
+    uint64_t denominator = factor->denominator;
+    uint64_t magnitude = unit < 0 ? (uint64_t)(-(int64_t)unit)
+                                  : (uint64_t)unit;
+    uint64_t reduction = greatest_common_divisor(magnitude, denominator);
+    if (reduction != 0U) {
+        magnitude /= reduction;
+        denominator /= reduction;
+    }
+    if (magnitude != 0U && numerator > UINT64_MAX / magnitude) {
+        return set_error(error, error_capacity, "scaled dimension overflow");
+    }
+    uint64_t scaled = numerator * magnitude / denominator;
+    if (scaled > UINT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "dimension exceeds TeX's maximum");
+    }
+    bool negative = (factor->sign < 0) != (unit < 0);
+    *value = negative ? (int32_t)(-(int64_t)scaled) : (int32_t)scaled;
+    return 0;
+}
+
 static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
                                     int32_t *value, uint8_t *order, char *error,
                                     size_t error_capacity)
@@ -3195,15 +3315,9 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return -1;
         }
         if (internal_result > 0) {
-            uint64_t magnitude = internal_unit < 0
-                                     ? (uint64_t)(-(int64_t)internal_unit)
-                                     : (uint64_t)internal_unit;
-            if (internal_unit < 0) {
-                factor.sign = -factor.sign;
-            }
             *order = 0U;
-            return scaled_rational(&factor, magnitude, 1U, value, error,
-                                   error_capacity);
+            return scaled_internal_dimension(&factor, internal_unit, value,
+                                             error, error_capacity);
         }
     }
     if (push_one(engine, possible_unit, possible_unit_location, error,
@@ -3241,6 +3355,16 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
     } else if (strcmp(unit, "cc") == 0) {
         numerator = UINT64_C(12) * UINT64_C(1238) * UINT64_C(65536);
         denominator = 1157U;
+    } else if (strcmp(unit, "em") == 0 || strcmp(unit, "ex") == 0) {
+        const struct hstex_font *font =
+            font_by_identifier(engine, engine->current_font);
+        size_t parameter = strcmp(unit, "em") == 0 ? 5U : 4U;
+        if (font == NULL || parameter >= font->dimen_count) {
+            return set_error(error, error_capacity,
+                             "current font does not define %s", unit);
+        }
+        return scaled_internal_dimension(&factor, font->dimens[parameter],
+                                         value, error, error_capacity);
     } else if (allow_fil && strcmp(unit, "fil") == 0) {
         numerator = UINT64_C(65536);
         *order = 1U;
@@ -6117,9 +6241,248 @@ static int scan_font_integer_assignment(struct hstex_engine *engine,
     return 0;
 }
 
-static int scan_empty_hbox(struct hstex_engine *engine,
-                           struct hstex_box *box, char *error,
-                           size_t error_capacity)
+static int begin_group(struct hstex_engine *engine, char *error,
+                       size_t error_capacity);
+static int end_group(struct hstex_engine *engine, char *error,
+                     size_t error_capacity);
+
+static int reserve_hbox_items(struct hstex_hbox_builder *builder,
+                              size_t required, char *error,
+                              size_t error_capacity)
+{
+    if (required <= builder->capacity) {
+        return 0;
+    }
+    size_t capacity = builder->capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_HBOX_ITEM_CAPACITY
+                          : builder->capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "hbox item capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*builder->node_identifiers)) {
+        return set_error(error, error_capacity,
+                         "hbox item allocation overflow");
+    }
+    void *allocation = realloc(
+        builder->node_identifiers,
+        capacity * sizeof(*builder->node_identifiers));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "hbox item allocation failed");
+    }
+    builder->node_identifiers = allocation;
+    builder->capacity = capacity;
+    return 0;
+}
+
+static int append_hbox_node(struct hstex_engine *engine,
+                            const struct hstex_node *node, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_hbox_builder *builder = engine->active_hbox_builder;
+    if (builder == NULL || node == NULL) {
+        return set_error(error, error_capacity,
+                         "horizontal node used outside an hbox");
+    }
+    if (engine->node_count >= (size_t)UINT32_MAX ||
+        reserve_hbox_items(builder, builder->count + 1U, error,
+                           error_capacity) != 0 ||
+        reserve_nodes(engine, engine->node_count + 1U, error,
+                      error_capacity) != 0) {
+        return -1;
+    }
+    int64_t width = builder->width + (int64_t)node->width;
+    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "hbox width exceeds TeX's dimension range");
+    }
+    engine->nodes[engine->node_count] = *node;
+    builder->node_identifiers[builder->count++] =
+        (uint32_t)engine->node_count + 1U;
+    ++engine->node_count;
+    builder->width = width;
+    if (node->height > builder->height) {
+        builder->height = node->height;
+    }
+    if (node->depth > builder->depth) {
+        builder->depth = node->depth;
+    }
+    return 0;
+}
+
+static int execute_vrule(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = 26214,
+        .height = 0,
+        .depth = 0,
+        .font = 0U,
+        .character = 0U,
+    };
+    for (;;) {
+        bool matched = false;
+        if (try_keyword(engine, "width", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            if (scan_dimension(engine, &rule.width, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        if (try_keyword(engine, "height", &matched, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        if (matched) {
+            if (scan_dimension(engine, &rule.height, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        if (try_keyword(engine, "depth", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            if (scan_dimension(engine, &rule.depth, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        break;
+    }
+    return append_hbox_node(engine, &rule, error, error_capacity);
+}
+
+static int evaluate_hbox_contents(struct hstex_engine *engine,
+                                  struct token_vector *contents,
+                                  struct hstex_hbox_builder *builder,
+                                  char *error, size_t error_capacity)
+{
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (push_owned_vector(engine, contents, (struct hstex_source_location){0},
+                          error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        return -1;
+    }
+
+    uint32_t base_group_level = engine->group_level;
+    uint32_t previous_group_floor = engine->output_group_floor;
+    size_t previous_conditional_floor = engine->output_conditional_floor;
+    struct hstex_hbox_builder *previous_builder =
+        engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    bool previous_inner_mode = engine->inner_mode;
+    if (begin_group(engine, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        return -1;
+    }
+    engine->output_group_floor = engine->group_level;
+    engine->output_conditional_floor = engine->conditional_count;
+    engine->active_hbox_builder = builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    engine->inner_mode = true;
+
+    int status = 0;
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            status = -1;
+            break;
+        }
+        if (token_is_space(token)) {
+            continue;
+        }
+        if (hstex_token_is_character(token)) {
+            status = set_error(error, error_capacity,
+                               "character metrics inside hbox are not implemented");
+        } else {
+            status = set_error(error, error_capacity,
+                               "unsupported horizontal-mode token inside hbox");
+        }
+        break;
+    }
+
+    engine->active_hbox_builder = previous_builder;
+    engine->mode = previous_mode;
+    engine->inner_mode = previous_inner_mode;
+    engine->output_group_floor = previous_group_floor;
+    engine->output_conditional_floor = previous_conditional_floor;
+    if (hstex_source_pop_boundary(&engine->sources, error, error_capacity) != 0) {
+        status = -1;
+    }
+    while (engine->group_level > base_group_level) {
+        if (end_group(engine, error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+    }
+    if (engine->group_level != base_group_level) {
+        status = set_error(error, error_capacity,
+                           "hbox content closed an outer group");
+    }
+    return status;
+}
+
+static int finalize_hbox(struct hstex_engine *engine,
+                         struct hstex_hbox_builder *builder,
+                         bool matched_to, bool matched_spread,
+                         int32_t requested_width, struct hstex_box *box,
+                         char *error, size_t error_capacity)
+{
+    if (builder->count > (size_t)UINT32_MAX ||
+        engine->list_item_count > (size_t)UINT32_MAX - builder->count ||
+        reserve_list_items(engine, engine->list_item_count + builder->count,
+                           error, error_capacity) != 0) {
+        return -1;
+    }
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_HLIST;
+    box->width = (int32_t)builder->width;
+    box->height = builder->height;
+    box->depth = builder->depth;
+    if (matched_to) {
+        box->width = requested_width;
+    } else if (matched_spread) {
+        int64_t spread_width = builder->width + (int64_t)requested_width;
+        if (spread_width < -INT64_C(1073741823) ||
+            spread_width > INT64_C(1073741823)) {
+            return set_error(error, error_capacity,
+                             "spread hbox width exceeds TeX's dimension range");
+        }
+        box->width = (int32_t)spread_width;
+    }
+    if (builder->count != 0U) {
+        box->node_start = (uint32_t)engine->list_item_count;
+        box->node_count = (uint32_t)builder->count;
+        memcpy(engine->list_items + engine->list_item_count,
+               builder->node_identifiers,
+               builder->count * sizeof(*engine->list_items));
+        engine->list_item_count += builder->count;
+    }
+    return 0;
+}
+
+static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
+                     char *error, size_t error_capacity)
 {
     bool matched_to = false;
     bool matched_spread = false;
@@ -6162,20 +6525,16 @@ static int scan_empty_hbox(struct hstex_engine *engine,
         vector_destroy(&contents);
         return -1;
     }
-    for (size_t index = 0U; index < contents.count; ++index) {
-        if (!token_is_space(contents.data[index])) {
-            vector_destroy(&contents);
-            return set_error(error, error_capacity,
-                             "nonempty hbox construction is not implemented");
-        }
-    }
+    struct hstex_hbox_builder builder = {0};
+    int status = evaluate_hbox_contents(engine, &contents, &builder, error,
+                                        error_capacity);
     vector_destroy(&contents);
-    memset(box, 0, sizeof(*box));
-    box->kind = HSTEX_BOX_HLIST;
-    if (matched_to || matched_spread) {
-        box->width = requested_width;
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, matched_to, matched_spread,
+                              requested_width, box, error, error_capacity);
     }
-    return 0;
+    free(builder.node_identifiers);
+    return status;
 }
 
 static int execute_set_box(struct hstex_engine *engine, char *error,
@@ -6214,7 +6573,7 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "unsupported setbox box specification");
     }
-    if (scan_empty_hbox(engine, &value, error, error_capacity) != 0) {
+    if (scan_hbox(engine, &value, error, error_capacity) != 0) {
         return -1;
     }
     return assign_box(engine, (uint32_t)register_index, value,
@@ -7081,19 +7440,25 @@ static int scan_token_parameter_assignment(struct hstex_engine *engine,
                                   requested_global, error, error_capacity);
 }
 
-enum integer_variable_kind {
-    INTEGER_VARIABLE_COUNT = 0,
-    INTEGER_VARIABLE_PARAMETER,
+enum arithmetic_variable_kind {
+    ARITHMETIC_VARIABLE_COUNT = 0,
+    ARITHMETIC_VARIABLE_INTEGER_PARAMETER,
+    ARITHMETIC_VARIABLE_DIMEN,
+    ARITHMETIC_VARIABLE_DIMEN_PARAMETER,
+    ARITHMETIC_VARIABLE_GLUE,
+    ARITHMETIC_VARIABLE_GLUE_PARAMETER,
+    ARITHMETIC_VARIABLE_MUGLUE,
+    ARITHMETIC_VARIABLE_MUGLUE_PARAMETER,
 };
 
-struct integer_variable {
-    enum integer_variable_kind kind;
+struct arithmetic_variable {
+    enum arithmetic_variable_kind kind;
     uint32_t index;
 };
 
-static int scan_integer_variable(struct hstex_engine *engine,
-                                 struct integer_variable *variable,
-                                 char *error, size_t error_capacity)
+static int scan_arithmetic_variable(struct hstex_engine *engine,
+                                    struct arithmetic_variable *variable,
+                                    char *error, size_t error_capacity)
 {
     hstex_token token = 0U;
     struct hstex_source_location location;
@@ -7101,7 +7466,7 @@ static int scan_integer_variable(struct hstex_engine *engine,
                                 error_capacity) != HSTEX_ENGINE_TOKEN ||
         !hstex_token_is_control_sequence(token)) {
         return set_error(error, error_capacity,
-                         "arithmetic operation requires an integer variable");
+                         "arithmetic operation requires a variable");
     }
     const struct hstex_meaning *meaning = hstex_engine_meaning(
         engine, hstex_token_control_sequence_id(token));
@@ -7111,7 +7476,7 @@ static int scan_integer_variable(struct hstex_engine *engine,
             return set_error(error, error_capacity,
                              "invalid count-register variable");
         }
-        variable->kind = INTEGER_VARIABLE_COUNT;
+        variable->kind = ARITHMETIC_VARIABLE_COUNT;
         variable->index = (uint32_t)meaning->value.integer;
         return 0;
     }
@@ -7122,19 +7487,94 @@ static int scan_integer_variable(struct hstex_engine *engine,
             return set_error(error, error_capacity,
                              "count variable outside supported range");
         }
-        variable->kind = INTEGER_VARIABLE_COUNT;
+        variable->kind = ARITHMETIC_VARIABLE_COUNT;
         variable->index = (uint32_t)index;
         return 0;
     }
     if (meaning->command == HSTEX_COMMAND_INTEGER_PARAMETER &&
         meaning->value.integer >= 0 &&
         meaning->value.integer < (int32_t)HSTEX_INTEGER_PARAMETER_COUNT) {
-        variable->kind = INTEGER_VARIABLE_PARAMETER;
+        variable->kind = ARITHMETIC_VARIABLE_INTEGER_PARAMETER;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_DIMEN_REGISTER &&
+        meaning->value.integer >= 0 &&
+        (size_t)meaning->value.integer < engine->count_capacity) {
+        variable->kind = ARITHMETIC_VARIABLE_DIMEN;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_DIMEN) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "dimen arithmetic target outside supported range");
+        }
+        variable->kind = ARITHMETIC_VARIABLE_DIMEN;
+        variable->index = (uint32_t)index;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_DIMEN_PARAMETER &&
+        meaning->value.integer >= 0 &&
+        meaning->value.integer < (int32_t)HSTEX_DIMEN_PARAMETER_COUNT) {
+        variable->kind = ARITHMETIC_VARIABLE_DIMEN_PARAMETER;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_SKIP_REGISTER &&
+        meaning->value.integer >= 0 &&
+        (size_t)meaning->value.integer < engine->count_capacity) {
+        variable->kind = ARITHMETIC_VARIABLE_GLUE;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_SKIP) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "skip arithmetic target outside supported range");
+        }
+        variable->kind = ARITHMETIC_VARIABLE_GLUE;
+        variable->index = (uint32_t)index;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_GLUE_PARAMETER &&
+        meaning->value.integer >= 0 &&
+        meaning->value.integer < (int32_t)HSTEX_GLUE_PARAMETER_COUNT) {
+        variable->kind = ARITHMETIC_VARIABLE_GLUE_PARAMETER;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_MUSKIP_REGISTER &&
+        meaning->value.integer >= 0 &&
+        (size_t)meaning->value.integer < engine->count_capacity) {
+        variable->kind = ARITHMETIC_VARIABLE_MUGLUE;
+        variable->index = (uint32_t)meaning->value.integer;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_MUSKIP) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "muskip arithmetic target outside supported range");
+        }
+        variable->kind = ARITHMETIC_VARIABLE_MUGLUE;
+        variable->index = (uint32_t)index;
+        return 0;
+    }
+    if (meaning->command == HSTEX_COMMAND_MUGLUE_PARAMETER &&
+        meaning->value.integer >= 0 &&
+        meaning->value.integer < (int32_t)HSTEX_MUGLUE_PARAMETER_COUNT) {
+        variable->kind = ARITHMETIC_VARIABLE_MUGLUE_PARAMETER;
         variable->index = (uint32_t)meaning->value.integer;
         return 0;
     }
     return set_error(error, error_capacity,
-                     "arithmetic target is not an integer variable");
+                     "arithmetic target is not a supported variable");
 }
 
 static bool token_has_character(hstex_token token, uint8_t character)
@@ -7173,20 +7613,31 @@ static int scan_optional_by(struct hstex_engine *engine, char *error,
     return 0;
 }
 
-static int execute_arithmetic(struct hstex_engine *engine,
-                              enum hstex_command operation, char *error,
-                              size_t error_capacity)
+static bool arithmetic_variable_is_integer(
+    enum arithmetic_variable_kind kind)
 {
-    struct integer_variable variable = {0};
-    int32_t operand = 0;
-    if (scan_integer_variable(engine, &variable, error, error_capacity) != 0 ||
-        scan_optional_by(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &operand, error, error_capacity) != 0) {
-        return -1;
-    }
-    int32_t current = variable.kind == INTEGER_VARIABLE_COUNT
-                          ? engine->counts[variable.index]
-                          : engine->integer_parameters[variable.index];
+    return kind == ARITHMETIC_VARIABLE_COUNT ||
+           kind == ARITHMETIC_VARIABLE_INTEGER_PARAMETER;
+}
+
+static bool arithmetic_variable_is_dimen(enum arithmetic_variable_kind kind)
+{
+    return kind == ARITHMETIC_VARIABLE_DIMEN ||
+           kind == ARITHMETIC_VARIABLE_DIMEN_PARAMETER;
+}
+
+static bool arithmetic_variable_is_glue(enum arithmetic_variable_kind kind)
+{
+    return kind == ARITHMETIC_VARIABLE_GLUE ||
+           kind == ARITHMETIC_VARIABLE_GLUE_PARAMETER;
+}
+
+static int arithmetic_scalar_result(int32_t current, int32_t operand,
+                                    enum hstex_command operation,
+                                    int64_t lower, int64_t upper,
+                                    int32_t *value, char *error,
+                                    size_t error_capacity)
+{
     int64_t result = 0;
     if (operation == HSTEX_COMMAND_ADVANCE) {
         result = (int64_t)current + operand;
@@ -7198,18 +7649,197 @@ static int execute_arithmetic(struct hstex_engine *engine,
         }
         result = (int64_t)current / operand;
     }
-    if (result < INT32_MIN || result > INT32_MAX) {
+    if (result < lower || result > upper) {
         return set_error(error, error_capacity, "arithmetic overflow");
     }
+    *value = (int32_t)result;
+    return 0;
+}
+
+static int advance_glue_component(int32_t *left, uint8_t *left_order,
+                                  int32_t right, uint8_t right_order,
+                                  char *error, size_t error_capacity)
+{
+    if (right_order > *left_order) {
+        *left = right;
+        *left_order = right_order;
+        return 0;
+    }
+    if (right_order < *left_order) {
+        return 0;
+    }
+    int64_t combined = (int64_t)*left + right;
+    if (combined < -INT64_C(1073741823) ||
+        combined > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "glue arithmetic overflow");
+    }
+    *left = (int32_t)combined;
+    return 0;
+}
+
+static int advance_glue_value(struct hstex_glue *left,
+                              const struct hstex_glue *right, char *error,
+                              size_t error_capacity)
+{
+    int64_t width = (int64_t)left->width + right->width;
+    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "glue-width arithmetic overflow");
+    }
+    struct hstex_glue result = *left;
+    result.width = (int32_t)width;
+    if (advance_glue_component(&result.stretch, &result.stretch_order,
+                               right->stretch, right->stretch_order, error,
+                               error_capacity) != 0 ||
+        advance_glue_component(&result.shrink, &result.shrink_order,
+                               right->shrink, right->shrink_order, error,
+                               error_capacity) != 0) {
+        return -1;
+    }
+    *left = result;
+    return 0;
+}
+
+static int scale_glue_value(struct hstex_glue *value, int32_t operand,
+                            enum hstex_command operation, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_glue result = *value;
+    if (arithmetic_scalar_result(result.width, operand, operation,
+                                 -INT64_C(1073741823),
+                                 INT64_C(1073741823), &result.width, error,
+                                 error_capacity) != 0 ||
+        arithmetic_scalar_result(result.stretch, operand, operation,
+                                 -INT64_C(1073741823),
+                                 INT64_C(1073741823), &result.stretch, error,
+                                 error_capacity) != 0 ||
+        arithmetic_scalar_result(result.shrink, operand, operation,
+                                 -INT64_C(1073741823),
+                                 INT64_C(1073741823), &result.shrink, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    *value = result;
+    return 0;
+}
+
+static int execute_arithmetic(struct hstex_engine *engine,
+                              enum hstex_command operation, char *error,
+                              size_t error_capacity)
+{
+    struct arithmetic_variable variable = {0};
+    if (scan_arithmetic_variable(engine, &variable, error, error_capacity) !=
+            0 ||
+        scan_optional_by(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+
     bool requested_global = engine->pending_global;
+    if (arithmetic_variable_is_integer(variable.kind) ||
+        arithmetic_variable_is_dimen(variable.kind)) {
+        int32_t operand = 0;
+        if ((operation == HSTEX_COMMAND_ADVANCE &&
+             arithmetic_variable_is_dimen(variable.kind)
+                 ? scan_dimension(engine, &operand, error, error_capacity)
+                 : scan_integer(engine, &operand, error, error_capacity)) !=
+            0) {
+            return -1;
+        }
+        int32_t current = 0;
+        if (variable.kind == ARITHMETIC_VARIABLE_COUNT) {
+            current = engine->counts[variable.index];
+        } else if (variable.kind ==
+                   ARITHMETIC_VARIABLE_INTEGER_PARAMETER) {
+            current = engine->integer_parameters[variable.index];
+        } else if (variable.kind == ARITHMETIC_VARIABLE_DIMEN) {
+            current = engine->dimens[variable.index];
+        } else {
+            current = engine->dimen_parameters[variable.index];
+        }
+        int32_t result = 0;
+        int64_t lower = arithmetic_variable_is_integer(variable.kind)
+                            ? (int64_t)INT32_MIN
+                            : -INT64_C(1073741823);
+        int64_t upper = arithmetic_variable_is_integer(variable.kind)
+                            ? (int64_t)INT32_MAX
+                            : INT64_C(1073741823);
+        if (arithmetic_scalar_result(current, operand, operation, lower, upper,
+                                     &result, error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pending_global = false;
+        engine->pending_macro_flags = 0U;
+        switch (variable.kind) {
+        case ARITHMETIC_VARIABLE_COUNT:
+            return assign_count(engine, variable.index, result,
+                                requested_global, error, error_capacity);
+        case ARITHMETIC_VARIABLE_INTEGER_PARAMETER:
+            return assign_integer_parameter(engine, variable.index, result,
+                                            requested_global, error,
+                                            error_capacity);
+        case ARITHMETIC_VARIABLE_DIMEN:
+            return assign_dimen(engine, variable.index, result,
+                                requested_global, error, error_capacity);
+        case ARITHMETIC_VARIABLE_DIMEN_PARAMETER:
+            return assign_dimen_parameter(engine, variable.index, result,
+                                          requested_global, error,
+                                          error_capacity);
+        default:
+            return set_error(error, error_capacity,
+                             "internal scalar arithmetic target mismatch");
+        }
+    }
+
+    struct hstex_glue value;
+    if (variable.kind == ARITHMETIC_VARIABLE_GLUE) {
+        value = engine->glues[variable.index];
+    } else if (variable.kind == ARITHMETIC_VARIABLE_GLUE_PARAMETER) {
+        value = engine->glue_parameters[variable.index];
+    } else if (variable.kind == ARITHMETIC_VARIABLE_MUGLUE) {
+        value = engine->muglues[variable.index];
+    } else {
+        value = engine->muglue_parameters[variable.index];
+    }
+    if (operation == HSTEX_COMMAND_ADVANCE) {
+        struct hstex_glue operand;
+        int scan_status = arithmetic_variable_is_glue(variable.kind)
+                              ? scan_glue(engine, &operand, error,
+                                          error_capacity)
+                              : scan_math_glue(engine, &operand, error,
+                                               error_capacity);
+        if (scan_status != 0 ||
+            advance_glue_value(&value, &operand, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        int32_t operand = 0;
+        if (scan_integer(engine, &operand, error, error_capacity) != 0 ||
+            scale_glue_value(&value, operand, operation, error,
+                             error_capacity) != 0) {
+            return -1;
+        }
+    }
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
-    if (variable.kind == INTEGER_VARIABLE_COUNT) {
-        return assign_count(engine, variable.index, (int32_t)result,
-                            requested_global, error, error_capacity);
+    switch (variable.kind) {
+    case ARITHMETIC_VARIABLE_GLUE:
+        return assign_glue(engine, variable.index, value, requested_global,
+                           error, error_capacity);
+    case ARITHMETIC_VARIABLE_GLUE_PARAMETER:
+        return assign_glue_parameter(engine, variable.index, value,
+                                     requested_global, error, error_capacity);
+    case ARITHMETIC_VARIABLE_MUGLUE:
+        return assign_muglue(engine, variable.index, value, requested_global,
+                             error, error_capacity);
+    case ARITHMETIC_VARIABLE_MUGLUE_PARAMETER:
+        return assign_muglue_parameter(engine, variable.index, value,
+                                       requested_global, error,
+                                       error_capacity);
+    default:
+        return set_error(error, error_capacity,
+                         "internal glue arithmetic target mismatch");
     }
-    return assign_integer_parameter(engine, variable.index, (int32_t)result,
-                                    requested_global, error, error_capacity);
 }
 
 static int scan_stream_number(struct hstex_engine *engine, int32_t *stream,
@@ -8856,12 +9486,13 @@ enum hstex_engine_result hstex_engine_next_output(
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, token, location, error, error_capacity);
         if (result == HSTEX_ENGINE_EOF) {
-            if (engine->group_level != 0U) {
+            if (engine->group_level != engine->output_group_floor) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a group");
                 return HSTEX_ENGINE_ERROR;
             }
-            if (engine->conditional_count != 0U) {
+            if (engine->conditional_count !=
+                engine->output_conditional_floor) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a conditional");
                 return HSTEX_ENGINE_ERROR;
@@ -9135,6 +9766,11 @@ handle_token:
             if (finish_assignment(
                     engine, execute_set_box(engine, error, error_capacity), error,
                     error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_VRULE:
+            if (execute_vrule(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
