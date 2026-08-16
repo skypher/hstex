@@ -87,6 +87,13 @@ the meaning and save-stack machinery used by integer state. Character code
 tables are flat 256-entry arrays with level tags, keeping assignments and
 lookups contiguous.
 
+Assigned token lists are immutable arrays addressed by integer IDs. Token
+registers and named token parameters therefore copy one ID and restore one ID
+at group exit, while old values remain valid without reference-count traffic.
+`the` inserts token-list control sequences with a one-expansion marker: expanded
+definitions and writes receive the original tokens, while ordinary execution
+requeues them for normal expansion or command dispatch.
+
 Expanded definitions reuse the ordinary immutable macro representation but
 drive the replacement scanner through the expansion loop. Integer `the` and
 `number` expansions materialize compact other-character token arrays;

@@ -16,7 +16,9 @@ enum hstex_token_kind {
 
 #define HSTEX_TOKEN_KIND_SHIFT UINT32_C(30)
 #define HSTEX_TOKEN_PAYLOAD_MASK UINT32_C(0x3fffffff)
-#define HSTEX_CS_ID_MAX HSTEX_TOKEN_PAYLOAD_MASK
+#define HSTEX_TOKEN_UNEXPANDED_EXECUTABLE_FLAG UINT32_C(0x20000000)
+#define HSTEX_TOKEN_CS_ID_MASK UINT32_C(0x1fffffff)
+#define HSTEX_CS_ID_MAX HSTEX_TOKEN_CS_ID_MASK
 
 static inline enum hstex_token_kind hstex_token_kind_of(hstex_token token)
 {
@@ -49,9 +51,16 @@ hstex_token_frozen_control_sequence(hstex_cs_id identifier)
     return (UINT32_C(3) << HSTEX_TOKEN_KIND_SHIFT) | identifier;
 }
 
+static inline hstex_token
+hstex_token_unexpanded_control_sequence(hstex_cs_id identifier)
+{
+    return (UINT32_C(3) << HSTEX_TOKEN_KIND_SHIFT) |
+           HSTEX_TOKEN_UNEXPANDED_EXECUTABLE_FLAG | identifier;
+}
+
 static inline hstex_cs_id hstex_token_control_sequence_id(hstex_token token)
 {
-    return token & HSTEX_TOKEN_PAYLOAD_MASK;
+    return token & HSTEX_TOKEN_CS_ID_MASK;
 }
 
 static inline hstex_token hstex_token_parameter(uint8_t number)
@@ -77,6 +86,13 @@ static inline bool hstex_token_is_control_sequence(hstex_token token)
 static inline bool hstex_token_is_frozen_control_sequence(hstex_token token)
 {
     return hstex_token_kind_of(token) == HSTEX_TOKEN_FROZEN_CONTROL_SEQUENCE;
+}
+
+static inline bool
+hstex_token_is_unexpanded_control_sequence(hstex_token token)
+{
+    return hstex_token_is_frozen_control_sequence(token) &&
+           (token & HSTEX_TOKEN_UNEXPANDED_EXECUTABLE_FLAG) != 0U;
 }
 
 static inline bool hstex_token_is_parameter(hstex_token token)

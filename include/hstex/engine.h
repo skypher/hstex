@@ -86,6 +86,7 @@ enum hstex_command {
     HSTEX_COMMAND_LANGUAGE,
     HSTEX_COMMAND_DIMEN_PARAMETER,
     HSTEX_COMMAND_GLUE_PARAMETER,
+    HSTEX_COMMAND_TOKEN_PARAMETER,
     HSTEX_COMMAND_PROTECTED,
     HSTEX_COMMAND_SF_CODE,
     HSTEX_COMMAND_LC_CODE,
@@ -178,6 +179,19 @@ enum hstex_glue_parameter {
     HSTEX_GLUE_PARAMETER_COUNT,
 };
 
+enum hstex_token_parameter {
+    HSTEX_TOKEN_OUTPUT = 0,
+    HSTEX_TOKEN_EVERY_PAR,
+    HSTEX_TOKEN_EVERY_MATH,
+    HSTEX_TOKEN_EVERY_DISPLAY,
+    HSTEX_TOKEN_EVERY_HBOX,
+    HSTEX_TOKEN_EVERY_VBOX,
+    HSTEX_TOKEN_EVERY_JOB,
+    HSTEX_TOKEN_EVERY_CR,
+    HSTEX_TOKEN_ERROR_HELP,
+    HSTEX_TOKEN_PARAMETER_COUNT,
+};
+
 enum hstex_macro_flag {
     HSTEX_MACRO_LONG = 1U << 0U,
     HSTEX_MACRO_OUTER = 1U << 1U,
@@ -213,6 +227,8 @@ enum hstex_save_kind {
     HSTEX_SAVE_DIMEN_PARAMETER,
     HSTEX_SAVE_GLUE_PARAMETER,
     HSTEX_SAVE_CODE,
+    HSTEX_SAVE_TOKEN_REGISTER,
+    HSTEX_SAVE_TOKEN_PARAMETER,
 };
 
 struct hstex_glue {
@@ -221,6 +237,11 @@ struct hstex_glue {
     int32_t shrink;
     uint8_t stretch_order;
     uint8_t shrink_order;
+};
+
+struct hstex_token_list {
+    hstex_token *tokens;
+    size_t count;
 };
 
 struct hstex_save_entry {
@@ -233,6 +254,7 @@ struct hstex_save_entry {
         int32_t integer;
         uint8_t category;
         struct hstex_glue glue;
+        uint32_t token_list_identifier;
     } previous;
 };
 
@@ -262,10 +284,17 @@ struct hstex_engine {
     uint32_t *dimen_levels;
     struct hstex_glue *glues;
     uint32_t *glue_levels;
+    uint32_t *token_registers;
+    uint32_t *token_register_levels;
+    struct hstex_token_list *token_lists;
+    size_t token_list_count;
+    size_t token_list_capacity;
     int32_t dimen_parameters[HSTEX_DIMEN_PARAMETER_COUNT];
     uint32_t dimen_parameter_levels[HSTEX_DIMEN_PARAMETER_COUNT];
     struct hstex_glue glue_parameters[HSTEX_GLUE_PARAMETER_COUNT];
     uint32_t glue_parameter_levels[HSTEX_GLUE_PARAMETER_COUNT];
+    uint32_t token_parameters[HSTEX_TOKEN_PARAMETER_COUNT];
+    uint32_t token_parameter_levels[HSTEX_TOKEN_PARAMETER_COUNT];
     int32_t code_tables[5][256];
     uint32_t code_levels[5][256];
     int32_t integer_parameters[HSTEX_INTEGER_PARAMETER_COUNT];
@@ -278,6 +307,7 @@ struct hstex_engine {
     uint8_t pending_macro_flags;
     bool pending_global;
     bool returned_unexpanded;
+    bool returned_unexpanded_executable;
     bool inhibit_protected_expansion;
 };
 

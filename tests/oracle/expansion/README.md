@@ -53,3 +53,11 @@ removed the textual `macro:->` prefix using a delimited macro, and recorded:
 ```text
 MEANING=[./]
 ```
+
+The token-list probe covered a `toksdef` alias, local restoration, `everyjob`,
+copying an existing list, the `expandafter` append idiom, and preservation of
+control sequences inserted by `the` during `edef`. Its relevant transcript was:
+
+```text
+MEANING=[macro:-><A\x >] EVERY=[J\the \toks 0] LOCAL=[L] RESTORE=[A\x ]
+```

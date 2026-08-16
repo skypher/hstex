@@ -17,6 +17,7 @@
 enum {
     HSTEX_INITIAL_MEANING_CAPACITY = 64,
     HSTEX_INITIAL_MACRO_CAPACITY = 32,
+    HSTEX_INITIAL_TOKEN_LIST_CAPACITY = 32,
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
     HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
     HSTEX_COUNT_REGISTER_CAPACITY = 32768,
@@ -202,6 +203,40 @@ static int reserve_macros(struct hstex_engine *engine, size_t required,
     return 0;
 }
 
+static int reserve_token_lists(struct hstex_engine *engine, size_t required,
+                               char *error, size_t error_capacity)
+{
+    if (required <= engine->token_list_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->token_list_capacity == 0U
+                          ? (size_t)HSTEX_INITIAL_TOKEN_LIST_CAPACITY
+                          : engine->token_list_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "token-list capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*engine->token_lists)) {
+        return set_error(error, error_capacity,
+                         "token-list allocation overflow");
+    }
+    size_t old_capacity = engine->token_list_capacity;
+    void *allocation = realloc(engine->token_lists,
+                               capacity * sizeof(*engine->token_lists));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "token-list allocation failed");
+    }
+    engine->token_lists = allocation;
+    memset(engine->token_lists + old_capacity, 0,
+           (capacity - old_capacity) * sizeof(*engine->token_lists));
+    engine->token_list_capacity = capacity;
+    return 0;
+}
+
 static int reserve_saves(struct hstex_engine *engine, size_t required,
                          char *error, size_t error_capacity)
 {
@@ -344,6 +379,123 @@ static int save_value(struct hstex_engine *engine, enum hstex_save_kind kind,
     } else {
         save->previous.integer = previous_integer;
     }
+    return 0;
+}
+
+static int save_token_list_identifier(
+    struct hstex_engine *engine, enum hstex_save_kind kind, uint32_t index,
+    uint32_t previous_level, uint32_t previous_identifier, char *error,
+    size_t error_capacity)
+{
+    if (reserve_saves(engine, engine->save_count + 1U, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    struct hstex_save_entry *save = &engine->saves[engine->save_count++];
+    memset(save, 0, sizeof(*save));
+    save->kind = kind;
+    save->index = index;
+    save->level = engine->group_level;
+    save->previous_level = previous_level;
+    save->previous.token_list_identifier = previous_identifier;
+    return 0;
+}
+
+static int store_token_list(struct hstex_engine *engine,
+                            struct token_vector *tokens,
+                            uint32_t *identifier, char *error,
+                            size_t error_capacity)
+{
+    if (tokens->count == 0U) {
+        vector_destroy(tokens);
+        *identifier = 0U;
+        return 0;
+    }
+    if (engine->token_list_count >= (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity,
+                         "token-list identifier space exhausted");
+    }
+    if (reserve_token_lists(engine, engine->token_list_count + 1U, error,
+                            error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < tokens->count; ++index) {
+        if (hstex_token_is_frozen_control_sequence(tokens->data[index])) {
+            tokens->data[index] = hstex_token_control_sequence(
+                hstex_token_control_sequence_id(tokens->data[index]));
+        }
+    }
+    struct hstex_token_list *list =
+        &engine->token_lists[engine->token_list_count];
+    list->tokens = tokens->data;
+    list->count = tokens->count;
+    tokens->data = NULL;
+    tokens->count = 0U;
+    tokens->capacity = 0U;
+    ++engine->token_list_count;
+    *identifier = (uint32_t)engine->token_list_count;
+    return 0;
+}
+
+static const struct hstex_token_list *token_list_by_identifier(
+    const struct hstex_engine *engine, uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->token_list_count) {
+        return NULL;
+    }
+    return &engine->token_lists[identifier - 1U];
+}
+
+static int assign_token_register(struct hstex_engine *engine, uint32_t index,
+                                 uint32_t identifier, bool requested_global,
+                                 char *error, size_t error_capacity)
+{
+    if ((size_t)index >= engine->count_capacity ||
+        (identifier != 0U &&
+         token_list_by_identifier(engine, identifier) == NULL)) {
+        return set_error(error, error_capacity,
+                         "invalid token-register assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_token_list_identifier(
+                engine, HSTEX_SAVE_TOKEN_REGISTER, index,
+                engine->token_register_levels[index],
+                engine->token_registers[index], error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->token_register_levels[index] = engine->group_level;
+    } else {
+        engine->token_register_levels[index] = 0U;
+    }
+    engine->token_registers[index] = identifier;
+    return 0;
+}
+
+static int assign_token_parameter(struct hstex_engine *engine, uint32_t index,
+                                  uint32_t identifier,
+                                  bool requested_global, char *error,
+                                  size_t error_capacity)
+{
+    if (index >= (uint32_t)HSTEX_TOKEN_PARAMETER_COUNT ||
+        (identifier != 0U &&
+         token_list_by_identifier(engine, identifier) == NULL)) {
+        return set_error(error, error_capacity,
+                         "invalid token-parameter assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_token_list_identifier(
+                engine, HSTEX_SAVE_TOKEN_PARAMETER, index,
+                engine->token_parameter_levels[index],
+                engine->token_parameters[index], error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->token_parameter_levels[index] = engine->group_level;
+    } else {
+        engine->token_parameter_levels[index] = 0U;
+    }
+    engine->token_parameters[index] = identifier;
     return 0;
 }
 
@@ -620,11 +772,17 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->glues = calloc(engine->count_capacity, sizeof(*engine->glues));
     engine->glue_levels =
         calloc(engine->count_capacity, sizeof(*engine->glue_levels));
+    engine->token_registers =
+        calloc(engine->count_capacity, sizeof(*engine->token_registers));
+    engine->token_register_levels =
+        calloc(engine->count_capacity, sizeof(*engine->token_register_levels));
     if (engine->counts == NULL || engine->count_levels == NULL ||
         engine->dimens == NULL || engine->dimen_levels == NULL ||
-        engine->glues == NULL || engine->glue_levels == NULL) {
+        engine->glues == NULL || engine->glue_levels == NULL ||
+        engine->token_registers == NULL ||
+        engine->token_register_levels == NULL) {
         (void)set_error(error, error_capacity,
-                        "count-register allocation failed");
+                        "register allocation failed");
         hstex_engine_destroy(engine);
         return -1;
     }
@@ -856,6 +1014,32 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    static const struct {
+        const char *name;
+        enum hstex_token_parameter parameter;
+    } token_primitives[] = {
+        {"output", HSTEX_TOKEN_OUTPUT},
+        {"everypar", HSTEX_TOKEN_EVERY_PAR},
+        {"everymath", HSTEX_TOKEN_EVERY_MATH},
+        {"everydisplay", HSTEX_TOKEN_EVERY_DISPLAY},
+        {"everyhbox", HSTEX_TOKEN_EVERY_HBOX},
+        {"everyvbox", HSTEX_TOKEN_EVERY_VBOX},
+        {"everyjob", HSTEX_TOKEN_EVERY_JOB},
+        {"everycr", HSTEX_TOKEN_EVERY_CR},
+        {"errhelp", HSTEX_TOKEN_ERROR_HELP},
+    };
+    for (size_t index = 0U;
+         index < sizeof(token_primitives) / sizeof(token_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, token_primitives[index].name,
+                HSTEX_COMMAND_TOKEN_PARAMETER,
+                (int32_t)token_primitives[index].parameter, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
     if (register_integer_primitive(engine, "eTeXversion",
                                    HSTEX_COMMAND_CHAR_GIVEN, 2, error,
                                    error_capacity) != 0) {
@@ -900,6 +1084,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->macros[index].parameter_text);
         free(engine->macros[index].replacement);
     }
+    for (size_t index = 0U; index < engine->token_list_count; ++index) {
+        free(engine->token_lists[index].tokens);
+    }
     free(engine->meanings);
     free(engine->macros);
     free(engine->saves);
@@ -910,6 +1097,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->dimen_levels);
     free(engine->glues);
     free(engine->glue_levels);
+    free(engine->token_registers);
+    free(engine->token_register_levels);
+    free(engine->token_lists);
     free(engine->output_directory);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
@@ -1993,6 +2183,108 @@ static int expand_integer_primitive(struct hstex_engine *engine,
                                   error_capacity);
 }
 
+static int token_list_identifier_from_meaning(
+    struct hstex_engine *engine, const struct hstex_meaning *meaning,
+    uint32_t *identifier, char *error, size_t error_capacity)
+{
+    if (meaning->command == HSTEX_COMMAND_TOKS_REGISTER) {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "invalid token-register meaning");
+        }
+        *identifier = engine->token_registers[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_TOKEN_PARAMETER) {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || index >= (int32_t)HSTEX_TOKEN_PARAMETER_COUNT) {
+            return set_error(error, error_capacity,
+                             "invalid token-parameter meaning");
+        }
+        *identifier = engine->token_parameters[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_TOKS) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
+            index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "token register outside supported range");
+        }
+        *identifier = engine->token_registers[(size_t)index];
+        return 1;
+    }
+    return 0;
+}
+
+static int push_token_list_expansion(
+    struct hstex_engine *engine, uint32_t identifier,
+    struct hstex_source_location location, char *error,
+    size_t error_capacity)
+{
+    if (identifier == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, identifier);
+    if (list == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid token-list identifier");
+    }
+    struct token_vector expansion = {0};
+    if (vector_reserve(&expansion, list->count, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < list->count; ++index) {
+        hstex_token token = list->tokens[index];
+        if (hstex_token_is_control_sequence(token) ||
+            hstex_token_is_frozen_control_sequence(token)) {
+            token = hstex_token_unexpanded_control_sequence(
+                hstex_token_control_sequence_id(token));
+        }
+        expansion.data[expansion.count++] = token;
+    }
+    if (push_owned_vector(engine, &expansion, location, error, error_capacity) !=
+        0) {
+        vector_destroy(&expansion);
+        return -1;
+    }
+    return 0;
+}
+
+static int expand_the_primitive(struct hstex_engine *engine,
+                                struct hstex_source_location location,
+                                char *error, size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location subject_location;
+    if (expanded_next_non_space(engine, &subject, &subject_location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning the");
+    }
+    if (hstex_token_is_control_sequence(subject)) {
+        uint32_t identifier = 0U;
+        int result = token_list_identifier_from_meaning(
+            engine,
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(subject)),
+            &identifier, error, error_capacity);
+        if (result < 0) {
+            return -1;
+        }
+        if (result > 0) {
+            return push_token_list_expansion(engine, identifier, location,
+                                             error, error_capacity);
+        }
+    }
+    if (push_one(engine, subject, subject_location, error, error_capacity) != 0) {
+        return -1;
+    }
+    return expand_integer_primitive(engine, location, error, error_capacity);
+}
+
 static bool token_is_paragraph(const struct hstex_engine *engine,
                                hstex_token token)
 {
@@ -2325,8 +2617,10 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_NO_EXPAND) {
         return no_expand_once(engine, location, error, error_capacity);
     }
-    if (meaning->command == HSTEX_COMMAND_THE ||
-        meaning->command == HSTEX_COMMAND_NUMBER) {
+    if (meaning->command == HSTEX_COMMAND_THE) {
+        return expand_the_primitive(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_NUMBER) {
         return expand_integer_primitive(engine, location, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_MEANING) {
@@ -2376,6 +2670,7 @@ enum hstex_engine_result hstex_engine_next_expanded(
         return HSTEX_ENGINE_ERROR;
     }
     engine->returned_unexpanded = false;
+    engine->returned_unexpanded_executable = false;
     for (;;) {
         enum hstex_engine_result result = raw_next(
             engine, token, location, error, error_capacity);
@@ -2383,9 +2678,11 @@ enum hstex_engine_result hstex_engine_next_expanded(
             return result;
         }
         if (hstex_token_is_frozen_control_sequence(*token)) {
+            bool executable = hstex_token_is_unexpanded_control_sequence(*token);
             *token = hstex_token_control_sequence(
                 hstex_token_control_sequence_id(*token));
             engine->returned_unexpanded = true;
+            engine->returned_unexpanded_executable = executable;
             return HSTEX_ENGINE_TOKEN;
         }
         if (!hstex_token_is_control_sequence(*token)) {
@@ -2428,10 +2725,17 @@ enum hstex_engine_result hstex_engine_next_expanded(
             *token = next;
             *location = next_location;
             engine->returned_unexpanded = true;
+            engine->returned_unexpanded_executable = false;
             return HSTEX_ENGINE_TOKEN;
         }
-        if (meaning->command == HSTEX_COMMAND_THE ||
-            meaning->command == HSTEX_COMMAND_NUMBER) {
+        if (meaning->command == HSTEX_COMMAND_THE) {
+            if (expand_the_primitive(engine, *location, error,
+                                     error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_NUMBER) {
             if (expand_integer_primitive(engine, *location, error,
                                          error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -2994,6 +3298,88 @@ static int scan_glue_parameter_assignment(struct hstex_engine *engine,
     engine->pending_macro_flags = 0U;
     return assign_glue_parameter(engine, (uint32_t)parameter, value,
                                  requested_global, error, error_capacity);
+}
+
+static int scan_token_list_value(struct hstex_engine *engine,
+                                 uint32_t *identifier, char *error,
+                                 size_t error_capacity)
+{
+    hstex_token first = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space(engine, &first, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a token list");
+    }
+    if (hstex_token_is_control_sequence(first)) {
+        int result = token_list_identifier_from_meaning(
+            engine,
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(first)),
+            identifier, error, error_capacity);
+        if (result != 0) {
+            return result < 0 ? -1 : 0;
+        }
+    }
+    if (!token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "token-list assignment requires a register or braces");
+    }
+    struct token_vector tokens = {0};
+    if (scan_balanced_group(engine, &tokens, true, error, error_capacity) != 0 ||
+        store_token_list(engine, &tokens, identifier, error, error_capacity) !=
+            0) {
+        vector_destroy(&tokens);
+        return -1;
+    }
+    return 0;
+}
+
+static int scan_token_register_assignment(struct hstex_engine *engine,
+                                          int32_t index, char *error,
+                                          size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (index < 0 || (size_t)index >= engine->count_capacity ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_token_list_value(engine, &identifier, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid token-register assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_token_register(engine, (uint32_t)index, identifier,
+                                 requested_global, error, error_capacity);
+}
+
+static int scan_token_family_assignment(struct hstex_engine *engine,
+                                        char *error, size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    return scan_token_register_assignment(engine, index, error,
+                                          error_capacity);
+}
+
+static int scan_token_parameter_assignment(struct hstex_engine *engine,
+                                           int32_t parameter, char *error,
+                                           size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (parameter < 0 || parameter >= (int32_t)HSTEX_TOKEN_PARAMETER_COUNT ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_token_list_value(engine, &identifier, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid token-parameter assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_token_parameter(engine, (uint32_t)parameter, identifier,
+                                  requested_global, error, error_capacity);
 }
 
 enum integer_variable_kind {
@@ -3859,6 +4245,7 @@ static bool meanings_equal(const struct hstex_engine *engine,
     case HSTEX_COMMAND_TOKS_REGISTER:
     case HSTEX_COMMAND_DIMEN_PARAMETER:
     case HSTEX_COMMAND_GLUE_PARAMETER:
+    case HSTEX_COMMAND_TOKEN_PARAMETER:
         return left->value.integer == right->value.integer;
     default:
         return true;
@@ -4115,6 +4502,22 @@ static int end_group(struct hstex_engine *engine, char *error,
             }
             break;
         }
+        case HSTEX_SAVE_TOKEN_REGISTER:
+            if (engine->token_register_levels[save.index] == leaving_level) {
+                engine->token_registers[save.index] =
+                    save.previous.token_list_identifier;
+                engine->token_register_levels[save.index] =
+                    save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_TOKEN_PARAMETER:
+            if (engine->token_parameter_levels[save.index] == leaving_level) {
+                engine->token_parameters[save.index] =
+                    save.previous.token_list_identifier;
+                engine->token_parameter_levels[save.index] =
+                    save.previous_level;
+            }
+            break;
         }
     }
     --engine->group_level;
@@ -4147,6 +4550,11 @@ enum hstex_engine_result hstex_engine_next_output(
         }
         if (engine->returned_unexpanded &&
             hstex_token_is_control_sequence(*token)) {
+            if (engine->returned_unexpanded_executable &&
+                push_one(engine, *token, *location, error, error_capacity) !=
+                    0) {
+                return HSTEX_ENGINE_ERROR;
+            }
             continue;
         }
 
@@ -4279,6 +4687,26 @@ handle_token:
         case HSTEX_COMMAND_TOKS_DEF:
             if (scan_register_definition(engine, HSTEX_COMMAND_TOKS_REGISTER,
                                          error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_TOKS_REGISTER:
+            if (scan_token_register_assignment(
+                    engine, meaning->value.integer, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_TOKS:
+            if (scan_token_family_assignment(engine, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_TOKEN_PARAMETER:
+            if (scan_token_parameter_assignment(
+                    engine, meaning->value.integer, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -4480,8 +4908,6 @@ handle_token:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "inputlineno used outside an integer context");
-        case HSTEX_COMMAND_TOKS_REGISTER:
-        case HSTEX_COMMAND_TOKS:
         case HSTEX_COMMAND_BOX:
         case HSTEX_COMMAND_MATH_GROUP:
         case HSTEX_COMMAND_LANGUAGE:

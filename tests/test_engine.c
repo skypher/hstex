@@ -376,6 +376,19 @@ static int test_dimensions_and_glue(void)
     return status;
 }
 
+static int test_token_lists(void)
+{
+    const char source[] =
+        "\\def\\x{YZ}\\toksdef\\a=1 \\a={A\\x}"
+        "\\toks0={K}\\toks2=\\a "
+        "\\edef\\b{\\the\\a}\\def\\c{A\\x}"
+        "\\ifx\\b\\c T\\else F\\fi "
+        "\\everyjob={J}"
+        "\\everyjob\\expandafter{\\the\\everyjob\\the\\toks0}"
+        "{\\a={L}\\the\\a}\\the\\a\\the\\toks2\\the\\everyjob%";
+    return run_snippet(source, "TLAYZAYZJK");
+}
+
 int main(void)
 {
     if (run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
@@ -443,7 +456,7 @@ int main(void)
                        "non-long macro argument") != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_file_streams() != 0 ||
-        test_dimensions_and_glue() != 0) {
+        test_dimensions_and_glue() != 0 || test_token_lists() != 0) {
         return 1;
     }
     return 0;

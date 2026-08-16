@@ -48,12 +48,17 @@ int main(void)
     hstex_token character = hstex_token_character((uint8_t)HSTEX_CAT_LETTER,
                                                    (uint8_t)'q');
     hstex_token control = hstex_token_control_sequence(UINT32_C(1234));
+    hstex_token unexpanded =
+        hstex_token_unexpanded_control_sequence(UINT32_C(5678));
     hstex_token parameter = hstex_token_parameter(7U);
     if (!hstex_token_is_character(character) ||
         hstex_token_category(character) != (uint8_t)HSTEX_CAT_LETTER ||
         hstex_token_character_code(character) != (uint8_t)'q' ||
         !hstex_token_is_control_sequence(control) ||
         hstex_token_control_sequence_id(control) != UINT32_C(1234) ||
+        !hstex_token_is_frozen_control_sequence(unexpanded) ||
+        !hstex_token_is_unexpanded_control_sequence(unexpanded) ||
+        hstex_token_control_sequence_id(unexpanded) != UINT32_C(5678) ||
         hstex_token_kind_of(parameter) != HSTEX_TOKEN_PARAMETER ||
         hstex_token_parameter_number(parameter) != 7U) {
         (void)fprintf(stderr, "packed token contract failed\n");
