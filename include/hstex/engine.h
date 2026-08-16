@@ -154,7 +154,30 @@ enum hstex_command {
     HSTEX_COMMAND_PAGE_INTEGER,
     HSTEX_COMMAND_PAGE_DIMEN,
     HSTEX_COMMAND_PDF_TEX_REVISION,
+    HSTEX_COMMAND_PDF_MATCH,
+    HSTEX_COMMAND_PDF_LAST_MATCH,
+    HSTEX_COMMAND_PDF_ESCAPE_STRING,
+    HSTEX_COMMAND_PDF_ESCAPE_NAME,
+    HSTEX_COMMAND_PDF_ESCAPE_HEX,
+    HSTEX_COMMAND_PDF_UNESCAPE_HEX,
+    HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE,
 };
+
+/* One \pdfglyphtounicode mapping. The PDF backend turns these into the
+   ToUnicode CMap that makes extracted text match the reference. */
+struct hstex_glyph_unicode {
+    char *glyph;
+    char *unicode;
+};
+
+/* One captured group of the most recent \pdfmatch. A group that did not
+   participate keeps offset -1 and no text. */
+struct hstex_match_group {
+    int32_t offset;
+    char *text;
+};
+
+#define HSTEX_DEFAULT_MATCH_SUBCOUNT 10
 
 /* Packages and expl3 branch on the pdfTeX version. HSTeX reports the version
    of the reference engine it reproduces so that those branches are taken the
@@ -231,6 +254,11 @@ enum hstex_integer_parameter {
     HSTEX_INTEGER_PDF_DECIMAL_DIGITS,
     HSTEX_INTEGER_PDF_PK_RESOLUTION,
     HSTEX_INTEGER_PDF_DRAFT_MODE,
+    HSTEX_INTEGER_PDF_ADJUST_SPACING,
+    HSTEX_INTEGER_PDF_PROTRUDE_CHARS,
+    HSTEX_INTEGER_PDF_GEN_TO_UNICODE,
+    HSTEX_INTEGER_PDF_UNIQUE_RES_NAME,
+    HSTEX_INTEGER_PDF_IMAGE_RESOLUTION,
     HSTEX_INTEGER_PARAMETER_COUNT,
 };
 
@@ -261,6 +289,10 @@ enum hstex_dimen_parameter {
     HSTEX_DIMEN_PDF_PAGE_HEIGHT,
     HSTEX_DIMEN_PDF_HORIGIN,
     HSTEX_DIMEN_PDF_VORIGIN,
+    HSTEX_DIMEN_PDF_LINK_MARGIN,
+    HSTEX_DIMEN_PDF_DEST_MARGIN,
+    HSTEX_DIMEN_PDF_THREAD_MARGIN,
+    HSTEX_DIMEN_PDF_PX_DIMEN,
     HSTEX_DIMEN_PARAMETER_COUNT,
 };
 
@@ -362,6 +394,10 @@ struct hstex_token_list {
 
 struct hstex_font {
     char *name;
+    /* The control sequence \the\font reports for this font. Re-declaring an
+       already loaded font reuses it and renames it to the newer control
+       sequence; see docs/DECISIONS.md, font-identifier. */
+    hstex_cs_id identifier_cs;
     int32_t size;
     int32_t *dimens;
     size_t dimen_count;
@@ -543,6 +579,11 @@ struct hstex_engine {
     uint32_t integer_parameter_levels[HSTEX_INTEGER_PARAMETER_COUNT];
     int32_t page_integers[HSTEX_PAGE_INTEGER_COUNT];
     int32_t page_dimens[HSTEX_PAGE_DIMEN_COUNT];
+    struct hstex_match_group *match_groups;
+    size_t match_group_count;
+    struct hstex_glyph_unicode *glyph_unicode;
+    size_t glyph_unicode_count;
+    size_t glyph_unicode_capacity;
     uint32_t catcode_levels[256];
     FILE *write_streams[16];
     FILE *read_streams[16];

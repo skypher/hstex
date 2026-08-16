@@ -42,6 +42,18 @@ selects its pdfTeX backend. The resulting message stream is a subsequence of
 the `pdflatex` log for the same document; what is missing is the file-open
 notation and everything downstream of the page builder.
 
+The benchmark corpus loads its full package stack — `geometry`, `amsmath`,
+`amssymb`, `mathtools`, `microtype`, `hyperref`, `xr`, `cleveref` and their
+73-file dependency graph — on the same command:
+
+```sh
+./build/hstex --run-latex "$(kpsewhich latex.ltx)" tests/corpus/document.tex
+```
+
+That needed pdfTeX's regular-expression and string-escape primitives and the
+font identifier reported by `\the\font`. Execution currently stops in the
+corpus preamble, before any typesetting.
+
 Paragraph breaking, the page builder, the output routine, and PDF emission
 remain under construction.
 

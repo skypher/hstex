@@ -1256,6 +1256,26 @@ int main(void)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        /* A parameter-category character is displayed doubled, so that the
+           display reads back as the same token. */
+        run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
+                    "[#1Q][macro:#1->##1#1]") != 0 ||
+        run_snippet("[\\pdfescapestring{a b(c)\\string\\\\}]"
+                    "[\\pdfescapename{a b}][\\pdfescapehex{AB}]"
+                    "[\\pdfunescapehex{4142}][\\the\\pdfpxdimen]%",
+                    "[a\\040b\\(c\\)\\\\\\\\][a#20b][4142][AB][1.00375pt]") != 0 ||
+        /* \protected stops expansion while \edef builds a token list, but a
+           csname is still expanded in full. */
+        run_snippet("\\protected\\def\\PP{AB}\\def\\ABC{Z}"
+                    "\\edef\\z{\\csname \\PP C\\endcsname}\\z"
+                    "\\edef\\w{\\ifcsname \\PP C\\endcsname Y\\else N\\fi}\\w%",
+                    "ZY") != 0 ||
+        /* \noexpand before a parameter marker leaves it a parameter marker,
+           unlike \unexpanded and \the, whose tokens are inserted verbatim.
+           hyperref's \HyLang@DeclareLang depends on the difference. */
+        run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
+                    "\\o{A}\\x{P}{Q}%",
+                    "[P|Q|A]") != 0 ||
         test_page_state() != 0 || test_dimension_units() != 0 ||
         test_pdftex_identification() != 0 ||
         /* \typeout writes to an allocated but unopened stream, and \write

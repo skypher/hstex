@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <regex.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -65,6 +66,13 @@ struct hstex_vbox_builder {
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
+static void clear_match_groups(struct hstex_engine *engine);
+enum pdf_escape_kind {
+    PDF_ESCAPE_STRING = 0,
+    PDF_ESCAPE_NAME,
+    PDF_ESCAPE_HEX,
+    PDF_UNESCAPE_HEX,
+};
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
 {
@@ -1370,6 +1378,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER] = 92;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR] = 45;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR] = -1;
+    /* pdfTeX defaults that are not zero: one big point of pixel size and a
+       72 dpi image resolution. */
+    engine->integer_parameters[HSTEX_INTEGER_PDF_IMAGE_RESOLUTION] = 72;
+    engine->dimen_parameters[HSTEX_DIMEN_PDF_PX_DIMEN] = 65782;
     engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES] = 25;
     engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
     engine->active_vbox_builder = engine->page_builder;
@@ -1464,6 +1476,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"pdftexrevision", HSTEX_COMMAND_PDF_TEX_REVISION},
         {"pdffilesize", HSTEX_COMMAND_PDF_FILE_SIZE},
         {"pdfstrcmp", HSTEX_COMMAND_PDF_STRING_COMPARE},
+        {"pdfmatch", HSTEX_COMMAND_PDF_MATCH},
+        {"pdflastmatch", HSTEX_COMMAND_PDF_LAST_MATCH},
+        {"pdfescapestring", HSTEX_COMMAND_PDF_ESCAPE_STRING},
+        {"pdfescapename", HSTEX_COMMAND_PDF_ESCAPE_NAME},
+        {"pdfescapehex", HSTEX_COMMAND_PDF_ESCAPE_HEX},
+        {"pdfunescapehex", HSTEX_COMMAND_PDF_UNESCAPE_HEX},
+        {"pdfglyphtounicode", HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE},
         {"end", HSTEX_COMMAND_END},
         {"endinput", HSTEX_COMMAND_END_INPUT},
         {"errmessage", HSTEX_COMMAND_ERROR_MESSAGE},
@@ -1722,6 +1741,11 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"pdfdecimaldigits", HSTEX_INTEGER_PDF_DECIMAL_DIGITS},
         {"pdfpkresolution", HSTEX_INTEGER_PDF_PK_RESOLUTION},
         {"pdfdraftmode", HSTEX_INTEGER_PDF_DRAFT_MODE},
+        {"pdfadjustspacing", HSTEX_INTEGER_PDF_ADJUST_SPACING},
+        {"pdfprotrudechars", HSTEX_INTEGER_PDF_PROTRUDE_CHARS},
+        {"pdfgentounicode", HSTEX_INTEGER_PDF_GEN_TO_UNICODE},
+        {"pdfuniqueresname", HSTEX_INTEGER_PDF_UNIQUE_RES_NAME},
+        {"pdfimageresolution", HSTEX_INTEGER_PDF_IMAGE_RESOLUTION},
     };
     for (size_t index = 0U;
          index < sizeof(integer_primitives) / sizeof(integer_primitives[0]);
@@ -1764,6 +1788,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"pdfpageheight", HSTEX_DIMEN_PDF_PAGE_HEIGHT},
         {"pdfhorigin", HSTEX_DIMEN_PDF_HORIGIN},
         {"pdfvorigin", HSTEX_DIMEN_PDF_VORIGIN},
+        {"pdflinkmargin", HSTEX_DIMEN_PDF_LINK_MARGIN},
+        {"pdfdestmargin", HSTEX_DIMEN_PDF_DEST_MARGIN},
+        {"pdfthreadmargin", HSTEX_DIMEN_PDF_THREAD_MARGIN},
+        {"pdfpxdimen", HSTEX_DIMEN_PDF_PX_DIMEN},
     };
     for (size_t index = 0U;
          index < sizeof(dimen_primitives) / sizeof(dimen_primitives[0]);
@@ -1870,6 +1898,16 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         hstex_engine_destroy(engine);
         return -1;
     }
+    struct hstex_font *null_font_entry = font_by_identifier(engine, null_font);
+    hstex_cs_id null_font_cs = 0U;
+    if (null_font_entry == NULL ||
+        hstex_symbol_find(&engine->lexical_state.symbols, HSTEX_SYMBOL_REGULAR,
+                          (const uint8_t *)"nullfont", 8U, &null_font_cs) != 1) {
+        (void)set_error(error, error_capacity, "nullfont registration failed");
+        hstex_engine_destroy(engine);
+        return -1;
+    }
+    null_font_entry->identifier_cs = null_font_cs;
     engine->current_font = null_font;
     engine->output_directory = strdup(".");
     if (engine->output_directory == NULL) {
@@ -1946,6 +1984,12 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->page_builder->node_identifiers);
     }
     free(engine->page_builder);
+    clear_match_groups(engine);
+    for (size_t index = 0U; index < engine->glyph_unicode_count; ++index) {
+        free(engine->glyph_unicode[index].glyph);
+        free(engine->glyph_unicode[index].unicode);
+    }
+    free(engine->glyph_unicode);
     free(engine->output_directory);
     free(engine->job_name);
     hstex_lexical_state_destroy(&engine->lexical_state);
@@ -2973,6 +3017,20 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
             engine, hstex_token_control_sequence_id(token));
         if (integer_from_control_sequence(engine, meaning, &magnitude, error,
                                           error_capacity) != 0) {
+            /* Name the control sequence: an integer scan that fails on a
+               control sequence is usually a primitive HSTeX has not
+               implemented, and the name is what identifies it. */
+            enum hstex_symbol_kind kind;
+            const uint8_t *name = NULL;
+            size_t length = 0U;
+            char reason[256];
+            (void)snprintf(reason, sizeof(reason), "%s", error);
+            if (hstex_symbol_name(&engine->lexical_state.symbols,
+                                  hstex_token_control_sequence_id(token), &kind,
+                                  &name, &length) == 0) {
+                return set_error(error, error_capacity, "%s scanning \\%.*s",
+                                 reason, (int)length, (const char *)name);
+            }
             return -1;
         }
     } else {
@@ -4972,6 +5030,24 @@ static int expand_the_primitive(struct hstex_engine *engine,
             return push_dimension_expansion(engine, dimension, location, error,
                                             error_capacity);
         }
+        /* \the on a font yields that font's identifier control sequence, not
+           a printed representation. */
+        if (meaning->command == HSTEX_COMMAND_FONT ||
+            meaning->command == HSTEX_COMMAND_FONT_GIVEN) {
+            uint32_t font_identifier =
+                meaning->command == HSTEX_COMMAND_FONT
+                    ? engine->current_font
+                    : (uint32_t)meaning->value.integer;
+            const struct hstex_font *font =
+                font_by_identifier(engine, font_identifier);
+            if (font == NULL || font->identifier_cs == 0U) {
+                return set_error(error, error_capacity,
+                                 "the requires a defined font");
+            }
+            return push_one(engine,
+                            hstex_token_control_sequence(font->identifier_cs),
+                            location, error, error_capacity);
+        }
     }
     if (push_one(engine, subject, subject_location, error, error_capacity) != 0) {
         return -1;
@@ -4986,12 +5062,18 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t name_capacity = 0U;
+    /* \protected suppresses expansion while an \edef or \write builds a token
+       list, but a csname is expanded in full regardless: \edef\z{\csname
+       \protectedmacro\endcsname} expands the macro. */
+    bool previous_inhibition = engine->inhibit_protected_expansion;
+    engine->inhibit_protected_expansion = false;
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location token_location;
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, &token, &token_location, error, error_capacity);
         if (result != HSTEX_ENGINE_TOKEN) {
+            engine->inhibit_protected_expansion = previous_inhibition;
             free(bytes);
             return set_error(error, error_capacity,
                              "end of input inside csname");
@@ -5000,8 +5082,14 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
         if (hstex_token_is_control_sequence(token)) {
             if (engine->returned_unexpanded &&
                 engine->returned_unexpanded_executable) {
+                /* \noexpand only defers one expansion step, so the token is
+                   re-read without its marking and expands normally. This
+                   terminates because the token pushed back has already been
+                   normalized, and because protected macros cannot reach here
+                   with expansion inhibition cleared above. */
                 if (push_one(engine, token, token_location, error,
                              error_capacity) != 0) {
+                    engine->inhibit_protected_expansion = previous_inhibition;
                     free(bytes);
                     return -1;
                 }
@@ -5023,17 +5111,20 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                 int printable_length = unexpected_length > (size_t)INT_MAX
                                            ? INT_MAX
                                            : (int)unexpected_length;
+                engine->inhibit_protected_expansion = previous_inhibition;
                 free(bytes);
                 return set_error(error, error_capacity,
                                  "non-character token inside csname: \\%.*s",
                                  printable_length,
                                  (const char *)unexpected_name);
             }
+            engine->inhibit_protected_expansion = previous_inhibition;
             free(bytes);
             return set_error(error, error_capacity,
                              "non-character token inside csname");
         }
         if (!hstex_token_is_character(token)) {
+            engine->inhibit_protected_expansion = previous_inhibition;
             free(bytes);
             return set_error(error, error_capacity,
                              "internal token inside csname");
@@ -5041,10 +5132,12 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
         if (append_byte(&bytes, &count, &name_capacity,
                         hstex_token_character_code(token), error,
                         error_capacity) != 0) {
+            engine->inhibit_protected_expansion = previous_inhibition;
             free(bytes);
             return -1;
         }
     }
+    engine->inhibit_protected_expansion = previous_inhibition;
 
     *name = bytes;
     *name_count = count;
@@ -5716,6 +5809,16 @@ static int expand_string(struct hstex_engine *engine,
 static int expand_pdf_string_compare(
     struct hstex_engine *engine, struct hstex_source_location location,
     char *error, size_t error_capacity);
+static int expand_pdf_match(struct hstex_engine *engine,
+                            struct hstex_source_location location, char *error,
+                            size_t error_capacity);
+static int expand_pdf_escape(struct hstex_engine *engine,
+                             enum pdf_escape_kind kind,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity);
+static int expand_pdf_last_match(struct hstex_engine *engine,
+                                 struct hstex_source_location location,
+                                 char *error, size_t error_capacity);
 static int expand_token_once(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity);
@@ -5842,6 +5945,28 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_PDF_STRING_COMPARE) {
         return expand_pdf_string_compare(engine, location, error,
                                          error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_MATCH) {
+        return expand_pdf_match(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_ESCAPE_STRING) {
+        return expand_pdf_escape(engine, PDF_ESCAPE_STRING, location, error,
+                                 error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_ESCAPE_NAME) {
+        return expand_pdf_escape(engine, PDF_ESCAPE_NAME, location, error,
+                                 error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_ESCAPE_HEX) {
+        return expand_pdf_escape(engine, PDF_ESCAPE_HEX, location, error,
+                                 error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_UNESCAPE_HEX) {
+        return expand_pdf_escape(engine, PDF_UNESCAPE_HEX, location, error,
+                                 error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_LAST_MATCH) {
+        return expand_pdf_last_match(engine, location, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_THE) {
         return expand_the_primitive(engine, location, error, error_capacity);
@@ -5999,8 +6124,15 @@ enum hstex_engine_result hstex_engine_next_expanded(
             }
             *token = next;
             *location = next_location;
-            engine->returned_unexpanded = true;
-            engine->returned_unexpanded_executable = false;
+            /* \noexpand suppresses the expansion of a control sequence. A
+               character token is not expandable, so it passes through
+               unmarked and still counts as, say, a parameter marker. Token
+               lists inserted by \unexpanded and \the are the ones that bypass
+               later scanning. */
+            if (hstex_token_is_control_sequence(next)) {
+                engine->returned_unexpanded = true;
+                engine->returned_unexpanded_executable = false;
+            }
             return HSTEX_ENGINE_TOKEN;
         }
         if (meaning->command == HSTEX_COMMAND_UNLESS) {
@@ -6046,6 +6178,38 @@ enum hstex_engine_result hstex_engine_next_expanded(
         if (meaning->command == HSTEX_COMMAND_PDF_STRING_COMPARE) {
             if (expand_pdf_string_compare(engine, *location, error,
                                           error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_MATCH) {
+            if (expand_pdf_match(engine, *location, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_ESCAPE_STRING ||
+            meaning->command == HSTEX_COMMAND_PDF_ESCAPE_NAME ||
+            meaning->command == HSTEX_COMMAND_PDF_ESCAPE_HEX ||
+            meaning->command == HSTEX_COMMAND_PDF_UNESCAPE_HEX) {
+            enum pdf_escape_kind kind =
+                meaning->command == HSTEX_COMMAND_PDF_ESCAPE_STRING
+                    ? PDF_ESCAPE_STRING
+                    : meaning->command == HSTEX_COMMAND_PDF_ESCAPE_NAME
+                          ? PDF_ESCAPE_NAME
+                          : meaning->command == HSTEX_COMMAND_PDF_ESCAPE_HEX
+                                ? PDF_ESCAPE_HEX
+                                : PDF_UNESCAPE_HEX;
+            if (expand_pdf_escape(engine, kind, *location, error,
+                                  error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_LAST_MATCH) {
+            if (expand_pdf_last_match(engine, *location, error,
+                                      error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -6287,6 +6451,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                                              error_capacity)
                 : raw_next(engine, &current, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
+        /* Tokens delivered by \unexpanded or \the are inserted verbatim and
+           are not rescanned for parameter markers. */
         bool current_unexpanded =
             expanded_replacement && engine->returned_unexpanded;
         if (result != HSTEX_ENGINE_TOKEN) {
@@ -6325,6 +6491,36 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
             } else {
                 vector_destroy(&parameter_text);
                 vector_destroy(&replacement);
+                enum hstex_symbol_kind target_kind;
+                const uint8_t *target_name = NULL;
+                size_t target_length = 0U;
+                if (hstex_symbol_name(&engine->lexical_state.symbols,
+                                      hstex_token_control_sequence_id(target),
+                                      &target_kind, &target_name,
+                                      &target_length) != 0) {
+                    target_name = (const uint8_t *)"?";
+                    target_length = 1U;
+                }
+                if (hstex_token_is_character(following)) {
+                    return set_error(
+                        error, error_capacity,
+                        "illegal macro parameter #%c in replacement text of "
+                        "\\%.*s, which has %u parameters",
+                        (char)hstex_token_character_code(following),
+                        (int)target_length, (const char *)target_name,
+                        (unsigned int)parameter_count);
+                }
+                enum hstex_symbol_kind kind;
+                const uint8_t *name = NULL;
+                size_t length = 0U;
+                if (hstex_symbol_name(&engine->lexical_state.symbols,
+                                      hstex_token_control_sequence_id(following),
+                                      &kind, &name, &length) == 0) {
+                    return set_error(error, error_capacity,
+                                     "illegal macro parameter #\\%.*s in "
+                                     "replacement text",
+                                     (int)length, (const char *)name);
+                }
                 return set_error(error, error_capacity,
                                  "illegal macro parameter in replacement text");
             }
@@ -6533,6 +6729,12 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
     free(name);
     if (status != 0) {
         return -1;
+    }
+    /* A reused font is renamed to the control sequence that just declared it,
+       so \the\font reports the most recent declaration. */
+    struct hstex_font *declared = font_by_identifier(engine, identifier);
+    if (declared != NULL) {
+        declared->identifier_cs = hstex_token_control_sequence_id(target);
     }
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_FONT_GIVEN,
@@ -8815,8 +9017,15 @@ static int append_token_description(struct hstex_engine *engine,
 {
     token = normalize_frozen_control_sequence(token);
     if (hstex_token_is_character(token)) {
-        return append_byte(bytes, count, capacity,
-                           hstex_token_character_code(token), error,
+        uint8_t character = hstex_token_character_code(token);
+        /* A character token of the parameter category is displayed doubled,
+           so that reading the display back yields the same token. */
+        if (token_is_category(token, HSTEX_CAT_PARAMETER) &&
+            append_byte(bytes, count, capacity, character, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        return append_byte(bytes, count, capacity, character, error,
                            error_capacity);
     }
     if (hstex_token_is_parameter(token)) {
@@ -9163,8 +9372,12 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
             return -1;
         }
         if (hstex_token_is_character(token)) {
-            if (append_byte(&result, &count, &capacity,
-                            hstex_token_character_code(token), error,
+            uint8_t character = hstex_token_character_code(token);
+            /* A parameter-category character is written doubled. */
+            if ((token_is_category(token, HSTEX_CAT_PARAMETER) &&
+                 append_byte(&result, &count, &capacity, character, error,
+                             error_capacity) != 0) ||
+                append_byte(&result, &count, &capacity, character, error,
                             error_capacity) != 0) {
                 free(result);
                 return -1;
@@ -9185,6 +9398,338 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
     *bytes = result;
     *byte_count = count;
     return 0;
+}
+
+static int hex_digit_value(uint8_t byte)
+{
+    if (byte >= (uint8_t)'0' && byte <= (uint8_t)'9') {
+        return byte - (uint8_t)'0';
+    }
+    if (byte >= (uint8_t)'a' && byte <= (uint8_t)'f') {
+        return byte - (uint8_t)'a' + 10;
+    }
+    if (byte >= (uint8_t)'A' && byte <= (uint8_t)'F') {
+        return byte - (uint8_t)'A' + 10;
+    }
+    return -1;
+}
+
+/* The four PDF string escapes. \pdfescapestring quotes the bytes PDF string
+   syntax reserves, \pdfescapename applies PDF name syntax, and the hex pair
+   converts to and from hexadecimal; see docs/DECISIONS.md, pdf-escapes. */
+static int expand_pdf_escape(struct hstex_engine *engine,
+                             enum pdf_escape_kind kind,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    static const char hex_digits[] = "0123456789ABCDEF";
+    /* Four output bytes per input byte covers the widest escape, \\ooo. */
+    char *rendered = malloc(byte_count * 4U + 1U);
+    if (rendered == NULL) {
+        free(bytes);
+        return set_error(error, error_capacity, "escape allocation failed");
+    }
+    size_t length = 0U;
+    int status = 0;
+    for (size_t index = 0U; index < byte_count; ++index) {
+        uint8_t byte = bytes[index];
+        switch (kind) {
+        case PDF_ESCAPE_STRING:
+            if (byte == (uint8_t)'(' || byte == (uint8_t)')' ||
+                byte == (uint8_t)'\\') {
+                rendered[length++] = '\\';
+                rendered[length++] = (char)byte;
+            } else if (byte < 0x21U || byte > 0x7EU) {
+                rendered[length++] = '\\';
+                rendered[length++] = (char)('0' + ((byte >> 6) & 0x07U));
+                rendered[length++] = (char)('0' + ((byte >> 3) & 0x07U));
+                rendered[length++] = (char)('0' + (byte & 0x07U));
+            } else {
+                rendered[length++] = (char)byte;
+            }
+            break;
+        case PDF_ESCAPE_NAME:
+            if (byte < 0x21U || byte > 0x7EU || byte == (uint8_t)'#' ||
+                byte == (uint8_t)'(' || byte == (uint8_t)')' ||
+                byte == (uint8_t)'<' || byte == (uint8_t)'>' ||
+                byte == (uint8_t)'[' || byte == (uint8_t)']' ||
+                byte == (uint8_t)'{' || byte == (uint8_t)'}' ||
+                byte == (uint8_t)'/' || byte == (uint8_t)'%') {
+                rendered[length++] = '#';
+                rendered[length++] = hex_digits[(byte >> 4) & 0x0FU];
+                rendered[length++] = hex_digits[byte & 0x0FU];
+            } else {
+                rendered[length++] = (char)byte;
+            }
+            break;
+        case PDF_ESCAPE_HEX:
+            rendered[length++] = hex_digits[(byte >> 4) & 0x0FU];
+            rendered[length++] = hex_digits[byte & 0x0FU];
+            break;
+        case PDF_UNESCAPE_HEX: {
+            int high = hex_digit_value(byte);
+            if (high < 0) {
+                continue;
+            }
+            int low = 0;
+            while (index + 1U < byte_count) {
+                int candidate = hex_digit_value(bytes[index + 1U]);
+                ++index;
+                if (candidate >= 0) {
+                    low = candidate;
+                    break;
+                }
+            }
+            rendered[length++] = (char)((high << 4) | low);
+            break;
+        }
+        }
+    }
+    free(bytes);
+    if (status == 0) {
+        status = push_other_character_expansion(engine, rendered, length,
+                                                location, error,
+                                                error_capacity);
+    }
+    free(rendered);
+    return status;
+}
+
+/* \pdfglyphtounicode records the mapping the ToUnicode CMap is built from.
+   The mapping is stored rather than discarded because extracted text is one
+   of the correctness gates. */
+static int execute_pdf_glyph_to_unicode(struct hstex_engine *engine,
+                                        char *error, size_t error_capacity)
+{
+    uint8_t *glyph = NULL;
+    uint8_t *unicode = NULL;
+    size_t glyph_count = 0U;
+    size_t unicode_count = 0U;
+    if (scan_expanded_general_text(engine, &glyph, &glyph_count, error,
+                                   error_capacity) != 0 ||
+        scan_expanded_general_text(engine, &unicode, &unicode_count, error,
+                                   error_capacity) != 0) {
+        free(glyph);
+        free(unicode);
+        return -1;
+    }
+    if (engine->glyph_unicode_count == engine->glyph_unicode_capacity) {
+        size_t capacity = engine->glyph_unicode_capacity == 0U
+                              ? 64U
+                              : engine->glyph_unicode_capacity * 2U;
+        struct hstex_glyph_unicode *grown = realloc(
+            engine->glyph_unicode, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            free(glyph);
+            free(unicode);
+            return set_error(error, error_capacity,
+                             "glyph-to-unicode allocation failed");
+        }
+        engine->glyph_unicode = grown;
+        engine->glyph_unicode_capacity = capacity;
+    }
+    char *glyph_text = malloc(glyph_count + 1U);
+    char *unicode_text = malloc(unicode_count + 1U);
+    if (glyph_text == NULL || unicode_text == NULL) {
+        free(glyph);
+        free(unicode);
+        free(glyph_text);
+        free(unicode_text);
+        return set_error(error, error_capacity,
+                         "glyph-to-unicode allocation failed");
+    }
+    memcpy(glyph_text, glyph, glyph_count);
+    glyph_text[glyph_count] = '\0';
+    memcpy(unicode_text, unicode, unicode_count);
+    unicode_text[unicode_count] = '\0';
+    free(glyph);
+    free(unicode);
+    engine->glyph_unicode[engine->glyph_unicode_count].glyph = glyph_text;
+    engine->glyph_unicode[engine->glyph_unicode_count].unicode = unicode_text;
+    ++engine->glyph_unicode_count;
+    return 0;
+}
+
+static void clear_match_groups(struct hstex_engine *engine)
+{
+    for (size_t index = 0U; index < engine->match_group_count; ++index) {
+        free(engine->match_groups[index].text);
+    }
+    free(engine->match_groups);
+    engine->match_groups = NULL;
+    engine->match_group_count = 0U;
+}
+
+/* \pdfmatch reports 1 for a match, 0 for no match, and -1 for a pattern the
+   matcher rejects; see docs/DECISIONS.md, pdf-match. */
+static int expand_pdf_match(struct hstex_engine *engine,
+                            struct hstex_source_location location, char *error,
+                            size_t error_capacity)
+{
+    bool ignore_case = false;
+    int32_t subcount = HSTEX_DEFAULT_MATCH_SUBCOUNT;
+    for (;;) {
+        bool matched = false;
+        if (try_keyword(engine, "icase", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            ignore_case = true;
+            continue;
+        }
+        if (try_keyword(engine, "subcount", &matched, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        if (!matched) {
+            break;
+        }
+        if (scan_integer(engine, &subcount, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (subcount < 0) {
+            return set_error(error, error_capacity,
+                             "pdfmatch subcount must not be negative");
+        }
+    }
+
+    uint8_t *pattern = NULL;
+    uint8_t *subject = NULL;
+    size_t pattern_count = 0U;
+    size_t subject_count = 0U;
+    if (scan_expanded_general_text(engine, &pattern, &pattern_count, error,
+                                   error_capacity) != 0 ||
+        scan_expanded_general_text(engine, &subject, &subject_count, error,
+                                   error_capacity) != 0) {
+        free(pattern);
+        free(subject);
+        return -1;
+    }
+    char *pattern_text = malloc(pattern_count + 1U);
+    char *subject_text = malloc(subject_count + 1U);
+    if (pattern_text == NULL || subject_text == NULL) {
+        free(pattern);
+        free(subject);
+        free(pattern_text);
+        free(subject_text);
+        return set_error(error, error_capacity, "match argument allocation failed");
+    }
+    memcpy(pattern_text, pattern, pattern_count);
+    pattern_text[pattern_count] = '\0';
+    memcpy(subject_text, subject, subject_count);
+    subject_text[subject_count] = '\0';
+    free(pattern);
+    free(subject);
+
+    clear_match_groups(engine);
+    regex_t compiled;
+    int flags = REG_EXTENDED | (ignore_case ? REG_ICASE : 0);
+    int32_t result = 1;
+    if (regcomp(&compiled, pattern_text, flags) != 0) {
+        result = -1;
+    } else {
+        size_t group_capacity =
+            subcount > 0 ? (size_t)subcount : (size_t)1;
+        regmatch_t *positions = calloc(group_capacity, sizeof(*positions));
+        if (positions == NULL) {
+            regfree(&compiled);
+            free(pattern_text);
+            free(subject_text);
+            return set_error(error, error_capacity,
+                             "match position allocation failed");
+        }
+        if (regexec(&compiled, subject_text, group_capacity, positions, 0) !=
+            0) {
+            result = 0;
+        } else if (subcount > 0) {
+            engine->match_groups =
+                calloc(group_capacity, sizeof(*engine->match_groups));
+            if (engine->match_groups == NULL) {
+                free(positions);
+                regfree(&compiled);
+                free(pattern_text);
+                free(subject_text);
+                return set_error(error, error_capacity,
+                                 "match group allocation failed");
+            }
+            engine->match_group_count = group_capacity;
+            for (size_t index = 0U; index < group_capacity; ++index) {
+                engine->match_groups[index].offset = -1;
+                if (positions[index].rm_so < 0) {
+                    continue;
+                }
+                size_t start = (size_t)positions[index].rm_so;
+                size_t length = (size_t)(positions[index].rm_eo -
+                                         positions[index].rm_so);
+                char *text = malloc(length + 1U);
+                if (text == NULL) {
+                    free(positions);
+                    regfree(&compiled);
+                    free(pattern_text);
+                    free(subject_text);
+                    clear_match_groups(engine);
+                    return set_error(error, error_capacity,
+                                     "match text allocation failed");
+                }
+                memcpy(text, subject_text + start, length);
+                text[length] = '\0';
+                engine->match_groups[index].offset = (int32_t)start;
+                engine->match_groups[index].text = text;
+            }
+        }
+        free(positions);
+        regfree(&compiled);
+    }
+    free(pattern_text);
+    free(subject_text);
+    return push_integer_expansion(engine, result, location, error,
+                                  error_capacity);
+}
+
+/* \pdflastmatch<n> expands to "<offset>-><text>", and to "-1->" when the
+   group did not participate or lies beyond the stored subcount. */
+static int expand_pdf_last_match(struct hstex_engine *engine,
+                                 struct hstex_source_location location,
+                                 char *error, size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0) {
+        return set_error(error, error_capacity, "bad match number (%d)", index);
+    }
+    const char *text = "";
+    int32_t offset = -1;
+    if ((size_t)index < engine->match_group_count &&
+        engine->match_groups[(size_t)index].offset >= 0) {
+        offset = engine->match_groups[(size_t)index].offset;
+        text = engine->match_groups[(size_t)index].text;
+    }
+    char rendered[64];
+    int length = snprintf(rendered, sizeof(rendered), "%" PRId32 "->", offset);
+    if (length < 0 || (size_t)length >= sizeof(rendered)) {
+        return set_error(error, error_capacity, "could not format last match");
+    }
+    size_t text_length = strlen(text);
+    char *combined = malloc((size_t)length + text_length + 1U);
+    if (combined == NULL) {
+        return set_error(error, error_capacity, "last-match allocation failed");
+    }
+    memcpy(combined, rendered, (size_t)length);
+    memcpy(combined + length, text, text_length + 1U);
+    int status = push_other_character_expansion(
+        engine, combined, (size_t)length + text_length, location, error,
+        error_capacity);
+    free(combined);
+    return status;
 }
 
 static int expand_pdf_string_compare(
@@ -10029,7 +10574,8 @@ static int scan_if_case(struct hstex_engine *engine, char *error,
     int32_t selection = 0;
     if (scan_integer(engine, &selection, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
-        return set_error(error, error_capacity, "invalid ifcase integer");
+        /* Keep the scanner's own diagnosis rather than masking it. */
+        return -1;
     }
     if (selection == 0) {
         engine->conditionals[conditional].branch_true = true;
@@ -11019,6 +11565,12 @@ handle_token:
         case HSTEX_COMMAND_DETOKENIZE:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:
+        case HSTEX_COMMAND_PDF_MATCH:
+        case HSTEX_COMMAND_PDF_LAST_MATCH:
+        case HSTEX_COMMAND_PDF_ESCAPE_STRING:
+        case HSTEX_COMMAND_PDF_ESCAPE_NAME:
+        case HSTEX_COMMAND_PDF_ESCAPE_HEX:
+        case HSTEX_COMMAND_PDF_UNESCAPE_HEX:
         case HSTEX_COMMAND_PDF_TEX_REVISION:
         case HSTEX_COMMAND_THE:
         case HSTEX_COMMAND_NUMBER:
@@ -11034,6 +11586,12 @@ handle_token:
                 error, error_capacity, "extra endcsname");
         case HSTEX_COMMAND_INPUT:
             if (execute_input(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE:
+            if (execute_pdf_glyph_to_unicode(engine, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
