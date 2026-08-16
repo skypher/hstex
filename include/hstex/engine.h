@@ -27,11 +27,18 @@ enum hstex_command {
     HSTEX_COMMAND_EDEF,
     HSTEX_COMMAND_XDEF,
     HSTEX_COMMAND_LET,
+    HSTEX_COMMAND_FUTURE_LET,
+    HSTEX_COMMAND_AFTER_ASSIGNMENT,
     HSTEX_COMMAND_LONG,
     HSTEX_COMMAND_OUTER,
     HSTEX_COMMAND_GLOBAL,
     HSTEX_COMMAND_EXPAND_AFTER,
     HSTEX_COMMAND_NO_EXPAND,
+    HSTEX_COMMAND_CS_NAME,
+    HSTEX_COMMAND_END_CS_NAME,
+    HSTEX_COMMAND_EXPANDED,
+    HSTEX_COMMAND_UNEXPANDED,
+    HSTEX_COMMAND_DETOKENIZE,
     HSTEX_COMMAND_BEGIN_GROUP,
     HSTEX_COMMAND_END_GROUP,
     HSTEX_COMMAND_CAT_CODE,
@@ -42,12 +49,19 @@ enum hstex_command {
     HSTEX_COMMAND_COUNT_REGISTER,
     HSTEX_COMMAND_INTEGER_PARAMETER,
     HSTEX_COMMAND_IF_NUM,
+    HSTEX_COMMAND_IF_DIM,
+    HSTEX_COMMAND_IF_H_MODE,
+    HSTEX_COMMAND_IF_V_MODE,
+    HSTEX_COMMAND_IF_M_MODE,
+    HSTEX_COMMAND_IF_INNER,
     HSTEX_COMMAND_IF_X,
     HSTEX_COMMAND_IF_TRUE,
     HSTEX_COMMAND_IF_FALSE,
     HSTEX_COMMAND_ELSE,
     HSTEX_COMMAND_FI,
     HSTEX_COMMAND_INPUT,
+    HSTEX_COMMAND_PDF_FILE_SIZE,
+    HSTEX_COMMAND_PDF_STRING_COMPARE,
     HSTEX_COMMAND_END,
     HSTEX_COMMAND_END_INPUT,
     HSTEX_COMMAND_ERROR_MESSAGE,
@@ -56,25 +70,38 @@ enum hstex_command {
     HSTEX_COMMAND_DIVIDE,
     HSTEX_COMMAND_THE,
     HSTEX_COMMAND_NUMBER,
+    HSTEX_COMMAND_ROMAN_NUMERAL,
+    HSTEX_COMMAND_NUM_EXPR,
+    HSTEX_COMMAND_DIM_EXPR,
+    HSTEX_COMMAND_GLUE_EXPR,
+    HSTEX_COMMAND_MU_EXPR,
     HSTEX_COMMAND_IMMEDIATE,
     HSTEX_COMMAND_OPEN_OUT,
     HSTEX_COMMAND_WRITE,
     HSTEX_COMMAND_CLOSE_OUT,
     HSTEX_COMMAND_OPEN_IN,
     HSTEX_COMMAND_READ,
+    HSTEX_COMMAND_READ_LINE,
     HSTEX_COMMAND_CLOSE_IN,
     HSTEX_COMMAND_IF_EOF,
     HSTEX_COMMAND_MEANING,
     HSTEX_COMMAND_STRING,
+    HSTEX_COMMAND_JOB_NAME,
     HSTEX_COMMAND_IF_CHAR,
     HSTEX_COMMAND_INPUT_LINE_NUMBER,
     HSTEX_COMMAND_MESSAGE,
     HSTEX_COMMAND_MATH_CHAR_DEF,
     HSTEX_COMMAND_MATH_CHAR_GIVEN,
+    HSTEX_COMMAND_RADICAL,
+    HSTEX_COMMAND_MARKS,
+    HSTEX_COMMAND_PATTERNS,
+    HSTEX_COMMAND_HYPHENATION,
     HSTEX_COMMAND_DIMEN_DEF,
     HSTEX_COMMAND_DIMEN_REGISTER,
     HSTEX_COMMAND_SKIP_DEF,
     HSTEX_COMMAND_SKIP_REGISTER,
+    HSTEX_COMMAND_MUSKIP_DEF,
+    HSTEX_COMMAND_MUSKIP_REGISTER,
     HSTEX_COMMAND_TOKS_DEF,
     HSTEX_COMMAND_TOKS_REGISTER,
     HSTEX_COMMAND_DIMEN,
@@ -82,10 +109,13 @@ enum hstex_command {
     HSTEX_COMMAND_MUSKIP,
     HSTEX_COMMAND_TOKS,
     HSTEX_COMMAND_BOX,
+    HSTEX_COMMAND_SET_BOX,
+    HSTEX_COMMAND_HBOX,
     HSTEX_COMMAND_MATH_GROUP,
     HSTEX_COMMAND_LANGUAGE,
     HSTEX_COMMAND_DIMEN_PARAMETER,
     HSTEX_COMMAND_GLUE_PARAMETER,
+    HSTEX_COMMAND_MUGLUE_PARAMETER,
     HSTEX_COMMAND_TOKEN_PARAMETER,
     HSTEX_COMMAND_PROTECTED,
     HSTEX_COMMAND_SF_CODE,
@@ -94,6 +124,23 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_CODE,
     HSTEX_COMMAND_DEL_CODE,
     HSTEX_COMMAND_IF_DEFINED,
+    HSTEX_COMMAND_IF_CS_NAME,
+    HSTEX_COMMAND_IF_CAT,
+    HSTEX_COMMAND_IF_ODD,
+    HSTEX_COMMAND_IF_CASE,
+    HSTEX_COMMAND_OR,
+    HSTEX_COMMAND_UNLESS,
+    HSTEX_COMMAND_LOWER_CASE,
+    HSTEX_COMMAND_UPPER_CASE,
+    HSTEX_COMMAND_IGNORE_SPACES,
+    HSTEX_COMMAND_INTERACTION_MODE,
+    HSTEX_COMMAND_DUMP,
+    HSTEX_COMMAND_FONT,
+    HSTEX_COMMAND_FONT_GIVEN,
+    HSTEX_COMMAND_FONT_DIMEN,
+    HSTEX_COMMAND_HYPHEN_CHAR,
+    HSTEX_COMMAND_SKEW_CHAR,
+    HSTEX_COMMAND_FONT_NAME,
 };
 
 enum hstex_integer_parameter {
@@ -123,6 +170,7 @@ enum hstex_integer_parameter {
     HSTEX_INTEGER_FINAL_HYPHEN_DEMERITS,
     HSTEX_INTEGER_ADJ_DEMERITS,
     HSTEX_INTEGER_TRACING_LOST_CHARS,
+    HSTEX_INTEGER_TRACING_STATS,
     HSTEX_INTEGER_UC_HYPH,
     HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR,
     HSTEX_INTEGER_DEFAULT_SKEW_CHAR,
@@ -130,6 +178,9 @@ enum hstex_integer_parameter {
     HSTEX_INTEGER_SHOW_BOX_BREADTH,
     HSTEX_INTEGER_SHOW_BOX_DEPTH,
     HSTEX_INTEGER_ERROR_CONTEXT_LINES,
+    HSTEX_INTEGER_MAX_DEAD_CYCLES,
+    HSTEX_INTEGER_LEFT_HYPHEN_MIN,
+    HSTEX_INTEGER_RIGHT_HYPHEN_MIN,
     HSTEX_INTEGER_LANGUAGE,
     HSTEX_INTEGER_MATH_GROUP,
     HSTEX_INTEGER_PARAMETER_COUNT,
@@ -179,6 +230,13 @@ enum hstex_glue_parameter {
     HSTEX_GLUE_PARAMETER_COUNT,
 };
 
+enum hstex_muglue_parameter {
+    HSTEX_MUGLUE_THIN = 0,
+    HSTEX_MUGLUE_MEDIUM,
+    HSTEX_MUGLUE_THICK,
+    HSTEX_MUGLUE_PARAMETER_COUNT,
+};
+
 enum hstex_token_parameter {
     HSTEX_TOKEN_OUTPUT = 0,
     HSTEX_TOKEN_EVERY_PAR,
@@ -210,6 +268,7 @@ struct hstex_macro {
 struct hstex_meaning {
     enum hstex_command command;
     uint32_t level;
+    hstex_cs_id primitive_origin;
     union {
         uint32_t macro_identifier;
         hstex_token token;
@@ -224,11 +283,14 @@ enum hstex_save_kind {
     HSTEX_SAVE_INTEGER_PARAMETER,
     HSTEX_SAVE_DIMEN,
     HSTEX_SAVE_GLUE,
+    HSTEX_SAVE_MUGLUE,
     HSTEX_SAVE_DIMEN_PARAMETER,
     HSTEX_SAVE_GLUE_PARAMETER,
+    HSTEX_SAVE_MUGLUE_PARAMETER,
     HSTEX_SAVE_CODE,
     HSTEX_SAVE_TOKEN_REGISTER,
     HSTEX_SAVE_TOKEN_PARAMETER,
+    HSTEX_SAVE_BOX,
 };
 
 struct hstex_glue {
@@ -244,6 +306,46 @@ struct hstex_token_list {
     size_t count;
 };
 
+struct hstex_font {
+    char *name;
+    int32_t size;
+    int32_t *dimens;
+    size_t dimen_count;
+    size_t dimen_capacity;
+    int32_t hyphen_character;
+    int32_t skew_character;
+};
+
+struct hstex_hyphen_trie_node {
+    uint32_t first_child;
+    uint32_t next_sibling;
+    uint32_t value_offset;
+    uint16_t value_count;
+    uint8_t character;
+};
+
+struct hstex_hyphen_exception {
+    uint32_t letter_offset;
+    uint32_t break_offset;
+    uint16_t letter_count;
+    uint16_t language;
+};
+
+enum hstex_box_kind {
+    HSTEX_BOX_VOID = 0,
+    HSTEX_BOX_HLIST,
+    HSTEX_BOX_VLIST,
+};
+
+struct hstex_box {
+    enum hstex_box_kind kind;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    uint32_t node_start;
+    uint32_t node_count;
+};
+
 struct hstex_save_entry {
     enum hstex_save_kind kind;
     uint32_t index;
@@ -254,6 +356,7 @@ struct hstex_save_entry {
         int32_t integer;
         uint8_t category;
         struct hstex_glue glue;
+        struct hstex_box box;
         uint32_t token_list_identifier;
     } previous;
 };
@@ -261,6 +364,21 @@ struct hstex_save_entry {
 struct hstex_conditional {
     bool branch_true;
     bool else_seen;
+    bool case_conditional;
+    bool negate;
+};
+
+enum hstex_mode {
+    HSTEX_MODE_VERTICAL = 0,
+    HSTEX_MODE_HORIZONTAL,
+    HSTEX_MODE_MATH,
+};
+
+enum hstex_interaction_mode {
+    HSTEX_INTERACTION_BATCH = 0,
+    HSTEX_INTERACTION_NONSTOP,
+    HSTEX_INTERACTION_SCROLL,
+    HSTEX_INTERACTION_ERROR_STOP,
 };
 
 struct hstex_engine {
@@ -284,15 +402,39 @@ struct hstex_engine {
     uint32_t *dimen_levels;
     struct hstex_glue *glues;
     uint32_t *glue_levels;
+    struct hstex_glue *muglues;
+    uint32_t *muglue_levels;
     uint32_t *token_registers;
     uint32_t *token_register_levels;
+    struct hstex_box *boxes;
+    uint32_t *box_levels;
     struct hstex_token_list *token_lists;
     size_t token_list_count;
     size_t token_list_capacity;
+    struct hstex_font *fonts;
+    size_t font_count;
+    size_t font_capacity;
+    uint32_t current_font;
+    uint32_t *hyphen_roots;
+    struct hstex_hyphen_trie_node *hyphen_nodes;
+    size_t hyphen_node_count;
+    size_t hyphen_node_capacity;
+    uint8_t *hyphen_values;
+    size_t hyphen_value_count;
+    size_t hyphen_value_capacity;
+    size_t hyphen_pattern_count;
+    struct hstex_hyphen_exception *hyphen_exceptions;
+    size_t hyphen_exception_count;
+    size_t hyphen_exception_capacity;
+    uint8_t *hyphen_exception_data;
+    size_t hyphen_exception_data_count;
+    size_t hyphen_exception_data_capacity;
     int32_t dimen_parameters[HSTEX_DIMEN_PARAMETER_COUNT];
     uint32_t dimen_parameter_levels[HSTEX_DIMEN_PARAMETER_COUNT];
     struct hstex_glue glue_parameters[HSTEX_GLUE_PARAMETER_COUNT];
     uint32_t glue_parameter_levels[HSTEX_GLUE_PARAMETER_COUNT];
+    struct hstex_glue muglue_parameters[HSTEX_MUGLUE_PARAMETER_COUNT];
+    uint32_t muglue_parameter_levels[HSTEX_MUGLUE_PARAMETER_COUNT];
     uint32_t token_parameters[HSTEX_TOKEN_PARAMETER_COUNT];
     uint32_t token_parameter_levels[HSTEX_TOKEN_PARAMETER_COUNT];
     int32_t code_tables[5][256];
@@ -303,12 +445,21 @@ struct hstex_engine {
     FILE *write_streams[16];
     FILE *read_streams[16];
     char *output_directory;
+    char *job_name;
+    enum hstex_mode mode;
+    enum hstex_interaction_mode interaction_mode;
+    bool inner_mode;
+    hstex_token after_assignment_token;
+    struct hstex_source_location after_assignment_location;
+    bool has_after_assignment;
     uint32_t group_level;
     uint8_t pending_macro_flags;
     bool pending_global;
     bool returned_unexpanded;
     bool returned_unexpanded_executable;
     bool inhibit_protected_expansion;
+    bool negate_next_conditional;
+    bool dump_requested;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,
@@ -316,9 +467,16 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
 void hstex_engine_destroy(struct hstex_engine *engine);
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
+int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
+                           char *error, size_t error_capacity);
 int hstex_engine_set_output_directory(struct hstex_engine *engine,
                                       const char *path, char *error,
                                       size_t error_capacity);
+int hstex_engine_hyphenate_word(const struct hstex_engine *engine,
+                                int32_t language, const uint8_t *word,
+                                size_t length, uint8_t *break_before,
+                                size_t break_capacity, char *error,
+                                size_t error_capacity);
 enum hstex_engine_result hstex_engine_next_expanded(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,

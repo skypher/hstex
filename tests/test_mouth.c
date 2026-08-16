@@ -251,9 +251,9 @@ static int test_funny_space_and_invalid(void)
     }
     (void)hstex_catcode_set(&first.lexical_state.catcodes, (uint32_t)'Q',
                             HSTEX_CAT_SPACE);
-    static const uint8_t space[] = {' '};
-    int failed = expect_control(&first, HSTEX_SYMBOL_REGULAR, space,
-                                sizeof(space)) ||
+    static const uint8_t funny_name[] = {'Q'};
+    int failed = expect_control(&first, HSTEX_SYMBOL_REGULAR, funny_name,
+                                sizeof(funny_name)) ||
                  expect_character(&first, HSTEX_CAT_LETTER, (uint8_t)'x') ||
                  expect_character(&first, HSTEX_CAT_SPACE, (uint8_t)' ') ||
                  expect_eof(&first);

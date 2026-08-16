@@ -124,6 +124,11 @@ static int run_snippet(const char *source, const char *expected)
         (void)fprintf(stderr,
                       "output mismatch for %s: got %zu bytes, expected %zu\n",
                       source, output_count, expected_length);
+        (void)fprintf(stderr, "actual output: [");
+        if (output_count != 0U) {
+            (void)fwrite(output, 1U, output_count, stderr);
+        }
+        (void)fprintf(stderr, "]\n");
         status = 1;
     }
     hstex_engine_destroy(&engine);
@@ -295,18 +300,189 @@ static int test_ini_bootstrap(void)
 static int test_input_primitive(void)
 {
     char child_path[64];
-    if (open_snippet("\\def\\fromchild{C}%", child_path) != 0) {
+    if (open_snippet("\\def\\fromchild{C}\\endinput"
+                     "\\def\\ignored{X}%",
+                     child_path) != 0) {
         return 1;
     }
     char source[256];
-    int length = snprintf(source, sizeof(source), "\\input{%s}\\fromchild%%",
-                          child_path);
+    int length = snprintf(
+        source, sizeof(source),
+        "\\input{%s}\\fromchild\\ifdefined\\ignored F\\else I\\fi%%",
+        child_path);
     if (length < 0 || (size_t)length >= sizeof(source)) {
         (void)unlink(child_path);
         return 1;
     }
-    int status = run_snippet(source, "C");
+    int status = run_snippet(source, "CI");
     (void)unlink(child_path);
+    return status;
+}
+
+static int test_job_name(void)
+{
+    char temporary_path[] = "/tmp/hstex-jobname-XXXXXX";
+    int descriptor = mkstemp(temporary_path);
+    if (descriptor < 0) {
+        return 1;
+    }
+    char path[96];
+    int path_length = snprintf(path, sizeof(path), "%s.multi.part.tex",
+                               temporary_path);
+    static const uint8_t source[] = "\\jobname%";
+    if (path_length < 0 || (size_t)path_length >= sizeof(path) ||
+        rename(temporary_path, path) != 0 ||
+        write_all(descriptor, source, sizeof(source) - 1U) != 0 ||
+        close(descriptor) != 0) {
+        (void)close(descriptor);
+        (void)unlink(temporary_path);
+        (void)unlink(path);
+        return 1;
+    }
+
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    uint8_t output[96];
+    size_t output_count = 0U;
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+        if (result == HSTEX_ENGINE_TOKEN &&
+            hstex_token_is_character(token) &&
+            output_count < sizeof(output)) {
+            output[output_count++] = hstex_token_character_code(token);
+        }
+    } while (result == HSTEX_ENGINE_TOKEN);
+
+    const char *base = strrchr(path, '/');
+    base = base == NULL ? path : base + 1;
+    size_t expected_length = strlen(base) - strlen(".tex");
+    int status = result != HSTEX_ENGINE_EOF ||
+                 output_count != expected_length ||
+                 memcmp(output, base, expected_length) != 0 ||
+                 engine.job_name == NULL ||
+                 strlen(engine.job_name) != expected_length ||
+                 memcmp(engine.job_name, base, expected_length) != 0;
+    if (status != 0) {
+        (void)fprintf(stderr, "jobname test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+static int test_hyphenation_data(void)
+{
+    const char source[] =
+        "\\language=7\\relax"
+        "\\lefthyphenmin=1\\relax\\righthyphenmin=1\\relax"
+        "\\patterns{a1b b3c .ab4}"
+        "\\hyphenation{ab-cd}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+
+    static const uint8_t patterned_word[] = "abc";
+    static const uint8_t exception_word[] = "abcd";
+    uint8_t patterned_breaks[sizeof(patterned_word)] = {0};
+    uint8_t exception_breaks[sizeof(exception_word)] = {0};
+    int status = result != HSTEX_ENGINE_EOF ||
+                 engine.hyphen_pattern_count != 3U ||
+                 engine.hyphen_exception_count != 1U ||
+                 hstex_engine_hyphenate_word(
+                     &engine, 7, patterned_word,
+                     sizeof(patterned_word) - 1U, patterned_breaks,
+                     sizeof(patterned_breaks), error, sizeof(error)) != 0 ||
+                 patterned_breaks[1] != 1U || patterned_breaks[2] != 0U ||
+                 hstex_engine_hyphenate_word(
+                     &engine, 7, exception_word, sizeof(exception_word) - 1U,
+                     exception_breaks, sizeof(exception_breaks), error,
+                     sizeof(error)) != 0 ||
+                 exception_breaks[1] != 0U || exception_breaks[2] != 1U ||
+                 exception_breaks[3] != 0U;
+    if (status != 0) {
+        (void)fprintf(stderr, "hyphenation-data test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+static int test_document_job_transition(void)
+{
+    char format_path[64];
+    char document_path[64];
+    if (open_snippet("\\everyjob{J}\\dump", format_path) != 0 ||
+        open_snippet("D%", document_path) != 0) {
+        (void)unlink(format_path);
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, format_path, true, error, sizeof(error)) != 0) {
+        (void)unlink(format_path);
+        (void)unlink(document_path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    uint8_t output[2] = {0};
+    size_t output_count = 0U;
+    if (result == HSTEX_ENGINE_EOF && engine.dump_requested &&
+        hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) ==
+            0) {
+        do {
+            hstex_token token = 0U;
+            struct hstex_source_location location;
+            result = hstex_engine_next_output(&engine, &token, &location, error,
+                                              sizeof(error));
+            if (result == HSTEX_ENGINE_TOKEN &&
+                hstex_token_is_character(token) &&
+                output_count < sizeof(output)) {
+                output[output_count++] = hstex_token_character_code(token);
+            }
+        } while (result == HSTEX_ENGINE_TOKEN);
+    }
+    const char *document_base = strrchr(document_path, '/');
+    document_base = document_base == NULL ? document_path : document_base + 1;
+    int status = result != HSTEX_ENGINE_EOF || engine.dump_requested ||
+                 output_count != sizeof(output) ||
+                 memcmp(output, "JD", sizeof(output)) != 0 ||
+                 engine.job_name == NULL ||
+                 strcmp(engine.job_name, document_base) != 0;
+    if (status != 0) {
+        (void)fprintf(stderr, "document-job transition test failed: %s\n",
+                      error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(format_path);
+    (void)unlink(document_path);
     return status;
 }
 
@@ -316,20 +492,26 @@ static int test_file_streams(void)
     if (open_snippet("", stream_path) != 0 || unlink(stream_path) != 0) {
         return 1;
     }
-    char source[768];
+    char source[1024];
     int length = snprintf(
         source, sizeof(source),
-        "\\chardef\\stream=3 \\openout\\stream=%s \\def\\expected{abc}"
+        "\\chardef\\stream=3 \\openout\\stream=%s \\def\\expected{abc }"
         "\\write\\stream{\\expected}\\closeout\\stream "
-        "\\openin\\stream=%s \\ifeof\\stream F\\else "
+        "\\openin\\stream=\"%s\" \\ifeof\\stream F\\else "
         "\\read\\stream to \\actual "
         "\\ifx\\actual\\expected T\\else F\\fi\\fi "
+        "\\closein\\stream "
+        "\\openin\\stream=\"%s\" "
+        "\\edef\\otherexpected{\\detokenize{abc}}"
+        "\\endlinechar=-1 \\readline\\stream to \\otheractual "
+        "\\endlinechar=13 "
+        "\\ifx\\otheractual\\otherexpected T\\else F\\fi "
         "\\closein\\stream%%",
-        stream_path, stream_path);
+        stream_path, stream_path, stream_path);
     if (length < 0 || (size_t)length >= sizeof(source)) {
         return 1;
     }
-    int status = run_snippet(source, "T");
+    int status = run_snippet(source, "TT");
     (void)unlink(stream_path);
     return status;
 }
@@ -389,6 +571,65 @@ static int test_token_lists(void)
     return run_snippet(source, "TLAYZAYZJK");
 }
 
+static int test_empty_hboxes(void)
+{
+    const char source[] =
+        "{\\setbox5=\\hbox{ }}"
+        "\\setbox6=\\hbox to 2pt{}"
+        "{\\global\\setbox7=\\hbox spread 3sp{}}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    int status = result != HSTEX_ENGINE_EOF ||
+                 engine.boxes[5].kind != HSTEX_BOX_VOID ||
+                 engine.boxes[6].kind != HSTEX_BOX_HLIST ||
+                 engine.boxes[6].width != 2 * 65536 ||
+                 engine.boxes[6].height != 0 || engine.boxes[6].depth != 0 ||
+                 engine.boxes[7].kind != HSTEX_BOX_HLIST ||
+                 engine.boxes[7].width != 3;
+    if (status != 0) {
+        (void)fprintf(stderr, "empty hbox test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+static int test_pdf_file_size(void)
+{
+    char data_path[64];
+    if (open_snippet("size", data_path) != 0) {
+        return 1;
+    }
+    char source[512];
+    int length = snprintf(
+        source, sizeof(source),
+        "\\ifnum\\pdffilesize{%s}=4 T\\else F\\fi "
+        "X\\pdffilesize{%s-missing}Y%%",
+        data_path, data_path);
+    if (length < 0 || (size_t)length >= sizeof(source)) {
+        (void)unlink(data_path);
+        return 1;
+    }
+    int result = run_snippet(source, "TXY");
+    (void)unlink(data_path);
+    return result;
+}
+
 int main(void)
 {
     if (run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
@@ -397,11 +638,37 @@ int main(void)
         run_snippet("\\def\\grab#1,#2;{<#2:#1>}\\grab {a,b},c;%",
                     "<c:a,b>") != 0 ||
         run_snippet("\\def\\tag pre#1!{(#1)}\\tag preX!%", "(X)") != 0 ||
+        run_snippet("\\def\\grabbrace#1#{[#1]}\\grabbrace abc{X}%",
+                    "[abc]X") != 0 ||
         run_snippet("\\def\\a{G}{\\def\\a{L}\\a}\\a%", "LG") != 0 ||
         run_snippet("\\def\\a{G}{\\global\\def\\a{N}}\\a%", "N") != 0 ||
         run_snippet("\\def\\a{Q}\\let\\b=\\a\\def\\a{R}\\b\\a"
                     "\\let\\c=Z\\c%",
                     "QRZ") != 0 ||
+        run_snippet("\\def\\after{A}"
+                    "\\afterassignment\\after\\dimen0=1pt B%",
+                    "AB") != 0 ||
+        run_snippet("\\def\\after{A}"
+                    "\\afterassignment\\after\\def\\x{X}\\x%",
+                    "AX") != 0 ||
+        run_snippet("\\afterassignment A\\afterassignment B\\count0=0%",
+                    "B") != 0 ||
+        run_snippet("\\def\\x{O}\\def\\y{P}"
+                    "{\\afterassignment\\global\\let\\x=Z\\let\\y=Y}"
+                    "\\x\\y%",
+                    "OY") != 0 ||
+        run_snippet("\\def\\a{A}\\def\\b{B}"
+                    "\\def\\check{\\ifx\\next\\b T\\else F\\fi}"
+                    "\\let\\next\\a"
+                    "{\\futurelet\\next\\check\\b}"
+                    "\\ifx\\next\\a T\\else F\\fi"
+                    "{\\global\\futurelet\\next\\relax\\b}"
+                    "\\ifx\\next\\b T\\else F\\fi%",
+                    "TBTBT") != 0 ||
+        run_snippet("\\def\\emit{Q}\\def\\use#1#2{#1#2}"
+                    "\\def\\letspace#1{\\let#1= }"
+                    "\\use{\\letspace\\s}{ }\\emit A\\s B%",
+                    "QA B") != 0 ||
         run_snippet("\\def\\a{A}\\def\\b{\\def\\a{B}}"
                     "\\expandafter\\a\\b\\a%",
                     "AB") != 0 ||
@@ -409,6 +676,33 @@ int main(void)
         run_snippet("\\def\\hash#1{##1:#1}\\hash Z%", "#1:Z") != 0 ||
         run_snippet("\\long\\def\\a#1{X}\\a{one\n\n two}%", "X") != 0 ||
         run_snippet("\\ifnum2<1F\\else T\\fi%", "T") != 0 ||
+        run_snippet("\\ifdim1pt<2pt T\\else F\\fi"
+                    "\\ifdim2pt=2pt T\\else F\\fi"
+                    "\\ifdim3sp>2sp T\\else F\\fi%",
+                    "TTT") != 0 ||
+        run_snippet("\\ifvmode T\\else F\\fi"
+                    "\\ifhmode F\\else T\\fi"
+                    "\\ifmmode F\\else T\\fi"
+                    "\\ifinner F\\else T\\fi%",
+                    "TTTT") != 0 ||
+        run_snippet("\\unless\\ifnum1=2T\\else F\\fi"
+                    "\\unless\\ifnum\\iftrue1\\else2\\fi=2"
+                    "T\\else F\\fi%",
+                    "TT") != 0 ||
+        run_snippet("\\def\\first#1X{\\fi[#1]}"
+                    "\\expandafter\\first\\unless\\if ABX%",
+                    "[]") != 0 ||
+        run_snippet("\\def\\oddvalue{\\iftrue-3\\else2\\fi}"
+                    "\\ifodd\\oddvalue T\\else F\\fi"
+                    "\\ifodd4F\\else T\\fi%",
+                    "TT") != 0 ||
+        run_snippet("\\ifcase0 A\\or X\\else Y\\fi"
+                    "\\ifcase1 X\\or B\\or Y\\else Z\\fi"
+                    "\\ifcase2 X\\or Y\\or C\\else Z\\fi"
+                    "\\ifcase4 X\\or Y\\else D\\fi"
+                    "\\ifcase-1 X\\or Y\\else E\\fi"
+                    "\\ifcase1 X\\ifcase0 N\\or M\\fi\\or F\\fi%",
+                    "ABCDEF") != 0 ||
         run_snippet("\\iffalse A\\iftrue B\\fi\\else C\\fi%", "C") !=
             0 ||
         run_snippet("\\ifx\\unknown\\alsoUnknown T\\else F\\fi%", "T") !=
@@ -418,14 +712,137 @@ int main(void)
                     "T") != 0 ||
         run_snippet("\\chardef\\A=65 \\ifnum\\A=65 \\A\\else X\\fi%",
                     "A") != 0 ||
+        run_snippet("\\catcode94=7 \\catcode9=10 "
+                    "\\catcode`\\^^I=13 "
+                    "\\ifnum\\catcode9=13 T\\else F\\fi%",
+                    "T") != 0 ||
         run_snippet("\\mathchardef\\M=1000 \\ifnum\\M=1000 T\\else F\\fi%",
                     "T") != 0 ||
+        run_snippet("\\meaning\\radical%", "\\radical") != 0 ||
+        run_snippet("\\let\\R\\radical\\meaning\\R%", "\\radical") != 0 ||
+        run_snippet("\\ifx\\radical\\undefined F\\else T\\fi%", "T") !=
+            0 ||
+        run_snippet("\\ifx\\marks\\undefined F\\else T\\fi"
+                    "\\let\\R\\marks\\meaning\\R%",
+                    "T\\marks") != 0 ||
         run_snippet("\\countdef\\n=7 \\n=1 {\\n=2 \\ifnum\\n=2 L\\fi}"
                     "\\ifnum\\n=1 G\\fi%",
                     "LG") != 0 ||
+        run_snippet("\\the\\maxdeadcycles/"
+                    "{\\maxdeadcycles=100\\relax"
+                    "\\the\\maxdeadcycles/}"
+                    "\\the\\maxdeadcycles%",
+                    "25/100/25") != 0 ||
+        run_snippet("\\the\\tracingstats/"
+                    "{\\tracingstats=1\\relax\\the\\tracingstats/}"
+                    "\\the\\tracingstats%",
+                    "0/1/0") != 0 ||
+        run_snippet("\\the\\lefthyphenmin/\\the\\righthyphenmin/"
+                    "{\\lefthyphenmin=2\\righthyphenmin=3\\relax"
+                    "\\the\\lefthyphenmin/\\the\\righthyphenmin/}"
+                    "\\the\\lefthyphenmin/\\the\\righthyphenmin%",
+                    "0/0/2/3/0/0") != 0 ||
+        run_snippet("\\dimendef\\d=3 \\d=2sp "
+                    "\\ifnum1<\\d T\\else F\\fi/\\number\\d%",
+                    "T/2") != 0 ||
         run_snippet("\\countdef\\n=1 \\n=100 \\divide\\n by 6 "
                     "\\multiply\\n -3 \\advance\\n 2 \\number\\n%",
                     "-46") != 0 ||
+        run_snippet("\\romannumeral1994 \\def\\a{A}"
+                    "\\romannumeral0\\a\\romannumeral-5%",
+                    "mcmxcivA") != 0 ||
+        run_snippet("\\number\\numexpr2+3*4\\relax/"
+                    "\\the\\numexpr(2+3)*4\\relax/"
+                    "\\number\\numexpr5/2\\relax/"
+                    "\\number\\numexpr-5/2\\relax/"
+                    "\\number\\numexpr1-5/2\\relax/"
+                    "\\number\\numexpr7/-2\\relax%",
+                    "14/20/3/-3/-2/-4") != 0 ||
+        run_snippet("\\number\"FF/\\number'17/"
+                    "\\the\\numexpr\"10+\"F\\relax%",
+                    "255/15/31") != 0 ||
+        run_snippet("\\dimendef\\d=0 "
+                    "\\d=\\dimexpr 2pt+3pt*4\\relax "
+                    "\\the\\d/"
+                    "\\the\\dimexpr(2pt+3pt)*4\\relax/"
+                    "\\the\\dimexpr5sp/2\\relax/"
+                    "\\the\\dimexpr-5sp/2\\relax/"
+                    "\\the\\dimexpr7sp/-2\\relax%",
+                    "14.0pt/20.0pt/0.00005pt/-0.00005pt/-0.00006pt") != 0 ||
+        run_snippet("\\font\\f=cmr10 at 1sp "
+                    "\\fontdimen1\\f=123sp "
+                    "\\fontdimen20\\f=456sp "
+                    "\\hyphenchar\\f=7 "
+                    "\\font\\g=cmr10 at 1sp "
+                    "\\ifx\\f\\g T\\else F\\fi/"
+                    "{\\fontdimen1\\f=321sp}"
+                    "\\the\\fontdimen1\\f/"
+                    "\\the\\fontdimen20\\f/"
+                    "\\the\\hyphenchar\\f/"
+                    "\\fontname\\f%",
+                    "T/0.0049pt/0.00696pt/7/cmr10 at 0.00002pt") != 0 ||
+        run_snippet("\\font\\natural=cmr10 "
+                    "\\font\\tiny=cmr10 at 1sp "
+                    "\\meaning\\natural/\\meaning\\tiny%",
+                    "select font cmr10/"
+                    "select font cmr10 at 0.00002pt") != 0 ||
+        run_snippet("\\font\\f=cmr10 at 1sp \\f "
+                    "\\hyphenchar\\font=9 "
+                    "\\the\\hyphenchar\\f/\\fontname\\font%",
+                    "9/cmr10 at 0.00002pt") != 0 ||
+        run_snippet("\\font\\line=line10\\relax \\the\\fontdimen8\\line%",
+                    "0.39998pt") != 0 ||
+        run_snippet("\\fontname\\font/\\fontname\\nullfont/"
+                    "\\meaning\\nullfont/\\the\\hyphenchar\\nullfont/"
+                    "\\the\\skewchar\\nullfont/"
+                    "\\the\\fontdimen1\\nullfont%",
+                    "nullfont/nullfont/select font nullfont/45/-1/0.0pt") != 0 ||
+        run_snippet("\\skipdef\\s=0 "
+                    "\\s=\\glueexpr 1pt plus 2pt minus 3pt"
+                    "+4pt plus 5pt minus 6pt\\relax "
+                    "\\the\\s/"
+                    "\\the\\glueexpr 1pt plus 2fil"
+                    "+3pt plus 4fill\\relax/"
+                    "\\the\\glueexpr(1pt plus 2fil)*3\\relax/"
+                    "\\the\\glueexpr 1pt plus 5sp minus 7sp/2\\relax%",
+                    "5.0pt plus 7.0pt minus 9.0pt/"
+                    "4.0pt plus 4.0fill/"
+                    "3.0pt plus 6.0fil/"
+                    "0.5pt plus 0.00005pt minus 0.00006pt") != 0 ||
+        run_snippet("\\skip0=7pt "
+                    "\\muskipdef\\m=0 "
+                    "\\m=\\muexpr 1mu plus 2mu minus 3mu"
+                    "+3mu plus 4fil minus 5mu\\relax "
+                    "\\the\\m/"
+                    "{\\m=9mu\\relax \\the\\m/}"
+                    "\\the\\m/\\the\\skip0/"
+                    "\\the\\muexpr(1mu plus 2fil)*3\\relax%",
+                    "4.0mu plus 4.0fil minus 8.0mu/"
+                    "9.0mu/"
+                    "4.0mu plus 4.0fil minus 8.0mu/"
+                    "7.0pt/3.0mu plus 6.0fil") != 0 ||
+        run_snippet("\\thinmuskip=3mu plus 2mu minus 1mu "
+                    "{\\thinmuskip=9mu\\relax \\the\\thinmuskip/}"
+                    "\\the\\thinmuskip/"
+                    "\\medmuskip=4mu plus 2mu minus 4mu "
+                    "\\thickmuskip=5mu plus 5mu "
+                    "\\the\\medmuskip/\\the\\thickmuskip%",
+                    "9.0mu/3.0mu plus 2.0mu minus 1.0mu/"
+                    "4.0mu plus 2.0mu minus 4.0mu/5.0mu plus 5.0mu") != 0 ||
+        run_snippet("\\def\\name{abc:def}"
+                    "\\def\\split#1:#2!{[#1/#2]}"
+                    "\\expandafter\\split\\romannumeral`A\\name!%",
+                    "[lxvabc/def]") != 0 ||
+        run_snippet("\\protected\\def\\zero{0}"
+                    "\\edef\\saved{\\romannumeral\\zero X}"
+                    "\\def\\zero{1}\\saved%",
+                    "X") != 0 ||
+        run_snippet("\\def\\use#1#2{#1#2}"
+                    "\\use{\\let\\stop= }{ }"
+                    "\\edef\\saved{\\ifnum1=1\\stop A\\fi}"
+                    "\\def\\expected{A}"
+                    "\\ifx\\saved\\expected T\\else F\\fi%",
+                    "T") != 0 ||
         run_snippet("\\countdef\\n=2 \\n=7 "
                     "\\def\\two#1{\\ifnum#1<10 0\\fi\\number#1}"
                     "\\edef\\saved{\\two{\\the\\n}}\\n=42 \\saved%",
@@ -436,6 +853,95 @@ int main(void)
         run_snippet("\\protected\\def\\a{A}\\edef\\saved{\\a}"
                     "\\def\\a{B}\\saved%",
                     "B") != 0 ||
+        run_snippet("\\def\\a{A}\\def\\b{B}"
+                    "\\expanded{<\\a\\b>}"
+                    "\\expanded{\\noexpand\\a}%",
+                    "<AB>A") != 0 ||
+        run_snippet("\\def\\trim#1{[#1]}"
+                    "\\edef\\saved{\\expandafter\\trim"
+                    "\\expanded{{A\\iffalse}}}\\fi B}}}"
+                    "\\saved%",
+                    "[AB]") != 0 ||
+        run_snippet("\\def\\a{A}"
+                    "\\expandafter\\ifx\\expanded{\\unexpanded{e}}e"
+                    "T\\else F\\fi"
+                    "\\expandafter\\ifx\\expanded{\\noexpand\\a}\\a "
+                    "T\\else F\\fi"
+                    "\\expandafter\\ifx\\noexpand\\a\\a "
+                    "T\\else F\\fi%",
+                    "TTF") != 0 ||
+        run_snippet("\\def\\a{A}"
+                    "\\def\\choose{\\if\\noexpand\\a\\noexpand\\a"
+                    "\\edef\\saved{X}\\fi}"
+                    "\\choose\\saved%",
+                    "X") != 0 ||
+        run_snippet("\\def\\comma#1,{[#1]}"
+                    "\\expandafter\\comma"
+                    "\\expanded{\\unexpanded{A,}}"
+                    "\\def\\prefix A#1{<#1>}"
+                    "\\expandafter\\prefix"
+                    "\\expanded{\\unexpanded{A}}B%",
+                    "[A]<B>") != 0 ||
+        run_snippet("\\def\\left{abc}"
+                    "\\pdfstrcmp{abc}{abc}/"
+                    "\\pdfstrcmp{abc}{abd}/"
+                    "\\pdfstrcmp{abd}{abc}/"
+                    "\\pdfstrcmp{\\left}{abc}/"
+                    "\\pdfstrcmp{\\noexpand\\relax}"
+                    "{\\noexpand\\relax}%",
+                    "0/-1/1/0/0") != 0 ||
+        run_snippet("\\expanded\\expanded{{A}}%", "A") != 0 ||
+        run_snippet("\\protected\\def\\a{A}"
+                    "\\edef\\saved{\\expanded{\\a}}"
+                    "\\def\\a{B}\\saved%",
+                    "B") != 0 ||
+        run_snippet("\\def\\a{A}"
+                    "\\edef\\saved{\\unexpanded{\\a}}"
+                    "\\def\\a{B}\\saved\\unexpanded{\\a}%",
+                    "BB") != 0 ||
+        run_snippet("\\edef\\saved{\\unexpanded{#1}}\\saved/"
+                    "\\toks0={#2}\\edef\\fromtoks{\\the\\toks0}"
+                    "\\fromtoks%",
+                    "#1/#2") != 0 ||
+        run_snippet("\\def\\a{A}\\unexpanded\\expanded{{\\a}}%",
+                    "A") != 0 ||
+        run_snippet("\\lowercase{AB}\\uppercase{ab}"
+                    "\\def\\opening{{C}}\\lowercase\\opening%",
+                    "abABc") != 0 ||
+        run_snippet("A\\ignorespaces   B"
+                    "\\def\\s{ }\\ignorespaces\\s C%",
+                    "ABC") != 0 ||
+        run_snippet("\\ifx\\batchmode\\errorstopmode T\\else F\\fi"
+                    "\\batchmode A\\dump B%",
+                    "FA") != 0 ||
+        run_snippet("\\lccode`*=32 "
+                    "\\def\\samecat#1{\\ifcat#1*P\\else F\\fi}"
+                    "\\lowercase{\\samecat*}%",
+                    "P") != 0 ||
+        run_snippet("\\catcode`~=13 \\def~{T}"
+                    "\\catcode`!=13 \\def!{B}"
+                    "\\lccode`~=`! \\lowercase{~}%",
+                    "B") != 0 ||
+        run_snippet("\\def\\expected{\\relax}"
+                    "\\expanded{\\noexpand\\def\\noexpand\\saved"
+                    "{\\noexpand\\relax}}"
+                    "\\ifx\\saved\\expected T\\else F\\fi%",
+                    "T") != 0 ||
+        run_snippet("\\def\\a{A}"
+                    "\\def\\same#1{\\ifx\\a#1T\\else F\\fi}"
+                    "\\expanded{\\unexpanded{\\same}"
+                    "\\unexpanded{\\a}}%",
+                    "T") != 0 ||
+        run_snippet("\\def\\a{X}"
+                    "\\detokenize{A \\a!\\, {B}}"
+                    "\\detokenize{#1}%",
+                    "A \\a !\\, {B}##1") != 0 ||
+        run_snippet("\\detokenize\\expanded{{A}}%", "A") != 0 ||
+        run_snippet(
+            "\\expandafter\\def"
+            "\\csname\\detokenize{name_with:chars}\\endcsname{D}"
+            "\\csname name_with:chars\\endcsname%",
+            "D") != 0 ||
         run_snippet("\\def\\a{./}\\def\\strip#1>{}"
                     "\\edef\\saved{\\expandafter\\strip\\meaning\\a}"
                     "\\saved%",
@@ -446,17 +952,72 @@ int main(void)
                     "^^J") != 0 ||
         run_snippet("\\if AAT\\else F\\fi\\if ABF\\else T\\fi%",
                     "TT") != 0 ||
+        run_snippet("\\def\\base#1{\\if c#1N\\else"
+                    "\\if o#1n\\else X\\fi\\fi}"
+                    "\\def\\digit{\\iftrue1\\else2\\fi}"
+                    "\\if n\\base oT\\else F\\fi"
+                    "\\ifnum\\digit=1T\\else F\\fi%",
+                    "TT") != 0 ||
+        run_snippet("\\let\\x=A\\def\\letter{A}\\chardef\\A=65 "
+                    "\\ifcat AB1\\else0\\fi"
+                    "\\ifcat A70\\else1\\fi"
+                    "\\ifcat\\x B1\\else0\\fi"
+                    "\\ifcat\\letter B1\\else0\\fi"
+                    "\\ifcat\\A\\relax1\\else0\\fi"
+                    "\\ifcat\\relax\\def1\\else0\\fi"
+                    "\\ifcat\\noexpand\\missing\\noexpand\\other"
+                    "1\\else0\\fi%",
+                    "1111111") != 0 ||
         run_snippet("\\sfcode`\\)=0 \\ifnum\\sfcode`\\)=0 T\\else F\\fi "
                     "\\ifdefined\\sfcode T\\else F\\fi "
                     "\\ifdefined\\unknown F\\else T\\fi%",
                     "TTT") != 0 ||
+        run_snippet(
+            "\\expandafter\\ifx\\csname absent:name\\endcsname\\relax "
+            "T\\else F\\fi"
+            "\\def\\part{dynamic}"
+            "\\expandafter\\def\\csname\\part-name\\endcsname{D}"
+            "\\csname dynamic-name\\endcsname"
+            "\\expandafter\\def\\csname a b\\endcsname{S}"
+            "\\csname a b\\endcsname"
+            "{\\csname scoped-name\\endcsname}"
+            "\\ifdefined\\scoped-name F\\else L\\fi"
+            "\\expandafter\\ifx\\csname scoped-name\\endcsname\\relax "
+            "T\\else F\\fi%",
+            "TDSLT") != 0 ||
+        run_snippet(
+            "\\def\\part{made}"
+            "\\expandafter\\def\\csname made-up\\endcsname{M}"
+            "\\ifcsname absent\\endcsname A\\else B\\fi"
+            "\\ifdefined\\absent C\\else D\\fi"
+            "\\ifcsname\\part-up\\endcsname E\\else F\\fi"
+            "\\ifcsname tokenized\\endcsname G\\else H\\fi"
+            "\\ifdefined\\tokenized I\\else J\\fi%",
+            "BDEHJ") != 0 ||
+        run_snippet(
+            "\\def\\piece{name}"
+            "\\expandafter\\def"
+            "\\csname\\expanded{\\noexpand\\piece}\\endcsname{X}"
+            "\\name%",
+            "X") != 0 ||
         run_snippet("\\catcode`\\@=11 \\def\\word@word{X}\\word@word%",
                     "X") != 0 ||
+        expect_failure("\\endcsname%", "extra endcsname") != 0 ||
+        expect_failure("\\unknown%",
+                       "undefined control sequence: \\unknown") != 0 ||
+        expect_failure("\\ifcat\\missing\\relax T\\else F\\fi%",
+                       "undefined control sequence: \\missing") != 0 ||
+        expect_failure("\\def\\why{expanded}"
+                       "\\errmessage{ERRMESSAGE: \\why}%",
+                       "ERRMESSAGE: expanded") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
-        test_input_primitive() != 0 || test_file_streams() != 0 ||
-        test_dimensions_and_glue() != 0 || test_token_lists() != 0) {
+        test_input_primitive() != 0 || test_job_name() != 0 ||
+        test_hyphenation_data() != 0 ||
+        test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        test_dimensions_and_glue() != 0 || test_token_lists() != 0 ||
+        test_empty_hboxes() != 0 || test_pdf_file_size() != 0) {
         return 1;
     }
     return 0;

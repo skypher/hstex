@@ -23,8 +23,10 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --probe-input FILE\n"
                   "       %s --trace-ini-mouth FILE\n"
                   "       %s --mouth-stats-latex FILE\n"
-                  "       %s --run-ini FILE\n",
-                  program, program, program, program, program, program);
+                  "       %s --run-ini FILE\n"
+                  "       %s --run-latex LATEX_LTX DOCUMENT\n",
+                  program, program, program, program, program, program,
+                  program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -289,6 +291,81 @@ static int run_ini(const char *path)
     return status;
 }
 
+static int drain_engine(struct hstex_engine *engine, const char *fallback_path,
+                        size_t *output_tokens)
+{
+    char error[512] = {0};
+    struct hstex_source_location last_location = {0};
+    *output_tokens = 0U;
+    for (;;) {
+        hstex_token token = 0U;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &last_location, error, sizeof(error));
+        if (result == HSTEX_ENGINE_EOF) {
+            return 0;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            const char *source = hstex_source_current_name(&engine->sources);
+            (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
+                          source == NULL ? fallback_path : source,
+                          last_location.line, last_location.column, error);
+            return 1;
+        }
+        ++*output_tokens;
+    }
+}
+
+static int run_latex(const char *format_path, const char *document_path)
+{
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    static const char output_directory[] = "build/document-output";
+    if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
+        hstex_engine_set_output_directory(&engine, output_directory, error,
+                                          sizeof(error)) != 0 ||
+        hstex_engine_push_file(&engine, format_path, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n",
+                      error[0] == '\0' ? "cannot prepare document output"
+                                        : error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t format_output_tokens = 0U;
+    if (drain_engine(&engine, format_path, &format_output_tokens) != 0 ||
+        !engine.dump_requested) {
+        if (!engine.dump_requested) {
+            (void)fprintf(stderr,
+                          "hstex: format source ended without dump\n");
+        }
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    (void)printf("format=%s output_tokens=%zu symbols=%zu macros=%zu\n",
+                 format_path, format_output_tokens,
+                 engine.lexical_state.symbols.entry_count, engine.macro_count);
+    if (hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) !=
+        0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t document_output_tokens = 0U;
+    int status =
+        drain_engine(&engine, document_path, &document_output_tokens);
+    if (status == 0) {
+        (void)printf("document=%s output_tokens=%zu symbols=%zu macros=%zu\n",
+                     document_path, document_output_tokens,
+                     engine.lexical_state.symbols.entry_count,
+                     engine.macro_count);
+    }
+    hstex_engine_destroy(&engine);
+    return status;
+}
+
 int main(int argument_count, char **arguments)
 {
     if (argument_count == 2 && strcmp(arguments[1], "--version") == 0) {
@@ -312,6 +389,9 @@ int main(int argument_count, char **arguments)
     }
     if (argument_count == 3 && strcmp(arguments[1], "--run-ini") == 0) {
         return run_ini(arguments[2]);
+    }
+    if (argument_count == 4 && strcmp(arguments[1], "--run-latex") == 0) {
+        return run_latex(arguments[2], arguments[3]);
     }
 
     print_usage(stderr, arguments[0]);

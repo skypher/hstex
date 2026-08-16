@@ -98,7 +98,24 @@ int main(void)
                                  sizeof(inserted) / sizeof(inserted[0]),
                                  inserted_location, error, sizeof(error)) != 0 ||
         expect_character(&stack, (uint8_t)'X', 99U, error, sizeof(error)) != 0 ||
-        expect_character(&stack, (uint8_t)'Y', 99U, error, sizeof(error)) != 0 ||
+        expect_character(&stack, (uint8_t)'Y', 99U, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "%s\n", error);
+        hstex_source_stack_destroy(&stack);
+        hstex_lexical_state_destroy(&lexical_state);
+        return 1;
+    }
+
+    hstex_token bounded =
+        hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'Z');
+    hstex_token token;
+    struct hstex_source_location location;
+    if (hstex_source_push_boundary(&stack, error, sizeof(error)) != 0 ||
+        hstex_source_push_tokens(&stack, &bounded, 1U, inserted_location, error,
+                                 sizeof(error)) != 0 ||
+        expect_character(&stack, (uint8_t)'Z', 99U, error, sizeof(error)) != 0 ||
+        hstex_source_next(&stack, &token, &location, error, sizeof(error)) !=
+            HSTEX_MOUTH_EOF ||
+        hstex_source_pop_boundary(&stack, error, sizeof(error)) != 0 ||
         expect_character(&stack, (uint8_t)' ', 1U, error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "%s\n", error);
         hstex_source_stack_destroy(&stack);
@@ -106,11 +123,35 @@ int main(void)
         return 1;
     }
 
-    hstex_token token;
-    struct hstex_source_location location;
     enum hstex_mouth_result final_result = hstex_source_next(
         &stack, &token, &location, error, sizeof(error));
     int failed = final_result != HSTEX_MOUTH_EOF;
+    for (size_t index = 0U; !failed && index < 128U; ++index) {
+        hstex_token *owned = malloc(sizeof(*owned));
+        if (owned == NULL) {
+            failed = 1;
+            break;
+        }
+        owned[0] = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                         (uint8_t)'T');
+        if (hstex_source_push_owned_tokens(&stack, owned, 1U,
+                                           inserted_location, error,
+                                           sizeof(error)) != 0 ||
+            expect_character(&stack, (uint8_t)'T', 99U, error,
+                             sizeof(error)) != 0 ||
+            stack.count != 1U || stack.capacity > 16U) {
+            (void)fprintf(stderr,
+                          "exhausted token frames accumulated: count=%zu "
+                          "capacity=%zu error=%s\n",
+                          stack.count, stack.capacity, error);
+            failed = 1;
+        }
+    }
+    if (!failed &&
+        hstex_source_next(&stack, &token, &location, error, sizeof(error)) !=
+            HSTEX_MOUTH_EOF) {
+        failed = 1;
+    }
     hstex_source_stack_destroy(&stack);
     hstex_lexical_state_destroy(&lexical_state);
     if (unlink(first_path) != 0 || unlink(second_path) != 0) {

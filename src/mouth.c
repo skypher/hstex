@@ -223,10 +223,7 @@ static enum hstex_mouth_result scan_control_sequence(
         }
         mouth->state = HSTEX_MOUTH_SKIP_SPACES;
     } else {
-        uint8_t name_character = category == (uint8_t)HSTEX_CAT_SPACE
-                                     ? (uint8_t)' '
-                                     : first.value;
-        if (append_name(mouth, name_character, error, error_capacity) != 0) {
+        if (append_name(mouth, first.value, error, error_capacity) != 0) {
             return HSTEX_MOUTH_ERROR;
         }
         mouth->state = category == (uint8_t)HSTEX_CAT_SPACE

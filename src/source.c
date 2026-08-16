@@ -50,10 +50,23 @@ static void pop_frame(struct hstex_source_stack *stack)
         hstex_mouth_destroy(&frame->value.file.mouth);
         hstex_input_close(&frame->value.file.input);
         free(frame->value.file.path);
-    } else {
+    } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
         free(frame->value.token_list.owned_allocation);
     }
     --stack->count;
+}
+
+static void pop_exhausted_token_frames(struct hstex_source_stack *stack)
+{
+    while (stack->count != 0U) {
+        struct hstex_source_frame *frame =
+            &stack->frames[stack->count - 1U];
+        if (frame->kind != HSTEX_SOURCE_TOKEN_LIST ||
+            frame->value.token_list.cursor < frame->value.token_list.count) {
+            break;
+        }
+        pop_frame(stack);
+    }
 }
 
 void hstex_source_stack_init(struct hstex_source_stack *stack,
@@ -81,6 +94,7 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     if (stack == NULL || stack->lexical_state == NULL || path == NULL) {
         return set_error(error, error_capacity, "invalid file-source request");
     }
+    pop_exhausted_token_frames(stack);
     if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
         return -1;
     }
@@ -115,6 +129,7 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     if (stack == NULL || (count != 0U && tokens == NULL)) {
         return set_error(error, error_capacity, "invalid token-source request");
     }
+    pop_exhausted_token_frames(stack);
     if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
         return -1;
     }
@@ -137,6 +152,7 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
         return set_error(error, error_capacity,
                          "invalid owned token-source request");
     }
+    pop_exhausted_token_frames(stack);
     if (count == 0U) {
         free(tokens);
         return 0;
@@ -155,6 +171,63 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     return 0;
 }
 
+int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
+                               size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity, "invalid source boundary request");
+    }
+    pop_exhausted_token_frames(stack);
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    memset(frame, 0, sizeof(*frame));
+    frame->kind = HSTEX_SOURCE_BOUNDARY;
+    return 0;
+}
+
+int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
+                              size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity, "invalid source boundary pop");
+    }
+    size_t boundary = stack->count;
+    while (boundary != 0U) {
+        --boundary;
+        if (stack->frames[boundary].kind == HSTEX_SOURCE_BOUNDARY) {
+            while (stack->count > boundary) {
+                pop_frame(stack);
+            }
+            return 0;
+        }
+    }
+    return set_error(error, error_capacity, "source boundary is not active");
+}
+
+int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
+                                  size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid end-current-file request");
+    }
+    for (size_t index = stack->count; index != 0U; --index) {
+        struct hstex_source_frame *frame = &stack->frames[index - 1U];
+        if (frame->kind != HSTEX_SOURCE_FILE) {
+            continue;
+        }
+        struct hstex_mouth *mouth = &frame->value.file.mouth;
+        mouth->next_line_offset = mouth->length;
+        mouth->line_loaded = false;
+        mouth->has_end_line_byte = false;
+        return 0;
+    }
+    return set_error(error, error_capacity,
+                     "endinput used without an active file");
+}
+
 enum hstex_mouth_result hstex_source_next(
     struct hstex_source_stack *stack, hstex_token *token,
     struct hstex_source_location *location, char *error,
@@ -166,6 +239,9 @@ enum hstex_mouth_result hstex_source_next(
     }
     while (stack->count != 0U) {
         struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
+        if (frame->kind == HSTEX_SOURCE_BOUNDARY) {
+            return HSTEX_MOUTH_EOF;
+        }
         if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
             struct hstex_token_source *source = &frame->value.token_list;
             if (source->cursor >= source->count) {
