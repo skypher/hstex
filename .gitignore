@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/tests/corpus/results/
+/tests/corpus/.work/
+*.o
+*.a
+*.so
+*.dylib
+*.exe

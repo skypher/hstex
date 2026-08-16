@@ -1,0 +1,24 @@
+#ifndef HSTEX_INPUT_H
+#define HSTEX_INPUT_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+enum hstex_input_storage {
+    HSTEX_INPUT_STORAGE_NONE = 0,
+    HSTEX_INPUT_STORAGE_OWNED,
+    HSTEX_INPUT_STORAGE_MMAP,
+};
+
+struct hstex_input {
+    const uint8_t *data;
+    size_t length;
+    enum hstex_input_storage storage;
+};
+
+int hstex_input_open(const char *path, struct hstex_input *input,
+                     char *error, size_t error_capacity);
+void hstex_input_close(struct hstex_input *input);
+const char *hstex_input_storage_name(enum hstex_input_storage storage);
+
+#endif
