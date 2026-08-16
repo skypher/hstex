@@ -737,6 +737,11 @@ int main(void)
                     "{\\tracingstats=1\\relax\\the\\tracingstats/}"
                     "\\the\\tracingstats%",
                     "0/1/0") != 0 ||
+        run_snippet("\\the\\pdfshellescape/"
+                    "\\number\\pdfshellescape/"
+                    "\\ifnum\\pdfshellescape=0 T\\else F\\fi/"
+                    "\\meaning\\pdfshellescape%",
+                    "0/0/T/\\pdfshellescape") != 0 ||
         run_snippet("\\the\\lefthyphenmin/\\the\\righthyphenmin/"
                     "{\\lefthyphenmin=2\\righthyphenmin=3\\relax"
                     "\\the\\lefthyphenmin/\\the\\righthyphenmin/}"
@@ -829,6 +834,12 @@ int main(void)
                     "\\the\\medmuskip/\\the\\thickmuskip%",
                     "9.0mu/3.0mu plus 2.0mu minus 1.0mu/"
                     "4.0mu plus 2.0mu minus 4.0mu/5.0mu plus 5.0mu") != 0 ||
+        run_snippet("\\skip0=3pt plus 4fil minus 5pt "
+                    "\\skip1=2\\skip0 "
+                    "\\skip2=-\\skip0 "
+                    "\\skip3=1.5\\skip0 "
+                    "\\the\\skip1/\\the\\skip2/\\the\\skip3%",
+                    "6.0pt/-3.0pt plus -4.0fil minus -5.0pt/4.5pt") != 0 ||
         run_snippet("\\def\\name{abc:def}"
                     "\\def\\split#1:#2!{[#1/#2]}"
                     "\\expandafter\\split\\romannumeral`A\\name!%",
@@ -1007,6 +1018,9 @@ int main(void)
                        "undefined control sequence: \\unknown") != 0 ||
         expect_failure("\\ifcat\\missing\\relax T\\else F\\fi%",
                        "undefined control sequence: \\missing") != 0 ||
+        expect_failure("\\expanded{\\number}%", "missing integer") != 0 ||
+        expect_failure("\\baselineskip=1\\relax%",
+                       "missing dimension unit") != 0 ||
         expect_failure("\\def\\why{expanded}"
                        "\\errmessage{ERRMESSAGE: \\why}%",
                        "ERRMESSAGE: expanded") != 0 ||
