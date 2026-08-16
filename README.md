@@ -32,6 +32,11 @@ construction.
 
 ## Build
 
+The engine itself requires a C17 compiler, Meson, and Ninja. The engine tests
+also load the standard `cmr10` and `line10` metrics through `kpsewhich`; on
+Ubuntu, install `texlive-latex-base` to provide those test fonts and the lookup
+tool.
+
 ```sh
 meson setup build
 meson compile -C build
