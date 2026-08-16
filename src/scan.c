@@ -16,7 +16,7 @@ typedef size_t (*scan_function)(const uint8_t *, size_t);
 
 static scan_function active_scan = hstex_scan_default_boundary_scalar;
 static const char *active_backend = "scalar";
-static atomic_int initialization_state = ATOMIC_VAR_INIT(0);
+static atomic_int initialization_state;
 
 static bool is_default_boundary(uint8_t byte)
 {

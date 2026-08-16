@@ -1,6 +1,7 @@
 #include "hstex/engine.h"
 
 #include "hstex/catcode.h"
+#include "internal.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -61,6 +62,9 @@ struct hstex_vbox_builder {
     int64_t extent;
     int32_t width;
 };
+
+static int set_error(char *error, size_t capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(3, 4);
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
 {

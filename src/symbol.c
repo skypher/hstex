@@ -1,5 +1,7 @@
 #include "hstex/symbol.h"
 
+#include "internal.h"
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -12,6 +14,9 @@ enum {
     HSTEX_INITIAL_ENTRY_CAPACITY = 32,
     HSTEX_INITIAL_BYTE_CAPACITY = 256,
 };
+
+static int set_error(char *error, size_t capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(3, 4);
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
 {

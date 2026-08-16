@@ -1,5 +1,7 @@
 #include "hstex/input.h"
 
+#include "internal.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -13,6 +15,9 @@
 #include <unistd.h>
 
 enum { HSTEX_MMAP_THRESHOLD = 64 * 1024 };
+
+static int set_error(char *error, size_t capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(3, 4);
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
 {

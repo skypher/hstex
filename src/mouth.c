@@ -1,5 +1,7 @@
 #include "hstex/mouth.h"
 
+#include "internal.h"
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -12,6 +14,9 @@ struct logical_character {
     uint8_t value;
     struct hstex_source_location location;
 };
+
+static int set_error(char *error, size_t capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(3, 4);
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
 {
