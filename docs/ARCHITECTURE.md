@@ -39,8 +39,8 @@ stable order independent of scheduling.
 
 - Source files are immutable byte spans. Large regular files use `mmap`; small
   files are copied into owned slabs. Streams receive buffered storage.
-- Tokens will use a compact 32-bit common representation with an explicit
-  escape representation when the payload does not fit.
+- Tokens use a compact 32-bit common representation with separate character
+  and control-sequence layouts.
 - Strings occupy append-only byte arenas and are addressed by integer offset
   and length.
 - Control sequences receive stable integer IDs from an open-addressed hash
@@ -79,12 +79,21 @@ queries. Conditionals are tracked in a separate contiguous stack; false
 branches are skipped without macro expansion while nested conditionals remain
 balanced.
 
+Dimensions are signed scaled-point integers. Their scanner uses checked integer
+fixed-point arithmetic for decimal factors, physical units, internal dimension
+values, and TeX's bounded range. Glue stores width, stretch, shrink, and the two
+infinite-order tags inline; registers and named dimension/glue parameters share
+the meaning and save-stack machinery used by integer state. Character code
+tables are flat 256-entry arrays with level tags, keeping assignments and
+lookups contiguous.
+
 Expanded definitions reuse the ordinary immutable macro representation but
 drive the replacement scanner through the expansion loop. Integer `the` and
 `number` expansions materialize compact other-character token arrays;
 conditionals execute inside that loop, so expanded definitions see the same
-branch semantics as ordinary execution. Checked 64-bit intermediates implement
-32-bit `advance`, `multiply`, and `divide` assignments.
+branch semantics as ordinary execution. Protected macros remain opaque during
+expanded definitions and writes. Checked 64-bit intermediates implement 32-bit
+`advance`, `multiply`, and `divide` assignments.
 
 File input first checks the process and calling-file directories. During the
 bootstrap phase it uses `kpsewhich` as a safe argv-based lookup fallback for

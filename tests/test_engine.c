@@ -334,6 +334,48 @@ static int test_file_streams(void)
     return status;
 }
 
+static int test_dimensions_and_glue(void)
+{
+    const char source[] =
+        "\\dimendef\\d=5 \\d=1.5pt {\\d=2pt} "
+        "\\dimendef\\twice=6 \\twice=2\\d "
+        "\\dimendef\\largest=7 \\largest=16383.99999pt "
+        "\\skipdef\\s=3 \\s=-1000pt plus 1fill minus 2pt "
+        "\\hfuzz=.1pt \\parskip=0pt plus 1pt%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    const struct hstex_glue glue = engine.glues[3];
+    int status = result != HSTEX_ENGINE_EOF || engine.dimens[5] != 98304 ||
+                 engine.dimens[6] != 196608 ||
+                 engine.dimens[7] != 1073741823 ||
+                 glue.width != -65536000 || glue.stretch != 65536 ||
+                 glue.stretch_order != 2U || glue.shrink != 131072 ||
+                 glue.shrink_order != 0U ||
+                 engine.dimen_parameters[HSTEX_DIMEN_HFUZZ] != 6554 ||
+                 engine.glue_parameters[HSTEX_GLUE_PAR_SKIP].stretch != 65536;
+    if (status != 0) {
+        (void)fprintf(stderr, "dimension/glue test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 int main(void)
 {
     if (run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
@@ -378,6 +420,9 @@ int main(void)
         run_snippet("\\def\\a{A}\\edef\\saved{\\noexpand\\a}"
                     "\\def\\a{B}\\saved%",
                     "B") != 0 ||
+        run_snippet("\\protected\\def\\a{A}\\edef\\saved{\\a}"
+                    "\\def\\a{B}\\saved%",
+                    "B") != 0 ||
         run_snippet("\\def\\a{./}\\def\\strip#1>{}"
                     "\\edef\\saved{\\expandafter\\strip\\meaning\\a}"
                     "\\saved%",
@@ -388,12 +433,17 @@ int main(void)
                     "^^J") != 0 ||
         run_snippet("\\if AAT\\else F\\fi\\if ABF\\else T\\fi%",
                     "TT") != 0 ||
+        run_snippet("\\sfcode`\\)=0 \\ifnum\\sfcode`\\)=0 T\\else F\\fi "
+                    "\\ifdefined\\sfcode T\\else F\\fi "
+                    "\\ifdefined\\unknown F\\else T\\fi%",
+                    "TTT") != 0 ||
         run_snippet("\\catcode`\\@=11 \\def\\word@word{X}\\word@word%",
                     "X") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
-        test_input_primitive() != 0 || test_file_streams() != 0) {
+        test_input_primitive() != 0 || test_file_streams() != 0 ||
+        test_dimensions_and_glue() != 0) {
         return 1;
     }
     return 0;

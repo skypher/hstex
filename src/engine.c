@@ -58,6 +58,24 @@ static bool token_is_other_character(hstex_token token, uint8_t character)
            hstex_token_character_code(token) == character;
 }
 
+static int code_table_index(enum hstex_command command)
+{
+    switch (command) {
+    case HSTEX_COMMAND_SF_CODE:
+        return 0;
+    case HSTEX_COMMAND_LC_CODE:
+        return 1;
+    case HSTEX_COMMAND_UC_CODE:
+        return 2;
+    case HSTEX_COMMAND_MATH_CODE:
+        return 3;
+    case HSTEX_COMMAND_DEL_CODE:
+        return 4;
+    default:
+        return -1;
+    }
+}
+
 static void vector_destroy(struct token_vector *vector)
 {
     free(vector->data);
@@ -355,6 +373,32 @@ static int assign_catcode(struct hstex_engine *engine, uint32_t character,
                              category);
 }
 
+static int assign_code(struct hstex_engine *engine, uint32_t table,
+                       uint32_t character, int32_t value,
+                       bool requested_global, char *error,
+                       size_t error_capacity)
+{
+    if (table >= 5U || character > 255U) {
+        return set_error(error, error_capacity,
+                         "invalid code-table assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    uint32_t *level = &engine->code_levels[table][character];
+    if (!global && engine->group_level != 0U) {
+        uint32_t encoded_index = table * 256U + character;
+        if (save_value(engine, HSTEX_SAVE_CODE, encoded_index, *level,
+                       engine->code_tables[table][character], 0U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+        *level = engine->group_level;
+    } else {
+        *level = 0U;
+    }
+    engine->code_tables[table][character] = value;
+    return 0;
+}
+
 static int assign_count(struct hstex_engine *engine, uint32_t index,
                         int32_t value, bool requested_global, char *error,
                         size_t error_capacity)
@@ -375,6 +419,112 @@ static int assign_count(struct hstex_engine *engine, uint32_t index,
         engine->count_levels[index] = 0U;
     }
     engine->counts[index] = value;
+    return 0;
+}
+
+static int assign_dimen(struct hstex_engine *engine, uint32_t index,
+                        int32_t value, bool requested_global, char *error,
+                        size_t error_capacity)
+{
+    if ((size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "dimen register outside supported range");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_DIMEN, index,
+                       engine->dimen_levels[index], engine->dimens[index], 0U,
+                       error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->dimen_levels[index] = engine->group_level;
+    } else {
+        engine->dimen_levels[index] = 0U;
+    }
+    engine->dimens[index] = value;
+    return 0;
+}
+
+static int assign_glue(struct hstex_engine *engine, uint32_t index,
+                       struct hstex_glue value, bool requested_global,
+                       char *error, size_t error_capacity)
+{
+    if ((size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "glue register outside supported range");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (reserve_saves(engine, engine->save_count + 1U, error,
+                          error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_save_entry *save = &engine->saves[engine->save_count++];
+        memset(save, 0, sizeof(*save));
+        save->kind = HSTEX_SAVE_GLUE;
+        save->index = index;
+        save->level = engine->group_level;
+        save->previous_level = engine->glue_levels[index];
+        save->previous.glue = engine->glues[index];
+        engine->glue_levels[index] = engine->group_level;
+    } else {
+        engine->glue_levels[index] = 0U;
+    }
+    engine->glues[index] = value;
+    return 0;
+}
+
+static int assign_dimen_parameter(struct hstex_engine *engine, uint32_t index,
+                                  int32_t value, bool requested_global,
+                                  char *error, size_t error_capacity)
+{
+    if (index >= (uint32_t)HSTEX_DIMEN_PARAMETER_COUNT) {
+        return set_error(error, error_capacity,
+                         "invalid dimen-parameter assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_DIMEN_PARAMETER, index,
+                       engine->dimen_parameter_levels[index],
+                       engine->dimen_parameters[index], 0U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+        engine->dimen_parameter_levels[index] = engine->group_level;
+    } else {
+        engine->dimen_parameter_levels[index] = 0U;
+    }
+    engine->dimen_parameters[index] = value;
+    return 0;
+}
+
+static int assign_glue_parameter(struct hstex_engine *engine, uint32_t index,
+                                 struct hstex_glue value,
+                                 bool requested_global, char *error,
+                                 size_t error_capacity)
+{
+    if (index >= (uint32_t)HSTEX_GLUE_PARAMETER_COUNT) {
+        return set_error(error, error_capacity,
+                         "invalid glue-parameter assignment");
+    }
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (reserve_saves(engine, engine->save_count + 1U, error,
+                          error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_save_entry *save = &engine->saves[engine->save_count++];
+        memset(save, 0, sizeof(*save));
+        save->kind = HSTEX_SAVE_GLUE_PARAMETER;
+        save->index = index;
+        save->level = engine->group_level;
+        save->previous_level = engine->glue_parameter_levels[index];
+        save->previous.glue = engine->glue_parameters[index];
+        engine->glue_parameter_levels[index] = engine->group_level;
+    } else {
+        engine->glue_parameter_levels[index] = 0U;
+    }
+    engine->glue_parameters[index] = value;
     return 0;
 }
 
@@ -464,7 +614,15 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
     engine->count_levels =
         calloc(engine->count_capacity, sizeof(*engine->count_levels));
-    if (engine->counts == NULL || engine->count_levels == NULL) {
+    engine->dimens = calloc(engine->count_capacity, sizeof(*engine->dimens));
+    engine->dimen_levels =
+        calloc(engine->count_capacity, sizeof(*engine->dimen_levels));
+    engine->glues = calloc(engine->count_capacity, sizeof(*engine->glues));
+    engine->glue_levels =
+        calloc(engine->count_capacity, sizeof(*engine->glue_levels));
+    if (engine->counts == NULL || engine->count_levels == NULL ||
+        engine->dimens == NULL || engine->dimen_levels == NULL ||
+        engine->glues == NULL || engine->glue_levels == NULL) {
         (void)set_error(error, error_capacity,
                         "count-register allocation failed");
         hstex_engine_destroy(engine);
@@ -473,6 +631,24 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->integer_parameters[HSTEX_INTEGER_END_LINE_CHARACTER] = 13;
     engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER] = -1;
     engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER] = 92;
+    for (size_t character = 0U; character < 256U; ++character) {
+        engine->code_tables[0][character] = 1000;
+        engine->code_tables[3][character] = (int32_t)character;
+        engine->code_tables[4][character] = -1;
+    }
+    for (uint32_t character = (uint32_t)'A'; character <= (uint32_t)'Z';
+         ++character) {
+        engine->code_tables[0][character] = 999;
+        engine->code_tables[1][character] =
+            (int32_t)(character + ((uint32_t)'a' - (uint32_t)'A'));
+        engine->code_tables[2][character] = (int32_t)character;
+    }
+    for (uint32_t character = (uint32_t)'a'; character <= (uint32_t)'z';
+         ++character) {
+        engine->code_tables[1][character] = (int32_t)character;
+        engine->code_tables[2][character] =
+            (int32_t)(character - ((uint32_t)'a' - (uint32_t)'A'));
+    }
 
     time_t now = time(NULL);
     struct tm broken_down;
@@ -496,6 +672,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"let", HSTEX_COMMAND_LET},
         {"long", HSTEX_COMMAND_LONG},
         {"outer", HSTEX_COMMAND_OUTER},
+        {"protected", HSTEX_COMMAND_PROTECTED},
+        {"sfcode", HSTEX_COMMAND_SF_CODE},
+        {"lccode", HSTEX_COMMAND_LC_CODE},
+        {"uccode", HSTEX_COMMAND_UC_CODE},
+        {"mathcode", HSTEX_COMMAND_MATH_CODE},
+        {"delcode", HSTEX_COMMAND_DEL_CODE},
+        {"ifdefined", HSTEX_COMMAND_IF_DEFINED},
         {"global", HSTEX_COMMAND_GLOBAL},
         {"expandafter", HSTEX_COMMAND_EXPAND_AFTER},
         {"noexpand", HSTEX_COMMAND_NO_EXPAND},
@@ -542,8 +725,6 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"muskip", HSTEX_COMMAND_MUSKIP},
         {"toks", HSTEX_COMMAND_TOKS},
         {"box", HSTEX_COMMAND_BOX},
-        {"mathgroup", HSTEX_COMMAND_MATH_GROUP},
-        {"language", HSTEX_COMMAND_LANGUAGE},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
          ++index) {
@@ -566,6 +747,33 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"day", HSTEX_INTEGER_DAY},
         {"month", HSTEX_INTEGER_MONTH},
         {"year", HSTEX_INTEGER_YEAR},
+        {"pretolerance", HSTEX_INTEGER_PRETOLERANCE},
+        {"tolerance", HSTEX_INTEGER_TOLERANCE},
+        {"hbadness", HSTEX_INTEGER_HBADNESS},
+        {"vbadness", HSTEX_INTEGER_VBADNESS},
+        {"linepenalty", HSTEX_INTEGER_LINE_PENALTY},
+        {"hyphenpenalty", HSTEX_INTEGER_HYPHEN_PENALTY},
+        {"exhyphenpenalty", HSTEX_INTEGER_EX_HYPHEN_PENALTY},
+        {"binoppenalty", HSTEX_INTEGER_BIN_OP_PENALTY},
+        {"relpenalty", HSTEX_INTEGER_REL_PENALTY},
+        {"clubpenalty", HSTEX_INTEGER_CLUB_PENALTY},
+        {"widowpenalty", HSTEX_INTEGER_WIDOW_PENALTY},
+        {"displaywidowpenalty", HSTEX_INTEGER_DISPLAY_WIDOW_PENALTY},
+        {"brokenpenalty", HSTEX_INTEGER_BROKEN_PENALTY},
+        {"predisplaypenalty", HSTEX_INTEGER_PRE_DISPLAY_PENALTY},
+        {"doublehyphendemerits", HSTEX_INTEGER_DOUBLE_HYPHEN_DEMERITS},
+        {"finalhyphendemerits", HSTEX_INTEGER_FINAL_HYPHEN_DEMERITS},
+        {"adjdemerits", HSTEX_INTEGER_ADJ_DEMERITS},
+        {"tracinglostchars", HSTEX_INTEGER_TRACING_LOST_CHARS},
+        {"uchyph", HSTEX_INTEGER_UC_HYPH},
+        {"defaulthyphenchar", HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR},
+        {"defaultskewchar", HSTEX_INTEGER_DEFAULT_SKEW_CHAR},
+        {"delimiterfactor", HSTEX_INTEGER_DELIMITER_FACTOR},
+        {"showboxbreadth", HSTEX_INTEGER_SHOW_BOX_BREADTH},
+        {"showboxdepth", HSTEX_INTEGER_SHOW_BOX_DEPTH},
+        {"errorcontextlines", HSTEX_INTEGER_ERROR_CONTEXT_LINES},
+        {"language", HSTEX_INTEGER_LANGUAGE},
+        {"mathgroup", HSTEX_INTEGER_MATH_GROUP},
     };
     for (size_t index = 0U;
          index < sizeof(integer_primitives) / sizeof(integer_primitives[0]);
@@ -574,6 +782,75 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
                 engine, integer_primitives[index].name,
                 HSTEX_COMMAND_INTEGER_PARAMETER,
                 (int32_t)integer_primitives[index].parameter, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_dimen_parameter parameter;
+    } dimen_primitives[] = {
+        {"hfuzz", HSTEX_DIMEN_HFUZZ},
+        {"vfuzz", HSTEX_DIMEN_VFUZZ},
+        {"overfullrule", HSTEX_DIMEN_OVERFULL_RULE},
+        {"maxdepth", HSTEX_DIMEN_MAX_DEPTH},
+        {"splitmaxdepth", HSTEX_DIMEN_SPLIT_MAX_DEPTH},
+        {"boxmaxdepth", HSTEX_DIMEN_BOX_MAX_DEPTH},
+        {"delimitershortfall", HSTEX_DIMEN_DELIMITER_SHORTFALL},
+        {"nulldelimiterspace", HSTEX_DIMEN_NULL_DELIMITER_SPACE},
+        {"scriptspace", HSTEX_DIMEN_SCRIPT_SPACE},
+        {"parindent", HSTEX_DIMEN_PAR_INDENT},
+        {"hsize", HSTEX_DIMEN_HSIZE},
+        {"vsize", HSTEX_DIMEN_VSIZE},
+        {"lineskiplimit", HSTEX_DIMEN_LINE_SKIP_LIMIT},
+        {"mathsurround", HSTEX_DIMEN_MATH_SURROUND},
+        {"predisplaysize", HSTEX_DIMEN_PRE_DISPLAY_SIZE},
+        {"displaywidth", HSTEX_DIMEN_DISPLAY_WIDTH},
+        {"displayindent", HSTEX_DIMEN_DISPLAY_INDENT},
+        {"hangindent", HSTEX_DIMEN_HANG_INDENT},
+        {"hoffset", HSTEX_DIMEN_HOFFSET},
+        {"voffset", HSTEX_DIMEN_VOFFSET},
+        {"emergencystretch", HSTEX_DIMEN_EMERGENCY_STRETCH},
+    };
+    for (size_t index = 0U;
+         index < sizeof(dimen_primitives) / sizeof(dimen_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, dimen_primitives[index].name,
+                HSTEX_COMMAND_DIMEN_PARAMETER,
+                (int32_t)dimen_primitives[index].parameter, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_glue_parameter parameter;
+    } glue_primitives[] = {
+        {"parskip", HSTEX_GLUE_PAR_SKIP},
+        {"abovedisplayskip", HSTEX_GLUE_ABOVE_DISPLAY_SKIP},
+        {"abovedisplayshortskip", HSTEX_GLUE_ABOVE_DISPLAY_SHORT_SKIP},
+        {"belowdisplayskip", HSTEX_GLUE_BELOW_DISPLAY_SKIP},
+        {"belowdisplayshortskip", HSTEX_GLUE_BELOW_DISPLAY_SHORT_SKIP},
+        {"topskip", HSTEX_GLUE_TOP_SKIP},
+        {"splittopskip", HSTEX_GLUE_SPLIT_TOP_SKIP},
+        {"parfillskip", HSTEX_GLUE_PAR_FILL_SKIP},
+        {"baselineskip", HSTEX_GLUE_BASELINE_SKIP},
+        {"lineskip", HSTEX_GLUE_LINE_SKIP},
+        {"leftskip", HSTEX_GLUE_LEFT_SKIP},
+        {"rightskip", HSTEX_GLUE_RIGHT_SKIP},
+        {"tabskip", HSTEX_GLUE_TAB_SKIP},
+        {"spaceskip", HSTEX_GLUE_SPACE_SKIP},
+        {"xspaceskip", HSTEX_GLUE_XSPACE_SKIP},
+    };
+    for (size_t index = 0U;
+         index < sizeof(glue_primitives) / sizeof(glue_primitives[0]); ++index) {
+        if (register_integer_primitive(
+                engine, glue_primitives[index].name,
+                HSTEX_COMMAND_GLUE_PARAMETER,
+                (int32_t)glue_primitives[index].parameter, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -629,6 +906,10 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->conditionals);
     free(engine->counts);
     free(engine->count_levels);
+    free(engine->dimens);
+    free(engine->dimen_levels);
+    free(engine->glues);
+    free(engine->glue_levels);
     free(engine->output_directory);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
@@ -1116,6 +1397,22 @@ static int integer_from_control_sequence(
             &engine->lexical_state.catcodes, (uint8_t)character);
         return 0;
     }
+    case HSTEX_COMMAND_SF_CODE:
+    case HSTEX_COMMAND_LC_CODE:
+    case HSTEX_COMMAND_UC_CODE:
+    case HSTEX_COMMAND_MATH_CODE:
+    case HSTEX_COMMAND_DEL_CODE: {
+        int32_t character = 0;
+        int table = code_table_index(meaning->command);
+        if (table < 0 ||
+            scan_integer(engine, &character, error, error_capacity) != 0 ||
+            character < 0 || character > 255) {
+            return set_error(error, error_capacity,
+                             "code-table query outside 0..255");
+        }
+        *value = engine->code_tables[(size_t)table][(size_t)character];
+        return 0;
+    }
     case HSTEX_COMMAND_TOKEN_ALIAS:
         if (hstex_token_is_character(meaning->value.token)) {
             *value = (int32_t)hstex_token_character_code(meaning->value.token);
@@ -1234,6 +1531,426 @@ static int scan_optional_equals(struct hstex_engine *engine, char *error,
         return 0;
     }
     return push_one(engine, token, location, error, error_capacity);
+}
+
+struct decimal_factor {
+    int sign;
+    uint64_t whole;
+    uint32_t fraction;
+    uint32_t denominator;
+};
+
+static uint64_t greatest_common_divisor(uint64_t left, uint64_t right)
+{
+    while (right != 0U) {
+        uint64_t remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    return left;
+}
+
+static int dimen_from_meaning(struct hstex_engine *engine,
+                              const struct hstex_meaning *meaning,
+                              int32_t *value, char *error,
+                              size_t error_capacity)
+{
+    if (meaning->command == HSTEX_COMMAND_DIMEN_REGISTER) {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "invalid dimen-register meaning");
+        }
+        *value = engine->dimens[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_DIMEN_PARAMETER) {
+        int32_t index = meaning->value.integer;
+        if (index < 0 || index >= (int32_t)HSTEX_DIMEN_PARAMETER_COUNT) {
+            return set_error(error, error_capacity,
+                             "invalid dimen-parameter meaning");
+        }
+        *value = engine->dimen_parameters[(size_t)index];
+        return 1;
+    }
+    if (meaning->command == HSTEX_COMMAND_DIMEN) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+            (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "dimen register outside supported range");
+        }
+        *value = engine->dimens[(size_t)index];
+        return 1;
+    }
+    return 0;
+}
+
+static int scan_decimal_factor(struct hstex_engine *engine,
+                               struct decimal_factor *factor,
+                               bool *direct_dimen, int32_t *direct_value,
+                               char *error, size_t error_capacity)
+{
+    memset(factor, 0, sizeof(*factor));
+    factor->sign = 1;
+    factor->denominator = 1U;
+    *direct_dimen = false;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    for (;;) {
+        if (expanded_next_non_space(engine, &token, &location, error,
+                                    error_capacity) != HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input while scanning a dimension");
+        }
+        if (token_is_other_character(token, (uint8_t)'+')) {
+            continue;
+        }
+        if (token_is_other_character(token, (uint8_t)'-')) {
+            factor->sign = -factor->sign;
+            continue;
+        }
+        break;
+    }
+    if (hstex_token_is_control_sequence(token)) {
+        int result = dimen_from_meaning(
+            engine,
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(token)),
+            direct_value, error, error_capacity);
+        if (result < 0) {
+            return -1;
+        }
+        if (result > 0) {
+            if (factor->sign < 0) {
+                *direct_value = -*direct_value;
+            }
+            *direct_dimen = true;
+            return 0;
+        }
+    }
+
+    bool saw_digit = false;
+    bool saw_decimal = false;
+    size_t fraction_digits = 0U;
+    for (;;) {
+        if (token_is_decimal_digit(token)) {
+            saw_digit = true;
+            uint8_t digit = (uint8_t)(hstex_token_character_code(token) -
+                                      (uint8_t)'0');
+            if (!saw_decimal) {
+                if (factor->whole > (UINT64_MAX - digit) / 10U) {
+                    return set_error(error, error_capacity,
+                                     "dimension number overflow");
+                }
+                factor->whole = factor->whole * 10U + digit;
+            } else if (fraction_digits < 9U) {
+                factor->fraction = factor->fraction * 10U + digit;
+                factor->denominator *= 10U;
+                ++fraction_digits;
+            }
+        } else if (!saw_decimal && hstex_token_is_character(token) &&
+                   (hstex_token_character_code(token) == (uint8_t)'.' ||
+                    hstex_token_character_code(token) == (uint8_t)',')) {
+            saw_decimal = true;
+        } else {
+            if (!token_is_space(token) &&
+                push_one(engine, token, location, error, error_capacity) != 0) {
+                return -1;
+            }
+            break;
+        }
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+    }
+    if (!saw_digit) {
+        return set_error(error, error_capacity,
+                         "dimension requires a numeric factor");
+    }
+    return 0;
+}
+
+static int scan_unit_word(struct hstex_engine *engine, char word[16],
+                          char *error, size_t error_capacity)
+{
+    size_t count = 0U;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a dimension unit");
+    }
+    while (hstex_token_is_character(token)) {
+        uint8_t character = hstex_token_character_code(token);
+        bool is_letter = (character >= (uint8_t)'a' && character <= (uint8_t)'z') ||
+                         (character >= (uint8_t)'A' && character <= (uint8_t)'Z');
+        if (!is_letter) {
+            break;
+        }
+        if (count + 1U >= 16U) {
+            return set_error(error, error_capacity, "dimension unit too long");
+        }
+        word[count++] = (char)(character >= (uint8_t)'A' &&
+                                       character <= (uint8_t)'Z'
+                                   ? character + ((uint8_t)'a' - (uint8_t)'A')
+                                   : character);
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_EOF) {
+            token = 0U;
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+    }
+    if (token != 0U && !token_is_space(token) &&
+        push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (count == 0U) {
+        return set_error(error, error_capacity, "missing dimension unit");
+    }
+    word[count] = '\0';
+    return 0;
+}
+
+static int scaled_rational(const struct decimal_factor *factor,
+                           uint64_t unit_numerator, uint64_t unit_denominator,
+                           int32_t *value, char *error, size_t error_capacity)
+{
+    if (factor->whole >
+        (UINT64_MAX - factor->fraction) / factor->denominator) {
+        return set_error(error, error_capacity, "dimension factor overflow");
+    }
+    uint64_t numerator =
+        factor->whole * factor->denominator + factor->fraction;
+    uint64_t denominator = factor->denominator;
+    uint64_t reduction = greatest_common_divisor(numerator, unit_denominator);
+    if (reduction != 0U) {
+        numerator /= reduction;
+        unit_denominator /= reduction;
+    }
+    reduction = greatest_common_divisor(unit_numerator, denominator);
+    if (reduction != 0U) {
+        unit_numerator /= reduction;
+        denominator /= reduction;
+    }
+    if (unit_numerator != 0U && numerator > UINT64_MAX / unit_numerator) {
+        return set_error(error, error_capacity, "scaled dimension overflow");
+    }
+    numerator *= unit_numerator;
+    if (unit_denominator != 0U && denominator > UINT64_MAX / unit_denominator) {
+        return set_error(error, error_capacity, "dimension divisor overflow");
+    }
+    denominator *= unit_denominator;
+    uint64_t rounded = (numerator + denominator / 2U) / denominator;
+    if (rounded > UINT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "dimension exceeds TeX's maximum");
+    }
+    int64_t signed_value = factor->sign < 0 ? -(int64_t)rounded
+                                            : (int64_t)rounded;
+    *value = (int32_t)signed_value;
+    return 0;
+}
+
+static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
+                                    int32_t *value, uint8_t *order, char *error,
+                                    size_t error_capacity)
+{
+    struct decimal_factor factor;
+    bool direct_dimen = false;
+    int32_t direct_value = 0;
+    if (scan_decimal_factor(engine, &factor, &direct_dimen, &direct_value, error,
+                            error_capacity) != 0) {
+        return -1;
+    }
+    if (direct_dimen) {
+        *value = direct_value;
+        *order = 0U;
+        return 0;
+    }
+    hstex_token possible_unit = 0U;
+    struct hstex_source_location possible_unit_location;
+    if (expanded_next_non_space(engine, &possible_unit,
+                                &possible_unit_location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a dimension unit");
+    }
+    if (hstex_token_is_control_sequence(possible_unit)) {
+        int32_t internal_unit = 0;
+        int internal_result = dimen_from_meaning(
+            engine,
+            hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(possible_unit)),
+            &internal_unit, error, error_capacity);
+        if (internal_result < 0) {
+            return -1;
+        }
+        if (internal_result > 0) {
+            uint64_t magnitude = internal_unit < 0
+                                     ? (uint64_t)(-(int64_t)internal_unit)
+                                     : (uint64_t)internal_unit;
+            if (internal_unit < 0) {
+                factor.sign = -factor.sign;
+            }
+            *order = 0U;
+            return scaled_rational(&factor, magnitude, 1U, value, error,
+                                   error_capacity);
+        }
+    }
+    if (push_one(engine, possible_unit, possible_unit_location, error,
+                 error_capacity) != 0) {
+        return -1;
+    }
+    char unit[16];
+    if (scan_unit_word(engine, unit, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint64_t numerator = 0U;
+    uint64_t denominator = 1U;
+    *order = 0U;
+    if (strcmp(unit, "pt") == 0 || strcmp(unit, "truept") == 0) {
+        numerator = UINT64_C(65536);
+    } else if (strcmp(unit, "sp") == 0) {
+        numerator = 1U;
+    } else if (strcmp(unit, "pc") == 0) {
+        numerator = UINT64_C(12) * UINT64_C(65536);
+    } else if (strcmp(unit, "in") == 0) {
+        numerator = UINT64_C(7227) * UINT64_C(65536);
+        denominator = 100U;
+    } else if (strcmp(unit, "bp") == 0) {
+        numerator = UINT64_C(7227) * UINT64_C(65536);
+        denominator = 7200U;
+    } else if (strcmp(unit, "cm") == 0) {
+        numerator = UINT64_C(7227) * UINT64_C(65536);
+        denominator = 254U;
+    } else if (strcmp(unit, "mm") == 0) {
+        numerator = UINT64_C(7227) * UINT64_C(65536);
+        denominator = 2540U;
+    } else if (strcmp(unit, "dd") == 0) {
+        numerator = UINT64_C(1238) * UINT64_C(65536);
+        denominator = 1157U;
+    } else if (strcmp(unit, "cc") == 0) {
+        numerator = UINT64_C(12) * UINT64_C(1238) * UINT64_C(65536);
+        denominator = 1157U;
+    } else if (allow_fil && strcmp(unit, "fil") == 0) {
+        numerator = UINT64_C(65536);
+        *order = 1U;
+    } else if (allow_fil && strcmp(unit, "fill") == 0) {
+        numerator = UINT64_C(65536);
+        *order = 2U;
+    } else if (allow_fil && strcmp(unit, "filll") == 0) {
+        numerator = UINT64_C(65536);
+        *order = 3U;
+    } else {
+        return set_error(error, error_capacity,
+                         "unsupported dimension unit: %s", unit);
+    }
+    return scaled_rational(&factor, numerator, denominator, value, error,
+                           error_capacity);
+}
+
+static int scan_dimension(struct hstex_engine *engine, int32_t *value,
+                          char *error, size_t error_capacity)
+{
+    uint8_t order = 0U;
+    return scan_dimension_component(engine, false, value, &order, error,
+                                    error_capacity);
+}
+
+static int try_keyword(struct hstex_engine *engine, const char *keyword,
+                       bool *matched, char *error, size_t error_capacity)
+{
+    size_t length = strlen(keyword);
+    if (length > 15U) {
+        return set_error(error, error_capacity, "internal keyword too long");
+    }
+    hstex_token tokens[16];
+    struct hstex_source_location locations[16];
+    size_t consumed = 0U;
+    for (size_t index = 0U; index < length; ++index) {
+        enum hstex_engine_result result =
+            index == 0U
+                ? expanded_next_non_space(engine, &tokens[index],
+                                          &locations[index], error,
+                                          error_capacity)
+                : hstex_engine_next_expanded(engine, &tokens[index],
+                                             &locations[index], error,
+                                             error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN) {
+            if (result == HSTEX_ENGINE_ERROR) {
+                return -1;
+            }
+            for (size_t restore = consumed; restore > 0U; --restore) {
+                if (push_one(engine, tokens[restore - 1U],
+                             locations[restore - 1U], error,
+                             error_capacity) != 0) {
+                    return -1;
+                }
+            }
+            *matched = false;
+            return 0;
+        }
+        ++consumed;
+        uint8_t character = hstex_token_is_character(tokens[index])
+                                ? hstex_token_character_code(tokens[index])
+                                : 0U;
+        if (character >= (uint8_t)'A' && character <= (uint8_t)'Z') {
+            character = (uint8_t)(character + ((uint8_t)'a' - (uint8_t)'A'));
+        }
+        if (character != (uint8_t)keyword[index]) {
+            for (size_t restore = consumed; restore > 0U; --restore) {
+                if (push_one(engine, tokens[restore - 1U],
+                             locations[restore - 1U], error,
+                             error_capacity) != 0) {
+                    return -1;
+                }
+            }
+            *matched = false;
+            return 0;
+        }
+    }
+    *matched = true;
+    return 0;
+}
+
+static int scan_glue(struct hstex_engine *engine, struct hstex_glue *glue,
+                     char *error, size_t error_capacity)
+{
+    memset(glue, 0, sizeof(*glue));
+    if (scan_dimension(engine, &glue->width, error, error_capacity) != 0) {
+        return -1;
+    }
+    bool matched = false;
+    if (try_keyword(engine, "plus", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched &&
+        scan_dimension_component(engine, true, &glue->stretch,
+                                 &glue->stretch_order, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    if (try_keyword(engine, "minus", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched &&
+        scan_dimension_component(engine, true, &glue->shrink,
+                                 &glue->shrink_order, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static int push_integer_expansion(struct hstex_engine *engine, int32_t value,
@@ -1521,6 +2238,8 @@ static int scan_if_char(struct hstex_engine *engine, char *error,
                         size_t error_capacity);
 static int scan_if_eof(struct hstex_engine *engine, char *error,
                        size_t error_capacity);
+static int scan_if_defined(struct hstex_engine *engine, char *error,
+                           size_t error_capacity);
 static int start_conditional(struct hstex_engine *engine, bool condition,
                              char *error, size_t error_capacity);
 static int skip_conditional(struct hstex_engine *engine, bool stop_at_else,
@@ -1591,9 +2310,14 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
             (size_t)meaning->value.macro_identifier > engine->macro_count) {
             return set_error(error, error_capacity, "invalid macro meaning");
         }
-        return instantiate_macro(
-            engine, &engine->macros[meaning->value.macro_identifier - 1U],
-            location, error, error_capacity);
+        const struct hstex_macro *macro =
+            &engine->macros[meaning->value.macro_identifier - 1U];
+        if (engine->inhibit_protected_expansion &&
+            (macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U) {
+            return push_one(engine, token, location, error, error_capacity);
+        }
+        return instantiate_macro(engine, macro, location, error,
+                                 error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_EXPAND_AFTER) {
         return expand_after(engine, location, error, error_capacity);
@@ -1622,6 +2346,9 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     }
     if (meaning->command == HSTEX_COMMAND_IF_EOF) {
         return scan_if_eof(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_DEFINED) {
+        return scan_if_defined(engine, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_IF_TRUE ||
         meaning->command == HSTEX_COMMAND_IF_FALSE) {
@@ -1668,11 +2395,17 @@ enum hstex_engine_result hstex_engine_next_expanded(
             engine, hstex_token_control_sequence_id(*token));
         if (meaning->command == HSTEX_COMMAND_MACRO) {
             if (meaning->value.macro_identifier == 0U ||
-                (size_t)meaning->value.macro_identifier > engine->macro_count ||
-                instantiate_macro(
-                    engine,
-                    &engine->macros[meaning->value.macro_identifier - 1U],
-                    *location, error, error_capacity) != 0) {
+                (size_t)meaning->value.macro_identifier > engine->macro_count) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            const struct hstex_macro *macro =
+                &engine->macros[meaning->value.macro_identifier - 1U];
+            if (engine->inhibit_protected_expansion &&
+                (macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U) {
+                return HSTEX_ENGINE_TOKEN;
+            }
+            if (instantiate_macro(engine, macro, *location, error,
+                                  error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -1737,6 +2470,12 @@ enum hstex_engine_result hstex_engine_next_expanded(
         }
         if (meaning->command == HSTEX_COMMAND_IF_EOF) {
             if (scan_if_eof(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_DEFINED) {
+            if (scan_if_defined(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -1819,11 +2558,16 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     while (depth != 0U) {
         hstex_token current = 0U;
         struct hstex_source_location location;
+        bool previous_inhibition = engine->inhibit_protected_expansion;
+        if (expanded_replacement) {
+            engine->inhibit_protected_expansion = true;
+        }
         enum hstex_engine_result result =
             expanded_replacement
                 ? hstex_engine_next_expanded(engine, &current, &location, error,
                                              error_capacity)
                 : raw_next(engine, &current, &location, error, error_capacity);
+        engine->inhibit_protected_expansion = previous_inhibition;
         if (result != HSTEX_ENGINE_TOKEN) {
             vector_destroy(&parameter_text);
             vector_destroy(&replacement);
@@ -2092,6 +2836,33 @@ static int scan_catcode_assignment(struct hstex_engine *engine, char *error,
                           requested_global, error, error_capacity);
 }
 
+static int scan_code_assignment(struct hstex_engine *engine,
+                                enum hstex_command command, char *error,
+                                size_t error_capacity)
+{
+    int table = code_table_index(command);
+    int32_t character = 0;
+    int32_t value = 0;
+    if (table < 0 || scan_integer(engine, &character, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0 ||
+        character < 0 || character > 255) {
+        return set_error(error, error_capacity,
+                         "invalid code-table assignment");
+    }
+    if ((command == HSTEX_COMMAND_LC_CODE ||
+         command == HSTEX_COMMAND_UC_CODE) &&
+        (value < 0 || value > 255)) {
+        return set_error(error, error_capacity,
+                         "case code outside 0..255");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_code(engine, (uint32_t)table, (uint32_t)character, value,
+                       requested_global, error, error_capacity);
+}
+
 static int scan_count_assignment(struct hstex_engine *engine, int32_t index,
                                  char *error, size_t error_capacity)
 {
@@ -2135,6 +2906,94 @@ static int scan_integer_parameter_assignment(
     engine->pending_macro_flags = 0U;
     return assign_integer_parameter(engine, (uint32_t)parameter, value,
                                     requested_global, error, error_capacity);
+}
+
+static int scan_dimen_assignment(struct hstex_engine *engine, int32_t index,
+                                 char *error, size_t error_capacity)
+{
+    int32_t value = 0;
+    if (index < 0 || (size_t)index >= engine->count_capacity ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_dimension(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid dimen assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_dimen(engine, (uint32_t)index, value, requested_global, error,
+                        error_capacity);
+}
+
+static int scan_dimen_family_assignment(struct hstex_engine *engine,
+                                        char *error, size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    return scan_dimen_assignment(engine, index, error, error_capacity);
+}
+
+static int scan_glue_assignment(struct hstex_engine *engine, int32_t index,
+                                char *error, size_t error_capacity)
+{
+    struct hstex_glue value;
+    if (index < 0 || (size_t)index >= engine->count_capacity ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_glue(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid glue assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_glue(engine, (uint32_t)index, value, requested_global, error,
+                       error_capacity);
+}
+
+static int scan_glue_family_assignment(struct hstex_engine *engine, char *error,
+                                       size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    return scan_glue_assignment(engine, index, error, error_capacity);
+}
+
+static int scan_dimen_parameter_assignment(struct hstex_engine *engine,
+                                           int32_t parameter, char *error,
+                                           size_t error_capacity)
+{
+    int32_t value = 0;
+    if (parameter < 0 || parameter >= (int32_t)HSTEX_DIMEN_PARAMETER_COUNT ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_dimension(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid dimen-parameter assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_dimen_parameter(engine, (uint32_t)parameter, value,
+                                  requested_global, error, error_capacity);
+}
+
+static int scan_glue_parameter_assignment(struct hstex_engine *engine,
+                                          int32_t parameter, char *error,
+                                          size_t error_capacity)
+{
+    struct hstex_glue value;
+    if (parameter < 0 || parameter >= (int32_t)HSTEX_GLUE_PARAMETER_COUNT ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_glue(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid glue-parameter assignment");
+    }
+    bool requested_global = engine->pending_global;
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    return assign_glue_parameter(engine, (uint32_t)parameter, value,
+                                 requested_global, error, error_capacity);
 }
 
 enum integer_variable_kind {
@@ -2578,6 +3437,12 @@ static int expand_meaning(struct hstex_engine *engine,
                 free(bytes);
                 return -1;
             }
+            if ((macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U &&
+                append_text_bytes(&bytes, &count, &capacity, "protected ",
+                                  error, error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
             if (append_text_bytes(&bytes, &count, &capacity, "macro:", error,
                                   error_capacity) != 0) {
                 free(bytes);
@@ -2671,8 +3536,11 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
     size_t capacity = 0U;
     for (;;) {
         hstex_token token = 0U;
+        bool previous_inhibition = engine->inhibit_protected_expansion;
+        engine->inhibit_protected_expansion = true;
         enum hstex_engine_result expansion_result = hstex_engine_next_expanded(
             engine, &token, &location, error, error_capacity);
+        engine->inhibit_protected_expansion = previous_inhibition;
         if (expansion_result != HSTEX_ENGINE_TOKEN) {
             free(result);
             return set_error(error, error_capacity,
@@ -2920,13 +3788,30 @@ static int scan_if_eof(struct hstex_engine *engine, char *error,
     return start_conditional(engine, at_end, error, error_capacity);
 }
 
+static int scan_if_defined(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location location;
+    if (raw_next(engine, &subject, &location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input in ifdefined");
+    }
+    bool defined = hstex_token_is_control_sequence(subject) &&
+                   hstex_engine_meaning(
+                       engine, hstex_token_control_sequence_id(subject))
+                           ->command != HSTEX_COMMAND_UNDEFINED;
+    return start_conditional(engine, defined, error, error_capacity);
+}
+
 static bool command_starts_conditional(enum hstex_command command)
 {
     return command == HSTEX_COMMAND_IF_NUM || command == HSTEX_COMMAND_IF_X ||
            command == HSTEX_COMMAND_IF_CHAR ||
            command == HSTEX_COMMAND_IF_TRUE ||
            command == HSTEX_COMMAND_IF_FALSE ||
-           command == HSTEX_COMMAND_IF_EOF;
+           command == HSTEX_COMMAND_IF_EOF ||
+           command == HSTEX_COMMAND_IF_DEFINED;
 }
 
 static bool meanings_equal(const struct hstex_engine *engine,
@@ -2972,6 +3857,8 @@ static bool meanings_equal(const struct hstex_engine *engine,
     case HSTEX_COMMAND_DIMEN_REGISTER:
     case HSTEX_COMMAND_SKIP_REGISTER:
     case HSTEX_COMMAND_TOKS_REGISTER:
+    case HSTEX_COMMAND_DIMEN_PARAMETER:
+    case HSTEX_COMMAND_GLUE_PARAMETER:
         return left->value.integer == right->value.integer;
     default:
         return true;
@@ -3193,6 +4080,41 @@ static int end_group(struct hstex_engine *engine, char *error,
                 }
             }
             break;
+        case HSTEX_SAVE_DIMEN:
+            if (engine->dimen_levels[save.index] == leaving_level) {
+                engine->dimens[save.index] = save.previous.integer;
+                engine->dimen_levels[save.index] = save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_GLUE:
+            if (engine->glue_levels[save.index] == leaving_level) {
+                engine->glues[save.index] = save.previous.glue;
+                engine->glue_levels[save.index] = save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_DIMEN_PARAMETER:
+            if (engine->dimen_parameter_levels[save.index] == leaving_level) {
+                engine->dimen_parameters[save.index] = save.previous.integer;
+                engine->dimen_parameter_levels[save.index] =
+                    save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_GLUE_PARAMETER:
+            if (engine->glue_parameter_levels[save.index] == leaving_level) {
+                engine->glue_parameters[save.index] = save.previous.glue;
+                engine->glue_parameter_levels[save.index] =
+                    save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_CODE: {
+            uint32_t table = save.index / 256U;
+            uint32_t character = save.index % 256U;
+            if (engine->code_levels[table][character] == leaving_level) {
+                engine->code_tables[table][character] = save.previous.integer;
+                engine->code_levels[table][character] = save.previous_level;
+            }
+            break;
+        }
         }
     }
     --engine->group_level;
@@ -3296,6 +4218,9 @@ handle_token:
         case HSTEX_COMMAND_OUTER:
             engine->pending_macro_flags |= (uint8_t)HSTEX_MACRO_OUTER;
             continue;
+        case HSTEX_COMMAND_PROTECTED:
+            engine->pending_macro_flags |= (uint8_t)HSTEX_MACRO_PROTECTED;
+            continue;
         case HSTEX_COMMAND_GLOBAL:
             engine->pending_global = true;
             continue;
@@ -3311,6 +4236,16 @@ handle_token:
             continue;
         case HSTEX_COMMAND_CAT_CODE:
             if (scan_catcode_assignment(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SF_CODE:
+        case HSTEX_COMMAND_LC_CODE:
+        case HSTEX_COMMAND_UC_CODE:
+        case HSTEX_COMMAND_MATH_CODE:
+        case HSTEX_COMMAND_DEL_CODE:
+            if (scan_code_assignment(engine, meaning->command, error,
+                                     error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -3361,6 +4296,43 @@ handle_token:
             continue;
         case HSTEX_COMMAND_INTEGER_PARAMETER:
             if (scan_integer_parameter_assignment(
+                    engine, meaning->value.integer, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DIMEN_REGISTER:
+            if (scan_dimen_assignment(engine, meaning->value.integer, error,
+                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DIMEN:
+            if (scan_dimen_family_assignment(engine, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SKIP_REGISTER:
+            if (scan_glue_assignment(engine, meaning->value.integer, error,
+                                     error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SKIP:
+        case HSTEX_COMMAND_MUSKIP:
+            if (scan_glue_family_assignment(engine, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DIMEN_PARAMETER:
+            if (scan_dimen_parameter_assignment(
+                    engine, meaning->value.integer, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_GLUE_PARAMETER:
+            if (scan_glue_parameter_assignment(
                     engine, meaning->value.integer, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -3427,6 +4399,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_IF_EOF:
             if (scan_if_eof(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_DEFINED:
+            if (scan_if_defined(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -3503,12 +4480,7 @@ handle_token:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "inputlineno used outside an integer context");
-        case HSTEX_COMMAND_DIMEN_REGISTER:
-        case HSTEX_COMMAND_SKIP_REGISTER:
         case HSTEX_COMMAND_TOKS_REGISTER:
-        case HSTEX_COMMAND_DIMEN:
-        case HSTEX_COMMAND_SKIP:
-        case HSTEX_COMMAND_MUSKIP:
         case HSTEX_COMMAND_TOKS:
         case HSTEX_COMMAND_BOX:
         case HSTEX_COMMAND_MATH_GROUP:

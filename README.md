@@ -23,8 +23,10 @@ its first included configuration file and date calculation, including scoped
 integer arithmetic, serialization, expanded definitions, and conditionals
 inside expansions. The bootstrap also has deterministic file-stream I/O, line
 reads, EOF conditionals, messages, printable `string`/`meaning` expansion, and
-the initial register allocators; scaled dimensions and typesetting remain under
-construction.
+the initial register allocators. Scaled dimensions, finite and infinite-order
+glue, dimension/glue parameters, character code tables, and protected macros
+are implemented with scoped restoration; token-list state and typesetting
+remain under construction.
 
 ## Build
 
