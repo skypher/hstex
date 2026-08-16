@@ -14,7 +14,10 @@ The repository contains the clean-room contract, benchmark snapshot and oracle
 runner, plus the first engine substrate: regular-file loading, packed tokens,
 mutable catcodes, stable control-sequence interning, a line-aware TeX mouth,
 nested file/token sources, and a runtime-dispatched scalar/AVX2 lexical-boundary
-scanner. It does not yet expand or execute TeX tokens.
+scanner. The expansion core supports ordinary and delimited macros, local and
+global definitions, `let`, definition prefixes, `expandafter`, and `noexpand`.
+It does not yet execute the assignment and typesetting primitives required to
+load LaTeX.
 
 ## Build
 

@@ -6,6 +6,7 @@
 #include "hstex/mouth.h"
 #include "hstex/token.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 enum hstex_source_frame_kind {
@@ -21,6 +22,7 @@ struct hstex_file_source {
 
 struct hstex_token_source {
     const hstex_token *tokens;
+    hstex_token *owned_allocation;
     size_t count;
     size_t cursor;
     struct hstex_source_location location;
@@ -50,6 +52,10 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
                              const hstex_token *tokens, size_t count,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity);
+int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
+                                   hstex_token *tokens, size_t count,
+                                   struct hstex_source_location location,
+                                   char *error, size_t error_capacity);
 enum hstex_mouth_result hstex_source_next(
     struct hstex_source_stack *stack, hstex_token *token,
     struct hstex_source_location *location, char *error,

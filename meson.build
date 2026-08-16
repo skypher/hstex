@@ -36,6 +36,7 @@ core = static_library(
   'hstex_core',
   files(
     'src/catcode.c',
+    'src/engine.c',
     'src/input.c',
     'src/lex.c',
     'src/mouth.c',
@@ -103,8 +104,17 @@ source_test = executable(
 )
 test('source', source_test)
 
+engine_test = executable(
+  'test_engine',
+  'tests/test_engine.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('engine', engine_test)
+
 install_headers(
   'include/hstex/catcode.h',
+  'include/hstex/engine.h',
   'include/hstex/input.h',
   'include/hstex/lex.h',
   'include/hstex/mouth.h',

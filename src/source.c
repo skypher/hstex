@@ -50,6 +50,8 @@ static void pop_frame(struct hstex_source_stack *stack)
         hstex_mouth_destroy(&frame->value.file.mouth);
         hstex_input_close(&frame->value.file.input);
         free(frame->value.file.path);
+    } else {
+        free(frame->value.token_list.owned_allocation);
     }
     --stack->count;
 }
@@ -120,6 +122,34 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     frame->value.token_list.tokens = tokens;
+    frame->value.token_list.count = count;
+    frame->value.token_list.location = location;
+    return 0;
+}
+
+int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
+                                   hstex_token *tokens, size_t count,
+                                   struct hstex_source_location location,
+                                   char *error, size_t error_capacity)
+{
+    if (stack == NULL || (count != 0U && tokens == NULL)) {
+        free(tokens);
+        return set_error(error, error_capacity,
+                         "invalid owned token-source request");
+    }
+    if (count == 0U) {
+        free(tokens);
+        return 0;
+    }
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        free(tokens);
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    memset(frame, 0, sizeof(*frame));
+    frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+    frame->value.token_list.tokens = tokens;
+    frame->value.token_list.owned_allocation = tokens;
     frame->value.token_list.count = count;
     frame->value.token_list.location = location;
     return 0;

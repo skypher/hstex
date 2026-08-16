@@ -64,6 +64,14 @@ are requested, and implements TeX's new-line/middle-line/skip-spaces automaton.
 It interns regular and active control sequences into separate namespaces and
 feeds the same source stack used by future macro replacement lists.
 
+Macro bodies are immutable token arrays addressed by integer identifiers.
+Control-sequence meanings live in a growable indexed table, and replacement
+lists are instantiated into owned input frames. The expansion loop collects
+arguments without expanding them, supports literal and delimited parameter
+texts, strips one enclosing argument group, and substitutes parameter token
+arrays without linked lists. A compact save stack restores local meanings at
+group exit; global assignments supersede pending local restores by level.
+
 The SIMD scanner recognizes the default lexical-boundary bytes and selects AVX2
 at runtime on supported x86-64 CPUs. It is a batching substrate for the mouth;
 the semantic path remains authoritative at mutable boundaries. Scalar and
