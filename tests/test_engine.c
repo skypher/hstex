@@ -516,6 +516,67 @@ static int test_file_streams(void)
     return status;
 }
 
+/* Units are keywords, not maximal letter runs, and every conversion below is
+   recorded in docs/DECISIONS.md under dimension-unit-arithmetic. */
+static int test_dimension_units(void)
+{
+    const char source[] =
+        "\\dimen0=1ptpt "
+        "\\dimen1=1cm \\dimen2=1mm \\dimen3=1in \\dimen4=1bp "
+        "\\dimen5=1dd \\dimen6=1cc \\dimen7=1pc "
+        "\\dimen8=0.3cm \\dimen9=1.7mm \\dimen10=2.54cm "
+        "\\dimen11=1.5sp \\dimen12=0.5sp \\dimen13=3.14159dd "
+        "\\dimen20=1864679sp "
+        "\\dimen21=0.3\\dimen20 \\dimen22=0.1\\dimen20 "
+        "\\dimen23=2.54\\dimen20 \\dimen24=0.99999\\dimen20 "
+        "\\dimen25=-0.3\\dimen20 "
+        "\\dimen26=1truept \\dimen27=1PT "
+        "\\skip1=1pt plus2filll minus3fil "
+        "\\skip2=1pt plus2filx%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    const struct hstex_glue orders = engine.glues[1];
+    const struct hstex_glue truncated = engine.glues[2];
+    int status =
+        result != HSTEX_ENGINE_EOF || engine.dimens[0] != 65536 ||
+        engine.dimens[1] != 1864679 || engine.dimens[2] != 186467 ||
+        engine.dimens[3] != 4736286 || engine.dimens[4] != 65781 ||
+        engine.dimens[5] != 70124 || engine.dimens[6] != 841489 ||
+        engine.dimens[7] != 786432 || engine.dimens[8] != 559409 ||
+        engine.dimens[9] != 316994 || engine.dimens[10] != 4736274 ||
+        engine.dimens[11] != 1 || engine.dimens[12] != 0 ||
+        engine.dimens[13] != 220300 || engine.dimens[21] != 559409 ||
+        engine.dimens[22] != 186479 || engine.dimens[23] != 4736272 ||
+        engine.dimens[24] != 1864650 || engine.dimens[25] != -559409 ||
+        engine.dimens[26] != 65536 || engine.dimens[27] != 65536 ||
+        orders.width != 65536 || orders.stretch != 131072 ||
+        orders.stretch_order != 3U || orders.shrink != 196608 ||
+        orders.shrink_order != 1U || truncated.width != 65536 ||
+        truncated.stretch != 131072 || truncated.stretch_order != 1U ||
+        truncated.shrink != 0;
+    if (status != 0) {
+        (void)fprintf(stderr, "dimension unit test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 static int test_dimensions_and_glue(void)
 {
     const char source[] =
@@ -652,10 +713,10 @@ static int test_empty_hboxes(void)
                  engine.boxes[7].kind != HSTEX_BOX_HLIST ||
                  engine.boxes[7].width != 3 ||
                  rule_box.kind != HSTEX_BOX_HLIST || rule_box.width != 0 ||
-                 rule_box.height != 623903 || rule_box.depth != 267387 ||
+                 rule_box.height != 623900 || rule_box.depth != 267389 ||
                  rule == NULL || rule->kind != HSTEX_NODE_RULE ||
-                 rule->width != 0 || rule->height != 623903 ||
-                 rule->depth != 267387;
+                 rule->width != 0 || rule->height != 623900 ||
+                 rule->depth != 267389;
     if (status != 0) {
         (void)fprintf(stderr, "empty hbox test failed: %s\n", error);
     }
@@ -1155,7 +1216,10 @@ int main(void)
                        "undefined control sequence: \\missing") != 0 ||
         expect_failure("\\expanded{\\number}%", "missing integer") != 0 ||
         expect_failure("\\baselineskip=1\\relax%",
-                       "missing dimension unit") != 0 ||
+                       "illegal unit of measure") != 0 ||
+        expect_failure("\\skip1=1pt plus2fillll%",
+                       "infinite glue order beyond filll") != 0 ||
+        run_snippet("\\dimen0=1ptpt\\dimen1=1inch%", "ptch") != 0 ||
         expect_failure("\\def\\why{expanded}"
                        "\\errmessage{ERRMESSAGE: \\why}%",
                        "ERRMESSAGE: expanded") != 0 ||
@@ -1165,6 +1229,7 @@ int main(void)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        test_dimension_units() != 0 ||
         test_dimensions_and_glue() != 0 || test_token_lists() != 0 ||
         test_empty_hboxes() != 0 || test_vertical_lists() != 0 ||
         test_pdf_file_size() != 0) {

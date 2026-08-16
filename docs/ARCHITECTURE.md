@@ -81,7 +81,10 @@ balanced.
 
 Dimensions are signed scaled-point integers. Their scanner uses checked integer
 fixed-point arithmetic for decimal factors, physical units, internal dimension
-values, and TeX's bounded range. Glue stores width, stretch, shrink, and the two
+values, and TeX's bounded range. Units are matched as backtracking keywords
+rather than as letter runs, and a decimal factor is quantized to scaled points
+before any unit conversion; `docs/DECISIONS.md` records the observations behind
+both rules. Glue stores width, stretch, shrink, and the two
 infinite-order tags inline; registers and named dimension/glue parameters share
 the meaning and save-stack machinery used by integer state. Character code
 tables are flat 256-entry arrays with level tags, keeping assignments and

@@ -3119,27 +3119,22 @@ static int scan_optional_equals(struct hstex_engine *engine, char *error,
     return push_one(engine, token, location, error, error_capacity);
 }
 
+/* A decimal factor keeps the fraction as an exact rational so that a scanned
+   dimension can be quantized to scaled points before any unit conversion. */
+#define HSTEX_DECIMAL_FRACTION_DIGITS 17U
+#define HSTEX_MAX_DIMEN INT32_C(1073741823)
+
 struct decimal_factor {
     int sign;
     uint64_t whole;
-    uint32_t fraction;
-    uint32_t denominator;
+    uint64_t fraction;
+    uint64_t denominator;
 };
 
 static int glue_from_meaning(struct hstex_engine *engine,
                              const struct hstex_meaning *meaning,
                              struct hstex_glue *value, char *error,
                              size_t error_capacity);
-
-static uint64_t greatest_common_divisor(uint64_t left, uint64_t right)
-{
-    while (right != 0U) {
-        uint64_t remainder = left % right;
-        left = right;
-        right = remainder;
-    }
-    return left;
-}
 
 static int dimen_from_meaning(struct hstex_engine *engine,
                               const struct hstex_meaning *meaning,
@@ -3308,7 +3303,7 @@ static int scan_decimal_factor(struct hstex_engine *engine,
                                      "dimension number overflow");
                 }
                 factor->whole = factor->whole * 10U + digit;
-            } else if (fraction_digits < 9U) {
+            } else if (fraction_digits < HSTEX_DECIMAL_FRACTION_DIGITS) {
                 factor->fraction = factor->fraction * 10U + digit;
                 factor->denominator *= 10U;
                 ++fraction_digits;
@@ -3340,123 +3335,158 @@ static int scan_decimal_factor(struct hstex_engine *engine,
     return 0;
 }
 
-static int scan_unit_word(struct hstex_engine *engine, char word[16],
-                          char *error, size_t error_capacity)
+static int try_keyword(struct hstex_engine *engine, const char *keyword,
+                       bool *matched, char *error, size_t error_capacity);
+
+/* A unit of measure ends with one optional space. */
+static int skip_optional_space(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
 {
-    size_t count = 0U;
     hstex_token token = 0U;
     struct hstex_source_location location;
-    if (expanded_next_non_space(engine, &token, &location, error,
-                                error_capacity) != HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity,
-                         "end of input while scanning a dimension unit");
+    enum hstex_engine_result result = hstex_engine_next_expanded(
+        engine, &token, &location, error, error_capacity);
+    if (result == HSTEX_ENGINE_EOF) {
+        return 0;
     }
-    while (hstex_token_is_character(token)) {
-        uint8_t character = hstex_token_character_code(token);
-        bool is_letter = (character >= (uint8_t)'a' && character <= (uint8_t)'z') ||
-                         (character >= (uint8_t)'A' && character <= (uint8_t)'Z');
-        if (!is_letter) {
-            break;
-        }
-        if (count + 1U >= 16U) {
-            return set_error(error, error_capacity, "dimension unit too long");
-        }
-        word[count++] = (char)(character >= (uint8_t)'A' &&
-                                       character <= (uint8_t)'Z'
-                                   ? character + ((uint8_t)'a' - (uint8_t)'A')
-                                   : character);
-        enum hstex_engine_result result = hstex_engine_next_expanded(
-            engine, &token, &location, error, error_capacity);
-        if (result == HSTEX_ENGINE_EOF) {
-            token = 0U;
-            break;
-        }
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-    }
-    if (token != 0U && !token_is_effective_space(engine, token) &&
-        push_one(engine, token, location, error, error_capacity) != 0) {
+    if (result == HSTEX_ENGINE_ERROR) {
         return -1;
     }
-    if (count == 0U) {
-        return set_error(error, error_capacity, "missing dimension unit");
+    if (token_is_effective_space(engine, token)) {
+        return 0;
     }
-    word[count] = '\0';
-    return 0;
+    return push_one(engine, token, location, error, error_capacity);
 }
 
-static int scaled_rational(const struct decimal_factor *factor,
-                           uint64_t unit_numerator, uint64_t unit_denominator,
-                           int32_t *value, char *error, size_t error_capacity)
+/* Round the decimal fraction to scaled points, half away from zero. Binary
+   long division keeps seventeen decimal digits inside 64 bits: the running
+   remainder stays below the denominator, so doubling it cannot overflow. */
+static uint64_t scaled_fraction(const struct decimal_factor *factor)
 {
-    if (factor->whole >
-        (UINT64_MAX - factor->fraction) / factor->denominator) {
-        return set_error(error, error_capacity, "dimension factor overflow");
-    }
-    uint64_t numerator =
-        factor->whole * factor->denominator + factor->fraction;
     uint64_t denominator = factor->denominator;
-    uint64_t reduction = greatest_common_divisor(numerator, unit_denominator);
-    if (reduction != 0U) {
-        numerator /= reduction;
-        unit_denominator /= reduction;
+    if (denominator == 0U) {
+        return 0U;
     }
-    reduction = greatest_common_divisor(unit_numerator, denominator);
-    if (reduction != 0U) {
-        unit_numerator /= reduction;
-        denominator /= reduction;
+    uint64_t remainder = factor->fraction;
+    uint64_t quotient = 0U;
+    for (unsigned int step = 0U; step < 16U; ++step) {
+        remainder *= 2U;
+        quotient *= 2U;
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            quotient += 1U;
+        }
     }
-    if (unit_numerator != 0U && numerator > UINT64_MAX / unit_numerator) {
-        return set_error(error, error_capacity, "scaled dimension overflow");
+    if (remainder * 2U >= denominator) {
+        quotient += 1U;
     }
-    numerator *= unit_numerator;
-    if (unit_denominator != 0U && denominator > UINT64_MAX / unit_denominator) {
-        return set_error(error, error_capacity, "dimension divisor overflow");
-    }
-    denominator *= unit_denominator;
-    uint64_t rounded = (numerator + denominator / 2U) / denominator;
-    if (rounded > UINT64_C(1073741823)) {
+    return quotient;
+}
+
+static int finish_scaled(uint64_t magnitude, bool negative, int32_t *value,
+                         char *error, size_t error_capacity)
+{
+    if (magnitude > (uint64_t)HSTEX_MAX_DIMEN) {
         return set_error(error, error_capacity,
                          "dimension exceeds TeX's maximum");
     }
-    int64_t signed_value = factor->sign < 0 ? -(int64_t)rounded
-                                            : (int64_t)rounded;
-    *value = (int32_t)signed_value;
+    *value = negative ? (int32_t)(-(int64_t)magnitude) : (int32_t)magnitude;
     return 0;
 }
 
-static int scaled_internal_dimension(const struct decimal_factor *factor,
-                                     int32_t unit, int32_t *value,
-                                     char *error, size_t error_capacity)
+/* Convert a decimal factor through the rational ratio of a physical unit.
+   The fraction is quantized to scaled points first, then the integer and
+   fractional halves are converted separately. Deriving the conversion from
+   the exact decimal instead would drift by several scaled points on ordinary
+   values such as `0.3cm`; see docs/DECISIONS.md, dimension-unit-arithmetic. */
+static int scaled_physical_unit(const struct decimal_factor *factor,
+                                uint64_t numerator, uint64_t denominator,
+                                int32_t *value, char *error,
+                                size_t error_capacity)
 {
-    if (factor->whole >
-        (UINT64_MAX - factor->fraction) / factor->denominator) {
-        return set_error(error, error_capacity, "dimension factor overflow");
-    }
-    uint64_t numerator =
-        factor->whole * factor->denominator + factor->fraction;
-    uint64_t denominator = factor->denominator;
-    uint64_t magnitude = unit < 0 ? (uint64_t)(-(int64_t)unit)
-                                  : (uint64_t)unit;
-    uint64_t reduction = greatest_common_divisor(magnitude, denominator);
-    if (reduction != 0U) {
-        magnitude /= reduction;
-        denominator /= reduction;
-    }
-    if (magnitude != 0U && numerator > UINT64_MAX / magnitude) {
-        return set_error(error, error_capacity, "scaled dimension overflow");
-    }
-    uint64_t scaled = numerator * magnitude / denominator;
-    if (scaled > UINT64_C(1073741823)) {
+    if (factor->whole > (uint64_t)HSTEX_MAX_DIMEN) {
         return set_error(error, error_capacity,
                          "dimension exceeds TeX's maximum");
     }
-    bool negative = (factor->sign < 0) != (unit < 0);
-    *value = negative ? (int32_t)(-(int64_t)scaled) : (int32_t)scaled;
-    return 0;
+    uint64_t fraction = scaled_fraction(factor);
+    uint64_t scaled_whole = factor->whole * numerator;
+    uint64_t magnitude =
+        (scaled_whole / denominator) * UINT64_C(65536) +
+        (numerator * fraction + UINT64_C(65536) * (scaled_whole % denominator)) /
+            denominator;
+    return finish_scaled(magnitude, factor->sign < 0, value, error,
+                         error_capacity);
 }
 
+/* Convert a decimal factor that multiplies an internal dimension, such as
+   `2.5\parindent`, `1.5em`, or a glue component. The quantized fraction
+   scales the unit and truncates, matching the observed reference values. */
+static int scaled_internal_unit(const struct decimal_factor *factor,
+                                int32_t unit, int32_t *value, char *error,
+                                size_t error_capacity)
+{
+    if (factor->whole > (uint64_t)HSTEX_MAX_DIMEN) {
+        return set_error(error, error_capacity,
+                         "dimension exceeds TeX's maximum");
+    }
+    uint64_t fraction = scaled_fraction(factor);
+    uint64_t magnitude = unit < 0 ? (uint64_t)(-(int64_t)unit) : (uint64_t)unit;
+    uint64_t product = factor->whole * magnitude;
+    if (product > (uint64_t)HSTEX_MAX_DIMEN) {
+        return set_error(error, error_capacity,
+                         "dimension exceeds TeX's maximum");
+    }
+    product += magnitude * fraction / UINT64_C(65536);
+    return finish_scaled(product, (factor->sign < 0) != (unit < 0), value,
+                         error, error_capacity);
+}
+
+/* Scan `fil`, `fill`, or `filll` and report the infinite order. */
+static int scan_infinite_order(struct hstex_engine *engine, bool *matched,
+                               uint8_t *order, char *error,
+                               size_t error_capacity)
+{
+    if (try_keyword(engine, "fil", matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!*matched) {
+        return 0;
+    }
+    *order = 1U;
+    for (;;) {
+        bool another = false;
+        if (try_keyword(engine, "l", &another, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (!another) {
+            return 0;
+        }
+        if (*order >= 3U) {
+            return set_error(error, error_capacity,
+                             "infinite glue order beyond filll");
+        }
+        ++*order;
+    }
+}
+
+static const struct {
+    const char *name;
+    uint64_t numerator;
+    uint64_t denominator;
+} hstex_physical_units[] = {
+    {"pt", UINT64_C(1), UINT64_C(1)},
+    {"in", UINT64_C(7227), UINT64_C(100)},
+    {"pc", UINT64_C(12), UINT64_C(1)},
+    {"cm", UINT64_C(7227), UINT64_C(254)},
+    {"mm", UINT64_C(7227), UINT64_C(2540)},
+    {"bp", UINT64_C(7227), UINT64_C(7200)},
+    {"dd", UINT64_C(1238), UINT64_C(1157)},
+    {"cc", UINT64_C(14856), UINT64_C(1157)},
+};
+
+/* Units are matched as keywords with backtracking rather than as a maximal
+   run of letters: `12ptpt` is twelve points followed by the letters `pt`, and
+   LaTeX's \@defaultunits depends on that leftover. */
 static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
                                     int32_t *value, uint8_t *order, char *error,
                                     size_t error_capacity)
@@ -3468,11 +3498,24 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
                             error_capacity) != 0) {
         return -1;
     }
+    *order = 0U;
     if (direct_dimen) {
         *value = direct_value;
-        *order = 0U;
         return 0;
     }
+
+    bool matched = false;
+    if (allow_fil) {
+        if (scan_infinite_order(engine, &matched, order, error,
+                                error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1),
+                                        value, error, error_capacity);
+        }
+    }
+
     hstex_token possible_unit = 0U;
     struct hstex_source_location possible_unit_location;
     if (expanded_next_non_space(engine, &possible_unit,
@@ -3492,71 +3535,83 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return -1;
         }
         if (internal_result > 0) {
-            *order = 0U;
-            return scaled_internal_dimension(&factor, internal_unit, value,
-                                             error, error_capacity);
+            return scaled_internal_unit(&factor, internal_unit, value, error,
+                                        error_capacity);
         }
     }
     if (push_one(engine, possible_unit, possible_unit_location, error,
                  error_capacity) != 0) {
         return -1;
     }
-    char unit[16];
-    if (scan_unit_word(engine, unit, error, error_capacity) != 0) {
+
+    const char *font_unit = NULL;
+    size_t font_parameter = 0U;
+    if (try_keyword(engine, "em", &matched, error, error_capacity) != 0) {
         return -1;
     }
-    uint64_t numerator = 0U;
-    uint64_t denominator = 1U;
-    *order = 0U;
-    if (strcmp(unit, "pt") == 0 || strcmp(unit, "truept") == 0) {
-        numerator = UINT64_C(65536);
-    } else if (strcmp(unit, "sp") == 0) {
-        numerator = 1U;
-    } else if (strcmp(unit, "pc") == 0) {
-        numerator = UINT64_C(12) * UINT64_C(65536);
-    } else if (strcmp(unit, "in") == 0) {
-        numerator = UINT64_C(7227) * UINT64_C(65536);
-        denominator = 100U;
-    } else if (strcmp(unit, "bp") == 0) {
-        numerator = UINT64_C(7227) * UINT64_C(65536);
-        denominator = 7200U;
-    } else if (strcmp(unit, "cm") == 0) {
-        numerator = UINT64_C(7227) * UINT64_C(65536);
-        denominator = 254U;
-    } else if (strcmp(unit, "mm") == 0) {
-        numerator = UINT64_C(7227) * UINT64_C(65536);
-        denominator = 2540U;
-    } else if (strcmp(unit, "dd") == 0) {
-        numerator = UINT64_C(1238) * UINT64_C(65536);
-        denominator = 1157U;
-    } else if (strcmp(unit, "cc") == 0) {
-        numerator = UINT64_C(12) * UINT64_C(1238) * UINT64_C(65536);
-        denominator = 1157U;
-    } else if (strcmp(unit, "em") == 0 || strcmp(unit, "ex") == 0) {
+    if (matched) {
+        font_unit = "em";
+        font_parameter = 5U;
+    } else {
+        if (try_keyword(engine, "ex", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            font_unit = "ex";
+            font_parameter = 4U;
+        }
+    }
+    if (font_unit != NULL) {
         const struct hstex_font *font =
             font_by_identifier(engine, engine->current_font);
-        size_t parameter = strcmp(unit, "em") == 0 ? 5U : 4U;
-        if (font == NULL || parameter >= font->dimen_count) {
+        if (font == NULL || font_parameter >= font->dimen_count) {
             return set_error(error, error_capacity,
-                             "current font does not define %s", unit);
+                             "current font does not define %s", font_unit);
         }
-        return scaled_internal_dimension(&factor, font->dimens[parameter],
-                                         value, error, error_capacity);
-    } else if (allow_fil && strcmp(unit, "fil") == 0) {
-        numerator = UINT64_C(65536);
-        *order = 1U;
-    } else if (allow_fil && strcmp(unit, "fill") == 0) {
-        numerator = UINT64_C(65536);
-        *order = 2U;
-    } else if (allow_fil && strcmp(unit, "filll") == 0) {
-        numerator = UINT64_C(65536);
-        *order = 3U;
-    } else {
-        return set_error(error, error_capacity,
-                         "unsupported dimension unit: %s", unit);
+        int32_t unit = font->dimens[font_parameter];
+        if (skip_optional_space(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        return scaled_internal_unit(&factor, unit, value, error,
+                                    error_capacity);
     }
-    return scaled_rational(&factor, numerator, denominator, value, error,
-                           error_capacity);
+
+    /* `true` compensates for \mag, which is fixed at 1000 here, so the
+       prefixed unit is the ordinary unit. */
+    if (try_keyword(engine, "true", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+
+    for (size_t index = 0U;
+         index < sizeof(hstex_physical_units) / sizeof(hstex_physical_units[0]);
+         ++index) {
+        if (try_keyword(engine, hstex_physical_units[index].name, &matched,
+                        error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            if (skip_optional_space(engine, error, error_capacity) != 0) {
+                return -1;
+            }
+            return scaled_physical_unit(&factor,
+                                        hstex_physical_units[index].numerator,
+                                        hstex_physical_units[index].denominator,
+                                        value, error, error_capacity);
+        }
+    }
+
+    /* A scaled-point factor discards its fraction. */
+    if (try_keyword(engine, "sp", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched) {
+        if (skip_optional_space(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        return finish_scaled(factor.whole, factor.sign < 0, value, error,
+                             error_capacity);
+    }
+    return set_error(error, error_capacity, "illegal unit of measure");
 }
 
 static int scan_dimension(struct hstex_engine *engine, int32_t *value,
@@ -3920,27 +3975,30 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "ordinary dimension used as a math-glue component");
     }
-    char unit[16];
-    if (scan_unit_word(engine, unit, error, error_capacity) != 0) {
+    *order = 0U;
+    bool matched = false;
+    if (allow_fil) {
+        if (scan_infinite_order(engine, &matched, order, error,
+                                error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1),
+                                        value, error, error_capacity);
+        }
+    }
+    if (try_keyword(engine, "mu", &matched, error, error_capacity) != 0) {
         return -1;
     }
-    *order = 0U;
-    if (strcmp(unit, "mu") == 0) {
-        return scaled_rational(&factor, UINT64_C(65536), 1U, value, error,
-                               error_capacity);
-    }
-    if (allow_fil && strcmp(unit, "fil") == 0) {
-        *order = 1U;
-    } else if (allow_fil && strcmp(unit, "fill") == 0) {
-        *order = 2U;
-    } else if (allow_fil && strcmp(unit, "filll") == 0) {
-        *order = 3U;
-    } else {
+    if (!matched) {
         return set_error(error, error_capacity,
-                         "unsupported math-glue unit: %s", unit);
+                         "illegal unit of measure in math glue");
     }
-    return scaled_rational(&factor, UINT64_C(65536), 1U, value, error,
-                           error_capacity);
+    if (skip_optional_space(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1), value, error,
+                                error_capacity);
 }
 
 static int scan_glue_literal(struct hstex_engine *engine,

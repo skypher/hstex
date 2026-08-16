@@ -57,6 +57,6 @@ Generate a fresh pdfTeX oracle build in an ignored output directory:
 tests/corpus/run_pdftex_oracle.sh
 ```
 
-See `CLEANROOM.md`, `docs/ARCHITECTURE.md`, and
+See `CLEANROOM.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and
 `docs/BENCHMARK_CONTRACT.md` before changing semantics or performance-critical
 representations.
