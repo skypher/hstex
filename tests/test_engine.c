@@ -2645,6 +2645,66 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* A kern \mkern asked for stays an explicit one once its mu have been
+   turned into points, which is what \showbox shows by leaving a space after
+   the name; the italic correction a character carries does not. \nonscript
+   leaves a marker of its own in the list whatever the style. See
+   docs/DECISIONS.md, a-kern-in-mu and nonscript. */
+static int test_a_kern_in_mu(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=100 \\medmuskip=4mu pl"
+    "us 2mu minus 4mu \\message{[k]}\\setbox0=\\hbox{a"
+    "\\kern3pt b\\/ c$x\\mkern18mu y$}\\showbox0 \\mess"
+    "age{[t]}\\setbox0=\\hbox{$x\\nonscript\\mskip9mu y"
+    "\\nonscript\\mkern9mu z\\nonscript\\ w$}\\showbox0"
+    " \\message{[s]}\\setbox0=\\hbox{$\\scriptstyle x\\"
+    "nonscript\\mskip9mu y\\nonscript\\mkern9mu z$}\\sh"
+    "owbox0 \\message{[n]}\\setbox0=\\hbox{$x\\nonscrip"
+    "t y$}\\showbox0%"
+,
+    "[k]> \\box0=\n\\hbox(6.94444+1.94444)x42.97665\n."
+    "\\tenrm a\n.\\kern 3.0\n.\\tenrm b\n.\\kern 0.0\n."
+    "\\glue(\\spaceskip) 4.0\n.\\tenrm c\n.\\mathon\n."
+    "\\teni x\n.\\kern 9.99976\n.\\teni y\n.\\kern0.358"
+    "78\n.\\mathoff\n\n! OK.\n[t]> \\box0=\n\\hbox(4.30"
+    "554+1.94444)x37.49518\n.\\mathon\n.\\teni x\n.\\gl"
+    "ue(\\nonscript)\n.\\glue 4.99988\n.\\teni y\n.\\ke"
+    "rn0.35878\n.\\glue(\\nonscript)\n.\\kern 4.99988\n"
+    ".\\teni z\n.\\kern0.4398\n.\\glue(\\nonscript)\n."
+    "\\glue(\\spaceskip) 4.0\n.\\teni w\n.\\kern0.26909"
+    "\n.\\mathoff\n\n! OK.\n[s]> \\box0=\n\\hbox(3.0138"
+    "9+1.3611)x12.94916\n.\\mathon\n.\\seveni x\n.\\glu"
+    "e(\\nonscript)\n.\\seveni y\n.\\kern0.25116\n.\\gl"
+    "ue(\\nonscript)\n.\\seveni z\n.\\kern0.28703\n.\\m"
+    "athoff\n\n! OK.\n[n]> \\box0=\n\\hbox(4.30554+1.94"
+    "444)x10.97687\n.\\mathon\n.\\teni x\n.\\glue(\\non"
+    "script)\n.\\teni y\n.\\kern0.35878\n.\\mathoff\n\n"
+    "! OK.\n"
+);
+}
+
 /* A display interrupts the paragraph, so the lines before it reach the
    vertical list and the page builder runs while the formula is still
    unread. The output routine it fires sees the page counter it advanced
@@ -6892,6 +6952,7 @@ int main(void)
         test_a_fence_is_set_in_place() != 0 ||
         test_an_accent_alone_in_braces() != 0 ||
         test_a_page_that_breaks_at_a_display() != 0 ||
+        test_a_kern_in_mu() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

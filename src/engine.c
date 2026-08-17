@@ -10934,6 +10934,9 @@ static const char *glue_parameter_name(uint8_t parameter)
     if (parameter == 0U) {
         return NULL;
     }
+    if (parameter == HSTEX_GLUE_NONSCRIPT) {
+        return "nonscript";
+    }
     if (parameter > HSTEX_GLUE_PARAMETER_COUNT) {
         size_t index = parameter - HSTEX_GLUE_PARAMETER_COUNT - 1U;
         return index < (size_t)HSTEX_MUGLUE_PARAMETER_COUNT ? math[index]
@@ -11249,6 +11252,10 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             (void)fputs("(\\", out);
             (void)fputs(name, out);
             (void)fputc(')', out);
+        }
+        /* The marker \nonscript leaves has no size to show. */
+        if (node->value.glue.parameter == HSTEX_GLUE_NONSCRIPT) {
+            return;
         }
         (void)fputc(' ', out);
         show_glue_spec(out, node);
@@ -18008,11 +18015,16 @@ static int emit_math_parameter_glue(struct hstex_engine *engine,
 }
 
 static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
-                          char *error, size_t error_capacity)
+                          bool explicit_kern, char *error,
+                          size_t error_capacity)
 {
     struct hstex_node node = {
         .kind = HSTEX_NODE_KERN,
         .width = amount,
+        /* A kern \mkern asked for is an explicit one still, once the mu has
+           been turned into points; the italic correction a character carries
+           is not. See docs/DECISIONS.md, a-kern-in-mu. */
+        .explicit_kern = explicit_kern,
     };
     return append_hbox_node(engine, &node, error, error_capacity);
 }
@@ -18416,13 +18428,15 @@ static int attach_math_scripts(struct hstex_engine *engine,
     if (!has_superscript && !has_subscript) {
         return italic == 0
                    ? 0
-                   : emit_math_kern(engine, italic, error, error_capacity);
+                   : emit_math_kern(engine, italic, false, error,
+                                    error_capacity);
     }
     /* The italic correction is a kern of its own only when there is no
        subscript; otherwise it displaces the superscript instead. */
     int32_t delta = italic;
     if (!has_subscript && delta != 0) {
-        if (emit_math_kern(engine, delta, error, error_capacity) != 0) {
+        if (emit_math_kern(engine, delta, false, error, error_capacity) !=
+            0) {
             return -1;
         }
         delta = 0;
@@ -18772,6 +18786,15 @@ static int translate_math_list_with(struct hstex_engine *engine,
                     ++index;
                 }
             }
+            /* The marker itself stays in the list whatever the style; see
+               docs/DECISIONS.md, nonscript. */
+            struct hstex_node marker = {
+                .kind = HSTEX_NODE_GLUE,
+                .value.glue = {.parameter = HSTEX_GLUE_NONSCRIPT},
+            };
+            if (append_hbox_node(engine, &marker, error, error_capacity) != 0) {
+                return -1;
+            }
             continue;
         }
         bool middle_atom = noad->kind == (uint8_t)HSTEX_NOAD_MIDDLE;
@@ -18822,7 +18845,7 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                      math_glue_in_points(noad->glue, unit),
                                      error, error_capacity)
                     : emit_math_kern(engine, scaled_by_unit(noad->kern, unit),
-                                     error, error_capacity);
+                                     true, error, error_capacity);
             if (status != 0) {
                 return -1;
             }

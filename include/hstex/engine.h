@@ -542,6 +542,12 @@ enum hstex_muglue_parameter {
     HSTEX_MUGLUE_PARAMETER_COUNT,
 };
 
+/* \nonscript leaves a marker in the list where it stood: a glue node with
+   nothing in it, named after the primitive. See docs/DECISIONS.md, nonscript. */
+#define HSTEX_GLUE_NONSCRIPT \
+    ((uint8_t)HSTEX_GLUE_PARAMETER_COUNT + \
+     (uint8_t)HSTEX_MUGLUE_PARAMETER_COUNT + 1U)
+
 enum hstex_token_parameter {
     HSTEX_TOKEN_OUTPUT = 0,
     HSTEX_TOKEN_EVERY_PAR,
