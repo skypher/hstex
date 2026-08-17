@@ -34,6 +34,9 @@ enum {
     HSTEX_INITIAL_HYPHEN_EXCEPTION_CAPACITY = 32,
     HSTEX_INITIAL_HYPHEN_EXCEPTION_DATA_CAPACITY = 1024,
     HSTEX_MAX_HYPHEN_PATTERN_LENGTH = 255,
+    /* How wide the reference prints its diagnostics; a whatsit's text is
+       shown to ten characters short of it. */
+    HSTEX_PRINT_LINE = 79,
     HSTEX_MAX_FONT_DIMENS = 1048576,
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
     HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
@@ -4195,8 +4198,39 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                              "box register %d is outside 0..%zu", index,
                              engine->count_capacity - 1U);
         }
-        /* Nothing protrudes, so nothing hangs in the margin. */
+        /* How far the character at that end of the line hangs into the
+           margin: the kern the breaker put there, or nothing. See
+           docs/DECISIONS.md, the-margin-kerns-of-a-line. */
+        const struct hstex_box *box = &engine->boxes[(size_t)index];
         *value = 0;
+        bool left =
+            meaning->value.integer == (int32_t)HSTEX_MARGIN_KERN_LEFT;
+        if (box->kind == HSTEX_BOX_HLIST && box->node_count != 0U &&
+            (size_t)box->node_start + box->node_count <=
+                engine->list_item_count) {
+            const uint32_t *items = engine->list_items + box->node_start;
+            size_t at = left ? 0U : box->node_count - 1U;
+            if (!left) {
+                /* The glue that ends a line stands behind the kern. */
+                while (at != 0U) {
+                    uint32_t glue = items[at];
+                    if (glue == 0U || (size_t)glue > engine->node_count ||
+                        engine->nodes[glue - 1U].kind != HSTEX_NODE_GLUE) {
+                        break;
+                    }
+                    --at;
+                }
+            }
+            uint32_t identifier = items[at];
+            if (identifier != 0U && (size_t)identifier <= engine->node_count) {
+                const struct hstex_node *node =
+                    &engine->nodes[identifier - 1U];
+                if (node->kind == HSTEX_NODE_KERN &&
+                    node->value.kern.margin == (left ? 1U : 2U)) {
+                    *value = node->width;
+                }
+            }
+        }
         return 1;
     }
     if (meaning->command == HSTEX_COMMAND_BOX_DIMEN) {
@@ -10953,7 +10987,8 @@ static void show_ascii(FILE *out, uint8_t code)
 
 static int stored_token_list_text(struct hstex_engine *engine,
                                   uint32_t identifier, uint8_t **bytes,
-                                  size_t *byte_count, char *error,
+                                  size_t *byte_count, size_t limit,
+                                  bool *truncated, char *error,
                                   size_t error_capacity);
 
 /* A whatsit is shown as the command that left it there, with the text it is
@@ -10979,15 +11014,25 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
     }
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
+    bool truncated = false;
     char ignored[256];
+    /* The reference shows a whatsit's text to within ten characters of the
+       width it prints to, and says \ETC. for the rest. */
     if (stored_token_list_text(engine, node->value.whatsit.tokens, &bytes,
-                               &byte_count, ignored, sizeof(ignored)) != 0) {
+                               &byte_count,
+                               kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT
+                                   ? 0U
+                                   : (size_t)HSTEX_PRINT_LINE - 10U,
+                               &truncated, ignored, sizeof(ignored)) != 0) {
         free(bytes);
         return;
     }
     (void)fputc(kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT ? '=' : '{', out);
     if (byte_count != 0U) {
         (void)fwrite(bytes, 1U, byte_count, out);
+    }
+    if (truncated) {
+        (void)fputs("\\ETC.", out);
     }
     if (kind != (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
         (void)fputc('}', out);
@@ -13124,10 +13169,13 @@ static int scan_general_text(struct hstex_engine *engine,
 }
 
 /* The bytes a stored token list stands for, with no expansion: what
-   \showbox prints for a whatsit. */
+   \showbox prints for a whatsit. A limit stops the walk once that many
+   characters have been written -- the token that reaches it is written
+   whole -- and says so. See docs/DECISIONS.md, whatsits. */
 static int stored_token_list_text(struct hstex_engine *engine,
                                   uint32_t identifier, uint8_t **bytes,
-                                  size_t *byte_count, char *error,
+                                  size_t *byte_count, size_t limit,
+                                  bool *truncated, char *error,
                                   size_t error_capacity)
 {
     const struct hstex_token_list *list =
@@ -13135,7 +13183,16 @@ static int stored_token_list_text(struct hstex_engine *engine,
     uint8_t *result = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
+    if (truncated != NULL) {
+        *truncated = false;
+    }
     for (size_t index = 0U; list != NULL && index < list->count; ++index) {
+        if (limit != 0U && count >= limit) {
+            if (truncated != NULL) {
+                *truncated = true;
+            }
+            break;
+        }
         hstex_token token = list->tokens[index];
         if (hstex_token_is_character(token)) {
             uint8_t character = hstex_token_character_code(token);
@@ -18026,7 +18083,12 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                  "math list refers to a missing node");
             }
             struct hstex_node contributed = engine->nodes[noad->nucleus.node - 1U];
+            /* Only a large operator that is one character of its own is
+               centred on the axis; \log and its like are lists, and stand
+               on the baseline. See docs/DECISIONS.md,
+               only-a-character-is-centred. */
             if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
+                nucleus_is_character &&
                 centre_on_axis(engine, size, &contributed, error,
                                error_capacity) != 0) {
                 return -1;
@@ -18065,14 +18127,49 @@ static int translate_math_list_with(struct hstex_engine *engine,
                     .character = noad->nucleus.character,
                 },
             };
-            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
-                centre_on_axis(engine, size, &node, error, error_capacity) !=
+            italic = metric->italic;
+            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP) {
+                /* A large operator is set in a box of its own -- without the
+                   italic correction, which the scripts get instead -- and
+                   that box is what sits on the axis. See docs/DECISIONS.md,
+                   only-a-character-is-centred. */
+                uint32_t placed = 0U;
+                uint32_t start = 0U;
+                if (store_node(engine, &node, &placed, error, error_capacity) !=
+                        0 ||
+                    store_list_run(engine, &placed, 1U, &start, error,
+                                   error_capacity) != 0) {
+                    return -1;
+                }
+                struct hstex_node boxed = {
+                    .kind = HSTEX_NODE_LIST,
+                    .width = node.width,
+                    .height = node.height,
+                    .depth = node.depth,
+                    .value.list = {.node_start = start,
+                                   .node_count = 1U,
+                                   .box_kind = HSTEX_BOX_HLIST},
+                };
+                if (centre_on_axis(engine, size, &boxed, error,
+                                   error_capacity) != 0) {
+                    return -1;
+                }
+                nucleus_height = boxed.height - boxed.shift;
+                nucleus_depth = boxed.depth + boxed.shift;
+                nucleus_is_character = false;
+                if (append_hbox_node(engine, &boxed, error, error_capacity) !=
                     0) {
-                return -1;
+                    return -1;
+                }
+                if (attach_math_scripts(engine, noad, style, nucleus_height,
+                                        nucleus_depth, false, italic, error,
+                                        error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
             }
             nucleus_height = node.height - node.shift;
             nucleus_depth = node.depth + node.shift;
-            italic = metric->italic;
             /* A character read as part of a word in a text font carries no
                italic correction; a font with no interword space of its own
                is a math font and does. */
@@ -19584,14 +19681,25 @@ static int append_display_line(struct hstex_engine *engine,
     int status = 0;
     const struct hstex_box *first = left ? number : &equation;
     const struct hstex_box *second = left ? &equation : number;
+    /* The equation and its number are each marked; the line they are packed
+       into is not. See docs/DECISIONS.md, display-math. */
     if (store_box_node(engine, first, 0, &identifier, error, error_capacity) !=
-            0 ||
-        append_hbox_item(engine, identifier, error, error_capacity) != 0 ||
-        append_hbox_node(engine, &gap, error, error_capacity) != 0 ||
-        store_box_node(engine, second, 0, &identifier, error,
-                       error_capacity) != 0 ||
-        append_hbox_item(engine, identifier, error, error_capacity) != 0) {
+        0) {
         status = -1;
+    } else {
+        engine->nodes[identifier - 1U].value.list.display = true;
+        if (append_hbox_item(engine, identifier, error, error_capacity) != 0 ||
+            append_hbox_node(engine, &gap, error, error_capacity) != 0 ||
+            store_box_node(engine, second, 0, &identifier, error,
+                           error_capacity) != 0) {
+            status = -1;
+        } else {
+            engine->nodes[identifier - 1U].value.list.display = true;
+            if (append_hbox_item(engine, identifier, error, error_capacity) !=
+                0) {
+                status = -1;
+            }
+        }
     }
     struct hstex_box line = {0};
     if (status == 0) {
@@ -19615,7 +19723,6 @@ static int append_display_line(struct hstex_engine *engine,
             .node_count = line.node_count,
             .box_kind = line.kind,
             .glue = line.glue,
-            .display = true,
         },
     };
     return append_vbox_node(engine, &node, error, error_capacity);
@@ -21466,8 +21573,8 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
     if (kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
-        if (stored_token_list_text(engine, tokens, &bytes, &byte_count, error,
-                                   error_capacity) != 0) {
+        if (stored_token_list_text(engine, tokens, &bytes, &byte_count, 0U,
+                                   NULL, error, error_capacity) != 0) {
             return -1;
         }
         char *filename = malloc(byte_count + 1U);

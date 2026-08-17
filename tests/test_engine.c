@@ -1632,6 +1632,121 @@ static int test_prevdepth_belongs_to_one_list(void)
         "p) 0.0\n\n! OK.\n");
 }
 
+/* \\leftmarginkern and \\rightmarginkern report the kern the breaker put at
+   either end of a line, which is how microtype protrudes an equation number;
+   see docs/DECISIONS.md, the-margin-kerns-of-a-line. */
+static int test_margin_kerns_of_a_line(void)
+{
+    return run_document(
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\tracingonline=1 \\sh"
+        "owboxdepth=3 \\showboxbreadth=40 \\hbadness=10000 \\vb"
+        "adness=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\font\\f=c"
+        "mr10 \\f \\hsize=100pt \\parindent=0pt \\baselineskip="
+        "12pt \\lineskip=0pt \\lineskiplimit=0pt \\parfillskip="
+        "0pt \\leftskip=0pt \\rightskip=0pt \\tolerance=10000 \\"
+        "pretolerance=-1 \\boxmaxdepth=16383.99998pt \\splittop"
+        "skip=0pt \\splitmaxdepth=16383.99998pt \\lpcode\\f`\\("
+        "=117 \\rpcode\\f`\\)=117 \\pdfprotrudechars=2 \\setbox"
+        "1=\\vbox{\\noindent(1)\\par} \\setbox2=\\vbox{\\unvbox"
+        "1 \\global\\setbox1=\\lastbox} \\dimen5=\\leftmarginke"
+        "rn1 \\dimen6=\\rightmarginkern1 \\message{<L=\\the\\di"
+        "men5><R=\\the\\dimen6>} \\showbox1%",
+        "<L=-1.17pt><R=-1.17pt>> \\box1=\n\\hbox(7.5+2.5)x100.0"
+        "\n.\\kern-1.17 (left margin)\n.\\f (\n.\\f 1\n.\\f )\n"
+        ".\\penalty 10000\n.\\kern-1.17 (right margin)\n.\\glue"
+        "(\\parfillskip) 0.0\n.\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n");
+}
+
+/* A whatsit's text is shown to within ten characters of the width the
+   reference prints to, and the token that reaches that mark is shown whole;
+   see docs/DECISIONS.md, whatsits. */
+static int test_whatsit_text_is_cut(void)
+{
+    return run_document(
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\tracingonline=1 \\sh"
+        "owboxdepth=3 \\showboxbreadth=30 \\message{[69]}\\setb"
+        "ox0=\\hbox{\\write1{abcdefghijklmnopqrstuvwxyzabcdefgh"
+        "ijklmnopqrstuvwxyzabcdefghijklmnopq}}\\showbox0 \\mess"
+        "age{[70]}\\setbox0=\\hbox{\\write1{abcdefghijklmnopqrs"
+        "tuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr}}\\"
+        "showbox0 \\message{[cw]}\\setbox0=\\hbox{\\write1{abcd"
+        "efghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdef"
+        "ghijklm\\thepage}}\\showbox0 \\message{[cw2]}\\setbox0"
+        "=\\hbox{\\write1{abcdefghijklmnopqrstuvwxyzabcdefghijk"
+        "lmnopqrstuvwxyzabcdefghijklmnop\\thepage}}\\showbox0%",
+        "[69]> \\box0=\n\\hbox(0.0+0.0)x0.0\n.\\write1{abcdefgh"
+        "ijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij"
+        "klmnopq}\n\n! OK.\n[70]> \\box0=\n\\hbox(0.0+0.0)x0.0\n"
+        ".\\write1{abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr"
+        "stuvwxyzabcdefghijklmnopq\\ETC.}\n\n! OK.\n[cw]> \\box"
+        "0=\n\\hbox(0.0+0.0)x0.0\n.\\write1{abcdefghijklmnopqrs"
+        "tuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm\\thepag"
+        "e }\n\n! OK.\n[cw2]> \\box0=\n\\hbox(0.0+0.0)x0.0\n.\\"
+        "write1{abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstu"
+        "vwxyzabcdefghijklmnop\\thepage }\n\n! OK.\n");
+}
+
+/* A large operator is centred on the axis only when it is one character of
+   its own; \\log and its like stand on the baseline. An equation and its
+   number are each marked as a display. See docs/DECISIONS.md,
+   only-a-character-is-centred. */
+static int test_only_a_character_is_centred(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\tracingonline=1 \\"
+        "showboxdepth=3 \\showboxbreadth=60 \\hbadness=10000 \\"
+        "vbadness=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=2"
+        "00pt \\parindent=0pt \\boxmaxdepth=16383.99998pt \\bas"
+        "elineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt \\pa"
+        "rfillskip=0pt plus1fil \\leftskip=0pt \\rightskip=0pt "
+        "\\tolerance=10000 \\pretolerance=-1 \\spaceskip=4pt \\"
+        "font\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\font\\"
+        "fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\sevensy=cmsy7"
+        " \\font\\fivesy=cmsy5 \\font\\tenex=cmex10 \\textfont0"
+        "=\\tenrm \\scriptfont0=\\sevenrm \\scriptscriptfont0=\\"
+        "fiverm \\textfont1=\\teni \\scriptfont1=\\seveni \\scr"
+        "iptscriptfont1=\\fivei \\textfont2=\\tensy \\scriptfon"
+        "t2=\\sevensy \\scriptscriptfont2=\\fivesy \\textfont3="
+        "\\tenex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\tenrm \\mathcode`\\+=\"202B \\thinmuskip=3mu \\m"
+        "edmuskip=4mu plus 2mu minus 4mu \\thickmuskip=5mu plus"
+        " 5mu \\abovedisplayskip=10pt plus2pt \\belowdisplayski"
+        "p=11pt plus2pt \\abovedisplayshortskip=1pt plus3pt \\b"
+        "elowdisplayshortskip=2pt plus3pt \\predisplaypenalty=1"
+        "0000 \\postdisplaypenalty=0 \\widowpenalty=150 \\displ"
+        "aywidowpenalty=50 \\clubpenalty=0 \\interlinepenalty=0"
+        " \\message{[op]}\\setbox0=\\hbox{$\\mathop{\\tenrm log"
+        "}$}\\showbox0 \\message{[ch]}\\setbox0=\\hbox{$\\matho"
+        "p{x}$}\\showbox0 \\message{[eqno]}\\setbox0=\\vbox{\\n"
+        "oindent aa $$x+y\\eqno z$$ bb\\par}\\showbox0%",
+        "[op]> \\box0=\n\\hbox(6.94444+1.94444)x13.15627\n.\\ma"
+        "thon\n.\\hbox(6.94444+1.94444)x13.15627\n..\\teni l\n."
+        ".\\kern0.19678\n..\\teni o\n..\\teni g\n..\\kern0.3587"
+        "8\n.\\mathoff\n\n! OK.\n[ch]> \\box0=\n\\hbox(4.65277+"
+        "0.0)x5.71527\n.\\mathon\n.\\hbox(4.30554+0.0)x5.71527,"
+        " shifted -0.34723\n..\\teni x\n.\\mathoff\n\n! OK.\n[e"
+        "qno]> \\box0=\n\\vbox(31.30554+0.0)x200.0\n.\\hbox(4.3"
+        "0554+0.0)x200.0, glue set 189.99997fil\n..\\tenrm a\n."
+        ".\\tenrm a\n..\\penalty 10000\n..\\glue(\\parfillskip)"
+        " 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n.\\penalt"
+        "y 10000\n.\\glue(\\abovedisplayshortskip) 1.0 plus 3.0"
+        "\n.\\glue(\\baselineskip) 6.16667\n.\\hbox(5.83333+1.9"
+        "4444)x111.5995, shifted 88.4005\n..\\hbox(5.83333+1.94"
+        "444)x23.199, display\n...\\teni x\n...\\glue(\\medmusk"
+        "ip) 2.22217 plus 1.11108 minus 2.22217\n...\\tenrm +\n"
+        "...\\glue(\\medmuskip) 2.22217 plus 1.11108 minus 2.22"
+        "217\n...\\teni y\n...\\kern0.35878\n..\\kern83.3102\n."
+        ".\\hbox(4.30554+0.0)x5.0903, display\n...\\teni z\n..."
+        "\\kern0.4398\n.\\penalty 0\n.\\glue(\\belowdisplayshor"
+        "tskip) 2.0 plus 3.0\n.\\glue(\\baselineskip) 3.11111\n"
+        ".\\hbox(6.94444+0.0)x200.0, glue set 188.88885fil\n..\\"
+        "tenrm b\n..\\tenrm b\n..\\penalty 10000\n..\\glue(\\pa"
+        "rfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n"
+        "\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4473,6 +4588,9 @@ int main(void)
         test_emergency_stretch() != 0 ||
         test_display_skips_and_widows() != 0 ||
         test_prevdepth_belongs_to_one_list() != 0 ||
+        test_margin_kerns_of_a_line() != 0 ||
+        test_whatsit_text_is_cut() != 0 ||
+        test_only_a_character_is_centred() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
