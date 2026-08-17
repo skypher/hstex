@@ -629,6 +629,33 @@ static int test_paragraphs(void)
         "[6.83331pt|100.0pt][6.83331pt|1.94444pt][18.83331pt]");
 }
 
+/* A horizontal command met in vertical mode is put back and read again, so
+   that \everypar runs before the command scans its own operands; see
+   docs/DECISIONS.md, starting-a-paragraph. */
+static int test_starting_a_paragraph(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f\\hsize=200pt \\parindent=10pt \\tolerance=10000 "
+        /* \everypar sets \dimen0 to 7pt, so \hskip\dimen0 must measure 7pt
+           and not the 3pt that was current when \hskip was read. */
+        "\\everypar{\\dimen0=7pt}\\dimen0=3pt "
+        "\\setbox0=\\vbox{\\hskip\\dimen0 \\global\\skip1=\\lastskip\\par}"
+        "[\\the\\skip1]"
+        /* \unhbox starts one too, which is what \leavevmode relies on. */
+        "\\everypar{\\global\\count1=1 }\\setbox1=\\hbox{}\\count1=0 "
+        "\\setbox2=\\vbox{\\unhbox1 \\global\\count2=\\count1 \\par}"
+        "[\\the\\count2]"
+        /* The paragraph is indented and set to \hsize. */
+        "\\everypar{}\\setbox3=\\vbox{\\hskip3pt\\par}[\\the\\wd3]"
+        /* \vrule, \char, a control space and \hfil start one; \unvbox does
+           not, and pdfTeX rejects \/ in internal vertical mode outright. */
+        "\\def\\p#1{\\setbox4=\\vbox{#1\\global\\count0=\\ifhmode 1\\else 0\\fi"
+        "\\par}[\\the\\count0]}"
+        "\\p{\\vrule width1pt}\\p{\\char65 }\\p{\\ }\\p{\\hfil}"
+        "\\setbox5=\\vbox{}\\p{\\unvbox5 }%",
+        "[7.0pt][1][200.0pt][1][1][1][1][0]");
+}
+
 /* Characters, with the font's ligature and kerning program and interword
    glue; see docs/DECISIONS.md, characters-and-ligatures. */
 static int test_characters(void)
@@ -653,6 +680,24 @@ static int test_characters(void)
         "[7.50002pt|6.83331pt|0.0pt][21.8056pt][4.30554pt|1.94444pt]"
         "[3.33333pt plus 1.66498pt minus 1.11221pt][17.9167pt][13.8889pt]"
         "[5.83336pt|7][8.33336pt][6.11115pt]");
+}
+
+/* A control sequence \let to a brace opens a box; see docs/DECISIONS.md,
+   implicit-braces. */
+static int test_implicit_braces(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f\\let\\bg={\\let\\eg=}"
+        "\\setbox0=\\hbox\\bg\\kern5pt\\eg[\\the\\wd0]"
+        "\\setbox1=\\vbox\\bg\\kern5pt\\eg[\\the\\ht1]"
+        "\\setbox2=\\hbox to 20pt\\bg\\eg[\\the\\wd2]"
+        "\\setbox3=\\vtop\\bg\\kern5pt\\eg[\\the\\ht3]"
+        /* The brace may arrive by expansion, and may be nested. */
+        "\\def\\m{\\bg}\\setbox4=\\hbox\\m\\kern7pt\\eg[\\the\\wd4]"
+        "\\setbox5=\\hbox\\bg\\kern1pt\\hbox\\bg\\kern2pt\\eg\\eg[\\the\\wd5]"
+        /* An implicit brace opens a group too. */
+        "\\count0=1 \\bg\\count0=2 \\eg[\\the\\count0]%",
+        "[5.0pt][5.0pt][20.0pt][0.0pt][7.0pt][3.0pt][1]");
 }
 
 /* The five glue commands measure the same in both directions; see
@@ -1736,7 +1781,8 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
+        test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

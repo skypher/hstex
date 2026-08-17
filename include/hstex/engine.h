@@ -884,6 +884,10 @@ struct hstex_engine {
     struct hstex_hbox_builder *paragraph_builder;
     bool building_paragraph;
     struct hstex_vbox_builder *active_vbox_builder;
+    /* Name of the primitive the executor is currently running, for
+       diagnostics: a scan that fails names the command that asked for the
+       value, which is otherwise invisible from inside the scanner. */
+    char executing_name[64];
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

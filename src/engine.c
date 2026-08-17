@@ -171,6 +171,41 @@ static bool token_is_effective_space(const struct hstex_engine *engine,
            token_is_space(meaning->value.token);
 }
 
+/* An implicit begin-group character - a control sequence \let to a catcode-1
+   token - opens a box just as an explicit brace does, because TeX inspects the
+   meaning rather than the token. Balanced-text scanning is deliberately not
+   changed: pdfTeX runs off the end of the file on \toks0=\bgroup abc\egroup,
+   so there only explicit braces count. See docs/DECISIONS.md, implicit-braces. */
+static bool token_is_effective_begin_group(struct hstex_engine *engine,
+                                           hstex_token token)
+{
+    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+        return true;
+    }
+    if (engine == NULL || !hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+           token_is_category(meaning->value.token, HSTEX_CAT_BEGIN_GROUP);
+}
+
+static bool token_is_effective_end_group(struct hstex_engine *engine,
+                                         hstex_token token)
+{
+    if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+        return true;
+    }
+    if (engine == NULL || !hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+           token_is_category(meaning->value.token, HSTEX_CAT_END_GROUP);
+}
+
 static int code_table_index(enum hstex_command command)
 {
     switch (command) {
@@ -3571,8 +3606,9 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
                 uint32_t line = 0U;
                 const char *origin = current_source_line(engine, &line);
                 return set_error(error, error_capacity,
-                                 "%s scanning \\%.*s, at %s:%u", reason,
-                                 (int)length, (const char *)name, origin,
+                                 "%s scanning \\%.*s for %s, at %s:%u", reason,
+                                 (int)length, (const char *)name,
+                                 engine->executing_name, origin,
                                  (unsigned int)line);
             }
             return -1;
@@ -5858,9 +5894,13 @@ static bool token_is_paragraph(const struct hstex_engine *engine,
                engine->lexical_state.paragraph_control_sequence;
 }
 
-static int scan_balanced_group(struct hstex_engine *engine,
-                               struct token_vector *argument, bool long_macro,
-                               char *error, size_t error_capacity)
+/* A macro argument counts only explicit braces, the way TeX compares tokens;
+   a box body counts implicit ones too, because it is a real group and ends
+   when the group ends. See docs/DECISIONS.md, implicit-braces. */
+static int scan_balanced_group_kind(struct hstex_engine *engine,
+                                    struct token_vector *argument,
+                                    bool long_macro, bool implicit_braces,
+                                    char *error, size_t error_capacity)
 {
     size_t depth = 1U;
     while (depth != 0U) {
@@ -5877,9 +5917,15 @@ static int scan_balanced_group(struct hstex_engine *engine,
             return set_error(error, error_capacity,
                              "paragraph ended a non-long macro argument");
         }
-        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+        bool opens = implicit_braces
+                         ? token_is_effective_begin_group(engine, token)
+                         : token_is_category(token, HSTEX_CAT_BEGIN_GROUP);
+        bool closes = implicit_braces
+                          ? token_is_effective_end_group(engine, token)
+                          : token_is_category(token, HSTEX_CAT_END_GROUP);
+        if (opens) {
             ++depth;
-        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+        } else if (closes) {
             --depth;
             if (depth == 0U) {
                 break;
@@ -5890,6 +5936,14 @@ static int scan_balanced_group(struct hstex_engine *engine,
         }
     }
     return 0;
+}
+
+static int scan_balanced_group(struct hstex_engine *engine,
+                               struct token_vector *argument, bool long_macro,
+                               char *error, size_t error_capacity)
+{
+    return scan_balanced_group_kind(engine, argument, long_macro, false, error,
+                                    error_capacity);
 }
 
 static int case_shift_active_character(struct hstex_engine *engine,
@@ -6313,6 +6367,15 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
         }
     }
     (void)snprintf(buffer, capacity, "an internal token");
+}
+
+/* Remember which primitive the executor is about to run. Scanners report the
+   token they choked on, but not who asked for a value; both halves are needed
+   to place a failure inside a macro expansion. */
+static void record_executing_name(struct hstex_engine *engine, hstex_token token)
+{
+    describe_token(engine, token, engine->executing_name,
+                   sizeof(engine->executing_name));
 }
 
 static int match_parameter_prefix(struct hstex_engine *engine,
@@ -8313,18 +8376,30 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
     enum hstex_engine_result result = expanded_next_non_space_unrestricted(
         engine, &opening, &location, error, error_capacity);
     if (result != HSTEX_ENGINE_TOKEN ||
-        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        !token_is_effective_begin_group(engine, opening)) {
         if (result == HSTEX_ENGINE_ERROR) {
             return -1;
         }
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
+                       found, sizeof(found));
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
         return set_error(error, error_capacity,
-                         "hbox requires a braced token list");
+                         "hbox requires a braced token list, found %s at %s:%u",
+                         found, origin, (unsigned int)line);
     }
     struct token_vector contents = {0};
-    if (scan_balanced_group(engine, &contents, true, error, error_capacity) !=
-        0) {
+    if (scan_balanced_group_kind(engine, &contents, true, true, error,
+                                 error_capacity) != 0) {
         vector_destroy(&contents);
-        return -1;
+        char reason[256];
+        (void)snprintf(reason, sizeof(reason), "%s", error);
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
+        return set_error(error, error_capacity,
+                         "%s, in a box body opened at %s:%u", reason, origin,
+                         (unsigned int)location.line);
     }
     struct hstex_hbox_builder builder = {0};
     int status = evaluate_hbox_contents(engine, &contents, &builder, error,
@@ -8528,18 +8603,30 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
     enum hstex_engine_result result = expanded_next_non_space_unrestricted(
         engine, &opening, &location, error, error_capacity);
     if (result != HSTEX_ENGINE_TOKEN ||
-        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        !token_is_effective_begin_group(engine, opening)) {
         if (result == HSTEX_ENGINE_ERROR) {
             return -1;
         }
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
+                       found, sizeof(found));
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
         return set_error(error, error_capacity,
-                         "vbox requires a braced token list");
+                         "vbox requires a braced token list, found %s at %s:%u",
+                         found, origin, (unsigned int)line);
     }
     struct token_vector contents = {0};
-    if (scan_balanced_group(engine, &contents, true, error, error_capacity) !=
-        0) {
+    if (scan_balanced_group_kind(engine, &contents, true, true, error,
+                                 error_capacity) != 0) {
         vector_destroy(&contents);
-        return -1;
+        char reason[256];
+        (void)snprintf(reason, sizeof(reason), "%s", error);
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
+        return set_error(error, error_capacity,
+                         "%s, in a box body opened at %s:%u", reason, origin,
+                         (unsigned int)location.line);
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &contents, &builder, error,
@@ -12737,14 +12824,40 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
     return append_box_node(engine, &box, error, error_capacity);
 }
 
-/* A horizontal command met in vertical mode starts a paragraph, indented. */
+/* A horizontal command met in vertical mode starts an indented paragraph and
+   is then read again, so that \everypar runs before the command's own
+   operands are scanned; see docs/DECISIONS.md, starting-a-paragraph. The
+   executor does the pushing back, so by the time an executor runs, the mode
+   is already right and this only reports a genuinely misplaced command. */
 static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
                                   size_t error_capacity)
 {
-    if (engine->mode != HSTEX_MODE_VERTICAL) {
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
         return 0;
     }
-    return start_paragraph(engine, true, error, error_capacity);
+    return set_error(error, error_capacity,
+                     "horizontal command used outside horizontal mode");
+}
+
+/* The commands that begin a paragraph when they are met in vertical mode.
+   Everything else either belongs to the vertical list or is an error there:
+   pdfTeX rejects \/ in internal vertical mode rather than starting one. */
+static bool command_starts_paragraph(const struct hstex_meaning *meaning)
+{
+    switch (meaning->command) {
+    case HSTEX_COMMAND_HSKIP:
+    case HSTEX_COMMAND_VRULE:
+    case HSTEX_COMMAND_CONTROL_SPACE:
+    case HSTEX_COMMAND_CHAR:
+        return true;
+    case HSTEX_COMMAND_UNBOX:
+        return meaning->value.integer ==
+                   (int32_t)HSTEX_UNBOX_HORIZONTAL ||
+               meaning->value.integer ==
+                   (int32_t)HSTEX_UNBOX_HORIZONTAL_COPY;
+    default:
+        return false;
+    }
 }
 
 /* A control space is the font's own interword glue, with no space-factor
@@ -14116,6 +14229,17 @@ handle_token:
         }
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(*token));
+        if (engine->mode == HSTEX_MODE_VERTICAL &&
+            !engine->pending_global && engine->pending_macro_flags == 0U &&
+            command_starts_paragraph(meaning)) {
+            if (push_one(engine, *token, *location, error, error_capacity) !=
+                    0 ||
+                start_paragraph(engine, true, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        record_executing_name(engine, *token);
         switch (meaning->command) {
         case HSTEX_COMMAND_RELAX:
             engine->pending_global = false;
