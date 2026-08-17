@@ -216,6 +216,7 @@ enum hstex_command {
     HSTEX_COMMAND_VCENTER,
     HSTEX_COMMAND_MARGIN_KERN,
     HSTEX_COMMAND_DELIMITER,
+    HSTEX_COMMAND_LEFT_RIGHT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -635,6 +636,16 @@ struct hstex_lig_kern {
     uint8_t remainder;
 };
 
+/* One recipe for building a delimiter too tall for any single character:
+   the pieces to stack, bottom, middle and top, with `repeated` filling the
+   gaps. A piece of zero is absent. */
+struct hstex_extensible {
+    uint8_t top;
+    uint8_t middle;
+    uint8_t bottom;
+    uint8_t repeated;
+};
+
 struct hstex_font {
     char *name;
     struct hstex_char_metric *characters;
@@ -642,6 +653,8 @@ struct hstex_font {
     size_t lig_kern_count;
     int32_t *kerns;
     size_t kern_count;
+    struct hstex_extensible *extensibles;
+    size_t extensible_count;
     int32_t design_size;
     /* The control sequence \the\font reports for this font. Re-declaring an
        already loaded font reuses it and renames it to the newer control
@@ -843,6 +856,9 @@ struct hstex_math_builder {
     /* Branches of a \mathchoice still to be read, and which one is next. */
     uint8_t choice_remaining;
     uint8_t choice_index;
+    /* Set for the list \left opened, with the delimiter it named. */
+    bool is_left_group;
+    int32_t left_delimiter;
 };
 
 enum hstex_node_kind {

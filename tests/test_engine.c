@@ -1416,6 +1416,62 @@ static int test_delimiters(void)
         "[10.00003pt|6.44444pt|0.0pt]");
 }
 
+/* \left and \right, and the extensible recipes the tallest delimiters are
+   built from; see docs/DECISIONS.md, extensible-delimiters. */
+static int test_left_right(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\textfont1=\\tenmi \\textfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont0=\\tenrm \\scriptfont1=\\tenmi "
+        "\\scriptfont2=\\tensy \\scriptfont3=\\tenex "
+        "\\scriptscriptfont0=\\tenrm \\scriptscriptfont1=\\tenmi "
+        "\\scriptscriptfont2=\\tensy \\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu "
+        "\\scriptspace=.5pt \\nullfont "
+        "\\delimiterfactor=901 \\delimitershortfall=5pt "
+        "\\nulldelimiterspace=1.2pt "
+        "\\delcode`\\(=\"028300 \\delcode`\\)=\"029301 "
+        "\\def\\V#1{\\vrule width2pt height#1 depth0pt}"
+        "\\def\\m#1{\\setbox0=\\hbox{$#1$}"
+        "[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* The smallest variant serves until the contents outgrow it, then
+           each larger one in the chain, then a delimiter built from pieces --
+           which is where the width stops growing. */
+        "\\m{\\left(\\V{1pt}\\right)}\\m{\\left(\\V{5pt}\\right)}"
+        "\\m{\\left(\\V{10pt}\\right)}\\m{\\left(\\V{15pt}\\right)}"
+        "\\m{\\left(\\V{20pt}\\right)}\\m{\\left(\\V{30pt}\\right)}"
+        "\\m{\\left(\\V{50pt}\\right)}"
+        /* A full stop names no delimiter, and leaves \nulldelimiterspace. */
+        "\\m{\\left.\\V{10pt}\\right.}"
+        /* The whole thing is an inner atom. */
+        "\\m{\\mathchar\"0030 \\left(\\V{10pt}\\right)\\mathchar\"0030 }"
+        "\\m{\\mathchar\"0030 \\mathinner{\\mathchar\"0030 }"
+        "\\mathchar\"0030 }"
+        "\\m{\\left(\\V{10pt}\\right)^\\mathchar\"0030 }"
+        /* Both parameters move the size the delimiter has to reach. */
+        "\\delimiterfactor=500 \\m{\\left(\\V{15pt}\\right)}"
+        "\\delimiterfactor=901 \\delimitershortfall=50pt "
+        "\\m{\\left(\\V{15pt}\\right)}\\delimitershortfall=5pt "
+        /* \delimiter names one just as a character with a \delcode does. */
+        "\\m{\\left\\delimiter\"028300 \\V{15pt}"
+        "\\right\\delimiter\"029301 }%",
+        "[9.7778pt|7.5pt|2.5pt][9.7778pt|7.5pt|2.5pt]"
+        "[13.94446pt|11.50008pt|6.50009pt]"
+        "[16.72229pt|15.0pt|9.50012pt]"
+        "[19.50003pt|20.50017pt|15.50017pt]"
+        "[19.50003pt|30.0pt|24.50026pt]"
+        "[19.50003pt|50.0pt|42.50044pt][4.4pt|10.0pt|0.0pt]"
+        "[27.27774pt|11.50008pt|6.50009pt]"
+        "[18.3333pt|6.44444pt|0.0pt]"
+        "[19.44447pt|14.08344pt|6.50009pt]"
+        "[16.72229pt|15.0pt|9.50012pt]"
+        "[16.72229pt|15.0pt|9.50012pt]"
+        "[16.72229pt|15.0pt|9.50012pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2504,7 +2560,8 @@ int main(void)
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
-        test_alignment_entries() != 0 || test_delimiters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_alignment_entries() != 0 || test_delimiters() != 0 ||
+        test_left_right() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

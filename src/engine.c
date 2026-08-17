@@ -860,12 +860,38 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
                 size);
         }
     }
+    /* The recipes a delimiter too tall for any single character is built
+       from; see docs/DECISIONS.md, extensible-delimiters. */
+    size_t extensible_base = kern_base + (size_t)fields[9];
+    struct hstex_extensible *extensibles = NULL;
+    if (fields[10] != 0U) {
+        extensibles = calloc((size_t)fields[10], sizeof(*extensibles));
+        if (extensibles == NULL) {
+            free(lig_kern);
+            free(kerns);
+            hstex_input_close(&input);
+            return set_error(error, error_capacity,
+                             "font extensible table allocation failed");
+        }
+        for (size_t index = 0U; index < (size_t)fields[10]; ++index) {
+            const uint8_t *recipe =
+                input.data + (extensible_base + index) * 4U;
+            extensibles[index].top = recipe[0];
+            extensibles[index].middle = recipe[1];
+            extensibles[index].bottom = recipe[2];
+            extensibles[index].repeated = recipe[3];
+        }
+    }
+
     free(font->lig_kern);
     free(font->kerns);
+    free(font->extensibles);
     font->lig_kern = lig_kern;
     font->lig_kern_count = (size_t)fields[8];
     font->kerns = kerns;
     font->kern_count = (size_t)fields[9];
+    font->extensibles = extensibles;
+    font->extensible_count = (size_t)fields[10];
 
     size_t parameter_count = fields[11];
     size_t parameter_word =
@@ -1625,6 +1651,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         engine->code_tables[3][character] = (int32_t)character;
         engine->code_tables[4][character] = -1;
     }
+    /* A full stop is the one character that names no delimiter at all. */
+    engine->code_tables[4][(size_t)'.'] = 0;
     for (uint32_t character = (uint32_t)'A'; character <= (uint32_t)'Z';
          ++character) {
         engine->code_tables[0][character] = 999;
@@ -1867,6 +1895,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
          (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
         {"delimiter", HSTEX_COMMAND_DELIMITER, 0},
+        {"left", HSTEX_COMMAND_LEFT_RIGHT, 0},
+        {"right", HSTEX_COMMAND_LEFT_RIGHT, 1},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
@@ -2493,6 +2523,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->fonts[index].characters);
         free(engine->fonts[index].lig_kern);
         free(engine->fonts[index].kerns);
+        free(engine->fonts[index].extensibles);
     }
     free(engine->meanings);
     free(engine->macros);
@@ -7986,6 +8017,14 @@ static void pop_math_list(struct hstex_engine *engine);
 static int32_t packed_dimen(int32_t value)
 {
     return value == HSTEX_RUNNING_DIMEN ? 0 : value;
+}
+
+/* Half a length, rounded the way the reference rounds it: an odd value goes
+   up, which is not the same as truncating (value + 1) / 2 once the value is
+   negative and even. */
+static int32_t half_of(int64_t value)
+{
+    return (int32_t)(value % 2 != 0 ? (value + 1) / 2 : value / 2);
 }
 
 /* How bad it is to stretch or shrink `available` by `needed`. The reference
@@ -14013,10 +14052,6 @@ static int begin_math_script(struct hstex_engine *engine, bool superscript,
 static int math_append_code(struct hstex_engine *engine, int32_t code,
                             char *error, size_t error_capacity)
 {
-    if (code == 0x8000) {
-        return set_error(error, error_capacity,
-                         "active math characters are not implemented");
-    }
     uint8_t class_code = (uint8_t)((code >> 12) & 0x7);
     uint8_t family = (uint8_t)((code >> 8) & 0xF);
     uint8_t character = (uint8_t)(code & 0xFF);
@@ -14368,11 +14403,9 @@ static int centre_on_axis(struct hstex_engine *engine, uint8_t size,
                          "a large operator needs \\textfont2 with "
                          "twenty-two parameters");
     }
-    node->shift =
-        (int32_t)(((int64_t)packed_dimen(node->height) -
-                   (int64_t)packed_dimen(node->depth) + 1) /
-                  2) -
-        symbols->dimens[21];
+    node->shift = half_of((int64_t)packed_dimen(node->height) -
+                          packed_dimen(node->depth)) -
+                  symbols->dimens[21];
     return 0;
 }
 
@@ -15001,6 +15034,413 @@ static int package_displayed_formula(struct hstex_engine *engine,
     return status;
 }
 
+/* Put one character in a box of its own, as wide as the character plus its
+   italic correction. */
+static int character_box(struct hstex_engine *engine, uint32_t font_identifier,
+                         const struct hstex_font *font, uint8_t code,
+                         struct hstex_box *box, char *error,
+                         size_t error_capacity)
+{
+    const struct hstex_char_metric *metric = &font->characters[code];
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = metric->width,
+        .height = metric->height,
+        .depth = metric->depth,
+        .value.character = {.font = font_identifier, .character = code},
+    };
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &builder;
+    int status = append_hbox_node(engine, &node, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, false, false, 0, box, error,
+                               error_capacity);
+    }
+    free(builder.node_identifiers);
+    if (status == 0) {
+        box->width = metric->width + metric->italic;
+    }
+    return status;
+}
+
+/* Stack the pieces of an extensible recipe until they reach `wanted`. */
+static int extensible_box(struct hstex_engine *engine,
+                          uint32_t font_identifier,
+                          const struct hstex_font *font,
+                          const struct hstex_extensible *recipe,
+                          int32_t wanted, struct hstex_box *box, char *error,
+                          size_t error_capacity)
+{
+    if (recipe->repeated == 0U ||
+        font->characters[recipe->repeated].tag < 0) {
+        return set_error(error, error_capacity,
+                         "an extensible delimiter has no repeated piece");
+    }
+    const struct hstex_char_metric *piece =
+        &font->characters[recipe->repeated];
+    int64_t step = (int64_t)piece->height + piece->depth;
+    int64_t reach = 0;
+    uint8_t fixed[3] = {recipe->bottom, recipe->middle, recipe->top};
+    for (size_t index = 0U; index < 3U; ++index) {
+        if (fixed[index] != 0U && font->characters[fixed[index]].tag >= 0) {
+            reach += (int64_t)font->characters[fixed[index]].height +
+                     font->characters[fixed[index]].depth;
+        }
+    }
+    size_t repeats = 0U;
+    if (step > 0) {
+        while (reach < wanted) {
+            reach += step;
+            ++repeats;
+            if (recipe->middle != 0U) {
+                reach += step;
+            }
+            if (repeats > 10000U) {
+                return set_error(error, error_capacity,
+                                 "an extensible delimiter did not converge");
+            }
+        }
+    }
+
+    /* The pieces go in from the bottom up, and the last one placed gives the
+       box its height. */
+    struct hstex_vbox_builder builder = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    struct hstex_hbox_builder *previous_hbox = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    int32_t previous_depth = engine->prev_depth;
+    engine->active_vbox_builder = &builder;
+    engine->active_hbox_builder = NULL;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
+
+    int status = 0;
+    int32_t top_height = 0;
+    int64_t total = 0;
+    bool first = true;
+    /* Written from the top down: top, then the repeats and the middle, then
+       the repeats again, then the bottom. */
+    size_t written = 0U;
+    for (size_t stage = 0U; status == 0 && stage < 5U; ++stage) {
+        size_t times = 1U;
+        uint8_t code = 0U;
+        switch (stage) {
+        case 0: code = recipe->top; break;
+        case 1: code = recipe->middle != 0U ? recipe->repeated : 0U;
+                times = repeats; break;
+        case 2: code = recipe->middle; break;
+        case 3: code = recipe->repeated; times = repeats; break;
+        default: code = recipe->bottom; break;
+        }
+        if (code == 0U || font->characters[code].tag < 0) {
+            continue;
+        }
+        for (size_t index = 0U; status == 0 && index < times; ++index) {
+            struct hstex_box piece_box = {0};
+            status = character_box(engine, font_identifier, font, code,
+                                   &piece_box, error, error_capacity);
+            if (status != 0) {
+                break;
+            }
+            if (first) {
+                top_height = piece_box.height;
+                first = false;
+            }
+            total += (int64_t)piece_box.height + piece_box.depth;
+            ++written;
+            struct hstex_node node = {
+                .kind = HSTEX_NODE_LIST,
+                .width = piece_box.width,
+                .height = piece_box.height,
+                .depth = piece_box.depth,
+                .value.list = {
+                    .node_start = piece_box.node_start,
+                    .node_count = piece_box.node_count,
+                    .box_kind = piece_box.kind,
+                },
+            };
+            status = append_vbox_node(engine, &node, error, error_capacity);
+        }
+    }
+    (void)written;
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &builder, false, false, 0, &packed,
+                               error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->active_hbox_builder = previous_hbox;
+    engine->mode = previous_mode;
+    engine->prev_depth = previous_depth;
+    if (status != 0) {
+        return -1;
+    }
+    packed.height = top_height;
+    packed.depth = (int32_t)(total - top_height);
+    packed.width = piece->width + piece->italic;
+    *box = packed;
+    return 0;
+}
+
+/* Find a delimiter at least `wanted` tall: walk the small variant's chain of
+   larger versions, then the large variant's, and fall back to building one
+   out of pieces. See docs/DECISIONS.md, extensible-delimiters. */
+static int variant_delimiter(struct hstex_engine *engine, int32_t code,
+                             uint8_t size, int32_t wanted,
+                             struct hstex_box *box, char *error,
+                             size_t error_capacity)
+{
+    uint8_t families[2] = {(uint8_t)((code >> 20) & 0xF),
+                           (uint8_t)((code >> 8) & 0xF)};
+    uint8_t characters[2] = {(uint8_t)((code >> 12) & 0xFF),
+                             (uint8_t)(code & 0xFF)};
+    const struct hstex_font *best_font = NULL;
+    uint32_t best_identifier = 0U;
+    uint8_t best_character = 0U;
+    int64_t best_reach = -1;
+    bool extensible = false;
+
+    for (size_t attempt = 0U; attempt < 2U && !extensible; ++attempt) {
+        if (families[attempt] == 0U && characters[attempt] == 0U) {
+            continue;
+        }
+        for (int32_t which = (int32_t)size; which >= 0; --which) {
+            uint32_t identifier =
+                engine->math_fonts[which][families[attempt]];
+            const struct hstex_font *font =
+                font_by_identifier(engine, identifier);
+            if (font == NULL || font->characters == NULL) {
+                continue;
+            }
+            uint8_t character = characters[attempt];
+            for (size_t step = 0U; step < 256U; ++step) {
+                const struct hstex_char_metric *metric =
+                    &font->characters[character];
+                if (metric->tag < 0) {
+                    break;
+                }
+                if (metric->tag == 3) {
+                    best_font = font;
+                    best_identifier = identifier;
+                    best_character = character;
+                    extensible = true;
+                    break;
+                }
+                int64_t reach = (int64_t)metric->height + metric->depth;
+                if (reach > best_reach) {
+                    best_font = font;
+                    best_identifier = identifier;
+                    best_character = character;
+                    best_reach = reach;
+                    if (reach >= wanted) {
+                        break;
+                    }
+                }
+                if (metric->tag != 2) {
+                    break;
+                }
+                character = (uint8_t)metric->remainder;
+            }
+            if (extensible || best_reach >= wanted) {
+                break;
+            }
+        }
+        if (extensible || best_reach >= wanted) {
+            break;
+        }
+    }
+
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_HLIST;
+    if (best_font == NULL) {
+        /* No variant at all: an empty box of \nulldelimiterspace. */
+        box->width = engine->dimen_parameters[HSTEX_DIMEN_NULL_DELIMITER_SPACE];
+        return 0;
+    }
+    if (extensible) {
+        const struct hstex_char_metric *metric =
+            &best_font->characters[best_character];
+        if ((size_t)metric->remainder >= best_font->extensible_count) {
+            return set_error(error, error_capacity,
+                             "extensible recipe %d is out of range",
+                             metric->remainder);
+        }
+        return extensible_box(
+            engine, best_identifier, best_font,
+            &best_font->extensibles[(size_t)metric->remainder], wanted, box,
+            error, error_capacity);
+    }
+    return character_box(engine, best_identifier, best_font, best_character,
+                         box, error, error_capacity);
+}
+
+/* A delimiter is named either by a character, whose \delcode says which one
+   it is, or by \delimiter and a number. */
+static int scan_delimiter(struct hstex_engine *engine, int32_t *code,
+                          char *error, size_t error_capacity)
+{
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a delimiter");
+    }
+    int32_t value = -1;
+    if (hstex_token_is_character(token) &&
+        (token_is_category(token, HSTEX_CAT_LETTER) ||
+         token_is_category(token, HSTEX_CAT_OTHER))) {
+        int table = code_table_index(HSTEX_COMMAND_DEL_CODE);
+        if (table < 0) {
+            return set_error(error, error_capacity, "no delcode table");
+        }
+        value = engine->code_tables[(size_t)table]
+                                   [hstex_token_character_code(token)];
+    } else if (hstex_token_is_control_sequence(token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        if (meaning->command == HSTEX_COMMAND_DELIMITER) {
+            if (scan_integer(engine, &value, error, error_capacity) != 0) {
+                return -1;
+            }
+        }
+    }
+    if (value < 0 || value > 0x7FFFFFF) {
+        char found[128];
+        describe_token(engine, token, found, sizeof(found));
+        return set_error(error, error_capacity,
+                         "%s is not a delimiter", found);
+    }
+    *code = value;
+    return 0;
+}
+
+/* \left opens a list of its own; \right closes it and makes an inner atom of
+   the two delimiters with that list between them. */
+static int execute_left_right(struct hstex_engine *engine, bool right,
+                              char *error, size_t error_capacity)
+{
+    struct hstex_math_builder *list = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || list == NULL) {
+        return set_error(error, error_capacity,
+                         "\\left and \\right are only allowed in a formula");
+    }
+    int32_t code = 0;
+    if (scan_delimiter(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!right) {
+        uint8_t style = list->current_style;
+        if (push_math_list(engine, style, error, error_capacity) != 0) {
+            return -1;
+        }
+        current_math_list(engine)->left_delimiter = code;
+        current_math_list(engine)->is_left_group = true;
+        return 0;
+    }
+    if (!list->is_left_group || engine->math_depth <= engine->math_floor + 1U) {
+        return set_error(error, error_capacity,
+                         "\\right has no matching \\left");
+    }
+    int32_t left_code = list->left_delimiter;
+    uint8_t style = list->style;
+    uint8_t size = math_size_of_style(style);
+
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &builder;
+    int status = translate_math_list(engine, list, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    struct hstex_box inner = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, false, false, 0, &inner, error,
+                               error_capacity);
+    }
+    free(builder.node_identifiers);
+    pop_math_list(engine);
+    if (status != 0) {
+        return -1;
+    }
+
+    int32_t axis = 0;
+    if (math_symbol_parameter(engine, size, 22U, &axis, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    /* How far the contents reach from the axis, in both directions. */
+    int64_t below = (int64_t)inner.depth + axis;
+    int64_t above = (int64_t)inner.height + inner.depth - below;
+    int64_t reach = above > below ? above : below;
+    int64_t factor =
+        (reach / 500) *
+        engine->integer_parameters[HSTEX_INTEGER_DELIMITER_FACTOR];
+    int64_t shortfall =
+        reach + reach -
+        engine->dimen_parameters[HSTEX_DIMEN_DELIMITER_SHORTFALL];
+    int64_t wanted = factor > shortfall ? factor : shortfall;
+    if (wanted < 0) {
+        wanted = 0;
+    }
+    if (wanted > HSTEX_MAX_DIMEN) {
+        wanted = HSTEX_MAX_DIMEN;
+    }
+
+    struct hstex_box left_box = {0};
+    struct hstex_box right_box = {0};
+    if (variant_delimiter(engine, left_code, size, (int32_t)wanted, &left_box,
+                          error, error_capacity) != 0 ||
+        variant_delimiter(engine, code, size, (int32_t)wanted, &right_box,
+                          error, error_capacity) != 0) {
+        return -1;
+    }
+
+    struct hstex_hbox_builder whole = {0};
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &whole;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    status = 0;
+    struct hstex_box *parts[3] = {&left_box, &inner, &right_box};
+    for (size_t index = 0U; status == 0 && index < 3U; ++index) {
+        /* A delimiter is centred on the axis; the contents are not moved. */
+        int32_t shift = index == 1U ? 0
+                                    : half_of((int64_t)parts[index]->height -
+                                              parts[index]->depth) -
+                                          axis;
+        uint32_t identifier = 0U;
+        if (store_box_node(engine, parts[index], shift, &identifier, error,
+                           error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        status = append_hbox_item(engine, identifier, error, error_capacity);
+    }
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &whole, false, false, 0, &packed, error,
+                               error_capacity);
+    }
+    free(whole.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    uint32_t identifier = 0U;
+    if (store_box_node(engine, &packed, 0, &identifier, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_ATOM,
+        .atom_class = (uint8_t)HSTEX_ATOM_INNER,
+        .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX, .node = identifier},
+    };
+    return math_append_atom(engine, &noad, error, error_capacity);
+}
+
 /* \vcenter builds a vertical box and hangs it on the axis of the symbol
    family; see docs/DECISIONS.md, vcenter. */
 static int execute_vcenter(struct hstex_engine *engine, char *error,
@@ -15022,7 +15462,7 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
         return -1;
     }
     int64_t total = (int64_t)box.height + box.depth;
-    box.height = (int32_t)(axis + (total + 1) / 2);
+    box.height = axis + half_of(total);
     box.depth = (int32_t)(total - box.height);
     return math_append_box(engine, &box, error, error_capacity);
 }
@@ -18035,9 +18475,28 @@ handle_token:
                     }
                     continue;
                 }
-                if (math_append_character(
-                        engine, hstex_token_character_code(*token), error,
-                        error_capacity) != 0) {
+                /* A mathcode of "8000 makes the character behave as an
+                   active one; see docs/DECISIONS.md, math-active. */
+                int table = code_table_index(HSTEX_COMMAND_MATH_CODE);
+                uint8_t character = hstex_token_character_code(*token);
+                if (table >= 0 &&
+                    engine->code_tables[(size_t)table][character] == 0x8000) {
+                    hstex_cs_id active = 0U;
+                    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                            HSTEX_SYMBOL_ACTIVE, &character,
+                                            1U, &active, error,
+                                            error_capacity) != 0 ||
+                        reserve_meanings(engine, (size_t)active, error,
+                                         error_capacity) != 0 ||
+                        push_one(engine,
+                                 hstex_token_control_sequence(active),
+                                 *location, error, error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
+                if (math_append_character(engine, character, error,
+                                          error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
@@ -18252,6 +18711,12 @@ handle_token:
             continue;
         case HSTEX_COMMAND_DELIMITER:
             if (execute_delimiter(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_LEFT_RIGHT:
+            if (execute_left_right(engine, meaning->value.integer != 0, error,
+                                   error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
