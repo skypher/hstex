@@ -15134,6 +15134,10 @@ static int append_horizontal_character(struct hstex_engine *engine,
 static int start_paragraph(struct hstex_engine *engine, bool indent,
                            char *error, size_t error_capacity)
 {
+    /* A paragraph of its own starts counting lines again; one resumed after
+       a display does not. See docs/DECISIONS.md,
+       lines-carry-on-past-a-display. */
+    engine->prev_graf = 0;
     if (engine->paragraph_builder == NULL) {
         engine->paragraph_builder =
             calloc(1U, sizeof(*engine->paragraph_builder));
@@ -15534,8 +15538,10 @@ static int32_t line_badness(int64_t shortfall,
             return 0;
         }
         /* A line that would have to stretch further than the reference is
-           willing to measure is infinitely bad but still counts as decent,
-           so that it costs no \adjdemerits against its neighbours. */
+           willing to measure is worse than infinitely bad -- which is what
+           takes the break it started from out of the running -- but it still
+           counts as decent, so that it costs no \adjdemerits against its
+           neighbours. See docs/DECISIONS.md, a-line-too-short-to-measure. */
         if (shortfall > INT64_C(7230584) &&
             totals->stretch[0] < INT64_C(1663497)) {
             *fitness = (uint8_t)HSTEX_FIT_DECENT;
@@ -15771,8 +15777,13 @@ static int try_break_at(struct hstex_engine *engine,
        character-protrusion. */
     bool protruding =
         engine->integer_parameters[HSTEX_INTEGER_PDF_PROTRUDE_CHARS] >= 2;
+    /* The break that ends the paragraph is measured without the kern that
+       lets its last character stick out, even though the line is set with
+       one; see docs/DECISIONS.md, the-last-line-is-measured-square. */
     int32_t right_kern =
-        protruding ? line_right_kern(engine, items, count, breakpoint) : 0;
+        protruding && breakpoint < count
+            ? line_right_kern(engine, items, count, breakpoint)
+            : 0;
 
     size_t kept = 0U;
     for (size_t slot = 0U; slot < state->active_count; ++slot) {
@@ -16001,7 +16012,7 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
     memset(first, 0, sizeof(*first));
     first->breakpoint = 0U;
     first->start = 0U;
-    first->line = 0;
+    first->line = engine->prev_graf;
     first->fitness = (uint8_t)HSTEX_FIT_DECENT;
     first->demerits = 0;
     first->previous = SIZE_MAX;
@@ -16154,9 +16165,14 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
     size_t lines = depth - 1U;
     engine->paragraph_lines =
         lines > (size_t)INT32_MAX ? INT32_MAX : (int32_t)lines;
+    /* \prevgraf counts every line the paragraph has produced so far. */
+    engine->prev_graf = state->records[chain[depth - 1U]].line;
     for (size_t line = 1U; status == 0 && line < depth; ++line) {
         size_t from = state->records[chain[line - 1U]].start;
         size_t to = state->records[chain[line]].breakpoint;
+        /* The line's own number, which carries on past a display; see
+           docs/DECISIONS.md, lines-carry-on-past-a-display. */
+        int32_t numbered = state->records[chain[line]].line;
         struct hstex_hbox_builder builder = {0};
         struct hstex_hbox_builder *previous = engine->active_hbox_builder;
         enum hstex_mode previous_mode = engine->mode;
@@ -16304,7 +16320,7 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
         struct hstex_box box = {0};
         if (status == 0) {
             status = finalize_hbox(engine, &builder, true, false,
-                                   line_width_for(engine, (int32_t)line), &box,
+                                   line_width_for(engine, numbered), &box,
                                    error, error_capacity);
         }
         free(builder.node_identifiers);
@@ -16321,7 +16337,7 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             .width = box.width,
             .height = box.height,
             .depth = box.depth,
-            .shift = line_shift_for(engine, (int32_t)line),
+            .shift = line_shift_for(engine, numbered),
             .value.list = {
                 .node_start = box.node_start,
                 .node_count = box.node_count,
@@ -17047,10 +17063,13 @@ static int break_paragraph(struct hstex_engine *engine,
         /* The pass that hyphenates is the last one only when there is no
            \emergencystretch to fall back on. See docs/DECISIONS.md,
            emergency-stretch. */
-        if (state.trace.out != NULL) {
+        /* The second pass announces itself only when the first one ran and
+           came to nothing; see docs/DECISIONS.md, tracing-paragraphs. */
+        if (state.trace.out != NULL && pretolerance >= 0) {
             trace_newline(&state.trace);
             (void)fputs("@secondpass\n", state.trace.out);
             state.trace.printed = 0U;
+            state.trace.font_known = false;
         }
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
@@ -17063,6 +17082,7 @@ static int break_paragraph(struct hstex_engine *engine,
             trace_newline(&state.trace);
             (void)fputs("@emergencypass\n", state.trace.out);
             state.trace.printed = 0U;
+            state.trace.font_known = false;
         }
         background.stretch[0] += emergency;
         found = find_paragraph_breaks(
@@ -21048,9 +21068,10 @@ static int end_display_math(struct hstex_engine *engine, char *error,
     struct hstex_box equation = numbered ? engine->displayed_equation : packaged;
     struct hstex_box number = packaged;
     engine->reading_equation_number = false;
-    if (end_group(engine, error, error_capacity) != 0) {
-        return -1;
-    }
+    /* The group the display opened is closed only once the display has been
+       put on the vertical list, so that the glue in front of it is the glue
+       the display itself asked for; see docs/DECISIONS.md,
+       a-display-closes-its-group-last. */
     engine->displayed_math = false;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = false;
@@ -21158,6 +21179,9 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                             error_capacity) != 0) {
         return -1;
     }
+    if (end_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     return resume_paragraph_after_display(engine, error, error_capacity);
 }
 
@@ -21184,6 +21208,9 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
     engine->building_paragraph = true;
     engine->space_factor = 1000;
     engine->has_pending_character = false;
+    /* The display counts as three lines of the paragraph it interrupted; see
+       docs/DECISIONS.md, lines-carry-on-past-a-display. */
+    engine->prev_graf += 3;
     return skip_optional_space(engine, error, error_capacity);
 }
 
@@ -22204,6 +22231,17 @@ static int finish_alignment(struct hstex_engine *engine,
                 if (step + 1U < entry->span) {
                     width += columns[column + step].tabskip.width;
                 }
+            }
+            /* The entry is set to the column's width, so its glue takes up
+               whatever the column is wider by; see docs/DECISIONS.md,
+               the-entries-of-a-row. */
+            if ((size_t)set.value.list.node_start + set.value.list.node_count <=
+                engine->list_item_count) {
+                struct hstex_glue spare = list_total_glue(
+                    engine, engine->list_items + set.value.list.node_start,
+                    set.value.list.node_count);
+                set.value.list.glue =
+                    packing_glue_set(entry->width, (int32_t)width, &spare);
             }
             set.width = (int32_t)width;
             status = append_hbox_node(engine, &set, error, error_capacity);

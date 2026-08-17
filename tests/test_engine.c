@@ -2206,6 +2206,158 @@ static int test_operators_that_are_lists(void)
 );
 }
 
+/* The break that ends a paragraph is measured without the kern that lets
+   its last character stick out, though the line is set with one; see
+   docs/DECISIONS.md, the-last-line-is-measured-square. */
+static int test_the_last_line_is_measured_square(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\pdfp"
+        "rotrudechars=2 \\rpcode\\tenrm`\\.=1000 \\hsize=38"
+        "pt \\parindent=0pt \\spaceskip=4pt plus 2pt minus "
+        "1pt \\pretolerance=-1 \\tolerance=200 \\hbadness=1"
+        "0000 \\vbadness=10000 \\hfuzz=1000pt \\vfuzz=1000p"
+        "t \\baselineskip=12pt \\lineskip=0pt \\lineskiplim"
+        "it=0pt \\parfillskip=0pt plus 1fil \\leftskip=0pt "
+        "\\rightskip=0pt \\tracingonline=1 \\tracingparagra"
+        "phs=1 \\setbox0=\\vbox{\\noindent xx xx xx.\\par}%"
+,
+        "\\tenrm xx xx xx. \n@\\par via @@0 b=* p=-10000 d="
+        "*\n@@1: line 1.3- t=0 -> @@0\n\n"
+);
+}
+
+/* A display closes its own group only once it has joined the vertical
+   list, so the glue in front of it is the glue the display asked for; see
+   docs/DECISIONS.md, a-display-closes-its-group-last. */
+static int test_a_display_closes_its_group_last(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\hsize=100pt \\parindent=0pt \\baseline"
+        "skip=0pt \\lineskip=1pt \\lineskiplimit=0pt \\parf"
+        "illskip=0pt plus1fil \\leftskip=0pt \\rightskip=0p"
+        "t \\predisplaypenalty=10000 \\postdisplaypenalty=0"
+        " \\abovedisplayskip=3pt \\belowdisplayskip=4pt \\a"
+        "bovedisplayshortskip=1pt \\belowdisplayshortskip=2"
+        "pt \\tolerance=10000 \\pretolerance=-1 \\hbadness="
+        "10000 \\vbadness=10000 \\hfuzz=1000pt \\vfuzz=1000"
+        "pt \\showboxdepth=1 \\showboxbreadth=100 \\message"
+        "{[out]}\\setbox0=\\vbox{\\noindent y$$\\hbox{}$$z"
+        "\\par}\\showbox0 \\message{[in]}\\setbox0=\\vbox{"
+        "\\noindent y$$\\lineskip=9pt \\hbox{}$$z\\par}\\sh"
+        "owbox0%"
+,
+        "[out]> \\box0=\n\\vbox(15.55553+0.0)x100.0\n.\\hbo"
+        "x(4.30554+1.94444)x100.0, glue set 94.7222fil []\n"
+        ".\\penalty 10000\n.\\glue(\\abovedisplayshortskip)"
+        " 1.0\n.\\glue(\\lineskip) 1.0\n.\\hbox(0.0+0.0)x0."
+        "0, shifted 50.0, display []\n.\\penalty 0\n.\\glue"
+        "(\\belowdisplayshortskip) 2.0\n.\\glue(\\lineskip)"
+        " 1.0\n.\\hbox(4.30554+0.0)x100.0, glue set 95.5555"
+        "6fil []\n\n! OK.\n[in]> \\box0=\n\\vbox(23.55553+0"
+        ".0)x100.0\n.\\hbox(4.30554+1.94444)x100.0, glue se"
+        "t 94.7222fil []\n.\\penalty 10000\n.\\glue(\\above"
+        "displayshortskip) 1.0\n.\\glue(\\lineskip) 9.0\n."
+        "\\hbox(0.0+0.0)x0.0, shifted 50.0, display []\n.\\"
+        "penalty 0\n.\\glue(\\belowdisplayshortskip) 2.0\n."
+        "\\glue(\\lineskip) 1.0\n.\\hbox(4.30554+0.0)x100.0"
+        ", glue set 95.55556fil []\n\n! OK.\n"
+);
+}
+
+/* A display counts as three lines of the paragraph it interrupts, so what
+   follows takes the shape of a later line; see docs/DECISIONS.md,
+   lines-carry-on-past-a-display. */
+static int test_lines_carry_on_past_a_display(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\hsize=100pt \\parindent=0pt \\baseline"
+        "skip=0pt \\lineskip=0pt \\lineskiplimit=0pt \\parf"
+        "illskip=0pt plus1fil \\leftskip=0pt \\rightskip=0p"
+        "t \\predisplaypenalty=10000 \\postdisplaypenalty=0"
+        " \\abovedisplayskip=3pt \\belowdisplayskip=4pt \\a"
+        "bovedisplayshortskip=1pt \\belowdisplayshortskip=2"
+        "pt \\tolerance=10000 \\pretolerance=-1 \\hbadness="
+        "10000 \\vbadness=10000 \\hfuzz=1000pt \\vfuzz=1000"
+        "pt \\showboxdepth=1 \\showboxbreadth=100 \\def\\W{"
+        "\\vrule width20pt height1pt depth0pt\\hskip0pt plu"
+        "s1fil}\\message{[shape]}\\setbox0=\\vbox{\\parshap"
+        "e=6 0pt 90pt 0pt 80pt 0pt 70pt 0pt 60pt 0pt 50pt 0"
+        "pt 40pt \\noindent\\W\\W$$\\hbox{}$$\\W\\W\\par}\\"
+        "showbox0%"
+,
+        "[shape]> \\box0=\n\\vbox(9.0+0.0)x90.0\n.\\hbox(1."
+        "0+0.0)x90.0, glue set 25.0fil []\n.\\penalty 10000"
+        "\n.\\glue(\\abovedisplayskip) 3.0\n.\\glue(\\basel"
+        "ineskip) 0.0\n.\\hbox(0.0+0.0)x0.0, shifted 35.0, "
+        "display []\n.\\penalty 0\n.\\glue(\\belowdisplaysk"
+        "ip) 4.0\n.\\glue(\\lineskip) 0.0\n.\\hbox(1.0+0.0)"
+        "x50.0, glue set 5.0fil []\n\n! OK.\n"
+);
+}
+
 /* A large operator sits on the axis, takes a bigger shape in display style,
    and carries its limits above and below unless told otherwise; see
    docs/DECISIONS.md, large-operators. */
@@ -5888,6 +6040,9 @@ int main(void)
         test_pdf_destinations() != 0 ||
         test_tracing_paragraphs() != 0 ||
         test_the_first_line_protrudes_too() != 0 ||
+        test_the_last_line_is_measured_square() != 0 ||
+        test_a_display_closes_its_group_last() != 0 ||
+        test_lines_carry_on_past_a_display() != 0 ||
         test_large_operators() != 0 ||
         test_operators_that_are_lists() != 0 ||
         test_the_space_factor_of_a_ligature() != 0 ||

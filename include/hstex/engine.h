@@ -1357,6 +1357,10 @@ struct hstex_engine {
     /* How many lines the paragraph most recently broken came to, which is
        what decides the line a display sits on. */
     int32_t paragraph_lines;
+    /* \prevgraf: how many lines the paragraph has behind it, which a
+       display adds three to. The breaker numbers its lines from here.
+       See docs/DECISIONS.md, lines-carry-on-past-a-display. */
+    int32_t prev_graf;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;
