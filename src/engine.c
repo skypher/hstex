@@ -9700,6 +9700,9 @@ static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
     struct hstex_vbox_builder *previous = engine->active_vbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     engine->active_vbox_builder = &builder;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
     struct hstex_glue top = engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
     int32_t height = packed_dimen(engine->nodes[items[first] - 1U].height);
@@ -9729,6 +9732,7 @@ static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
     }
     free(builder.node_identifiers);
     engine->active_vbox_builder = previous;
+    engine->prev_depth = enclosing_depth;
     engine->mode = previous_mode;
     return status;
 }
@@ -9791,6 +9795,9 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
     struct hstex_vbox_builder *previous = engine->active_vbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     engine->active_vbox_builder = &builder;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
     int status = 0;
     for (size_t item = 0U; status == 0 && item < split; ++item) {
@@ -9805,6 +9812,7 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
     }
     free(builder.node_identifiers);
     engine->active_vbox_builder = previous;
+    engine->prev_depth = enclosing_depth;
     engine->mode = previous_mode;
     struct hstex_box rest = {0};
     rest.kind = HSTEX_BOX_VOID;
@@ -11433,6 +11441,9 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     struct hstex_vbox_builder shipped = {0};
     struct hstex_vbox_builder *previous = engine->active_vbox_builder;
     engine->active_vbox_builder = &shipped;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     int status = 0;
     for (size_t index = 0U; status == 0 && index < split; ++index) {
         status = append_vbox_item(engine, page->node_identifiers[index], error,
@@ -11450,6 +11461,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     }
     free(shipped.node_identifiers);
     engine->active_vbox_builder = previous;
+    engine->prev_depth = enclosing_depth;
     if (status != 0) {
         free(returned);
         return -1;
@@ -18649,6 +18661,9 @@ static int build_math_radical(struct hstex_engine *engine,
     struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     engine->active_vbox_builder = &body;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
     /* The bar over the radicand is as thick as the sign is tall, and sits
        that same distance below the top of the whole thing; the default rule
@@ -18683,6 +18698,7 @@ static int build_math_radical(struct hstex_engine *engine,
     }
     free(body.node_identifiers);
     engine->active_vbox_builder = previous_vbox;
+    engine->prev_depth = enclosing_depth;
     engine->mode = previous_mode;
     if (status != 0) {
         return -1;
@@ -18766,6 +18782,9 @@ static int build_math_line(struct hstex_engine *engine,
     struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     engine->active_vbox_builder = &body;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
     uint32_t identifier = 0U;
     int status = 0;
@@ -18793,6 +18812,7 @@ static int build_math_line(struct hstex_engine *engine,
     }
     free(body.node_identifiers);
     engine->active_vbox_builder = previous_vbox;
+    engine->prev_depth = enclosing_depth;
     engine->mode = previous_mode;
     if (status != 0) {
         return -1;
@@ -18908,6 +18928,9 @@ static int translate_math_fraction(struct hstex_engine *engine,
     struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     engine->active_vbox_builder = &body;
+    /* A list built here is not the one \prevdepth belongs to. */
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
     int status = 0;
     uint32_t identifier = 0U;
@@ -18947,6 +18970,7 @@ static int translate_math_fraction(struct hstex_engine *engine,
     }
     free(body.node_identifiers);
     engine->active_vbox_builder = previous_vbox;
+    engine->prev_depth = enclosing_depth;
     engine->mode = previous_mode;
     if (status != 0) {
         return -1;
