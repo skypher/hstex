@@ -678,6 +678,11 @@ struct hstex_box {
 
 /* The three sizes a math family is set in. Only the text size is used so
    far; see docs/DECISIONS.md, math-mode. */
+/* The reference's two sentinel badnesses: the worst a box can be and still
+   be set, and what an overfull box reports. */
+#define HSTEX_INFINITE_BADNESS 10000
+#define HSTEX_OVERFULL_BADNESS 1000000
+
 enum hstex_math_size {
     HSTEX_MATH_TEXT = 0,
     HSTEX_MATH_SCRIPT,
@@ -1048,6 +1053,8 @@ struct hstex_engine {
     bool building_alignment;
     /* True while the formula being read is a display. */
     bool displayed_math;
+    /* What \badness reports about the box packed most recently. */
+    int32_t badness;
     /* The math lists being built, innermost last; empty outside math. */
     struct hstex_math_builder *math_stack;
     size_t math_depth;

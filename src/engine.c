@@ -1930,6 +1930,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         "currentiflevel",
         "currentiftype",
         "currentifbranch",
+        "badness",
     };
     for (size_t index = 0U;
          index < sizeof(engine_state_integer_primitives) /
@@ -3374,6 +3375,9 @@ static int integer_from_control_sequence(
             return 0;
         case 3:
             *value = engine->conditional_count == 0U ? 0 : 1;
+            return 0;
+        case 5:
+            *value = engine->badness;
             return 0;
         case 4:
             *value = engine->conditional_count == 0U
@@ -7942,6 +7946,101 @@ static int32_t packed_dimen(int32_t value)
     return value == HSTEX_RUNNING_DIMEN ? 0 : value;
 }
 
+/* How bad it is to stretch or shrink `available` by `needed`. The reference
+   computes an integer approximation of a hundred times the cube of the ratio,
+   which is not the same as rounding that cube: see docs/DECISIONS.md,
+   badness. */
+static int32_t glue_badness(int32_t needed, int32_t available)
+{
+    if (needed == 0) {
+        return 0;
+    }
+    if (available <= 0) {
+        return HSTEX_INFINITE_BADNESS;
+    }
+    int64_t ratio;
+    if (needed <= INT64_C(7230584)) {
+        ratio = ((int64_t)needed * 297) / available;
+    } else if (available >= INT64_C(1663497)) {
+        ratio = (int64_t)needed / ((int64_t)available / 297);
+    } else {
+        ratio = needed;
+    }
+    if (ratio > 1290) {
+        return HSTEX_INFINITE_BADNESS;
+    }
+    return (int32_t)((ratio * ratio * ratio + INT64_C(131072)) /
+                     INT64_C(262144));
+}
+
+/* The glue a list can give: the totals at the highest order present, which
+   is all the packing needs. */
+static struct hstex_glue list_total_glue(const struct hstex_engine *engine,
+                                         const uint32_t *identifiers,
+                                         size_t count)
+{
+    int64_t stretch[4] = {0, 0, 0, 0};
+    int64_t shrink[4] = {0, 0, 0, 0};
+    for (size_t index = 0U; index < count; ++index) {
+        uint32_t identifier = identifiers[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind != HSTEX_NODE_GLUE) {
+            continue;
+        }
+        uint8_t up = node->value.glue.stretch_order;
+        uint8_t down = node->value.glue.shrink_order;
+        if (up < 4U) {
+            stretch[up] += node->value.glue.stretch;
+        }
+        if (down < 4U) {
+            shrink[down] += node->value.glue.shrink;
+        }
+    }
+    struct hstex_glue total = {0};
+    for (int order = 3; order >= 0; --order) {
+        if (stretch[order] != 0) {
+            total.stretch = (int32_t)stretch[order];
+            total.stretch_order = (uint8_t)order;
+            break;
+        }
+    }
+    for (int order = 3; order >= 0; --order) {
+        if (shrink[order] != 0) {
+            total.shrink = (int32_t)shrink[order];
+            total.shrink_order = (uint8_t)order;
+            break;
+        }
+    }
+    return total;
+}
+
+/* What a box that has just been packed to a width reports through \badness:
+   nothing if it fits, the badness of the glue it had to move, or a million
+   if it could not be shrunk far enough. */
+static int32_t packing_badness(int64_t natural, int64_t target,
+                               const struct hstex_glue *total)
+{
+    if (target == natural) {
+        return 0;
+    }
+    if (target > natural) {
+        if (total->stretch_order != 0U) {
+            return 0;
+        }
+        return glue_badness((int32_t)(target - natural), total->stretch);
+    }
+    if (total->shrink_order != 0U) {
+        return 0;
+    }
+    if (natural - target > total->shrink) {
+        return HSTEX_OVERFULL_BADNESS;
+    }
+    return glue_badness((int32_t)(natural - target), total->shrink);
+}
+
 static int append_hbox_node(struct hstex_engine *engine,
                             const struct hstex_node *node, char *error,
                             size_t error_capacity)
@@ -8492,6 +8591,9 @@ static int finalize_hbox(struct hstex_engine *engine,
         }
         box->width = (int32_t)spread_width;
     }
+    struct hstex_glue total =
+        list_total_glue(engine, builder->node_identifiers, builder->count);
+    engine->badness = packing_badness(builder->width, box->width, &total);
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
         box->node_count = (uint32_t)builder->count;
@@ -8699,11 +8801,15 @@ static int finalize_vbox(struct hstex_engine *engine,
         height += (int64_t)depth - limit;
         depth = limit;
     }
+    int64_t natural = height;
     if (matched_to) {
         height = requested_height;
     } else if (matched_spread) {
         height += requested_height;
     }
+    struct hstex_glue total =
+        list_total_glue(engine, builder->node_identifiers, builder->count);
+    engine->badness = packing_badness(natural, height, &total);
     if (height < -INT64_C(1073741823) ||
         height > INT64_C(1073741823)) {
         return set_error(error, error_capacity,

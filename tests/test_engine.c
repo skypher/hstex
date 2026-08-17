@@ -1038,6 +1038,52 @@ static int test_math_choices(void)
         "[9.48615pt|8.14003pt][5.00002pt|6.44444pt][1111]");
 }
 
+/* \badness after packing a box; see docs/DECISIONS.md, badness. */
+static int test_badness(void)
+{
+    return run_snippet(
+        "\\def\\K#1{\\vrule width#1 height1pt depth0pt}"
+        "\\def\\b#1{\\setbox0=#1[\\the\\badness]}"
+        "\\hbadness=10000 \\hfuzz=1000pt \\vbadness=10000 \\vfuzz=1000pt "
+        /* Ten points of stretch, stretched by more and more of it. */
+        "\\b{\\hbox to 10pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 11pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 12pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 13pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 15pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 17pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 20pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 25pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 30pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 10.5pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        /* Either side of the ratio the approximation gives up at. */
+        "\\b{\\hbox to 53.4pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        "\\b{\\hbox to 53.5pt{\\K{10pt}\\hskip0pt plus10pt}}"
+        /* Shrinking, and shrinking further than the glue allows. */
+        "\\b{\\hbox to 9pt{\\K{10pt}\\hskip0pt minus10pt}}"
+        "\\b{\\hbox to 5pt{\\K{10pt}\\hskip0pt minus10pt}}"
+        "\\b{\\hbox to 0pt{\\K{10pt}\\hskip0pt minus10pt}}"
+        "\\b{\\hbox to -5pt{\\K{10pt}\\hskip0pt minus10pt}}"
+        /* No glue at all: infinitely bad unless it already fits. */
+        "\\b{\\hbox to 20pt{\\K{10pt}}}"
+        "\\b{\\hbox to 10pt{\\K{10pt}}}"
+        "\\b{\\hbox to 5pt{\\K{10pt}}}"
+        /* Infinite glue is never bad. */
+        "\\b{\\hbox to 50pt{\\K{10pt}\\hskip0pt plus1fil}}"
+        /* The branch the approximation takes for a large gap. */
+        "\\b{\\hbox to 200pt{\\K{10pt}\\hskip0pt plus100pt}}"
+        "\\b{\\hbox to 300pt{\\K{10pt}\\hskip0pt plus1000pt}}"
+        "\\b{\\hbox to 2000pt{\\K{10pt}\\hskip0pt plus1000pt}}"
+        "\\b{\\hbox to 200pt{\\K{10pt}\\hskip0pt plus60pt}}"
+        /* A vertical list is measured the same way. */
+        "\\b{\\vbox to 20pt{\\hrule height10pt \\vskip0pt plus10pt}}"
+        "\\b{\\vbox to 30pt{\\hrule height10pt \\vskip0pt plus10pt}}"
+        "\\b{\\vbox to 5pt{\\hrule height10pt \\vskip0pt minus10pt}}%",
+        "[0][0][1][3][12][34][100][336][800][0][8151][10000][0]"
+        "[12][100][1000000][10000][0][1000000][0][684][2][787]"
+        "[3168][100][800][12]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2123,7 +2169,8 @@ int main(void)
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
         test_math_scripts() != 0 || test_alignments() != 0 ||
-        test_display_math() != 0 || test_math_choices() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_display_math() != 0 || test_math_choices() != 0 ||
+        test_badness() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
