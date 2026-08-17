@@ -1111,6 +1111,11 @@ struct hstex_engine {
     bool reading_equation_number;
     bool equation_number_on_left;
     struct hstex_box displayed_equation;
+    /* An alignment standing in for a whole display: its rows are gathered
+       here until the closing $$ says what glue surrounds them. */
+    bool display_alignment;
+    struct hstex_vbox_builder *display_rows;
+    struct hstex_vbox_builder *display_outer_vbox;
     /* What \badness reports about the box packed most recently. */
     int32_t badness;
     /* The math lists being built, innermost last; empty outside math. */

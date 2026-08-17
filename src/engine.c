@@ -2502,6 +2502,11 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     engine->math_stack = NULL;
     engine->math_depth = 0U;
     engine->math_capacity = 0U;
+    if (engine->display_rows != NULL) {
+        free(engine->display_rows->node_identifiers);
+        free(engine->display_rows);
+        engine->display_rows = NULL;
+    }
     for (size_t index = 0U; index < 16U; ++index) {
         if (engine->write_streams[index] != NULL) {
             (void)fclose(engine->write_streams[index]);
@@ -8608,8 +8613,14 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
             continue;
         }
         if (!hstex_token_is_character(token)) {
+            char found[128];
+            describe_token(engine, token, found, sizeof(found));
+            uint32_t line = 0U;
+            const char *origin = current_source_line(engine, &line);
             status = set_error(error, error_capacity,
-                               "unsupported horizontal-mode token inside hbox");
+                               "unsupported horizontal-mode token inside hbox: "
+                               "%s at %s:%u",
+                               found, origin, (unsigned int)line);
             break;
         }
         status = append_horizontal_character(
@@ -9047,15 +9058,16 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
     return status;
 }
 
-static int append_box_node(struct hstex_engine *engine,
-                           const struct hstex_box *box, char *error,
-                           size_t error_capacity)
+static int append_shifted_box_node(struct hstex_engine *engine,
+                                   const struct hstex_box *box, int32_t shift,
+                                   char *error, size_t error_capacity)
 {
     struct hstex_node node = {
         .kind = HSTEX_NODE_LIST,
         .width = box->width,
         .height = box->height,
         .depth = box->depth,
+        .shift = shift,
         .value.list = {
             .node_start = box->node_start,
             .node_count = box->node_count,
@@ -9063,6 +9075,13 @@ static int append_box_node(struct hstex_engine *engine,
         },
     };
     return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+static int append_box_node(struct hstex_engine *engine,
+                           const struct hstex_box *box, char *error,
+                           size_t error_capacity)
+{
+    return append_shifted_box_node(engine, box, 0, error, error_capacity);
 }
 
 /* \vsplit takes the top of a vertical list, leaving the rest behind. A void
@@ -15645,6 +15664,9 @@ static int append_display_line(struct hstex_engine *engine,
     return append_vbox_node(engine, &node, error, error_capacity);
 }
 
+static int resume_paragraph_after_display(struct hstex_engine *engine,
+                                          char *error, size_t error_capacity);
+
 /* The closing $$ centres the formula in \displaywidth, surrounds it with the
    display penalties and skips, and lets the paragraph carry on. */
 static int end_display_math(struct hstex_engine *engine, char *error,
@@ -15764,8 +15786,14 @@ static int end_display_math(struct hstex_engine *engine, char *error,
         append_display_glue(engine, below, error, error_capacity) != 0) {
         return -1;
     }
-    /* The paragraph carries on, with no indentation and no \everypar, and a
-       space right after the display is ignored. */
+    return resume_paragraph_after_display(engine, error, error_capacity);
+}
+
+/* The paragraph carries on, with no indentation and no \everypar, and a
+   space right after the display is ignored. */
+static int resume_paragraph_after_display(struct hstex_engine *engine,
+                                          char *error, size_t error_capacity)
+{
     if (engine->paragraph_builder == NULL) {
         engine->paragraph_builder =
             calloc(1U, sizeof(*engine->paragraph_builder));
@@ -15785,6 +15813,55 @@ static int end_display_math(struct hstex_engine *engine, char *error,
     engine->space_factor = 1000;
     engine->has_pending_character = false;
     return skip_optional_space(engine, error, error_capacity);
+}
+
+/* The $$ that closes an alignment used as a display reads the penalties and
+   skips around it -- assignments between the alignment and the $$ still
+   count -- and puts the rows between them. See docs/DECISIONS.md,
+   display-alignments. */
+static int end_display_alignment(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity)
+{
+    struct hstex_vbox_builder *rows = engine->display_rows;
+    engine->display_rows = NULL;
+    engine->display_alignment = false;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = false;
+    struct hstex_node penalty = {
+        .kind = HSTEX_NODE_PENALTY,
+        .value.penalty =
+            engine->integer_parameters[HSTEX_INTEGER_PRE_DISPLAY_PENALTY],
+    };
+    int status = append_vbox_node(engine, &penalty, error, error_capacity);
+    if (status == 0) {
+        status = append_display_glue(
+            engine, engine->glue_parameters[HSTEX_GLUE_ABOVE_DISPLAY_SKIP],
+            error, error_capacity);
+    }
+    for (size_t index = 0U; status == 0 && rows != NULL && index < rows->count;
+         ++index) {
+        status = append_vbox_item(engine, rows->node_identifiers[index], error,
+                                  error_capacity);
+    }
+    if (rows != NULL) {
+        free(rows->node_identifiers);
+        free(rows);
+    }
+    if (status != 0) {
+        return -1;
+    }
+    penalty.value.penalty =
+        engine->integer_parameters[HSTEX_INTEGER_POST_DISPLAY_PENALTY];
+    if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
+        append_display_glue(
+            engine, engine->glue_parameters[HSTEX_GLUE_BELOW_DISPLAY_SKIP],
+            error, error_capacity) != 0) {
+        return -1;
+    }
+    if (end_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    return resume_paragraph_after_display(engine, error, error_capacity);
 }
 
 /* Entering a formula opens a group, sets \fam to none, and inserts
@@ -16608,7 +16685,7 @@ static int finish_alignment(struct hstex_engine *engine,
                             const struct hstex_align_row *rows,
                             size_t row_count, bool matched_to,
                             bool matched_spread, int32_t requested_width,
-                            char *error, size_t error_capacity)
+                            int32_t shift, char *error, size_t error_capacity)
 {
     for (size_t index = 0U; index < column_count; ++index) {
         columns[index].width = 0;
@@ -16724,9 +16801,31 @@ static int finish_alignment(struct hstex_engine *engine,
         if (status != 0) {
             return -1;
         }
-        if (append_box_node(engine, &packed, error, error_capacity) != 0) {
+        if (append_shifted_box_node(engine, &packed, shift, error,
+                                    error_capacity) != 0) {
             return -1;
         }
+    }
+    return 0;
+}
+
+/* \everycr is read once the preamble has been scanned and again after every
+   \cr that ends a row; a redundant \crcr does not fire it. See
+   docs/DECISIONS.md, everycr. */
+static int insert_every_cr(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    uint32_t every = engine->token_parameters[HSTEX_TOKEN_EVERY_CR];
+    if (every == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list = token_list_by_identifier(engine, every);
+    struct hstex_source_location location = {0};
+    if (list == NULL ||
+        hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "could not install everycr tokens");
     }
     return 0;
 }
@@ -16760,7 +16859,12 @@ static int reserve_align_rows(struct hstex_align_row **rows, size_t *capacity,
 
 /* \halign: read the preamble, read every row at its natural width, then set
    the columns to the width of their widest entry and put the rows in the
-   enclosing vertical list. */
+   enclosing vertical list.
+
+   An alignment may also be the whole of a display, which is how amsmath sets
+   align and gather. The rows are then gathered aside so that the display's
+   penalties and skips can be read at the closing $$; see
+   docs/DECISIONS.md, display-alignments. */
 static int execute_halign(struct hstex_engine *engine, char *error,
                           size_t error_capacity)
 {
@@ -16768,7 +16872,20 @@ static int execute_halign(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "an alignment does not accept prefixes");
     }
-    if (engine->mode != HSTEX_MODE_VERTICAL) {
+    bool display = false;
+    if (engine->mode == HSTEX_MODE_MATH) {
+        const struct hstex_math_builder *list = current_math_list(engine);
+        if (!engine->displayed_math || engine->reading_equation_number ||
+            list == NULL || engine->math_depth != engine->math_floor + 1U) {
+            return set_error(error, error_capacity,
+                             "\\halign requires vertical mode");
+        }
+        if (list->count != 0U) {
+            return set_error(error, error_capacity,
+                             "an alignment must be the whole of a display");
+        }
+        display = true;
+    } else if (engine->mode != HSTEX_MODE_VERTICAL) {
         return set_error(error, error_capacity,
                          "\\halign requires vertical mode");
     }
@@ -16808,6 +16925,25 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     /* The glue before the first column is \tabskip as it stood when the
        alignment began; the preamble's own assignments set the later ones. */
     struct hstex_glue leading = engine->glue_parameters[HSTEX_GLUE_TAB_SKIP];
+    int32_t shift = 0;
+    if (display) {
+        /* The formula the display was going to hold is empty and goes away;
+           what is left is a vertical list, gathered aside until the closing
+           $$ says what surrounds it. \prevdepth is carried over, so the
+           first row is spaced from the line above it as any box would be. */
+        pop_math_list(engine);
+        engine->mode = HSTEX_MODE_VERTICAL;
+        engine->inner_mode = false;
+        engine->displayed_math = false;
+        shift = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_INDENT];
+        engine->display_outer_vbox = engine->active_vbox_builder;
+        engine->display_rows = calloc(1U, sizeof(*engine->display_rows));
+        if (engine->display_rows == NULL) {
+            return set_error(error, error_capacity,
+                             "display alignment allocation failed");
+        }
+        engine->active_vbox_builder = engine->display_rows;
+    }
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -16821,6 +16957,9 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     int status = scan_align_preamble(engine, &columns, &column_count,
                                      &loop_start, error, error_capacity);
     column_capacity = column_count;
+    if (status == 0) {
+        status = insert_every_cr(engine, error, error_capacity);
+    }
     bool previous_building = engine->building_alignment;
     engine->building_alignment = true;
 
@@ -16965,12 +17104,14 @@ static int execute_halign(struct hstex_engine *engine, char *error,
         if (status != 0) {
             break;
         }
+        status = insert_every_cr(engine, error, error_capacity);
     }
     engine->building_alignment = previous_building;
     if (status == 0) {
         status = finish_alignment(engine, columns, column_count, leading,
                                   rows, row_count, matched_to, matched_spread,
-                                  requested_width, error, error_capacity);
+                                  requested_width, shift, error,
+                                  error_capacity);
     }
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
@@ -16978,6 +17119,16 @@ static int execute_halign(struct hstex_engine *engine, char *error,
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
             break;
+        }
+    }
+    if (display) {
+        engine->active_vbox_builder = engine->display_outer_vbox;
+        if (status == 0) {
+            engine->display_alignment = true;
+        } else {
+            free(engine->display_rows->node_identifiers);
+            free(engine->display_rows);
+            engine->display_rows = NULL;
         }
     }
     return status;
@@ -18441,6 +18592,32 @@ handle_token:
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
+                /* An alignment that stood in for a whole display leaves the
+                   engine in vertical mode, so the $$ that closes it is
+                   recognised before anything else. */
+                if (engine->display_alignment) {
+                    hstex_token second = 0U;
+                    struct hstex_source_location where;
+                    if (raw_next(engine, &second, &where, error,
+                                 error_capacity) != HSTEX_ENGINE_TOKEN ||
+                        !token_is_effective_category(
+                            engine, second, (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
+                        char found[128];
+                        describe_token(engine, second, found, sizeof(found));
+                        uint32_t line = 0U;
+                        const char *origin = current_source_line(engine, &line);
+                        (void)set_error(error, error_capacity,
+                                        "a display must be closed by $$, "
+                                        "found %s at %s:%u",
+                                        found, origin, (unsigned int)line);
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    if (end_display_alignment(engine, error, error_capacity) !=
+                        0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
                 /* Math shift starts a paragraph in vertical mode, and like
                    every other horizontal command it is read again once
                    \everypar has run. */

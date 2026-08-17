@@ -1532,6 +1532,75 @@ static int test_preamble_forms(void)
         "[24.0pt|1.0pt][15.0pt|1.0pt][15.0pt|1.0pt]");
 }
 
+/* An alignment can be the whole of a display; see docs/DECISIONS.md,
+   display-alignments. */
+static int test_display_alignments(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 \\catcode`\\$=3 \\parindent=0pt \\baseline"
+        "skip=0pt \\lineskip=0pt \\lineskiplimit=0pt \\boxmaxdepth="
+        "16383.99998pt \\parskip=0pt \\tabskip=0pt \\parfillskip=0p"
+        "t plus1fil \\tolerance=10000 \\abovedisplayskip=13pt \\bel"
+        "owdisplayskip=17pt \\abovedisplayshortskip=5pt \\belowdisp"
+        "layshortskip=7pt \\predisplaypenalty=101 \\postdisplaypena"
+        "lty=103 \\hbadness=10000 \\hfuzz=1000pt \\vbadness=10000 "
+        "\\vfuzz=1000pt \\hsize=200pt \\def\\K#1{\\vrule width#1pt "
+        "height1pt depth0pt}\\setbox0=\\vbox{\\noindent\\K{20}$$\\h"
+        "align{\\K{1}#\\K{2}&\\K{4}#\\K{8}\\cr\\K{5}&\\K{7}\\cr\\K{"
+        "11}&\\K{3}\\cr}$$\\K{30}}[1|\\the\\wd0|\\the\\ht0|\\the\\d"
+        "p0]\\setbox0=\\vbox{\\noindent$$\\halign{\\K{1}#\\K{2}&\\K"
+        "{4}#\\K{8}\\cr\\K{5}&\\K{7}\\cr\\K{11}&\\K{3}\\cr}$$}[2|\\"
+        "the\\wd0|\\the\\ht0]\\setbox0=\\vbox{\\noindent$$\\halign "
+        "to150pt{\\K{1}#\\K{2}\\tabskip=0pt plus1fil&\\K{4}#\\K{8}"
+        "\\cr\\K{5}&\\K{7}\\cr\\K{11}&\\K{3}\\cr}$$}[3|\\the\\wd0|"
+        "\\the\\ht0]\\baselineskip=20pt \\setbox0=\\vbox{\\noindent"
+        "$$\\halign{\\K{1}#\\K{2}&\\K{4}#\\K{8}\\cr\\vrule width5pt"
+        " height1pt depth2pt&\\vrule width7pt height1pt depth2pt\\c"
+        "r\\vrule width11pt height1pt depth2pt&\\vrule width3pt hei"
+        "ght1pt depth2pt\\cr}$$\\K{30}}[4|\\the\\wd0|\\the\\ht0|\\t"
+        "he\\dp0]\\baselineskip=0pt \\setbox0=\\vbox{\\noindent$$\\"
+        "halign{\\K{1}#\\K{2}&\\K{4}#\\K{8}\\cr\\K{5}&\\K{7}\\cr\\n"
+        "oalign{\\kern6pt}\\K{11}&\\K{3}\\cr}$$}[5|\\the\\wd0|\\the"
+        "\\ht0]\\count1=3 \\setbox0=\\vbox{\\noindent$$\\count1=7 "
+        "\\tabskip=5pt\\halign{\\K{1}#\\cr\\K{5}\\cr\\K{7}\\cr}$$\\"
+        "global\\count2=\\count1 \\global\\skip1=\\tabskip}[6|\\the"
+        "\\count2|\\the\\skip1][7|\\the\\count1|\\the\\tabskip|\\th"
+        "e\\wd0|\\the\\ht0]\\setbox0=\\vbox{\\noindent$$\\halign{#"
+        "\\cr\\K{5}\\cr}\\abovedisplayskip=40pt \\predisplaypenalty"
+        "=77 \\belowdisplayskip=41pt $$}[8|\\the\\wd0|\\the\\ht0]\\"
+        "setbox0=\\vbox{\\noindent$$\\halign{&\\K{1}#\\K{2}\\cr\\K{"
+        "5}&\\K{7}\\cr}$$}[9|\\the\\wd0|\\the\\ht0]%",
+        "[1|200.0pt|34.0pt|0.0pt][2|33.0pt|32.0pt][3|150.0pt|32.0pt"
+        "][4|200.0pt|71.0pt|0.0pt][5|33.0pt|38.0pt][6|3|0.0pt][7|3|"
+        "0.0pt|18.0pt|32.0pt][8|5.0pt|82.0pt][9|18.0pt|31.0pt]");
+}
+
+/* \everycr fires after the preamble and after every \cr that ends a
+   row; see docs/DECISIONS.md, everycr. */
+static int test_every_cr(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 \\parindent=0pt \\baselineskip=0pt \\lines"
+        "kip=0pt \\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\"
+        "parskip=0pt \\tabskip=0pt \\hbadness=10000 \\hfuzz=1000pt "
+        "\\vbadness=10000 \\vfuzz=1000pt \\hsize=200pt \\def\\K#1{"
+        "\\vrule width#1pt height1pt depth0pt}\\def\\C{\\everycr{\\"
+        "noalign{\\global\\advance\\count0by1 }}}\\count0=0 \\setbo"
+        "x9=\\vbox{\\C\\halign{#\\cr\\K{5}\\cr\\K{7}\\cr}}[1|\\the"
+        "\\count0]\\count0=0 \\setbox9=\\vbox{\\C\\halign{#\\cr}}[2"
+        "|\\the\\count0]\\count0=0 \\setbox9=\\vbox{\\C\\halign{#\\"
+        "cr\\K{5}\\crcr}}[3|\\the\\count0]\\count0=0 \\setbox9=\\vb"
+        "ox{\\C\\halign{#\\cr\\K{5}\\cr\\crcr}}[4|\\the\\count0]\\c"
+        "ount0=0 \\setbox9=\\vbox{\\C\\halign{#\\cr\\K{5}\\cr\\noal"
+        "ign{}\\crcr}}[5|\\the\\count0]\\count0=0 \\setbox9=\\vbox{"
+        "\\C\\halign{#\\cr\\K{5}\\cr\\noalign{}\\K{7}\\cr}}[6|\\the"
+        "\\count0]\\count0=0 \\setbox9=\\vbox{\\C\\halign{#&#\\cr\\"
+        "K{5}&\\K{6}\\cr}}[7|\\the\\count0]\\setbox9=\\vbox{\\every"
+        "cr{\\noalign{\\kern3pt}}\\halign{#\\cr\\K{5}\\cr\\K{7}\\cr"
+        "}}[8|\\the\\ht9]%",
+        "[1|3][2|1][3|2][4|2][5|2][6|3][7|2][8|11.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2621,7 +2690,8 @@ int main(void)
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
-        test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
+        test_every_cr() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
