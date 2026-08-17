@@ -73,6 +73,8 @@ static int set_error(char *error, size_t capacity, const char *format, ...)
 static void clear_match_groups(struct hstex_engine *engine);
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity);
+static const char *current_source_line(const struct hstex_engine *engine,
+                                      uint32_t *line);
 static const struct hstex_node *current_list_last_node(
     const struct hstex_engine *engine);
 static int32_t last_node_type(const struct hstex_node *node);
@@ -6974,6 +6976,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                          "def requires a control-sequence target");
     }
 
+    uint32_t origin_line = 0U;
+    const char *origin = current_source_line(engine, &origin_line);
     struct token_vector parameter_text = {0};
     uint8_t parameter_count = 0U;
     bool has_hash_brace = false;
@@ -7015,6 +7019,21 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                     (uint8_t)('1' + parameter_count) ||
                 parameter_count >= HSTEX_MAX_PARAMETERS) {
                 vector_destroy(&parameter_text);
+                enum hstex_symbol_kind kind;
+                const uint8_t *name = NULL;
+                size_t length = 0U;
+                char found[128];
+                describe_token(engine, number, found, sizeof(found));
+                if (hstex_symbol_name(&engine->lexical_state.symbols,
+                                      hstex_token_control_sequence_id(target),
+                                      &kind, &name, &length) == 0) {
+                    return set_error(
+                        error, error_capacity,
+                        "parameter %u of \\%.*s should be #%u, found %s",
+                        (unsigned int)parameter_count + 1U, (int)length,
+                        (const char *)name,
+                        (unsigned int)parameter_count + 1U, found);
+                }
                 return set_error(error, error_capacity,
                                  "macro parameters must be numbered consecutively");
             }
@@ -7056,8 +7075,10 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                                   hstex_token_control_sequence_id(target),
                                   &kind, &name, &length) == 0) {
                 return set_error(error, error_capacity,
-                                 "end of input while defining \\%.*s",
-                                 (int)length, (const char *)name);
+                                 "end of input while defining \\%.*s, "
+                                 "started at %s:%u",
+                                 (int)length, (const char *)name, origin,
+                                 (unsigned int)origin_line);
             }
             return set_error(error, error_capacity,
                              "end of input in macro replacement text");
