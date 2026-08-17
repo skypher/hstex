@@ -7862,6 +7862,11 @@ static int math_append_node(struct hstex_engine *engine,
 static int math_append_box(struct hstex_engine *engine,
                            const struct hstex_box *box, char *error,
                            size_t error_capacity);
+static int math_append_box_field(struct hstex_engine *engine,
+                                 const struct hstex_box *box,
+                                 bool single_character, char *error,
+                                 size_t error_capacity);
+static void pop_math_list(struct hstex_engine *engine);
 
 static int32_t packed_dimen(int32_t value)
 {
@@ -8295,6 +8300,9 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     uint32_t previous_stop_level = engine->group_stop_level;
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
+    /* A box body is a fresh place for formulas: a $ inside it opens and
+       closes its own math list, not the one the box interrupted. */
+    size_t previous_math_depth = engine->math_depth;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8303,6 +8311,7 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = base_group_level;
     engine->group_stop_armed = true;
     engine->group_stop_hit = false;
+    engine->math_depth = 0U;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -8369,6 +8378,10 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = previous_stop_level;
     engine->group_stop_armed = previous_stop_armed;
     engine->group_stop_hit = previous_stop_hit;
+    while (engine->math_depth > previous_math_depth) {
+        pop_math_list(engine);
+    }
+    engine->math_depth = previous_math_depth;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -8493,6 +8506,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     uint32_t previous_stop_level = engine->group_stop_level;
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
+    size_t previous_math_depth = engine->math_depth;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8501,6 +8515,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = base_group_level;
     engine->group_stop_armed = true;
     engine->group_stop_hit = false;
+    engine->math_depth = 0U;
     engine->active_hbox_builder = NULL;
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
@@ -8577,6 +8592,10 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = previous_stop_level;
     engine->group_stop_armed = previous_stop_armed;
     engine->group_stop_hit = previous_stop_hit;
+    while (engine->math_depth > previous_math_depth) {
+        pop_math_list(engine);
+    }
+    engine->math_depth = previous_math_depth;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -13010,8 +13029,8 @@ static struct hstex_math_builder *current_math_list(struct hstex_engine *engine)
     return &engine->math_stack[engine->math_depth - 1U];
 }
 
-static int push_math_list(struct hstex_engine *engine, char *error,
-                          size_t error_capacity)
+static int push_math_list(struct hstex_engine *engine, uint8_t style,
+                          char *error, size_t error_capacity)
 {
     if (engine->math_depth == engine->math_capacity) {
         size_t capacity =
@@ -13032,6 +13051,7 @@ static int push_math_list(struct hstex_engine *engine, char *error,
         &engine->math_stack[engine->math_depth++];
     memset(builder, 0, sizeof(*builder));
     builder->forced_class = -1;
+    builder->style = style;
     return 0;
 }
 
@@ -13099,11 +13119,67 @@ static int math_append_atom(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "math material used outside a formula");
     }
+    /* A script mark is waiting: this atom is the script, not a list item. */
+    if (builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        if (builder->slot_target >= builder->count) {
+            return set_error(error, error_capacity,
+                             "a script has no atom to attach to");
+        }
+        struct hstex_noad *target = &builder->noads[builder->slot_target];
+        if (builder->slot == (uint8_t)HSTEX_MATH_SLOT_SUPERSCRIPT) {
+            target->superscript = noad->nucleus;
+        } else {
+            target->subscript = noad->nucleus;
+        }
+        builder->slot = (uint8_t)HSTEX_MATH_SLOT_NONE;
+        return 0;
+    }
     if (builder->forced_class >= 0) {
         noad->atom_class = (uint8_t)builder->forced_class;
         builder->forced_class = -1;
     }
     return math_append(engine, noad, error, error_capacity);
+}
+
+/* A script mark attaches to the atom before it, or to a fresh ordinary atom
+   with nothing in it when there is none. */
+static int begin_math_script(struct hstex_engine *engine, bool superscript,
+                             char *error, size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (builder == NULL) {
+        return set_error(error, error_capacity,
+                         "a script mark is only allowed in a formula");
+    }
+    if (builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        return set_error(error, error_capacity,
+                         "one script mark followed another");
+    }
+    bool have_atom = builder->count != 0U &&
+                     builder->noads[builder->count - 1U].kind ==
+                         (uint8_t)HSTEX_NOAD_ATOM;
+    if (have_atom) {
+        const struct hstex_noad *last = &builder->noads[builder->count - 1U];
+        const struct hstex_math_field *taken =
+            superscript ? &last->superscript : &last->subscript;
+        if (taken->kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
+            return set_error(error, error_capacity,
+                             "this atom already has a %s",
+                             superscript ? "superscript" : "subscript");
+        }
+    } else {
+        struct hstex_noad empty = {
+            .kind = (uint8_t)HSTEX_NOAD_ATOM,
+            .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+        };
+        if (math_append(engine, &empty, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    builder->slot = superscript ? (uint8_t)HSTEX_MATH_SLOT_SUPERSCRIPT
+                                : (uint8_t)HSTEX_MATH_SLOT_SUBSCRIPT;
+    builder->slot_target = builder->count - 1U;
+    return 0;
 }
 
 /* A mathcode of class 7 means "the family is \fam if that is a real family",
@@ -13129,9 +13205,9 @@ static int math_append_code(struct hstex_engine *engine, int32_t code,
     struct hstex_noad noad = {
         .kind = (uint8_t)HSTEX_NOAD_ATOM,
         .atom_class = class_code,
-        .field = (uint8_t)HSTEX_MATH_FIELD_CHARACTER,
-        .family = family,
-        .character = character,
+        .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_CHARACTER,
+                    .family = family,
+                    .character = character},
     };
     return math_append_atom(engine, &noad, error, error_capacity);
 }
@@ -13147,9 +13223,10 @@ static int math_append_character(struct hstex_engine *engine, uint8_t code,
                             error, error_capacity);
 }
 
-static int math_append_box(struct hstex_engine *engine,
-                           const struct hstex_box *box, char *error,
-                           size_t error_capacity)
+static int math_append_box_field(struct hstex_engine *engine,
+                                 const struct hstex_box *box,
+                                 bool single_character, char *error,
+                                 size_t error_capacity)
 {
     struct hstex_node node = {
         .kind = HSTEX_NODE_LIST,
@@ -13169,10 +13246,18 @@ static int math_append_box(struct hstex_engine *engine,
     struct hstex_noad noad = {
         .kind = (uint8_t)HSTEX_NOAD_ATOM,
         .atom_class = (uint8_t)HSTEX_ATOM_ORD,
-        .field = (uint8_t)HSTEX_MATH_FIELD_BOX,
-        .node = identifier,
+        .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX,
+                    .single_character = single_character ? 1U : 0U,
+                    .node = identifier},
     };
     return math_append_atom(engine, &noad, error, error_capacity);
+}
+
+static int math_append_box(struct hstex_engine *engine,
+                           const struct hstex_box *box, char *error,
+                           size_t error_capacity)
+{
+    return math_append_box_field(engine, box, false, error, error_capacity);
 }
 
 /* Glue, kerns and penalties keep the shape they already have. */
@@ -13191,23 +13276,45 @@ static int math_append_node(struct hstex_engine *engine,
     return math_append(engine, &noad, error, error_capacity);
 }
 
-static const struct hstex_font *math_family_font(struct hstex_engine *engine,
-                                                 uint8_t family)
+/* The style decides which of the three font tables a family is read from. */
+static uint8_t math_size_of_style(uint8_t style)
 {
-    if (family >= 16U) {
+    if (style < (uint8_t)HSTEX_STYLE_SCRIPT) {
+        return (uint8_t)HSTEX_MATH_TEXT;
+    }
+    if (style < (uint8_t)HSTEX_STYLE_SCRIPT_SCRIPT) {
+        return (uint8_t)HSTEX_MATH_SCRIPT;
+    }
+    return (uint8_t)HSTEX_MATH_SCRIPT_SCRIPT;
+}
+
+static uint8_t math_superscript_style(uint8_t style)
+{
+    return (uint8_t)(2U * (style / 4U) + (uint8_t)HSTEX_STYLE_SCRIPT +
+                     (style % 2U));
+}
+
+static uint8_t math_subscript_style(uint8_t style)
+{
+    return (uint8_t)(2U * (style / 4U) + (uint8_t)HSTEX_STYLE_SCRIPT + 1U);
+}
+
+static const struct hstex_font *math_family_font(struct hstex_engine *engine,
+                                                 uint8_t size, uint8_t family)
+{
+    if (family >= 16U || size >= (uint8_t)HSTEX_MATH_SIZE_COUNT) {
         return NULL;
     }
-    return font_by_identifier(
-        engine, engine->math_fonts[HSTEX_MATH_TEXT][family]);
+    return font_by_identifier(engine, engine->math_fonts[size][family]);
 }
 
 /* One mu is a eighteenth of the quad of the symbol family, truncated; a mu
    quantity is that many times the stored value, again truncated toward zero.
    See docs/DECISIONS.md, math-mode. */
-static int math_unit(struct hstex_engine *engine, int32_t *unit, char *error,
-                     size_t error_capacity)
+static int math_unit(struct hstex_engine *engine, uint8_t size, int32_t *unit,
+                     char *error, size_t error_capacity)
 {
-    const struct hstex_font *symbols = math_family_font(engine, 2U);
+    const struct hstex_font *symbols = math_family_font(engine, size, 2U);
     if (symbols == NULL || symbols->dimen_count < 6U) {
         return set_error(error, error_capacity,
                          "math units need \\textfont2 with six parameters");
@@ -13238,6 +13345,22 @@ static struct hstex_glue math_glue_in_points(struct hstex_glue glue,
    0 none, 1 \thinmuskip, 2 \medmuskip, 3 \thickmuskip. The entries a Bin
    atom can never reach are marked 0 because the class conversion below
    removes them first. */
+/* Which of those spaces survive outside display and text style. Measured the
+   same way inside a superscript: only the five that touch a large operator
+   do. See docs/DECISIONS.md, math-scripts. */
+static const uint8_t math_spacing_all_styles[HSTEX_ATOM_CLASS_COUNT]
+                                            [HSTEX_ATOM_CLASS_COUNT] = {
+    /*            ord op   bin  rel  open close punct inner */
+    /* ord   */ {  0,  1,   0,   0,   0,   0,    0,    0 },
+    /* op    */ {  1,  1,   0,   0,   0,   0,    0,    0 },
+    /* bin   */ {  0,  0,   0,   0,   0,   0,    0,    0 },
+    /* rel   */ {  0,  0,   0,   0,   0,   0,    0,    0 },
+    /* open  */ {  0,  0,   0,   0,   0,   0,    0,    0 },
+    /* close */ {  0,  1,   0,   0,   0,   0,    0,    0 },
+    /* punct */ {  0,  0,   0,   0,   0,   0,    0,    0 },
+    /* inner */ {  0,  1,   0,   0,   0,   0,    0,    0 },
+};
+
 static const uint8_t math_spacing_table[HSTEX_ATOM_CLASS_COUNT]
                                        [HSTEX_ATOM_CLASS_COUNT] = {
     /*            ord op   bin  rel  open close punct inner */
@@ -13300,26 +13423,27 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
 }
 
 static int math_character_metric(struct hstex_engine *engine,
-                                 const struct hstex_noad *noad,
-                                 const struct hstex_font **font,
+                                 const struct hstex_math_field *field,
+                                 uint8_t size, const struct hstex_font **font,
                                  const struct hstex_char_metric **metric,
                                  char *error, size_t error_capacity)
 {
-    const struct hstex_font *resolved = math_family_font(engine, noad->family);
+    const struct hstex_font *resolved =
+        math_family_font(engine, size, field->family);
     if (resolved == NULL) {
         return set_error(error, error_capacity,
-                         "math family %u has no text font",
-                         (unsigned int)noad->family);
+                         "math family %u has no font in this size",
+                         (unsigned int)field->family);
     }
     if (resolved->characters == NULL ||
-        resolved->characters[noad->character].tag < 0) {
+        resolved->characters[field->character].tag < 0) {
         return set_error(error, error_capacity,
                          "math family %u has no character %u",
-                         (unsigned int)noad->family,
-                         (unsigned int)noad->character);
+                         (unsigned int)field->family,
+                         (unsigned int)field->character);
     }
     *font = resolved;
-    *metric = &resolved->characters[noad->character];
+    *metric = &resolved->characters[field->character];
     return 0;
 }
 
@@ -13327,7 +13451,8 @@ static int math_character_metric(struct hstex_engine *engine,
    font's ligature and kerning program, exactly as they would in text. */
 static int apply_math_ligatures(struct hstex_engine *engine,
                                 struct hstex_math_builder *builder,
-                                char *error, size_t error_capacity)
+                                uint8_t size, char *error,
+                                size_t error_capacity)
 {
     for (size_t index = 0U; index + 1U < builder->count;) {
         struct hstex_noad *left = &builder->noads[index];
@@ -13336,29 +13461,33 @@ static int apply_math_ligatures(struct hstex_engine *engine,
             right->kind != (uint8_t)HSTEX_NOAD_ATOM ||
             left->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
             right->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
-            left->field != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
-            right->field != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
-            left->family != right->family) {
+            left->nucleus.kind != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            right->nucleus.kind != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            left->nucleus.family != right->nucleus.family ||
+            left->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+            left->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+            right->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+            right->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
             ++index;
             continue;
         }
         const struct hstex_font *font = NULL;
         const struct hstex_char_metric *metric = NULL;
-        if (math_character_metric(engine, left, &font, &metric, error,
-                                  error_capacity) != 0) {
+        if (math_character_metric(engine, &left->nucleus, size, &font, &metric,
+                                  error, error_capacity) != 0) {
             return -1;
         }
         bool kerned = false;
         bool ligatured = false;
         int32_t kern = 0;
         uint8_t ligature = 0U;
-        if (font_lig_kern(font, (uint8_t)left->character,
-                          (uint8_t)right->character, &kerned, &kern,
+        if (font_lig_kern(font, (uint8_t)left->nucleus.character,
+                          (uint8_t)right->nucleus.character, &kerned, &kern,
                           &ligatured, &ligature, error, error_capacity) != 0) {
             return -1;
         }
         if (ligatured) {
-            left->character = ligature;
+            left->nucleus.character = ligature;
             memmove(&builder->noads[index + 1U], &builder->noads[index + 2U],
                     (builder->count - index - 2U) * sizeof(*builder->noads));
             --builder->count;
@@ -13395,10 +13524,11 @@ static int apply_math_ligatures(struct hstex_engine *engine,
 /* A large operator sits with its middle on the axis of the symbol family.
    The builder derives the reach of a shifted node itself, so only the
    displacement is recorded here. */
-static int centre_on_axis(struct hstex_engine *engine, struct hstex_node *node,
-                          char *error, size_t error_capacity)
+static int centre_on_axis(struct hstex_engine *engine, uint8_t size,
+                          struct hstex_node *node, char *error,
+                          size_t error_capacity)
 {
-    const struct hstex_font *symbols = math_family_font(engine, 2U);
+    const struct hstex_font *symbols = math_family_font(engine, size, 2U);
     if (symbols == NULL || symbols->dimen_count < 22U) {
         return set_error(error, error_capacity,
                          "a large operator needs \\textfont2 with "
@@ -13442,10 +13572,314 @@ static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
    building. The caller has already pointed active_hbox_builder at it. */
 static int translate_math_list(struct hstex_engine *engine,
                                struct hstex_math_builder *builder, char *error,
+                               size_t error_capacity);
+
+/* Pack one field into a box at the given style. An empty field gives an empty
+   box, a character gives that character with its italic correction, and a box
+   field is the box that is already there. */
+static int math_field_box(struct hstex_engine *engine,
+                          const struct hstex_math_field *field, uint8_t style,
+                          struct hstex_box *box, char *error,
+                          size_t error_capacity)
+{
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_HLIST;
+    if (field->kind == (uint8_t)HSTEX_MATH_FIELD_BOX) {
+        if (field->node == 0U || field->node > engine->node_count) {
+            return set_error(error, error_capacity,
+                             "math field refers to a missing node");
+        }
+        const struct hstex_node *node = &engine->nodes[field->node - 1U];
+        box->kind = node->value.list.box_kind;
+        box->width = node->width;
+        box->height = node->height;
+        box->depth = node->depth;
+        box->node_start = node->value.list.node_start;
+        box->node_count = node->value.list.node_count;
+        return 0;
+    }
+    if (field->kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
+        return 0;
+    }
+    struct hstex_math_builder single = {0};
+    single.forced_class = -1;
+    single.style = style;
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_ATOM,
+        .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+        .nucleus = *field,
+    };
+    if (reserve_noads(&single, 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    single.noads[0] = noad;
+    single.count = 1U;
+    struct hstex_hbox_builder packed = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &packed;
+    int status = translate_math_list(engine, &single, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    if (status == 0) {
+        status = finalize_hbox(engine, &packed, false, false, 0, box, error,
+                               error_capacity);
+    }
+    free(packed.node_identifiers);
+    free(single.noads);
+    return status;
+}
+
+static int store_box_node(struct hstex_engine *engine,
+                          const struct hstex_box *box, int32_t shift,
+                          uint32_t *identifier, char *error,
+                          size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .shift = shift,
+        .value.list = {
+            .node_start = box->node_start,
+            .node_count = box->node_count,
+            .box_kind = box->kind,
+        },
+    };
+    return store_node(engine, &node, identifier, error, error_capacity);
+}
+
+/* A family-two parameter at a given size. */
+static int math_symbol_parameter(struct hstex_engine *engine, uint8_t size,
+                                 size_t parameter, int32_t *value, char *error,
+                                 size_t error_capacity)
+{
+    const struct hstex_font *symbols = math_family_font(engine, size, 2U);
+    if (symbols == NULL || symbols->dimen_count < parameter) {
+        return set_error(error, error_capacity,
+                         "math family two needs at least %zu parameters in "
+                         "this size",
+                         parameter);
+    }
+    *value = symbols->dimens[parameter - 1U];
+    return 0;
+}
+
+static int math_extension_parameter(struct hstex_engine *engine, uint8_t size,
+                                    size_t parameter, int32_t *value,
+                                    char *error, size_t error_capacity)
+{
+    const struct hstex_font *extension = math_family_font(engine, size, 3U);
+    if (extension == NULL || extension->dimen_count < parameter) {
+        return set_error(error, error_capacity,
+                         "math family three needs at least %zu parameters in "
+                         "this size",
+                         parameter);
+    }
+    *value = extension->dimens[parameter - 1U];
+    return 0;
+}
+
+/* Attach the scripts of one atom, after its nucleus has been contributed.
+   All of the arithmetic here was measured; see docs/DECISIONS.md,
+   math-scripts. */
+static int attach_math_scripts(struct hstex_engine *engine,
+                               const struct hstex_noad *noad, uint8_t style,
+                               int32_t nucleus_height, int32_t nucleus_depth,
+                               bool nucleus_is_character, int32_t italic,
+                               char *error, size_t error_capacity)
+{
+    bool has_superscript = noad->superscript.kind !=
+                           (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+                           noad->superscript.node != 0U;
+    bool has_subscript =
+        noad->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+        noad->subscript.node != 0U;
+    if (!has_superscript && !has_subscript) {
+        return italic == 0
+                   ? 0
+                   : emit_math_kern(engine, italic, error, error_capacity);
+    }
+    /* The italic correction is a kern of its own only when there is no
+       subscript; otherwise it displaces the superscript instead. */
+    int32_t delta = italic;
+    if (!has_subscript && delta != 0) {
+        if (emit_math_kern(engine, delta, error, error_capacity) != 0) {
+            return -1;
+        }
+        delta = 0;
+    }
+
+    uint8_t size = math_size_of_style(style);
+    uint8_t superscript_style = math_superscript_style(style);
+    uint8_t subscript_style = math_subscript_style(style);
+    uint8_t script_size = math_size_of_style(superscript_style);
+
+    int32_t shift_up = 0;
+    int32_t shift_down = 0;
+    if (!nucleus_is_character) {
+        int32_t superscript_drop = 0;
+        int32_t subscript_drop = 0;
+        if (math_symbol_parameter(engine, script_size, 18U, &superscript_drop,
+                                  error, error_capacity) != 0 ||
+            math_symbol_parameter(engine, script_size, 19U, &subscript_drop,
+                                  error, error_capacity) != 0) {
+            return -1;
+        }
+        shift_up = nucleus_height - superscript_drop;
+        shift_down = nucleus_depth + subscript_drop;
+    }
+
+    int32_t x_height = 0;
+    if (math_symbol_parameter(engine, size, 5U, &x_height, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    int32_t x_height_magnitude = x_height < 0 ? -x_height : x_height;
+    int32_t scriptspace = engine->dimen_parameters[HSTEX_DIMEN_SCRIPT_SPACE];
+
+    struct hstex_box superscript = {0};
+    struct hstex_box subscript = {0};
+    if (has_superscript &&
+        math_field_box(engine, &noad->superscript, superscript_style,
+                       &superscript, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (has_subscript &&
+        math_field_box(engine, &noad->subscript, subscript_style, &subscript,
+                       error, error_capacity) != 0) {
+        return -1;
+    }
+    superscript.width += scriptspace;
+    subscript.width += scriptspace;
+
+    if (!has_superscript) {
+        int32_t floor_one = 0;
+        if (math_symbol_parameter(engine, size, 16U, &floor_one, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+        if (shift_down < floor_one) {
+            shift_down = floor_one;
+        }
+        int32_t clearance =
+            subscript.height - (int32_t)(((int64_t)x_height_magnitude * 4) / 5);
+        if (shift_down < clearance) {
+            shift_down = clearance;
+        }
+        uint32_t identifier = 0U;
+        return store_box_node(engine, &subscript, shift_down, &identifier,
+                              error, error_capacity) != 0
+                   ? -1
+                   : append_hbox_item(engine, identifier, error,
+                                      error_capacity);
+    }
+
+    /* A cramped style takes the third superscript parameter, an uncramped one
+       the second; the first belongs to display style, which is not here. */
+    int32_t superscript_floor = 0;
+    if (math_symbol_parameter(engine, size, (style % 2U) != 0U ? 15U : 14U,
+                              &superscript_floor, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (shift_up < superscript_floor) {
+        shift_up = superscript_floor;
+    }
+    int32_t clearance = superscript.depth + x_height_magnitude / 4;
+    if (shift_up < clearance) {
+        shift_up = clearance;
+    }
+
+    if (!has_subscript) {
+        uint32_t identifier = 0U;
+        return store_box_node(engine, &superscript, -shift_up, &identifier,
+                              error, error_capacity) != 0
+                   ? -1
+                   : append_hbox_item(engine, identifier, error,
+                                      error_capacity);
+    }
+
+    int32_t floor_two = 0;
+    int32_t rule_thickness = 0;
+    if (math_symbol_parameter(engine, size, 17U, &floor_two, error,
+                              error_capacity) != 0 ||
+        math_extension_parameter(engine, size, 8U, &rule_thickness, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    if (shift_down < floor_two) {
+        shift_down = floor_two;
+    }
+    int64_t gap = (int64_t)4 * rule_thickness -
+                  (((int64_t)shift_up - superscript.depth) -
+                   ((int64_t)subscript.height - shift_down));
+    if (gap > 0) {
+        shift_down += (int32_t)gap;
+        int64_t rise = ((int64_t)x_height_magnitude * 4) / 5 -
+                       ((int64_t)shift_up - superscript.depth);
+        if (rise > 0) {
+            shift_up += (int32_t)rise;
+            shift_down -= (int32_t)rise;
+        }
+    }
+
+    /* The two scripts stack in a vertical list: the superscript on top,
+       displaced right by the nucleus's italic correction, then a kern that
+       holds them the computed distance apart, then the subscript. */
+    int32_t separation = (shift_up - superscript.depth) -
+                         (subscript.height - shift_down);
+    uint32_t superscript_node = 0U;
+    uint32_t subscript_node = 0U;
+    uint32_t kern_node = 0U;
+    struct hstex_node kern = {
+        .kind = HSTEX_NODE_KERN,
+        .width = separation,
+    };
+    if (store_box_node(engine, &superscript, delta, &superscript_node, error,
+                       error_capacity) != 0 ||
+        store_node(engine, &kern, &kern_node, error, error_capacity) != 0 ||
+        store_box_node(engine, &subscript, 0, &subscript_node, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    uint32_t items[3] = {superscript_node, kern_node, subscript_node};
+    if (engine->list_item_count > (size_t)UINT32_MAX - 3U ||
+        reserve_list_items(engine, engine->list_item_count + 3U, error,
+                           error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box stack = {0};
+    stack.kind = HSTEX_BOX_VLIST;
+    stack.node_start = (uint32_t)engine->list_item_count;
+    stack.node_count = 3U;
+    for (size_t index = 0U; index < 3U; ++index) {
+        engine->list_items[engine->list_item_count++] = items[index];
+    }
+    /* A vertical package reaches from the top of the first box down to the
+       baseline of the last, and carries the last box's depth below it. */
+    stack.height = superscript.height + superscript.depth + separation +
+                   subscript.height;
+    stack.depth = subscript.depth;
+    int32_t left = superscript.width + delta;
+    stack.width = left > subscript.width ? left : subscript.width;
+    uint32_t identifier = 0U;
+    return store_box_node(engine, &stack, shift_down, &identifier, error,
+                          error_capacity) != 0
+               ? -1
+               : append_hbox_item(engine, identifier, error, error_capacity);
+}
+
+/* Translate one finished math list into the horizontal list the engine is
+   building. The caller has already pointed active_hbox_builder at it. */
+static int translate_math_list(struct hstex_engine *engine,
+                               struct hstex_math_builder *builder, char *error,
                                size_t error_capacity)
 {
+    uint8_t style = builder->style;
+    uint8_t size = math_size_of_style(style);
+    bool all_spacing = style < (uint8_t)HSTEX_STYLE_SCRIPT;
     resolve_binary_atoms(builder);
-    if (apply_math_ligatures(engine, builder, error, error_capacity) != 0) {
+    if (apply_math_ligatures(engine, builder, size, error, error_capacity) !=
+        0) {
         return -1;
     }
     int previous_class = -1;
@@ -13461,7 +13895,7 @@ static int translate_math_list(struct hstex_engine *engine,
         if (noad->kind == (uint8_t)HSTEX_NOAD_MU_GLUE ||
             noad->kind == (uint8_t)HSTEX_NOAD_MU_KERN) {
             int32_t unit = 0;
-            if (math_unit(engine, &unit, error, error_capacity) != 0) {
+            if (math_unit(engine, size, &unit, error, error_capacity) != 0) {
                 return -1;
             }
             int status =
@@ -13479,7 +13913,9 @@ static int translate_math_list(struct hstex_engine *engine,
         if (previous_class >= 0) {
             uint8_t which =
                 math_spacing_table[previous_class][noad->atom_class];
-            if (which != 0U) {
+            if (which != 0U &&
+                (all_spacing ||
+                 math_spacing_all_styles[previous_class][noad->atom_class])) {
                 static const size_t parameters[4] = {
                     0U,
                     (size_t)HSTEX_MUGLUE_THIN,
@@ -13487,7 +13923,8 @@ static int translate_math_list(struct hstex_engine *engine,
                     (size_t)HSTEX_MUGLUE_THICK,
                 };
                 int32_t unit = 0;
-                if (math_unit(engine, &unit, error, error_capacity) != 0) {
+                if (math_unit(engine, size, &unit, error, error_capacity) !=
+                    0) {
                     return -1;
                 }
                 struct hstex_glue amount = math_glue_in_points(
@@ -13499,57 +13936,63 @@ static int translate_math_list(struct hstex_engine *engine,
             }
         }
         previous_class = (int)noad->atom_class;
-        if (noad->field == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
-            continue;
-        }
-        if (noad->field == (uint8_t)HSTEX_MATH_FIELD_BOX) {
-            if (noad->node == 0U || noad->node > engine->node_count) {
+
+        int32_t nucleus_height = 0;
+        int32_t nucleus_depth = 0;
+        int32_t italic = 0;
+        bool nucleus_is_character =
+            noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            noad->nucleus.single_character != 0U;
+        if (noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_BOX) {
+            if (noad->nucleus.node == 0U ||
+                noad->nucleus.node > engine->node_count) {
                 return set_error(error, error_capacity,
                                  "math list refers to a missing node");
             }
-            if (noad->atom_class != (uint8_t)HSTEX_ATOM_OP) {
-                if (append_hbox_item(engine, noad->node, error,
-                                     error_capacity) != 0) {
-                    return -1;
-                }
-                continue;
-            }
-            struct hstex_node centred = engine->nodes[noad->node - 1U];
-            if (centre_on_axis(engine, &centred, error, error_capacity) != 0) {
+            struct hstex_node contributed = engine->nodes[noad->nucleus.node - 1U];
+            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
+                centre_on_axis(engine, size, &contributed, error,
+                               error_capacity) != 0) {
                 return -1;
             }
-            if (append_hbox_node(engine, &centred, error, error_capacity) !=
+            nucleus_height = contributed.height - contributed.shift;
+            nucleus_depth = contributed.depth + contributed.shift;
+            if (append_hbox_node(engine, &contributed, error, error_capacity) !=
                 0) {
                 return -1;
             }
-            continue;
+        } else if (nucleus_is_character) {
+            const struct hstex_font *font = NULL;
+            const struct hstex_char_metric *metric = NULL;
+            if (math_character_metric(engine, &noad->nucleus, size, &font,
+                                      &metric, error, error_capacity) != 0) {
+                return -1;
+            }
+            struct hstex_node node = {
+                .kind = HSTEX_NODE_CHARACTER,
+                .width = metric->width,
+                .height = metric->height,
+                .depth = metric->depth,
+                .value.character = {
+                    .font = engine->math_fonts[size][noad->nucleus.family],
+                    .character = noad->nucleus.character,
+                },
+            };
+            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
+                centre_on_axis(engine, size, &node, error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+            nucleus_height = node.height - node.shift;
+            nucleus_depth = node.depth + node.shift;
+            italic = metric->italic;
+            if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
+                return -1;
+            }
         }
-        const struct hstex_font *font = NULL;
-        const struct hstex_char_metric *metric = NULL;
-        if (math_character_metric(engine, noad, &font, &metric, error,
-                                  error_capacity) != 0) {
-            return -1;
-        }
-        struct hstex_node node = {
-            .kind = HSTEX_NODE_CHARACTER,
-            .width = metric->width,
-            .height = metric->height,
-            .depth = metric->depth,
-            .value.character = {
-                .font = engine->math_fonts[HSTEX_MATH_TEXT][noad->family],
-                .character = noad->character,
-            },
-        };
-        if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
-            centre_on_axis(engine, &node, error, error_capacity) != 0) {
-            return -1;
-        }
-        if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
-            return -1;
-        }
-        if (metric->italic != 0 &&
-            emit_math_kern(engine, metric->italic, error, error_capacity) !=
-                0) {
+        if (attach_math_scripts(engine, noad, style, nucleus_height,
+                                nucleus_depth, nucleus_is_character, italic,
+                                error, error_capacity) != 0) {
             return -1;
         }
     }
@@ -13572,7 +14015,8 @@ static int begin_math(struct hstex_engine *engine, char *error,
                                  false, error, error_capacity) != 0) {
         return -1;
     }
-    if (push_math_list(engine, error, error_capacity) != 0) {
+    if (push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
+                       error_capacity) != 0) {
         return -1;
     }
     engine->mode = HSTEX_MODE_MATH;
@@ -13593,11 +14037,22 @@ static int begin_math(struct hstex_engine *engine, char *error,
 }
 
 /* A brace inside a formula collects a sub-formula, which becomes one
-   ordinary atom. */
+   ordinary atom -- or the script the mark before it is waiting for, in which
+   case it is set in the style that script will be typeset at. */
 static int begin_math_group(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
-    return push_math_list(engine, error, error_capacity);
+    struct hstex_math_builder *outer = current_math_list(engine);
+    uint8_t style =
+        outer == NULL ? (uint8_t)HSTEX_STYLE_TEXT : outer->style;
+    if (outer != NULL) {
+        if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_SUPERSCRIPT) {
+            style = math_superscript_style(outer->style);
+        } else if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_SUBSCRIPT) {
+            style = math_subscript_style(outer->style);
+        }
+    }
+    return push_math_list(engine, style, error, error_capacity);
 }
 
 static int finish_math_group(struct hstex_engine *engine, char *error,
@@ -13608,9 +14063,29 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "a math group closed outside a formula");
     }
+    /* One ordinary atom in braces is that atom: {x} carries scripts exactly
+       as x does, however deeply the braces nest. */
+    if (inner->count == 1U &&
+        inner->noads[0].kind == (uint8_t)HSTEX_NOAD_ATOM &&
+        inner->noads[0].atom_class == (uint8_t)HSTEX_ATOM_ORD &&
+        inner->noads[0].superscript.kind ==
+            (uint8_t)HSTEX_MATH_FIELD_EMPTY &&
+        inner->noads[0].subscript.kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY &&
+        inner->slot == (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        struct hstex_noad passed = inner->noads[0];
+        pop_math_list(engine);
+        return math_append_atom(engine, &passed, error, error_capacity);
+    }
     struct hstex_hbox_builder builder = {0};
     struct hstex_hbox_builder *previous = engine->active_hbox_builder;
     engine->active_hbox_builder = &builder;
+    if (inner->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        engine->active_hbox_builder = previous;
+        free(builder.node_identifiers);
+        pop_math_list(engine);
+        return set_error(error, error_capacity,
+                         "a script mark was left without a script");
+    }
     int status = translate_math_list(engine, inner, error, error_capacity);
     engine->active_hbox_builder = previous;
     struct hstex_box box = {0};
@@ -13623,7 +14098,21 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
     if (status != 0) {
         return -1;
     }
-    return math_append_box(engine, &box, error, error_capacity);
+    /* A sub-formula that came to one character carries scripts the way that
+       character would; see docs/DECISIONS.md, math-scripts. A shifted node is
+       not one, because a centred large operator is a box. */
+    bool single = false;
+    if (box.node_count == 1U &&
+        (size_t)box.node_start < engine->list_item_count) {
+        uint32_t identifier = engine->list_items[box.node_start];
+        if (identifier != 0U && identifier <= engine->node_count) {
+            const struct hstex_node *node = &engine->nodes[identifier - 1U];
+            single = (node->kind == HSTEX_NODE_CHARACTER ||
+                      node->kind == HSTEX_NODE_LIGATURE) &&
+                     node->shift == 0;
+        }
+    }
+    return math_append_box_field(engine, &box, single, error, error_capacity);
 }
 
 /* Leaving a formula puts \mathsurround on both sides of the translation and
@@ -15088,13 +15577,13 @@ handle_token:
                 }
                 if (token_is_category(*token, HSTEX_CAT_SUPERSCRIPT) ||
                     token_is_category(*token, HSTEX_CAT_SUBSCRIPT)) {
-                    (void)set_error(error, error_capacity,
-                                    "%s are not implemented",
-                                    token_is_category(*token,
-                                                      HSTEX_CAT_SUPERSCRIPT)
-                                        ? "superscripts"
-                                        : "subscripts");
-                    return HSTEX_ENGINE_ERROR;
+                    if (begin_math_script(
+                            engine,
+                            token_is_category(*token, HSTEX_CAT_SUPERSCRIPT),
+                            error, error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
                 }
                 if (math_append_character(
                         engine, hstex_token_character_code(*token), error,

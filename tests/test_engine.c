@@ -774,6 +774,71 @@ static int test_math_mode(void)
         "[5.00002pt|6.44444pt|0.0pt][19.44438pt|6.44444pt|0.72223pt]");
 }
 
+/* Superscripts and subscripts: the styles they are set in, the shifts, and
+   the spacing that stops applying below text style; see docs/DECISIONS.md,
+   math-scripts. */
+static int test_math_scripts(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 \\font\\sevenrm=cmr7 \\font\\sevenmi=cmmi7 "
+        "\\font\\sevensy=cmsy7 \\font\\fiverm=cmr5 \\font\\fivemi=cmmi5 "
+        "\\font\\fivesy=cmsy5 "
+        "\\textfont0=\\tenrm \\scriptfont0=\\sevenrm "
+        "\\scriptscriptfont0=\\fiverm "
+        "\\textfont1=\\tenmi \\scriptfont1=\\sevenmi "
+        "\\scriptscriptfont1=\\fivemi "
+        "\\textfont2=\\tensy \\scriptfont2=\\sevensy "
+        "\\scriptscriptfont2=\\fivesy "
+        "\\textfont3=\\tenex \\scriptfont3=\\tenex "
+        "\\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu \\scriptspace=.5pt "
+        "\\def\\O{\\mathchar\"0030 }\\def\\Y{\\mathchar\"0179 }"
+        "\\def\\m#1{\\setbox0=\\hbox{$#1$}[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* The three shift paths: superscript alone, subscript alone, and the
+           pair, whose clearance rule pushes the subscript further down. */
+        "\\m{\\O^\\O}\\m{\\O_\\O}\\m{\\O^\\O_\\O}"
+        /* A box nucleus drops the shift by \sup_drop and \sub_drop taken at
+           the size the script will be set in. */
+        "\\m{\\hbox{\\vrule height8pt depth0pt width0pt}^\\O}"
+        "\\m{\\hbox{\\vrule height0pt depth8pt width0pt}_\\O}"
+        /* A sub-formula that came to one character is that character; an
+           \hbox is not, and two characters are not. */
+        "\\m{{\\O}^\\O}\\m{\\hbox{$\\O$}^\\O}\\m{{{\\O}}^\\O}"
+        "\\m{{\\O\\O}^\\O}"
+        /* A subscript is cramped, so a superscript inside one takes the
+           third parameter, not the second. */
+        "\\m{\\O_{\\O^\\O}}\\m{\\O^{\\O^\\O}}\\m{\\O^{\\O^{\\O^\\O}}}"
+        /* The italic correction is a kern only when there is no subscript;
+           with both it displaces the superscript instead. */
+        "\\m{\\Y^\\O}\\m{\\Y_\\O}\\m{\\Y^\\O_\\O}"
+        /* A script mark with nothing before it makes an empty atom, and a
+           deep superscript is pushed up to clear the axis. */
+        "\\m{^\\O}"
+        "\\m{\\O^{\\hbox{\\vrule height0pt depth8pt width0pt}}}"
+        /* Below text style only the spaces that touch a large operator are
+           inserted at all. */
+        "\\m{\\O^{\\O\\mathchar\"2030 \\O}}\\m{\\O^{\\O\\mathchar\"6030 \\O}}"
+        "\\m{\\O^{\\O\\mathchar\"1030 }}"
+        /* \scriptspace goes after the script, once for a pair. */
+        "\\scriptspace=0pt \\m{\\O^\\O}\\scriptspace=.5pt "
+        /* An atom keeps its class when it takes a script. */
+        "\\m{\\O\\mathchar\"2030 ^\\O\\O}%",
+        "[9.48615pt|8.14003pt|0.0pt][9.48615pt|6.44444pt|1.49998pt]"
+        "[9.48615pt|8.14003pt|2.4821pt][4.48613pt|10.03891pt|0.0pt]"
+        "[4.48613pt|0.0pt|8.49998pt][9.48615pt|8.14003pt|0.0pt]"
+        "[9.48615pt|8.48335pt|0.0pt][9.48615pt|8.14003pt|0.0pt]"
+        "[14.48616pt|8.48335pt|0.0pt][13.38898pt|6.44444pt|1.77777pt]"
+        "[13.38898pt|9.86893pt|0.0pt][17.29181pt|11.88669pt|0.0pt]"
+        "[9.74773pt|8.14003pt|1.94444pt]"
+        "[9.38895pt|4.30554pt|1.94444pt]"
+        "[9.74773pt|8.14003pt|2.4821pt][4.48613pt|8.14003pt|0.0pt]"
+        "[5.50002pt|9.07639pt|0.0pt][17.4584pt|8.14003pt|0.0pt]"
+        "[17.4584pt|8.14003pt|0.0pt][14.83801pt|8.14003pt|0.0pt]"
+        "[8.98615pt|8.14003pt|0.0pt][23.93051pt|8.14003pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1857,7 +1922,8 @@ int main(void)
         test_box_and_font_conditionals() != 0 ||
         test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
-        test_streaming_box_bodies() != 0 || test_math_mode() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
+        test_math_scripts() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

@@ -703,23 +703,53 @@ enum hstex_noad_kind {
     HSTEX_NOAD_MU_KERN,
 };
 
-enum hstex_math_field {
+enum hstex_math_field_kind {
     HSTEX_MATH_FIELD_EMPTY = 0,
     HSTEX_MATH_FIELD_CHARACTER,
     HSTEX_MATH_FIELD_BOX,
+};
+
+/* The styles, numbered so that the odd ones are the cramped variants and the
+   pair for one size is adjacent. Display style is not implemented. */
+enum hstex_math_style {
+    HSTEX_STYLE_TEXT = 2,
+    HSTEX_STYLE_TEXT_CRAMPED = 3,
+    HSTEX_STYLE_SCRIPT = 4,
+    HSTEX_STYLE_SCRIPT_CRAMPED = 5,
+    HSTEX_STYLE_SCRIPT_SCRIPT = 6,
+    HSTEX_STYLE_SCRIPT_SCRIPT_CRAMPED = 7,
+};
+
+/* A nucleus, a superscript or a subscript. */
+struct hstex_math_field {
+    uint8_t kind;
+    uint8_t family;
+    /* True for a box field whose whole content is one character node: the
+       reference places scripts on it as if it were that character. */
+    uint8_t single_character;
+    uint32_t character;
+    /* Identifier of the stored node, for a box field. */
+    uint32_t node;
 };
 
 /* One item of a math list. */
 struct hstex_noad {
     uint8_t kind;
     uint8_t atom_class;
-    uint8_t field;
-    uint8_t family;
-    uint32_t character;
-    /* Identifier of the stored node, for NODE items and box nuclei. */
+    struct hstex_math_field nucleus;
+    struct hstex_math_field superscript;
+    struct hstex_math_field subscript;
+    /* Identifier of the stored node, for NODE items. */
     uint32_t node;
     struct hstex_glue glue;
     int32_t kern;
+};
+
+/* Which slot the next atom fills, when a script mark is waiting. */
+enum hstex_math_slot {
+    HSTEX_MATH_SLOT_NONE = 0,
+    HSTEX_MATH_SLOT_SUPERSCRIPT,
+    HSTEX_MATH_SLOT_SUBSCRIPT,
 };
 
 struct hstex_math_builder {
@@ -728,6 +758,9 @@ struct hstex_math_builder {
     size_t capacity;
     /* The class \mathord and its relatives forced on the next atom, or -1. */
     int32_t forced_class;
+    uint8_t style;
+    uint8_t slot;
+    size_t slot_target;
 };
 
 enum hstex_node_kind {

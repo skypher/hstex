@@ -66,12 +66,15 @@ abstract, and stops at `\halign`.
 Inline formulas are typeset. `$...$` builds a math list, the atom classes
 from the mathcodes decide the spacing between them, math families come from
 `\textfont` and `\fam`, and the characters carry their italic corrections
-and their family's ligature program. Superscripts and subscripts are the
-next gap.
+and their family's ligature program. Superscripts and subscripts are set in
+the script and scriptscript styles with the reference's shift arithmetic,
+which is where `\scriptfont` and `\scriptscriptfont` come in.
 
-Line breaking, math scripts, alignments, the page builder, the output
-routine, and PDF emission remain under construction. A paragraph wider than
-`\hsize` reports an error rather than being set as one overfull line.
+Line breaking, alignments, the page builder, the output routine, and PDF
+emission remain under construction. `\halign` is the next thing the corpus
+wants: `\begin{tabular}` inside report.cls's `\@maketitle`. A paragraph
+wider than `\hsize` reports an error rather than being set as one overfull
+line.
 
 ## Build
 
