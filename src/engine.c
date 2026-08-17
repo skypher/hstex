@@ -85,6 +85,8 @@ static const char *current_source_line(const struct hstex_engine *engine,
                                       uint32_t *line);
 static const struct hstex_node *current_list_last_node(
     const struct hstex_engine *engine);
+static const struct hstex_node *last_item_node(
+    const struct hstex_engine *engine);
 static int32_t last_node_type(const struct hstex_node *node);
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
@@ -2767,6 +2769,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->output_conditional_floor = 0U;
     engine->active_hbox_builder = NULL;
     engine->page_has_box = false;
+    engine->page_last_taken = false;
     engine->page_builder->count = 0U;
     engine->page_builder->extent = 0;
     engine->page_builder->trailing_depth = 0;
@@ -3540,7 +3543,7 @@ static int integer_from_control_sequence(
         *value = engine->space_factor;
         return 0;
     case HSTEX_COMMAND_LAST_ITEM: {
-        const struct hstex_node *node = current_list_last_node(engine);
+        const struct hstex_node *node = last_item_node(engine);
         if (meaning->value.integer == (int32_t)HSTEX_LAST_NODE_TYPE) {
             *value = last_node_type(node);
             return 0;
@@ -4153,7 +4156,7 @@ static int dimen_from_meaning(struct hstex_engine *engine,
     }
     if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
         meaning->value.integer == (int32_t)HSTEX_LAST_KERN) {
-        const struct hstex_node *node = current_list_last_node(engine);
+        const struct hstex_node *node = last_item_node(engine);
         *value = node != NULL && node->kind == HSTEX_NODE_KERN ? node->width : 0;
         return 1;
     }
@@ -5027,7 +5030,7 @@ static int glue_from_meaning(struct hstex_engine *engine,
 {
     if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
         meaning->value.integer == (int32_t)HSTEX_LAST_SKIP) {
-        const struct hstex_node *node = current_list_last_node(engine);
+        const struct hstex_node *node = last_item_node(engine);
         memset(value, 0, sizeof(*value));
         if (node != NULL && node->kind == HSTEX_NODE_GLUE) {
             value->width = node->width;
@@ -11537,6 +11540,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     }
 
     int32_t penalty = engine->best_page_penalty;
+    engine->page_last_taken = false;
     page->count = 0U;
     page->extent = 0;
     page->trailing_depth = 0;
@@ -11650,6 +11654,11 @@ static int build_page(struct hstex_engine *engine, char *error,
                 continue;
             }
             struct hstex_node node = engine->nodes[identifier - 1U];
+            /* Every node the page builder takes is remembered, discarded or
+               not, because it is what \lastnodetype and its relatives
+               report; see docs/DECISIONS.md, the-last-node-of-a-page. */
+            engine->page_last_node = node;
+            engine->page_last_taken = true;
             bool is_box =
                 node.kind == HSTEX_NODE_RULE || node.kind == HSTEX_NODE_LIST;
             if (node.kind == HSTEX_NODE_WHATSIT) {
@@ -14090,6 +14099,20 @@ static const struct hstex_node *current_list_last_node(
         return NULL;
     }
     return &engine->nodes[identifier - 1U];
+}
+
+/* \lastnodetype and its relatives look at the contribution list, and when
+   the page builder has emptied that they report the last node it took; see
+   docs/DECISIONS.md, the-last-node-of-a-page. */
+static const struct hstex_node *last_item_node(const struct hstex_engine *engine)
+{
+    const struct hstex_node *node = current_list_last_node(engine);
+    if (node != NULL || engine->mode != HSTEX_MODE_VERTICAL ||
+        engine->active_vbox_builder != engine->contribution_builder ||
+        !engine->page_last_taken) {
+        return node;
+    }
+    return &engine->page_last_node;
 }
 
 /* The node type numbers are the ones the reference reports, with -1 for an

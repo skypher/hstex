@@ -1760,6 +1760,27 @@ static int test_a_hyphen_that_ligatures(void)
 );
 }
 
+/* Once the page builder has emptied the contribution list, \lastnodetype
+   and its relatives report the last node it took; see docs/DECISIONS.md,
+   the-last-node-of-a-page. */
+static int test_the_last_node_of_a_page(void)
+{
+    return run_document(
+        "\\vsize=200pt \\maxdepth=4pt \\output={\\shipout\\"
+        "box255 }\\message{[A=\\the\\lastnodetype]}\\hbox{}"
+        "\\message{[B=\\the\\lastnodetype]}\\vskip3pt \\mes"
+        "sage{[C=\\the\\lastnodetype][Cs=\\the\\lastskip]}"
+        "\\penalty5 \\message{[D=\\the\\lastnodetype][Dp=\\"
+        "the\\lastpenalty]}\\kern2pt \\message{[E=\\the\\la"
+        "stnodetype][Ek=\\the\\lastkern]}\\hbox{}\\message{"
+        "[F=\\the\\lastnodetype][Fs=\\the\\lastskip][Fk=\\t"
+        "he\\lastkern][Fp=\\the\\lastpenalty]}\\setbox0=\\v"
+        "box{\\message{[G=\\the\\lastnodetype]}\\hbox{}\\me"
+        "ssage{[H=\\the\\lastnodetype]}}%",
+        "[A=-1][B=1][C=11][Cs=3.0pt][D=13][Dp=5][E=12][Ek=2"
+        ".0pt][F=1][Fs=0.0pt][Fk=0.0pt][Fp=0][G=-1][H=1]");
+}
+
 /* A line that breaks at a penalty keeps the penalty; see docs/DECISIONS.md,
    a-line-that-breaks-at-a-penalty. */
 static int test_a_line_that_breaks_at_a_penalty(void)
@@ -5143,6 +5164,7 @@ int main(void)
         test_a_list_that_is_one_box() != 0 ||
         test_a_line_that_breaks_at_a_penalty() != 0 ||
         test_a_hyphen_that_ligatures() != 0 ||
+        test_the_last_node_of_a_page() != 0 ||
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||

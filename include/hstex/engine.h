@@ -1300,6 +1300,11 @@ struct hstex_engine {
     /* A box or rule has reached the current page, so it is no longer empty;
        see docs/DECISIONS.md, whatsits-on-an-empty-page. */
     bool page_has_box;
+    /* What the page builder last took off the contribution list, which
+       is what \lastnodetype and its relatives report once that list is
+       empty again; see docs/DECISIONS.md, the-last-node-of-a-page. */
+    struct hstex_node page_last_node;
+    bool page_last_taken;
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
