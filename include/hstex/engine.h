@@ -55,6 +55,7 @@ enum hstex_command {
     HSTEX_COMMAND_IF_V_MODE,
     HSTEX_COMMAND_IF_M_MODE,
     HSTEX_COMMAND_IF_INNER,
+    HSTEX_COMMAND_IF_IN_CS_NAME,
     HSTEX_COMMAND_IF_X,
     HSTEX_COMMAND_IF_TRUE,
     HSTEX_COMMAND_IF_FALSE,
@@ -213,6 +214,7 @@ enum hstex_command {
     HSTEX_COMMAND_ACCENT,
     HSTEX_COMMAND_EQUATION_NUMBER,
     HSTEX_COMMAND_VCENTER,
+    HSTEX_COMMAND_MARGIN_KERN,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -317,6 +319,14 @@ enum hstex_font_char_dimen {
     HSTEX_FONT_CHAR_HEIGHT,
     HSTEX_FONT_CHAR_DEPTH,
     HSTEX_FONT_CHAR_ITALIC,
+};
+
+/* The protrusion a line's first or last character was set with. HSTeX does
+   not protrude, so these are always nothing; see docs/DECISIONS.md,
+   margin-kerns. */
+enum hstex_margin_kern {
+    HSTEX_MARGIN_KERN_LEFT = 0,
+    HSTEX_MARGIN_KERN_RIGHT,
 };
 
 enum hstex_box_dimen {
@@ -746,6 +756,18 @@ struct hstex_align_cell {
     uint32_t span;
 };
 
+/* What the executor needs in order to end an alignment entry from wherever
+   the tab or \cr turns up -- which may be inside a box the entry's own
+   template opened. */
+struct hstex_align_entry {
+    const struct hstex_align_column *columns;
+    size_t column_count;
+    size_t column;
+    bool omit;
+    bool after_pushed;
+    uint8_t ending;
+};
+
 /* A row of entries, or a run of vertical material contributed by \noalign. */
 struct hstex_align_row {
     bool noalign;
@@ -1061,6 +1083,10 @@ struct hstex_engine {
     /* True while an alignment is reading its body, so that \cr and its
        relatives are recognised instead of being errors. */
     bool building_alignment;
+    /* The entry being read, if any. */
+    struct hstex_align_entry *alignment_entry;
+    /* True while the tokens between \csname and \endcsname are expanded. */
+    bool building_cs_name;
     /* True while the formula being read is a display. */
     bool displayed_math;
     /* The equation a display has already read, while its number is being

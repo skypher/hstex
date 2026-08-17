@@ -1340,6 +1340,43 @@ static int test_vcenter(void)
         "[100.0pt|6.83331pt|0.0pt]");
 }
 
+/* An alignment entry whose template opens a box, margin kerns, and
+   \ifincsname; see docs/DECISIONS.md, alignment-entries. */
+static int test_alignment_entries(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 "
+        "\\font\\tenrm=cmr10 \\tenrm \\hsize=100pt \\parindent=0pt "
+        "\\tolerance=10000 \\baselineskip=0pt \\lineskip=0pt "
+        "\\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\tabskip=0pt "
+        "\\parfillskip=0pt plus1fil \\hbadness=10000 \\hfuzz=1000pt "
+        "\\pretolerance=-1 \\leftskip=0pt \\rightskip=0pt "
+        "\\let\\bgroup={\\let\\egroup=}"
+        "\\long\\def\\m#1{\\setbox0=#1[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* A box in the entry's own material, then the same box opened by the
+           template and closed by it -- where the tab arrives while the box is
+           still open. */
+        "\\m{\\vbox{\\halign{#&#\\cr\\vtop{\\hsize=50pt A\\par}&B\\cr}}}"
+        "\\m{\\vbox{\\halign{\\vtop\\bgroup\\hsize=50pt #\\par\\egroup&#\\cr"
+        " A&B\\cr}}}"
+        "\\m{\\vbox{\\halign{\\vtop\\bgroup\\hsize=30pt #\\par\\egroup&#\\cr"
+        " AB AB AB&B\\cr}}}"
+        "\\m{\\vbox{\\halign{\\hbox\\bgroup#\\egroup&#\\cr A&B\\cr}}}"
+        /* Nothing protrudes, so nothing hangs in the margin. */
+        "\\lpcode\\tenrm`A=100 \\rpcode\\tenrm`A=200 \\pdfprotrudechars=2 "
+        "\\setbox0=\\hbox{AB}\\dimen1=\\leftmarginkern0 "
+        "\\dimen2=\\rightmarginkern0 [\\the\\dimen1|\\the\\dimen2]"
+        /* \ifincsname is true only while a control sequence name is built. */
+        "\\def\\p{\\ifincsname Y\\else N\\fi}[\\p]"
+        "\\expandafter\\def\\csname x\\p\\endcsname{}"
+        "[\\ifx\\xY\\relax R\\else\\meaning\\xY\\fi]"
+        "\\edef\\z{\\p}[\\meaning\\z]%",
+        "[57.08336pt|6.83331pt|0.0pt][57.08336pt|6.83331pt|0.0pt]"
+        "[37.08336pt|6.83331pt|13.66663pt]"
+        "[14.58337pt|6.83331pt|0.0pt][0.0pt|0.0pt][N][macro:->]"
+        "[macro:->N]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2427,7 +2464,8 @@ int main(void)
         test_math_scripts() != 0 || test_alignments() != 0 ||
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
-        test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
+        test_alignment_entries() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

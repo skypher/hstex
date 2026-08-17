@@ -1703,6 +1703,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"ifvmode", HSTEX_COMMAND_IF_V_MODE},
         {"ifmmode", HSTEX_COMMAND_IF_M_MODE},
         {"ifinner", HSTEX_COMMAND_IF_INNER},
+        {"ifincsname", HSTEX_COMMAND_IF_IN_CS_NAME},
         {"ifx", HSTEX_COMMAND_IF_X},
         {"iftrue", HSTEX_COMMAND_IF_TRUE},
         {"iffalse", HSTEX_COMMAND_IF_FALSE},
@@ -1867,6 +1868,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
+        {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
+         (int32_t)HSTEX_MARGIN_KERN_LEFT},
+        {"rightmarginkern", HSTEX_COMMAND_MARGIN_KERN,
+         (int32_t)HSTEX_MARGIN_KERN_RIGHT},
         {"eqno", HSTEX_COMMAND_EQUATION_NUMBER, 0},
         {"leqno", HSTEX_COMMAND_EQUATION_NUMBER, 1},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
@@ -3480,6 +3485,7 @@ static int integer_from_control_sequence(
     case HSTEX_COMMAND_FONT_DIMEN:
     case HSTEX_COMMAND_FONT_CHAR_DIMEN:
     case HSTEX_COMMAND_BOX_DIMEN:
+    case HSTEX_COMMAND_MARGIN_KERN:
     case HSTEX_COMMAND_PAGE_DIMEN:
     case HSTEX_COMMAND_PREV_DEPTH:
     case HSTEX_COMMAND_SKIP_REGISTER:
@@ -4037,6 +4043,20 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                                  : metric->width;
         return 1;
     }
+    if (meaning->command == HSTEX_COMMAND_MARGIN_KERN) {
+        int32_t index = 0;
+        if (scan_integer(engine, &index, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (index < 0 || (size_t)index >= engine->count_capacity) {
+            return set_error(error, error_capacity,
+                             "box register %d is outside 0..%zu", index,
+                             engine->count_capacity - 1U);
+        }
+        /* Nothing protrudes, so nothing hangs in the margin. */
+        *value = 0;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_BOX_DIMEN) {
         int32_t index = 0;
         if (scan_integer(engine, &index, error, error_capacity) != 0) {
@@ -4135,6 +4155,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_LAST_ITEM:
     case HSTEX_COMMAND_SPACE_FACTOR:
     case HSTEX_COMMAND_BOX_DIMEN:
+    case HSTEX_COMMAND_MARGIN_KERN:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
     case HSTEX_COMMAND_LC_CODE:
@@ -5931,6 +5952,8 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
        \protectedmacro\endcsname} expands the macro. */
     bool previous_inhibition = engine->inhibit_protected_expansion;
     engine->inhibit_protected_expansion = false;
+    bool previous_in_cs_name = engine->building_cs_name;
+    engine->building_cs_name = true;
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location token_location;
@@ -5938,6 +5961,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
             engine, &token, &token_location, error, error_capacity);
         if (result != HSTEX_ENGINE_TOKEN) {
             engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
             free(bytes);
             return set_error(error, error_capacity,
                              "end of input inside csname");
@@ -5954,6 +5978,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                 if (push_one(engine, token, token_location, error,
                              error_capacity) != 0) {
                     engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
                     free(bytes);
                     return -1;
                 }
@@ -5976,6 +6001,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                                            ? INT_MAX
                                            : (int)unexpected_length;
                 engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
                 free(bytes);
                 return set_error(error, error_capacity,
                                  "non-character token inside csname: \\%.*s",
@@ -5983,12 +6009,14 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                                  (const char *)unexpected_name);
             }
             engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
             free(bytes);
             return set_error(error, error_capacity,
                              "non-character token inside csname");
         }
         if (!hstex_token_is_character(token)) {
             engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
             free(bytes);
             return set_error(error, error_capacity,
                              "internal token inside csname");
@@ -5997,11 +6025,13 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                         hstex_token_character_code(token), error,
                         error_capacity) != 0) {
             engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
             free(bytes);
             return -1;
         }
     }
     engine->inhibit_protected_expansion = previous_inhibition;
+            engine->building_cs_name = previous_in_cs_name;
 
     *name = bytes;
     *name_count = count;
@@ -6664,6 +6694,8 @@ static bool mode_conditional_value(const struct hstex_engine *engine,
         return engine->mode == HSTEX_MODE_MATH;
     case HSTEX_COMMAND_IF_INNER:
         return engine->inner_mode;
+    case HSTEX_COMMAND_IF_IN_CS_NAME:
+        return engine->building_cs_name;
     default:
         return false;
     }
@@ -6933,7 +6965,8 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_IF_H_MODE ||
         meaning->command == HSTEX_COMMAND_IF_V_MODE ||
         meaning->command == HSTEX_COMMAND_IF_M_MODE ||
-        meaning->command == HSTEX_COMMAND_IF_INNER) {
+        meaning->command == HSTEX_COMMAND_IF_INNER ||
+        meaning->command == HSTEX_COMMAND_IF_IN_CS_NAME) {
         return start_conditional(
             engine, mode_conditional_value(engine, meaning->command), error,
             error_capacity);
@@ -7241,7 +7274,8 @@ enum hstex_engine_result hstex_engine_next_expanded(
         if (meaning->command == HSTEX_COMMAND_IF_H_MODE ||
             meaning->command == HSTEX_COMMAND_IF_V_MODE ||
             meaning->command == HSTEX_COMMAND_IF_M_MODE ||
-            meaning->command == HSTEX_COMMAND_IF_INNER) {
+            meaning->command == HSTEX_COMMAND_IF_INNER ||
+        meaning->command == HSTEX_COMMAND_IF_IN_CS_NAME) {
             if (start_conditional(
                     engine, mode_conditional_value(engine, meaning->command),
                     error, error_capacity) != 0) {
@@ -15771,6 +15805,40 @@ enum hstex_align_end {
     HSTEX_ALIGN_END_CR,
 };
 
+/* End the entry being read, from wherever the tab or \cr turned up. The v
+   part goes in behind a boundary and is read where it stands, so a template
+   that opened a box closes it before the entry is finished; see
+   docs/DECISIONS.md, alignment-entries. */
+static int end_alignment_entry(struct hstex_engine *engine,
+                               enum hstex_align_end ending, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_align_entry *entry = engine->alignment_entry;
+    if (entry == NULL) {
+        return set_error(error, error_capacity,
+                         "an alignment entry ended outside one");
+    }
+    if (entry->after_pushed) {
+        return set_error(error, error_capacity,
+                         "an alignment template ended the entry twice");
+    }
+    entry->ending = (uint8_t)ending;
+    entry->after_pushed = true;
+    struct hstex_source_location origin = {0};
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (!entry->omit && entry->column < entry->column_count &&
+        entry->columns[entry->column].after_count != 0U) {
+        return hstex_source_push_tokens(
+            &engine->sources, entry->columns[entry->column].after,
+            entry->columns[entry->column].after_count, origin, error,
+            error_capacity);
+    }
+    return 0;
+}
+
 /* Run one entry. The templates around it are pushed as token lists, so the
    entry sees exactly what the reference's u and v parts give it. \span
    carries on into the next column with the same box. */
@@ -15823,10 +15891,17 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     *span = 1U;
     *ending = HSTEX_ALIGN_END_CR;
     int status = 0;
-    bool in_after = false;
     bool finished = false;
     bool segment_omit = omit;
     struct hstex_source_location origin = {0};
+    struct hstex_align_entry entry = {
+        .columns = columns,
+        .column_count = column_count,
+        .column = first_column,
+        .omit = omit,
+    };
+    struct hstex_align_entry *previous_entry = engine->alignment_entry;
+    engine->alignment_entry = &entry;
     if (!omit && column < column_count && columns[column].before_count != 0U &&
         hstex_source_push_tokens(&engine->sources, columns[column].before,
                                  columns[column].before_count, origin, error,
@@ -15843,7 +15918,7 @@ static int evaluate_align_cell(struct hstex_engine *engine,
             break;
         }
         if (result == HSTEX_ENGINE_EOF) {
-            if (!in_after) {
+            if (!entry.after_pushed) {
                 status = set_error(error, error_capacity,
                                    "input ended inside an alignment entry");
                 break;
@@ -15854,17 +15929,20 @@ static int evaluate_align_cell(struct hstex_engine *engine,
                 status = -1;
                 break;
             }
-            in_after = false;
+            entry.after_pushed = false;
+            *ending = (enum hstex_align_end)entry.ending;
             if (*ending != HSTEX_ALIGN_END_SPAN) {
                 finished = true;
                 break;
             }
             ++column;
             ++*span;
-            *ending = HSTEX_ALIGN_END_CR;
+            entry.column = column;
+            entry.ending = (uint8_t)HSTEX_ALIGN_END_CR;
             /* \omit may follow \span, and drops the next column's
                templates just as it does at the start of an entry. */
             segment_omit = false;
+            entry.omit = false;
             hstex_token next = 0U;
             struct hstex_source_location where;
             enum hstex_engine_result got =
@@ -15880,6 +15958,7 @@ static int evaluate_align_cell(struct hstex_engine *engine,
                         engine, hstex_token_control_sequence_id(next))
                             ->command == HSTEX_COMMAND_OMIT) {
                     segment_omit = true;
+                    entry.omit = true;
                 } else if (push_one(engine, next, where, error,
                                     error_capacity) != 0) {
                     status = -1;
@@ -15891,48 +15970,6 @@ static int evaluate_align_cell(struct hstex_engine *engine,
                 hstex_source_push_tokens(&engine->sources,
                                          columns[column].before,
                                          columns[column].before_count, origin,
-                                         error, error_capacity) != 0) {
-                status = -1;
-            }
-            continue;
-        }
-        enum hstex_align_end found = HSTEX_ALIGN_END_CR;
-        bool terminator = false;
-        if (hstex_token_is_character(token)) {
-            if (token_is_category(token, HSTEX_CAT_ALIGNMENT_TAB)) {
-                found = HSTEX_ALIGN_END_TAB;
-                terminator = true;
-            }
-        } else {
-            const struct hstex_meaning *meaning = hstex_engine_meaning(
-                engine, hstex_token_control_sequence_id(token));
-            if (meaning->command == HSTEX_COMMAND_CR) {
-                found = HSTEX_ALIGN_END_CR;
-                terminator = true;
-            } else if (meaning->command == HSTEX_COMMAND_SPAN) {
-                found = HSTEX_ALIGN_END_SPAN;
-                terminator = true;
-            }
-        }
-        if (terminator) {
-            if (in_after) {
-                status = set_error(error, error_capacity,
-                                   "an alignment template ended the entry "
-                                   "twice");
-                break;
-            }
-            *ending = found;
-            in_after = true;
-            if (hstex_source_push_boundary(&engine->sources, error,
-                                           error_capacity) != 0) {
-                status = -1;
-                break;
-            }
-            if (!segment_omit && column < column_count &&
-                columns[column].after_count != 0U &&
-                hstex_source_push_tokens(&engine->sources,
-                                         columns[column].after,
-                                         columns[column].after_count, origin,
                                          error, error_capacity) != 0) {
                 status = -1;
             }
@@ -15971,6 +16008,7 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     engine->group_stop_armed = previous_stop_armed;
     engine->group_stop_hit = previous_stop_hit;
     engine->building_alignment = previous_building;
+    engine->alignment_entry = previous_entry;
     while (engine->math_depth > previous_math_depth) {
         pop_math_list(engine);
     }
@@ -17810,6 +17848,15 @@ handle_token:
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
+            if (token_is_category(*token, HSTEX_CAT_ALIGNMENT_TAB) &&
+                engine->alignment_entry != NULL &&
+                !engine->alignment_entry->after_pushed) {
+                if (end_alignment_entry(engine, HSTEX_ALIGN_END_TAB, error,
+                                        error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
                 /* Math shift starts a paragraph in vertical mode, and like
                    every other horizontal command it is read again once
@@ -18187,9 +18234,35 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_CR:
+        case HSTEX_COMMAND_SPAN:
+            /* A tab or \cr ends the entry from wherever it turns up, which
+               may be inside a box the entry's template opened. */
+            if (engine->alignment_entry != NULL &&
+                !engine->alignment_entry->after_pushed) {
+                if (end_alignment_entry(
+                        engine,
+                        meaning->command == HSTEX_COMMAND_SPAN
+                            ? HSTEX_ALIGN_END_SPAN
+                            : HSTEX_ALIGN_END_CR,
+                        error, error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+            if (!engine->building_alignment) {
+                char misplaced[128];
+                describe_token(engine, *token, misplaced, sizeof(misplaced));
+                uint32_t line = 0U;
+                const char *origin = current_source_line(engine, &line);
+                (void)set_error(error, error_capacity,
+                                "%s is only allowed inside an alignment, at "
+                                "%s:%u",
+                                misplaced, origin, (unsigned int)line);
+                return HSTEX_ENGINE_ERROR;
+            }
+            return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_NO_ALIGN:
         case HSTEX_COMMAND_OMIT:
-        case HSTEX_COMMAND_SPAN:
             /* These belong to an alignment, which reads them itself. */
             if (!engine->building_alignment) {
                 char misplaced[128];
@@ -18320,6 +18393,9 @@ handle_token:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
                 "font character dimensions cannot be assigned");
+        case HSTEX_COMMAND_MARGIN_KERN:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "a margin kern cannot be assigned");
         case HSTEX_COMMAND_BOX_DIMEN:
             if (finish_assignment(
                     engine,
@@ -18736,6 +18812,7 @@ handle_token:
         case HSTEX_COMMAND_IF_V_MODE:
         case HSTEX_COMMAND_IF_M_MODE:
         case HSTEX_COMMAND_IF_INNER:
+        case HSTEX_COMMAND_IF_IN_CS_NAME:
             if (start_conditional(
                     engine, mode_conditional_value(engine, meaning->command),
                     error, error_capacity) != 0) {
