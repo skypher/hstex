@@ -1425,6 +1425,28 @@ static int assign_box(struct hstex_engine *engine, uint32_t index,
     return 0;
 }
 
+/* \parshape holds a whole list of pairs, so the value saved for a group is
+   the offset of the shape in the arena rather than the shape itself; see
+   docs/DECISIONS.md, parshape. */
+static int assign_parshape(struct hstex_engine *engine, uint32_t shape,
+                           bool requested_global, char *error,
+                           size_t error_capacity)
+{
+    bool global = assignment_is_global(engine, requested_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_PAR_SHAPE, 0U,
+                       engine->parshape_level, (int32_t)engine->parshape, 0U,
+                       error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->parshape_level = engine->group_level;
+    } else {
+        engine->parshape_level = 0U;
+    }
+    engine->parshape = shape;
+    return 0;
+}
+
 static int assign_dimen_parameter(struct hstex_engine *engine, uint32_t index,
                                   int32_t value, bool requested_global,
                                   char *error, size_t error_capacity)
@@ -1899,6 +1921,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"right", HSTEX_COMMAND_LEFT_RIGHT, 1},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
+        {"parshape", HSTEX_COMMAND_PAR_SHAPE, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
          (int32_t)HSTEX_MARGIN_KERN_LEFT},
         {"rightmarginkern", HSTEX_COMMAND_MARGIN_KERN,
@@ -2514,6 +2537,10 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     engine->math_items = NULL;
     engine->math_item_count = 0U;
     engine->math_item_capacity = 0U;
+    free(engine->parshapes);
+    engine->parshapes = NULL;
+    engine->parshape_used = 0U;
+    engine->parshape_capacity = 0U;
     free(engine->math_sublists);
     engine->math_sublists = NULL;
     engine->math_sublist_count = 0U;
@@ -3366,6 +3393,11 @@ static int integer_from_control_sequence(
     int32_t *value, char *error, size_t error_capacity)
 {
     switch (meaning->command) {
+    case HSTEX_COMMAND_PAR_SHAPE:
+        *value = engine->parshape == 0U
+                     ? 0
+                     : engine->parshapes[engine->parshape - 1U];
+        return 0;
     case HSTEX_COMMAND_INPUT_LINE_NUMBER:
         for (size_t index = engine->sources.count; index > 0U; --index) {
             const struct hstex_source_frame *frame =
@@ -4196,6 +4228,7 @@ static int dimen_from_meaning(struct hstex_engine *engine,
 static bool meaning_supplies_integer_factor(enum hstex_command command)
 {
     switch (command) {
+    case HSTEX_COMMAND_PAR_SHAPE:
     case HSTEX_COMMAND_INPUT_LINE_NUMBER:
     case HSTEX_COMMAND_INTEGER_CONSTANT:
     case HSTEX_COMMAND_CHAR_GIVEN:
@@ -8216,6 +8249,9 @@ static int append_vbox_node(struct hstex_engine *engine,
                             const struct hstex_node *node, char *error,
                             size_t error_capacity);
 
+static int normal_paragraph(struct hstex_engine *engine, char *error,
+                            size_t error_capacity);
+
 /* Boxes in a vertical list are separated so that their baselines sit
    \baselineskip apart. When that would bring them closer than
    \lineskiplimit, \lineskip is used instead. The first box on a list gets no
@@ -8838,8 +8874,8 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->inner_mode = true;
     engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
 
-    int status = 0;
-    for (;;) {
+    int status = normal_paragraph(engine, error, error_capacity);
+    while (status == 0) {
         hstex_token token = 0U;
         struct hstex_source_location location;
         enum hstex_engine_result result = hstex_engine_next_output(
@@ -13501,10 +13537,34 @@ static int try_break_at(struct hstex_engine *engine,
     return 0;
 }
 
-/* The width a given line is set to. Hanging indentation narrows the lines it
-   covers; \parshape is not implemented. */
+/* The indent and length \parshape gives a line, the last pair standing for
+   every line after it. See docs/DECISIONS.md, parshape. */
+static const int32_t *parshape_pair(const struct hstex_engine *engine,
+                                    int32_t line)
+{
+    if (engine->parshape == 0U) {
+        return NULL;
+    }
+    const int32_t *shape = engine->parshapes + (engine->parshape - 1U);
+    int32_t count = shape[0];
+    if (count <= 0) {
+        return NULL;
+    }
+    int32_t which = line < 1 ? 1 : line;
+    if (which > count) {
+        which = count;
+    }
+    return shape + 1 + 2 * (which - 1);
+}
+
+/* The width a given line is set to. \parshape says so outright; failing
+   that, hanging indentation narrows the lines it covers. */
 static int32_t line_width_for(const struct hstex_engine *engine, int32_t line)
 {
+    const int32_t *pair = parshape_pair(engine, line);
+    if (pair != NULL) {
+        return pair[1];
+    }
     int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
     int32_t hang = engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT];
     if (hang == 0) {
@@ -13518,6 +13578,10 @@ static int32_t line_width_for(const struct hstex_engine *engine, int32_t line)
 
 static int32_t line_shift_for(const struct hstex_engine *engine, int32_t line)
 {
+    const int32_t *pair = parshape_pair(engine, line);
+    if (pair != NULL) {
+        return pair[0];
+    }
     int32_t hang = engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT];
     if (hang <= 0) {
         return 0;
@@ -13644,6 +13708,8 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
     int32_t widow = engine->integer_parameters[HSTEX_INTEGER_WIDOW_PENALTY];
     int status = 0;
     size_t lines = depth - 1U;
+    engine->paragraph_lines =
+        lines > (size_t)INT32_MAX ? INT32_MAX : (int32_t)lines;
     for (size_t line = 1U; status == 0 && line < depth; ++line) {
         size_t from = state->records[chain[line - 1U]].start;
         size_t to = state->records[chain[line]].breakpoint;
@@ -13844,10 +13910,43 @@ static int finish_paragraph_line(struct hstex_engine *engine,
     return status;
 }
 
+/* The shape of a paragraph belongs to that paragraph: the reference clears
+   it whenever a new one may begin, which is after \par and at the start of a
+   vertical box, but not at the start of an hbox. The assignments are local,
+   and are made only when they change something. See docs/DECISIONS.md,
+   parshape. */
+static int normal_paragraph(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_LOOSENESS] != 0 &&
+        assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_LOOSENESS, 0,
+                                 false, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT] != 0 &&
+        assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_HANG_INDENT, 0,
+                               false, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER] != 1 &&
+        assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_HANG_AFTER, 1,
+                                 false, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->parshape != 0U &&
+        assign_parshape(engine, 0U, false, error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int finish_paragraph(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
-    return finish_paragraph_line(engine, NULL, error, error_capacity);
+    if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0) {
+        return -1;
+    }
+    return normal_paragraph(engine, error, error_capacity);
 }
 
 /* A horizontal command met in vertical mode starts an indented paragraph and
@@ -15352,13 +15451,17 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
         return -1;
     }
     int32_t size = pre_display_size(engine, &line, had_line);
-    int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
+    /* The display stands where the line after the paragraph so far would,
+       plus one: the reference counts the display as taking two. */
+    int32_t where = had_line ? engine->paragraph_lines + 2 : 2;
     if (assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_PRE_DISPLAY_SIZE,
                                size, false, error, error_capacity) != 0 ||
         assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_WIDTH,
-                               hsize, false, error, error_capacity) != 0 ||
-        assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_INDENT, 0,
-                               false, error, error_capacity) != 0) {
+                               line_width_for(engine, where), false, error,
+                               error_capacity) != 0 ||
+        assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_INDENT,
+                               line_shift_for(engine, where), false, error,
+                               error_capacity) != 0) {
         return -1;
     }
     if (begin_group(engine, error, error_capacity) != 0) {
@@ -16139,6 +16242,73 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
     box.height = axis + half_of(total);
     box.depth = (int32_t)(total - box.height);
     return math_append_box(engine, &box, error, error_capacity);
+}
+
+/* \parshape reads a count and that many indent and length pairs. A count of
+   zero or less takes the shape away and reads nothing more. */
+static int execute_parshape(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    bool global = engine->pending_global;
+    int32_t count = 0;
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &count, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (count <= 0) {
+        if (assign_parshape(engine, 0U, global, error, error_capacity) != 0) {
+            return -1;
+        }
+        return finish_assignment(engine, 0, error, error_capacity);
+    }
+    if ((size_t)count > (SIZE_MAX - 1U) / 2U) {
+        return set_error(error, error_capacity, "\\parshape is too long");
+    }
+    size_t needed = 1U + 2U * (size_t)count;
+    if (engine->parshape_used + needed > engine->parshape_capacity) {
+        size_t capacity = engine->parshape_capacity == 0U
+                              ? 64U
+                              : engine->parshape_capacity;
+        while (capacity < engine->parshape_used + needed) {
+            if (capacity > SIZE_MAX / 2U) {
+                return set_error(error, error_capacity,
+                                 "\\parshape arena overflow");
+            }
+            capacity *= 2U;
+        }
+        if (capacity > SIZE_MAX / sizeof(*engine->parshapes)) {
+            return set_error(error, error_capacity, "\\parshape arena overflow");
+        }
+        void *allocation =
+            realloc(engine->parshapes, capacity * sizeof(*engine->parshapes));
+        if (allocation == NULL) {
+            return set_error(error, error_capacity,
+                             "\\parshape allocation failed");
+        }
+        engine->parshapes = allocation;
+        engine->parshape_capacity = capacity;
+    }
+    if (engine->parshape_used + needed > (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity, "\\parshape arena overflow");
+    }
+    size_t start = engine->parshape_used;
+    engine->parshapes[start] = count;
+    for (int32_t index = 0; index < count; ++index) {
+        int32_t indent = 0;
+        int32_t length = 0;
+        if (scan_dimension(engine, &indent, error, error_capacity) != 0 ||
+            scan_dimension(engine, &length, error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->parshapes[start + 1U + 2U * (size_t)index] = indent;
+        engine->parshapes[start + 2U + 2U * (size_t)index] = length;
+    }
+    engine->parshape_used = start + needed;
+    if (assign_parshape(engine, (uint32_t)(start + 1U), global, error,
+                        error_capacity) != 0) {
+        return -1;
+    }
+    return finish_assignment(engine, 0, error, error_capacity);
 }
 
 /* \over and its relatives split the list being read: what has been read so
@@ -19023,6 +19193,12 @@ static int end_group(struct hstex_engine *engine, char *error,
                 engine->catcode_levels[save.index] = save.previous_level;
             }
             break;
+        case HSTEX_SAVE_PAR_SHAPE:
+            if (engine->parshape_level == leaving_level) {
+                engine->parshape = (uint32_t)save.previous.integer;
+                engine->parshape_level = save.previous_level;
+            }
+            break;
         case HSTEX_SAVE_MATH_FONT: {
             size_t size = save.index / 16U;
             size_t family = save.index % 16U;
@@ -20363,6 +20539,11 @@ handle_token:
                 continue;
             }
             return HSTEX_ENGINE_TOKEN;
+        case HSTEX_COMMAND_PAR_SHAPE:
+            if (execute_parshape(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_FRACTION:
             if (execute_fraction(engine, meaning->value.integer, error,
                                  error_capacity) != 0) {
@@ -20396,6 +20577,12 @@ handle_token:
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
+            }
+            /* \par in a vertical list does nothing but clear the shape the
+               next paragraph would otherwise inherit. */
+            if (engine->mode == HSTEX_MODE_VERTICAL &&
+                normal_paragraph(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_UNDEFINED:

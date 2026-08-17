@@ -218,6 +218,7 @@ enum hstex_command {
     HSTEX_COMMAND_DELIMITER,
     HSTEX_COMMAND_LEFT_RIGHT,
     HSTEX_COMMAND_FRACTION,
+    HSTEX_COMMAND_PAR_SHAPE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -590,6 +591,7 @@ enum hstex_save_kind {
     HSTEX_SAVE_BOX,
     HSTEX_SAVE_AFTER_GROUP,
     HSTEX_SAVE_MATH_FONT,
+    HSTEX_SAVE_PAR_SHAPE,
 };
 
 struct hstex_glue {
@@ -1164,6 +1166,18 @@ struct hstex_engine {
     struct hstex_math_sublist *math_sublists;
     size_t math_sublist_count;
     size_t math_sublist_capacity;
+    /* \parshape: every shape read is kept in an arena as a count followed by
+       that many indent and length pairs. `parshape` is the one-based offset
+       of the shape in force, or zero for none; see docs/DECISIONS.md,
+       parshape. */
+    int32_t *parshapes;
+    size_t parshape_used;
+    size_t parshape_capacity;
+    uint32_t parshape;
+    uint32_t parshape_level;
+    /* How many lines the paragraph most recently broken came to, which is
+       what decides the line a display sits on. */
+    int32_t paragraph_lines;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;

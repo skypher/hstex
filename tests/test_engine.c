@@ -1673,6 +1673,73 @@ static int test_fractions(void)
         "5951pt]");
 }
 
+/* \parshape, and the shape a new paragraph starts with; see
+   docs/DECISIONS.md, parshape. */
+static int test_parshape(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\parindent=0pt \\baselineskip=0pt \\lines"
+        "kip=0pt \\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\"
+        "parskip=0pt \\parfillskip=0pt plus1fil \\tolerance=10000 "
+        "\\pretolerance=-1 \\linepenalty=10 \\adjdemerits=10000 \\c"
+        "lubpenalty=150 \\widowpenalty=150 \\brokenpenalty=100 \\in"
+        "terlinepenalty=0 \\hbadness=10000 \\hfuzz=1000pt \\vbadnes"
+        "s=10000 \\vfuzz=1000pt \\hsize=100pt \\def\\W{\\vrule widt"
+        "h20pt height1pt depth0pt\\hskip0pt plus1fil}\\def\\peel{\\"
+        "ifnum\\lastnodetype=1 \\setbox1=\\lastbox\\xdef\\R{\\R|\\t"
+        "he\\wd1}\\else\\ifnum\\lastnodetype=11 \\unskip\\else\\ifn"
+        "um\\lastnodetype=13 \\unpenalty\\else\\xdef\\R{\\R|.}\\fi"
+        "\\fi\\fi}\\def\\peelten{\\peel\\peel\\peel\\peel\\peel\\pe"
+        "el\\peel\\peel\\peel\\peel}\\long\\def\\m#1{\\gdef\\R{}\\s"
+        "etbox0=\\vbox{#1}\\global\\dimen0=\\wd0 \\setbox2=\\vbox{"
+        "\\unvbox0 \\peelten}}\\m{\\parshape=3 5pt 30pt 10pt 50pt 1"
+        "5pt 70pt \\noindent\\W\\W\\W\\W\\W\\W\\W\\W\\par}[1|\\the"
+        "\\dimen0\\R]\\m{\\parshape=1 25pt 40pt \\noindent\\W\\W\\W"
+        "\\W\\W\\par}[2|\\the\\dimen0\\R]\\m{\\hangindent=60pt\\han"
+        "gafter=0 \\parshape=1 25pt 40pt \\noindent\\W\\W\\W\\par}["
+        "3|\\the\\dimen0\\R]\\m{\\parshape=0 \\noindent\\W\\W\\W\\p"
+        "ar}[4|\\the\\dimen0\\R]\\m{\\parshape=2 -10pt 40pt 0pt 60p"
+        "t \\noindent\\W\\W\\W\\W\\par}[5|\\the\\dimen0\\R]\\m{\\ha"
+        "ngindent=9pt\\hangafter=0 \\noindent\\W\\W\\W\\W\\par}[6|"
+        "\\the\\dimen0\\R]\\parshape=2 5pt 30pt 10pt 50pt \\count1="
+        "\\parshape {\\global\\count2=\\parshape \\parshape=1 0pt 2"
+        "0pt \\global\\count3=\\parshape }\\count4=\\parshape \\set"
+        "box0=\\vbox{\\global\\count5=\\parshape }\\count6=\\parsha"
+        "pe \\setbox0=\\hbox{\\global\\count7=\\parshape }\\count8="
+        "\\parshape \\setbox0=\\vbox{\\parshape=1 5pt 30pt \\global"
+        "\\count9=\\parshape \\par \\global\\count0=\\parshape }[7|"
+        "\\the\\count1|\\the\\count2|\\the\\count3|\\the\\count4|\\"
+        "the\\count5|\\the\\count6|\\the\\count7|\\the\\count8|\\th"
+        "e\\count9|\\the\\count0]\\hangindent=7pt \\hangafter=3 \\l"
+        "ooseness=2 \\setbox0=\\vbox{\\global\\dimen1=\\hangindent "
+        "\\global\\count1=\\hangafter \\global\\count2=\\looseness "
+        "}\\global\\dimen2=\\hangindent \\global\\count3=\\hangafte"
+        "r \\global\\count4=\\looseness \\setbox0=\\vbox{\\hanginde"
+        "nt=7pt \\hangafter=3 \\looseness=2 \\noindent\\W\\W\\par "
+        "\\global\\dimen3=\\hangindent \\global\\count5=\\hangafter"
+        " \\global\\count6=\\looseness }[8|\\the\\dimen1|\\the\\cou"
+        "nt1|\\the\\count2|\\the\\dimen2|\\the\\count3|\\the\\count"
+        "4|\\the\\dimen3|\\the\\count5|\\the\\count6]\\def\\P{\\par"
+        "shape=5 1pt 21pt 2pt 42pt 3pt 63pt 4pt 84pt 5pt 95pt }\\de"
+        "f\\D{\\global\\dimen1=\\displaywidth \\global\\dimen2=\\di"
+        "splayindent }\\setbox0=\\vbox{\\P\\noindent$$\\D\\hbox{}$$"
+        "}[9|\\the\\dimen1|\\the\\dimen2]\\setbox0=\\vbox{\\P\\noin"
+        "dent\\W$$\\D\\hbox{}$$}[10|\\the\\dimen1|\\the\\dimen2]\\s"
+        "etbox0=\\vbox{\\P\\noindent\\W\\W\\W\\W\\W\\W$$\\D\\hbox{}"
+        "$$}[11|\\the\\dimen1|\\the\\dimen2]\\setbox0=\\vbox{\\hang"
+        "indent=9pt\\hangafter=2 \\noindent$$\\D\\hbox{}$$}[12|\\th"
+        "e\\dimen1|\\the\\dimen2]\\setbox0=\\vbox{\\hangindent=9pt"
+        "\\hangafter=2 \\noindent\\W$$\\D\\hbox{}$$}[13|\\the\\dime"
+        "n1|\\the\\dimen2]%",
+        "[1|85.0pt|70.0pt|70.0pt|50.0pt|30.0pt|.][2|65.0pt|40.0pt|4"
+        "0.0pt|40.0pt|.|.|.][3|65.0pt|40.0pt|40.0pt|.|.|.|.|.|.][4|"
+        "100.0pt|100.0pt|.|.|.|.|.|.|.|.|.][5|60.0pt|60.0pt|40.0pt|"
+        ".|.|.|.|.|.][6|100.0pt|91.0pt|.|.|.|.|.|.|.|.|.][7|2|2|1|2"
+        "|0|2|2|2|1|0][8|0.0pt|1|0|7.0pt|3|2|0.0pt|1|0][9|42.0pt|2."
+        "0pt][10|63.0pt|3.0pt][11|95.0pt|5.0pt][12|100.0pt|0.0pt][1"
+        "3|91.0pt|9.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2763,7 +2830,7 @@ int main(void)
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
-        test_every_cr() != 0 || test_fractions() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
