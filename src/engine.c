@@ -15377,8 +15377,12 @@ static int32_t line_badness(int64_t shortfall,
             *fitness = (uint8_t)HSTEX_FIT_DECENT;
             return 0;
         }
-        if (shortfall > INT64_C(7230584) && totals->stretch[0] < INT64_C(1663497)) {
-            *fitness = (uint8_t)HSTEX_FIT_VERY_LOOSE;
+        /* A line that would have to stretch further than the reference is
+           willing to measure is infinitely bad but still counts as decent,
+           so that it costs no \adjdemerits against its neighbours. */
+        if (shortfall > INT64_C(7230584) &&
+            totals->stretch[0] < INT64_C(1663497)) {
+            *fitness = (uint8_t)HSTEX_FIT_DECENT;
             return HSTEX_INFINITE_BADNESS;
         }
         int32_t badness =
@@ -15749,9 +15753,12 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         return 0;
     }
     int32_t last_line = state->records[state->active[0]].line + 1;
+    /* The forced break at the end counts as a hyphenated one, so that a
+       hyphen on the second-to-last line costs \finalhyphendemerits. */
     struct hstex_break_site final_site = {0};
     final_site.penalty = HSTEX_EJECT_PENALTY;
     final_site.start = SIZE_MAX;
+    final_site.hyphenated = true;
     if (try_break_at(engine, state, items, count, background,
                      line_width_for(engine, last_line), count, &final_site,
                      threshold, final_pass, error, error_capacity) != 0) {

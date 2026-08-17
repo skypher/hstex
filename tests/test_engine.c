@@ -2003,6 +2003,42 @@ static int test_colour_stack_nodes(void)
         "1.66666 minus 1.11111\n.\\f b\n\n! OK.\n[t 11]");
 }
 
+/* The forced break that ends a paragraph counts as a hyphenated one, so a
+   hyphen on the line before it costs \\finalhyphendemerits; see
+   docs/DECISIONS.md, the-final-break-is-hyphenated. */
+static int test_the_final_break_is_hyphenated(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=1 \\showboxbreadth=40"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hyphenchar\\f=45 \\hs"
+        "ize=28pt \\parindent=0pt \\leftskip=0pt \\rightskip=0p"
+        "t \\pdfprotrudechars=0 \\baselineskip=12pt \\lineskip="
+        "0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fil \\t"
+        "olerance=10000 \\pretolerance=-1 \\boxmaxdepth=16383.9"
+        "9998pt \\clubpenalty=0 \\widowpenalty=0 \\interlinepen"
+        "alty=0 \\brokenpenalty=0 \\uchyph=0 \\lefthyphenmin=1 "
+        "\\righthyphenmin=1 \\spaceskip=4pt plus2pt minus1pt \\"
+        "linepenalty=10 \\adjdemerits=0 \\doublehyphendemerits="
+        "0 \\hyphenpenalty=50 \\lccode`\\a=`\\a \\lccode`\\x=`\\"
+        "x \\patterns{a1a 1x1} \\finalhyphendemerits=0 \\messag"
+        "e{[none]}\\setbox0=\\vbox{\\noindent xx aaaaaa aaaa\\p"
+        "ar}\\showbox0 \\finalhyphendemerits=-1000000 \\message"
+        "{[some]}\\setbox0=\\vbox{\\noindent xx aaaaaa aaaa\\pa"
+        "r}\\showbox0%",
+        "[none]> \\box0=\n\\vbox(28.30554+0.0)x28.0\n.\\hbox(4."
+        "30554+0.0)x28.0, glue set 0.05553 []\n.\\glue(\\baseli"
+        "neskip) 7.69446\n.\\hbox(4.30554+0.0)x28.0 []\n.\\glue"
+        "(\\baselineskip) 7.69446\n.\\hbox(4.30554+0.0)x28.0, g"
+        "lue set 7.99994fil []\n\n! OK.\n[some]> \\box0=\n\\vbo"
+        "x(40.30554+0.0)x28.0\n.\\hbox(4.30554+0.0)x28.0, glue "
+        "set 0.05553 []\n.\\glue(\\baselineskip) 7.69446\n.\\hb"
+        "ox(4.30554+0.0)x28.0 []\n.\\glue(\\baselineskip) 7.694"
+        "46\n.\\hbox(4.30554+0.0)x28.0, glue set 0.33331 []\n.\\"
+        "glue(\\baselineskip) 7.69446\n.\\hbox(4.30554+0.0)x28."
+        "0, glue set 22.99998fil []\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4853,6 +4889,7 @@ int main(void)
         test_breaking_inside_a_ligature() != 0 ||
         test_accent_kerns() != 0 || test_protrusion_of_a_negative_code() != 0 ||
         test_colour_stack_nodes() != 0 ||
+        test_the_final_break_is_hyphenated() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
