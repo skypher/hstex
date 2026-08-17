@@ -18868,16 +18868,10 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                  "math list refers to a missing node");
             }
             struct hstex_node contributed = engine->nodes[noad->nucleus.node - 1U];
-            /* Only a large operator that is one character of its own is
-               centred on the axis; \log and its like are lists, and stand
-               on the baseline. See docs/DECISIONS.md,
-               only-a-character-is-centred. */
-            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
-                nucleus_is_character &&
-                centre_on_axis(engine, size, &contributed, error,
-                               error_capacity) != 0) {
-                return -1;
-            }
+            /* Only a large operator whose nucleus is a character of its
+               own is centred on the axis; one that is a box -- \log, or a
+               sub-formula that came to a box -- stands on the baseline. See
+               docs/DECISIONS.md, only-a-character-is-centred. */
             /* A large operator carries its limits above and below in display
                style whatever its nucleus is; see docs/DECISIONS.md,
                large-operators. */
@@ -20630,6 +20624,29 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
             target = delimiter_target(engine, measured.height, measured.depth,
                                       trial_axis);
             engine->middle_delimiter_size = target;
+        }
+    }
+    /* The two delimiters take part in the spacing as an opening and a
+       closing atom, so they are put into the list while it is set and the
+       boxes are spliced in where they stood. See docs/DECISIONS.md,
+       delimiters-are-atoms. */
+    if (status == 0) {
+        struct hstex_noad opening = {
+            .kind = (uint8_t)HSTEX_NOAD_ATOM,
+            .atom_class = (uint8_t)HSTEX_ATOM_OPEN,
+        };
+        struct hstex_noad closing = {
+            .kind = (uint8_t)HSTEX_NOAD_ATOM,
+            .atom_class = (uint8_t)HSTEX_ATOM_CLOSE,
+        };
+        if (reserve_noads(list, list->count + 2U, error, error_capacity) != 0) {
+            status = -1;
+        } else {
+            memmove(&list->noads[1], &list->noads[0],
+                    list->count * sizeof(*list->noads));
+            list->noads[0] = opening;
+            ++list->count;
+            list->noads[list->count++] = closing;
         }
     }
     if (status == 0) {

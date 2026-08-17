@@ -2533,6 +2533,67 @@ static int test_the_italic_of_a_math_ligature(void)
 );
 }
 
+/* Only an operator whose nucleus is a character of its own is centred on the
+   axis; one whose nucleus came out a box stands on the baseline; see
+   docs/DECISIONS.md, only-a-character-is-centred. */
+static int test_only_a_character_is_centred_still(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\catcod"
+        "e`\\\"=12 \\showboxdepth=6 \\showboxbreadth=100 \\"
+        "mathcode`\\==\"303D \\thinmuskip=3mu \\medmuskip=4"
+        "mu \\thickmuskip=5mu \\message{[boxed]}\\setbox0="
+        "\\hbox{$\\mathop{=}\\limits^?$}\\showbox0 \\messag"
+        "e{[char]}\\setbox0=\\hbox{$\\mathop{x}\\limits^?$}"
+        "\\showbox0 \\message{[list]}\\setbox0=\\hbox{$\\ma"
+        "thop{xy}\\limits^?$}\\showbox0%"
+,
+        "[boxed]> \\box0=\n\\hbox(11.52983+0.0)x7.7778\n.\\"
+        "mathon\n.\\vbox(11.52983+0.0)x7.7778\n..\\kern1.0"
+        "\n..\\hbox(4.8611+0.0)x7.7778, glue set 2.00348fil"
+        "\n...\\glue 0.0 plus 1.0fil minus 1.0fil\n...\\sev"
+        "enrm ?\n...\\glue 0.0 plus 1.0fil minus 1.0fil\n.."
+        "\\kern1.99998\n..\\hbox(3.66875+0.0)x7.7778\n...\\"
+        "tenrm =\n.\\mathoff\n\n! OK.\n[char]> \\box0=\n\\h"
+        "box(12.51385+0.0)x5.71527\n.\\mathon\n.\\vbox(12.5"
+        "1385+0.0)x5.71527\n..\\kern1.0\n..\\hbox(4.8611+0."
+        "0)x5.71527, glue set 0.97221fil\n...\\glue 0.0 plu"
+        "s 1.0fil minus 1.0fil\n...\\sevenrm ?\n...\\glue 0"
+        ".0 plus 1.0fil minus 1.0fil\n..\\kern1.99998\n..\\"
+        "hbox(4.65277+0.0)x5.71527\n...\\hbox(4.30554+0.0)x"
+        "5.71527, shifted -0.34723\n....\\teni x\n.\\mathof"
+        "f\n\n! OK.\n[list]> \\box0=\n\\hbox(12.16663+1.944"
+        "44)x10.97687\n.\\mathon\n.\\vbox(12.16663+1.94444)"
+        "x10.97687\n..\\kern1.0\n..\\hbox(4.8611+0.0)x10.97"
+        "687, glue set 3.60301fil\n...\\glue 0.0 plus 1.0fi"
+        "l minus 1.0fil\n...\\sevenrm ?\n...\\glue 0.0 plus"
+        " 1.0fil minus 1.0fil\n..\\kern1.99998\n..\\hbox(4."
+        "30554+1.94444)x10.97687\n...\\teni x\n...\\teni y"
+        "\n...\\kern0.35878\n.\\mathoff\n\n! OK.\n"
+);
+}
+
 /* A box register used in a formula is an ordinary atom holding that box, so
    braces round it change nothing; see docs/DECISIONS.md,
    a-box-register-in-a-formula. */
@@ -2581,6 +2642,72 @@ static int test_a_box_register_in_a_formula(void)
         "3\n..\\seveni a\n.\\mathoff\n\n! OK.\n[void]> \\bo"
         "x0=\n\\hbox(4.30554+0.0)x5.71527\n.\\mathon\n.\\te"
         "ni x\n.\\mathoff\n\n! OK.\n"
+);
+}
+
+/* The two delimiters of a \left...\right group are an opening and a
+   closing atom, so the spacing round what they hold is the ordinary spacing;
+   see docs/DECISIONS.md, delimiters-are-atoms. */
+static int test_delimiters_are_atoms(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\catcode`\\\"=12 \\showboxdepth=4 \\sho"
+        "wboxbreadth=100 \\nulldelimiterspace=1.2pt \\delim"
+        "itershortfall=5pt \\delimiterfactor=901 \\thinmusk"
+        "ip=3mu \\medmuskip=4mu plus 2mu \\thickmuskip=5mu "
+        "plus 5mu \\mathcode`\\+=\"202B \\mathcode`\\,=\"61"
+        "3B \\mathcode`\\==\"303D \\message{[punct]}\\setbo"
+        "x0=\\hbox{$\\left\\delimiter\"026A30C x,\\right.$}"
+        "\\showbox0 \\message{[rel]}\\setbox0=\\hbox{$\\lef"
+        "t\\delimiter\"026A30C x=y\\right.$}\\showbox0 \\me"
+        "ssage{[bin]}\\setbox0=\\hbox{$\\left\\delimiter\"0"
+        "26A30C +x\\right.$}\\showbox0 \\message{[after]}\\"
+        "setbox0=\\hbox{$y\\left\\delimiter\"026A30C x\\rig"
+        "ht.z$}\\showbox0%"
+,
+        "[punct]> \\box0=\n\\hbox(7.5+2.5)x14.13747\n.\\mat"
+        "hon\n.\\hbox(7.5+2.5)x14.13747\n..\\hbox(7.5+2.5)x"
+        "2.77779\n...\\tensy j\n..\\teni x\n..\\teni ;\n.."
+        "\\glue(\\thinmuskip) 1.66663\n..\\hbox(0.0+0.0)x1."
+        "2, shifted -2.5\n.\\mathoff\n\n! OK.\n[rel]> \\box"
+        "0=\n\\hbox(7.5+2.5)x28.28787\n.\\mathon\n.\\hbox(7"
+        ".5+2.5)x28.28787\n..\\hbox(7.5+2.5)x2.77779\n...\\"
+        "tensy j\n..\\teni x\n..\\glue(\\thickmuskip) 2.777"
+        "71 plus 2.77771\n..\\tenrm =\n..\\glue(\\thickmusk"
+        "ip) 2.77771 plus 2.77771\n..\\teni y\n..\\kern0.35"
+        "878\n..\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\matho"
+        "ff\n\n! OK.\n[bin]> \\box0=\n\\hbox(7.5+2.5)x17.47"
+        "086\n.\\mathon\n.\\hbox(7.5+2.5)x17.47086\n..\\hbo"
+        "x(7.5+2.5)x2.77779\n...\\tensy j\n..\\tenrm +\n.."
+        "\\teni x\n..\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\"
+        "mathoff\n\n! OK.\n[after]> \\box0=\n\\hbox(7.5+2.5"
+        ")x23.3782\n.\\mathon\n.\\teni y\n.\\kern0.35878\n."
+        "\\glue(\\thinmuskip) 1.66663\n.\\hbox(7.5+2.5)x9.6"
+        "9305\n..\\hbox(7.5+2.5)x2.77779\n...\\tensy j\n.."
+        "\\teni x\n..\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\"
+        "glue(\\thinmuskip) 1.66663\n.\\teni z\n.\\kern0.43"
+        "98\n.\\mathoff\n\n! OK.\n"
 );
 }
 
@@ -6530,7 +6657,9 @@ int main(void)
         test_the_size_before_a_display() != 0 ||
         test_a_display_squeezed_to_fit() != 0 ||
         test_what_stands_between_delimiters() != 0 ||
+        test_delimiters_are_atoms() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
+        test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||
         test_a_number_beside_a_squeezed_equation() != 0 ||
         test_large_operators() != 0 ||
