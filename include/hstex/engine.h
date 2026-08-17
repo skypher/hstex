@@ -1021,6 +1021,13 @@ struct hstex_node {
             uint8_t replace_count;
         } disc;
         struct {
+            /* Whether this kern is one the line breaker put at a margin so
+               that a character may stick out past it: 0 for no, 1 for the
+               left margin, 2 for the right. See docs/DECISIONS.md,
+               character-protrusion. */
+            uint8_t margin;
+        } kern;
+        struct {
             /* An enum hstex_whatsit_kind. */
             uint8_t kind;
             /* The stream the reference stores: 0..15 as given, 16 for any

@@ -11103,6 +11103,11 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             (void)fputc(' ', out);
         }
         show_scaled(out, packed_dimen(node->width));
+        if (node->value.kern.margin == 1U) {
+            (void)fputs(" (left margin)", out);
+        } else if (node->value.kern.margin == 2U) {
+            (void)fputs(" (right margin)", out);
+        }
         return;
     case HSTEX_NODE_PENALTY:
         (void)fprintf(out, "\\penalty %d", node->value.penalty);
@@ -14931,6 +14936,9 @@ struct hstex_break_record {
     /* This break is a discretionary's, which is what \brokenpenalty and the
        double-hyphen demerits are about. */
     bool hyphenated;
+    /* How much narrower a line starting here is for letting its first
+       character stick out past the margin. */
+    int32_t left_kern;
 };
 
 /* Everything a breakpoint contributes beyond its position. */
@@ -14979,6 +14987,96 @@ static bool node_is_discardable(const struct hstex_node *node)
 
 /* Where the line after a break really begins: the reference throws away the
    glue, penalties and engine-made kerns that follow it. */
+/* How far a character may stick out past a margin: its font's quad times the
+   \lpcode or \rpcode the font gives it, in thousandths, and negative because
+   the kern pulls the line's edge back. See docs/DECISIONS.md,
+   character-protrusion. */
+static int32_t protrusion_kern(struct hstex_engine *engine,
+                               uint32_t identifier, bool left)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    if (node->kind != HSTEX_NODE_CHARACTER &&
+        node->kind != HSTEX_NODE_LIGATURE) {
+        return 0;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, node->value.character.font);
+    uint32_t code = node->value.character.character;
+    if (font == NULL || font->characters == NULL ||
+        code >= (uint32_t)HSTEX_FONT_CHARACTER_COUNT || font->dimen_count < 6U) {
+        return 0;
+    }
+    int32_t factor = left ? font->characters[code].left_protrusion
+                          : font->characters[code].right_protrusion;
+    if (factor == 0) {
+        return 0;
+    }
+    /* The reference rounds this product rather than truncating it. */
+    int64_t product = (int64_t)font->dimens[5] * factor;
+    int64_t scaled = product >= 0 ? (product + 500) / 1000
+                                  : -((-product + 500) / 1000);
+    return -(int32_t)scaled;
+}
+
+/* Whether the search for the character that may stick out passes over this
+   node. Anything with a width of its own stops the search, as does a
+   character; everything else is stepped over. */
+static bool protrusion_passes_over(const struct hstex_node *node)
+{
+    switch (node->kind) {
+    case HSTEX_NODE_CHARACTER:
+    case HSTEX_NODE_LIGATURE:
+        return false;
+    case HSTEX_NODE_PENALTY:
+    case HSTEX_NODE_WHATSIT:
+    case HSTEX_NODE_DISCRETIONARY:
+        return true;
+    case HSTEX_NODE_GLUE:
+        /* Glue of any width stops the search, but the \parfillskip a
+           paragraph ends with is not part of the line's own text. */
+        return node->value.glue.parameter ==
+               1U + (uint8_t)HSTEX_GLUE_PAR_FILL_SKIP;
+    case HSTEX_NODE_KERN:
+        return packed_dimen(node->width) == 0;
+    case HSTEX_NODE_LIST:
+        /* A box is stepped over only when it is empty and takes up no room
+           at all. */
+        return node->value.list.node_count == 0U &&
+               packed_dimen(node->width) == 0 &&
+               packed_dimen(node->height) == 0 &&
+               packed_dimen(node->depth) == 0;
+    case HSTEX_NODE_RULE:
+        return false;
+    }
+    return true;
+}
+
+/* The character at one end of a run of nodes, or zero when the run does not
+   offer one. */
+static uint32_t protruding_character(struct hstex_engine *engine,
+                                     const uint32_t *items, size_t from,
+                                     size_t to, bool left)
+{
+    for (size_t step = 0U; step < to - from; ++step) {
+        size_t index = left ? from + step : to - 1U - step;
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            return 0U;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (!protrusion_passes_over(node)) {
+            return node->kind == HSTEX_NODE_CHARACTER ||
+                           node->kind == HSTEX_NODE_LIGATURE
+                       ? identifier
+                       : 0U;
+        }
+    }
+    return 0U;
+}
+
 /* The natural width of a run of nodes in the arena: what one of a
    discretionary's lists adds to a line. */
 static int32_t list_run_width(const struct hstex_engine *engine, uint32_t start,
@@ -15089,6 +15187,55 @@ static int32_t line_badness(int64_t shortfall,
 }
 
 /* Try every active break as the start of a line ending here. */
+/* The kern that goes in front of a line starting here, so that its first
+   character may stick out past the left margin. A line that begins with what
+   a discretionary put after the break looks there first. */
+static int32_t line_left_kern(struct hstex_engine *engine,
+                              const uint32_t *items, size_t count,
+                              size_t start,
+                              const struct hstex_break_site *site)
+{
+    uint32_t character = 0U;
+    if (site->entry_count != 0U &&
+        (size_t)site->entry_start + site->entry_count <=
+            engine->list_item_count) {
+        character = protruding_character(
+            engine, engine->list_items, site->entry_start,
+            (size_t)site->entry_start + site->entry_count, true);
+    }
+    if (character == 0U && start < count) {
+        character = protruding_character(engine, items, start, count, true);
+    }
+    return protrusion_kern(engine, character, true);
+}
+
+/* The kern that goes at the end of a line breaking here. A line that ends at
+   a discretionary ends with the text that goes before the break. */
+static int32_t line_right_kern(struct hstex_engine *engine,
+                               const uint32_t *items, size_t count,
+                               size_t breakpoint)
+{
+    uint32_t character = 0U;
+    const struct hstex_node *node =
+        breakpoint < count && items[breakpoint] != 0U &&
+                (size_t)items[breakpoint] <= engine->node_count
+            ? &engine->nodes[items[breakpoint] - 1U]
+            : NULL;
+    if (node != NULL && node->kind == HSTEX_NODE_DISCRETIONARY &&
+        node->value.disc.pre_count != 0U &&
+        (size_t)node->value.disc.pre_start + node->value.disc.pre_count <=
+            engine->list_item_count) {
+        character = protruding_character(
+            engine, engine->list_items, node->value.disc.pre_start,
+            (size_t)node->value.disc.pre_start + node->value.disc.pre_count,
+            false);
+    }
+    if (character == 0U && breakpoint != 0U) {
+        character = protruding_character(engine, items, 0U, breakpoint, false);
+    }
+    return protrusion_kern(engine, character, false);
+}
+
 static int try_break_at(struct hstex_engine *engine,
                         struct hstex_break_state *state,
                         const uint32_t *items, size_t count,
@@ -15109,6 +15256,13 @@ static int try_break_at(struct hstex_engine *engine,
     int64_t minimum = HSTEX_AWFUL_BADNESS;
     int32_t line_penalty = engine->integer_parameters[HSTEX_INTEGER_LINE_PENALTY];
     int32_t adjacent = engine->integer_parameters[HSTEX_INTEGER_ADJ_DEMERITS];
+    /* Only \pdfprotrudechars=2 lets a character sticking out past the margin
+       change where the line is broken; see docs/DECISIONS.md,
+       character-protrusion. */
+    bool protruding =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_PROTRUDE_CHARS] >= 2;
+    int32_t right_kern =
+        protruding ? line_right_kern(engine, items, count, breakpoint) : 0;
 
     size_t kept = 0U;
     for (size_t slot = 0U; slot < state->active_count; ++slot) {
@@ -15116,6 +15270,7 @@ static int try_break_at(struct hstex_engine *engine,
         const struct hstex_break_record *record = &state->records[index];
         struct hstex_break_totals totals = *background;
         totals.width += (int64_t)record->entry_width + site->pre_width +
+                        record->left_kern + right_kern +
                         state->totals[breakpoint].width -
                         state->totals[record->start].width;
         for (size_t order = 0U; order < 4U; ++order) {
@@ -15217,6 +15372,8 @@ static int try_break_at(struct hstex_engine *engine,
         record->entry_start = site->entry_start;
         record->entry_count = site->entry_count;
         record->hyphenated = site->hyphenated;
+        record->left_kern =
+            protruding ? line_left_kern(engine, items, count, start, site) : 0;
         state->active[state->active_count++] = state->record_count;
         ++state->record_count;
     }
@@ -15442,9 +15599,27 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                      : emit_parameter_glue(engine, left,
                                            HSTEX_GLUE_LEFT_SKIP, error,
                                            error_capacity);
-        /* A line that starts after a discretionary begins with the text
-           that discretionary put after the break. */
+        /* A character at either end of the line may be allowed to stick
+           out past the margin; see docs/DECISIONS.md,
+           character-protrusion. */
+        bool protruding =
+            engine->integer_parameters[HSTEX_INTEGER_PDF_PROTRUDE_CHARS] > 0;
         const struct hstex_break_record *opening = &state->records[chain[line - 1U]];
+        if (status == 0 && protruding) {
+            struct hstex_break_site opening_site = {0};
+            opening_site.entry_start = opening->entry_start;
+            opening_site.entry_count = opening->entry_count;
+            int32_t kern = line_left_kern(engine, items, count, from,
+                                          &opening_site);
+            if (kern != 0) {
+                struct hstex_node node = {
+                    .kind = HSTEX_NODE_KERN,
+                    .width = kern,
+                    .value.kern = {.margin = 1U},
+                };
+                status = append_hbox_node(engine, &node, error, error_capacity);
+            }
+        }
         for (uint16_t item = 0U;
              status == 0 && item < opening->entry_count &&
              (size_t)opening->entry_start + opening->entry_count <=
@@ -15484,6 +15659,40 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                     status = append_hbox_item(
                         engine, engine->list_items[pre_start + item], error,
                         error_capacity);
+                }
+            }
+        }
+        /* The kern that lets the last character stick out goes in front of
+           whatever glue trails the line, which on the last line is
+           \parfillskip. */
+        if (status == 0 && protruding) {
+            int32_t kern = line_right_kern(engine, items, count, to);
+            if (kern != 0) {
+                size_t trailing = builder.count;
+                while (trailing != 0U &&
+                       engine->nodes[builder.node_identifiers[trailing - 1U] -
+                                     1U]
+                               .kind == HSTEX_NODE_GLUE) {
+                    --trailing;
+                }
+                struct hstex_node node = {
+                    .kind = HSTEX_NODE_KERN,
+                    .width = kern,
+                    .value.kern = {.margin = 2U},
+                };
+                uint32_t placed = 0U;
+                status = store_node(engine, &node, &placed, error,
+                                    error_capacity);
+                if (status == 0) {
+                    status = append_hbox_item(engine, placed, error,
+                                              error_capacity);
+                }
+                if (status == 0 && trailing != builder.count - 1U) {
+                    memmove(builder.node_identifiers + trailing + 1U,
+                            builder.node_identifiers + trailing,
+                            (builder.count - 1U - trailing) *
+                                sizeof(*builder.node_identifiers));
+                    builder.node_identifiers[trailing] = placed;
                 }
             }
         }
@@ -15991,6 +16200,18 @@ static int finish_paragraph_line(struct hstex_engine *engine,
         .kind = HSTEX_NODE_PENALTY,
         .value.penalty = HSTEX_INFINITE_PENALTY,
     };
+    /* Glue at the end of a paragraph becomes the penalty rather than being
+       followed by one, so a \hskip written just before \par leaves nothing
+       behind. */
+    struct hstex_hbox_builder *ending = engine->paragraph_builder;
+    if (ending->count != 0U) {
+        uint32_t last = ending->node_identifiers[ending->count - 1U];
+        if (last != 0U && (size_t)last <= engine->node_count &&
+            engine->nodes[last - 1U].kind == HSTEX_NODE_GLUE) {
+            ending->width -= packed_dimen(engine->nodes[last - 1U].width);
+            --ending->count;
+        }
+    }
     struct hstex_glue fill = engine->glue_parameters[HSTEX_GLUE_PAR_FILL_SKIP];
     struct hstex_node fill_node = {
         .kind = HSTEX_NODE_GLUE,

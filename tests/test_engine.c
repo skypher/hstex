@@ -1127,6 +1127,56 @@ static int test_parskip_in_the_outermost_list(void)
         "! OK.\n");
 }
 
+/* \lpcode and \rpcode let the character at either end of a line stick out
+   past the margin; see docs/DECISIONS.md, character-protrusion. */
+static int test_character_protrusion(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=40"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=40pt \\parinden"
+        "t=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplim"
+        "it=0pt \\parfillskip=0pt plus1fil \\tolerance=10000 \\"
+        "pretolerance=-1 \\boxmaxdepth=16383.99998pt \\spaceski"
+        "p=4pt \\lpcode\\f`\\A=100 \\rpcode\\f`\\B=200 \\pdfpro"
+        "trudechars=1 \\leftskip=0pt \\rightskip=0pt plus1fil \\"
+        "message{[ragged]}\\setbox1=\\vbox{\\noindent AB\\par}\\"
+        "showbox1 \\rightskip=0pt \\message{[emptybox]}\\setbox"
+        "0=\\hbox{}\\setbox1=\\vbox{\\noindent \\copy0 AB\\par}"
+        "\\showbox1 \\message{[fullbox]}\\setbox0=\\hbox to0pt{"
+        "\\hss}\\setbox1=\\vbox{\\noindent \\copy0 AB\\par}\\sh"
+        "owbox1 \\message{[zerokern]}\\setbox1=\\vbox{\\noinden"
+        "t \\kern0pt AB\\par}\\showbox1 \\message{[zeroglue]}\\"
+        "setbox1=\\vbox{\\noindent \\hskip0pt AB\\par}\\showbox"
+        "1%",
+        "[ragged]> \\box1=\n\\vbox(6.83331+0.0)x40.0\n.\\hbox(6"
+        ".83331+0.0)x40.0, glue set 14.20831fil\n..\\kern-1.0 ("
+        "left margin)\n..\\f A\n..\\f B\n..\\penalty 10000\n..\\"
+        "kern-2.0 (right margin)\n..\\glue(\\parfillskip) 0.0 p"
+        "lus 1.0fil\n..\\glue(\\rightskip) 0.0 plus 1.0fil\n\n!"
+        " OK.\n[emptybox]> \\box1=\n\\vbox(6.83331+0.0)x40.0\n."
+        "\\hbox(6.83331+0.0)x40.0, glue set 28.41663fil\n..\\ke"
+        "rn-1.0 (left margin)\n..\\hbox(0.0+0.0)x0.0\n..\\f A\n"
+        "..\\f B\n..\\penalty 10000\n..\\kern-2.0 (right margin"
+        ")\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\"
+        "rightskip) 0.0\n\n! OK.\n[fullbox]> \\box1=\n\\vbox(6."
+        "83331+0.0)x40.0\n.\\hbox(6.83331+0.0)x40.0, glue set 2"
+        "7.41663fil\n..\\hbox(0.0+0.0)x0.0\n...\\glue 0.0 plus "
+        "1.0fil minus 1.0fil\n..\\f A\n..\\f B\n..\\penalty 100"
+        "00\n..\\kern-2.0 (right margin)\n..\\glue(\\parfillski"
+        "p) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n[zerokern]> \\box1=\n\\vbox(6.83331+0.0)x40.0\n.\\hb"
+        "ox(6.83331+0.0)x40.0, glue set 28.41663fil\n..\\kern-1"
+        ".0 (left margin)\n..\\kern 0.0\n..\\f A\n..\\f B\n..\\"
+        "penalty 10000\n..\\kern-2.0 (right margin)\n..\\glue(\\"
+        "parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0."
+        "0\n\n! OK.\n[zeroglue]> \\box1=\n\\vbox(6.83331+0.0)x4"
+        "0.0\n.\\hbox(6.83331+0.0)x40.0, glue set 27.41663fil\n"
+        "..\\glue 0.0\n..\\f A\n..\\f B\n..\\penalty 10000\n..\\"
+        "kern-2.0 (right margin)\n..\\glue(\\parfillskip) 0.0 p"
+        "lus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -3959,6 +4009,7 @@ int main(void)
         test_discretionaries() != 0 || test_hyphenation() != 0 ||
         test_interword_glue() != 0 ||
         test_parskip_in_the_outermost_list() != 0 ||
+        test_character_protrusion() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
