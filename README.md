@@ -97,7 +97,16 @@ The whole corpus now runs: all 217,376 lines of it, through every chapter,
 on the command above.
 
 The page builder, the output routine, and PDF emission remain under
-construction, and there is no hyphenation yet.
+construction, and there is no hyphenation yet. Text in outer vertical mode
+is still handed to the driver as output tokens rather than starting a
+paragraph, so nothing reaches a page.
+
+Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
+23 seconds, and the whole corpus about 107, against `pdflatex`'s 41 seconds
+for the same source with a prebuilt format and an 11 MB PDF at the end. A
+large part of that is allocation: a definition is a fresh record every time,
+so the bootstrap alone leaves 417,000 of them and the corpus 7.7 million.
+Nothing has been tuned yet; correctness came first.
 
 ## Build
 
