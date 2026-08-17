@@ -21414,6 +21414,13 @@ static int end_display_math(struct hstex_engine *engine, char *error,
 static int resume_paragraph_after_display(struct hstex_engine *engine,
                                           char *error, size_t error_capacity)
 {
+    /* Everything the display contributes has reached the vertical list, so
+       the page builder runs before the paragraph carries on -- outside the
+       display's group, which has already given its parameters back. See
+       docs/DECISIONS.md, a-page-that-breaks-at-a-display. */
+    if (contribute_page(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     if (engine->paragraph_builder == NULL) {
         engine->paragraph_builder =
             calloc(1U, sizeof(*engine->paragraph_builder));

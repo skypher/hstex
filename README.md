@@ -146,11 +146,11 @@ way the reference does, which is how the last few of those were found.
 
 What `\shipout` does not do yet is write anything: there is no page
 description, so no PDF. Insertions and marks are still to come. The corpus
-comes to 2,335 pages, which is `pdflatex`'s count, and the files it writes
-beside them agree: the table of contents and the bookmark file to the byte,
-and the `.aux` in all 23,372 of its `\newlabel` lines -- every page number,
-section number and cross-reference in a 2,335-page document. Two `\citation`
-lines still come out on the page before the reference's.
+comes to 2,335 pages, which is `pdflatex`'s count, and every file it writes
+beside them is identical to the reference's: the table of contents, the
+bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
+every page number, section number and cross-reference in a 2,335-page
+document, and every `\citation` in the order the reference wrote it.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
