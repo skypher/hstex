@@ -241,6 +241,34 @@ static int run_snippet(const char *source, const char *expected)
     return status;
 }
 
+/* \vsplit; see docs/DECISIONS.md, vsplit. */
+static int test_vsplit(void)
+{
+    return run_snippet(
+        "\\splittopskip=5pt \\splitmaxdepth=1pt \\vbadness=10000 \\"
+        "vfuzz=1000pt \\hbadness=10000 \\hfuzz=1000pt \\boxmaxdepth"
+        "=16383.99998pt \\baselineskip=0pt \\lineskip=0pt \\lineski"
+        "plimit=0pt \\hsize=100pt \\def\\H#1#2{\\hrule height#1pt d"
+        "epth#2pt }\\def\\S{\\setbox1=\\vbox{\\H{10}{1}\\vskip3pt "
+        "\\H{10}{2}\\vskip4pt \\H{10}{0}}}\\S[1|\\the\\ht1|\\the\\d"
+        "p1]\\S\\setbox2=\\vsplit1 to 12pt [2|\\the\\ht2|\\the\\dp2"
+        "|\\the\\ht1|\\the\\dp1]\\S\\setbox2=\\vsplit1 to 25pt [3|"
+        "\\the\\ht2|\\the\\dp2|\\the\\ht1|\\the\\dp1]\\S\\setbox2="
+        "\\vsplit1 to 0pt [4|\\the\\ht2|\\the\\dp2|\\the\\ht1|\\the"
+        "\\dp1]\\S\\setbox2=\\vsplit1 to 100pt [5|\\the\\ht2|\\the"
+        "\\dp2|\\ifvoid1 V\\else N\\fi]\\setbox3=\\box9 \\setbox2="
+        "\\vsplit3 to 10pt [6|\\ifvoid2 V\\else N\\fi]\\S\\splittop"
+        "skip=30pt \\setbox2=\\vsplit1 to 12pt \\splittopskip=5pt ["
+        "7|\\the\\ht2|\\the\\dp2|\\the\\ht1|\\the\\dp1]\\S\\splitma"
+        "xdepth=0pt \\setbox2=\\vsplit1 to 25pt \\splitmaxdepth=1pt"
+        " [8|\\the\\ht2|\\the\\dp2|\\the\\ht1|\\the\\dp1]%",
+        "[1|40.0pt|0.0pt][2|12.0pt|1.0pt|26.0pt|0.0pt][3|25.0pt|1.0"
+        "pt|10.0pt|0.0pt][4|0.0pt|1.0pt|26.0pt|0.0pt][5|100.0pt|0.0"
+        "pt|V][6|V][7|12.0pt|1.0pt|46.0pt|0.0pt][8|25.0pt|0.0pt|26."
+        "0pt|0.0pt]");
+}
+
+
 static int expect_failure(const char *source, const char *error_fragment)
 {
     char path[64];
@@ -3343,7 +3371,7 @@ int main(void)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

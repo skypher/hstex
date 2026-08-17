@@ -9364,6 +9364,160 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
     return drop_last_list_node(engine, error, error_capacity);
 }
 
+/* Where a vertical list would best be broken to come to `height`, taking
+   `depth` as the most any box may hang below the break. Returns how many
+   items go above it. See docs/DECISIONS.md, vsplit. */
+static size_t vertical_break(struct hstex_engine *engine,
+                             const uint32_t *items, size_t count,
+                             int32_t height, int32_t depth)
+{
+    int64_t total = 0;
+    int64_t stretch[4] = {0, 0, 0, 0};
+    int64_t shrink = 0;
+    int32_t previous_depth = 0;
+    int64_t least = HSTEX_AWFUL_BADNESS;
+    size_t best = count;
+    for (size_t index = 0U; index <= count; ++index) {
+        int32_t penalty = 0;
+        bool breakpoint = index == count;
+        const struct hstex_node *node = NULL;
+        if (index < count) {
+            uint32_t identifier = items[index];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            node = &engine->nodes[identifier - 1U];
+            if (node->kind == HSTEX_NODE_GLUE) {
+                if (index != 0U) {
+                    enum hstex_node_kind kind =
+                        engine->nodes[items[index - 1U] - 1U].kind;
+                    breakpoint = kind != HSTEX_NODE_GLUE &&
+                                 kind != HSTEX_NODE_KERN &&
+                                 kind != HSTEX_NODE_PENALTY;
+                }
+            } else if (node->kind == HSTEX_NODE_KERN) {
+                breakpoint = index + 1U < count &&
+                             engine->nodes[items[index + 1U] - 1U].kind ==
+                                 HSTEX_NODE_GLUE;
+            } else if (node->kind == HSTEX_NODE_PENALTY) {
+                breakpoint = true;
+                penalty = node->value.penalty;
+            }
+        } else {
+            penalty = -HSTEX_INFINITE_PENALTY;
+        }
+        if (breakpoint && penalty < HSTEX_INFINITE_PENALTY) {
+            int64_t cost;
+            if (total < height) {
+                cost = stretch[1] != 0 || stretch[2] != 0 || stretch[3] != 0
+                           ? 0
+                           : glue_badness((int32_t)(height - total),
+                                          (int32_t)stretch[0]);
+            } else if (total - height > shrink) {
+                cost = HSTEX_AWFUL_BADNESS;
+            } else {
+                cost = glue_badness((int32_t)(total - height),
+                                    (int32_t)shrink);
+            }
+            if (cost < HSTEX_AWFUL_BADNESS) {
+                if (penalty <= -HSTEX_INFINITE_PENALTY) {
+                    cost = penalty;
+                } else if (cost < HSTEX_INFINITE_BADNESS) {
+                    cost += penalty;
+                } else {
+                    cost = HSTEX_DEPLORABLE_COST;
+                }
+            }
+            if (cost <= least) {
+                best = index;
+                least = cost;
+            }
+            if (cost == HSTEX_AWFUL_BADNESS ||
+                penalty <= -HSTEX_INFINITE_PENALTY) {
+                return best;
+            }
+        }
+        if (node == NULL) {
+            break;
+        }
+        if (node->kind == HSTEX_NODE_GLUE || node->kind == HSTEX_NODE_KERN) {
+            if (node->kind == HSTEX_NODE_GLUE) {
+                stretch[node->value.glue.stretch_order] +=
+                    node->value.glue.stretch;
+                shrink += node->value.glue.shrink;
+            }
+            total += previous_depth + packed_dimen(node->width);
+            previous_depth = 0;
+        } else if (node->kind == HSTEX_NODE_RULE ||
+                   node->kind == HSTEX_NODE_LIST ||
+                   node->kind == HSTEX_NODE_CHARACTER) {
+            total += previous_depth + packed_dimen(node->height);
+            previous_depth = packed_dimen(node->depth);
+        }
+        if (previous_depth > depth) {
+            total += previous_depth - depth;
+            previous_depth = depth;
+        }
+    }
+    return best;
+}
+
+/* What is left after a split starts again with \splittopskip, and whatever
+   glue, kerns or penalties came first are gone. */
+static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
+                           size_t count, struct hstex_box *box, char *error,
+                           size_t error_capacity)
+{
+    size_t first = 0U;
+    while (first < count) {
+        enum hstex_node_kind kind = engine->nodes[items[first] - 1U].kind;
+        if (kind != HSTEX_NODE_GLUE && kind != HSTEX_NODE_KERN &&
+            kind != HSTEX_NODE_PENALTY) {
+            break;
+        }
+        ++first;
+    }
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_VOID;
+    if (first == count) {
+        return 0;
+    }
+    struct hstex_vbox_builder builder = {0};
+    struct hstex_vbox_builder *previous = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_vbox_builder = &builder;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    struct hstex_glue top = engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
+    int32_t height = packed_dimen(engine->nodes[items[first] - 1U].height);
+    top.width = top.width > height ? top.width - height : 0;
+    struct hstex_node glue = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = top.width,
+        .value.glue = {
+            .stretch = top.stretch,
+            .shrink = top.shrink,
+            .stretch_order = top.stretch_order,
+            .shrink_order = top.shrink_order,
+        },
+    };
+    uint32_t placed = 0U;
+    int status = store_node(engine, &glue, &placed, error, error_capacity);
+    if (status == 0) {
+        status = append_vbox_item(engine, placed, error, error_capacity);
+    }
+    for (size_t index = first; status == 0 && index < count; ++index) {
+        status = append_vbox_item(engine, items[index], error, error_capacity);
+    }
+    if (status == 0) {
+        status = finalize_vbox(engine, &builder, false, false, 0, box, error,
+                               error_capacity);
+    }
+    free(builder.node_identifiers);
+    engine->active_vbox_builder = previous;
+    engine->mode = previous_mode;
+    return status;
+}
+
 static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
                        char *error, size_t error_capacity)
 {
@@ -9388,30 +9542,70 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
         return -1;
     }
     struct hstex_box source = engine->boxes[(size_t)index];
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_VOID;
     if (source.kind == HSTEX_BOX_VOID) {
-        memset(box, 0, sizeof(*box));
-        box->kind = HSTEX_BOX_VOID;
         return 0;
     }
-    /* Asking for at least the whole list takes all of it: no break can leave
-       less material and come nearer the goal. The result is packaged to the
-       height asked for, however far off it is, and the register is emptied. */
-    if (source.kind != HSTEX_BOX_VLIST ||
-        (int64_t)source.height + source.depth > height) {
+    if (source.kind != HSTEX_BOX_VLIST) {
         return set_error(error, error_capacity,
-                         "splitting box %d, a %s of height %d, is not "
-                         "implemented",
-                         index,
-                         source.kind == HSTEX_BOX_HLIST ? "horizontal list"
-                                                        : "vertical list",
-                         source.height);
+                         "box %d is a horizontal list and cannot be split",
+                         index);
     }
-    *box = source;
-    box->height = height;
-    box->depth = 0;
-    struct hstex_box empty = {0};
-    empty.kind = HSTEX_BOX_VOID;
-    return assign_box(engine, (uint32_t)index, empty, true, error,
+    if ((size_t)source.node_start + source.node_count >
+        engine->list_item_count) {
+        return set_error(error, error_capacity,
+                         "box %d refers outside the list arena", index);
+    }
+    /* The arena moves while the two halves are packed, so the items are
+       taken first. */
+    size_t count = source.node_count;
+    uint32_t *items = NULL;
+    if (count != 0U) {
+        items = calloc(count, sizeof(*items));
+        if (items == NULL) {
+            return set_error(error, error_capacity, "vsplit allocation failed");
+        }
+        memcpy(items, engine->list_items + source.node_start,
+               count * sizeof(*items));
+    }
+    int32_t depth = engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
+    size_t split = vertical_break(engine, items, count, height, depth);
+
+    struct hstex_vbox_builder builder = {0};
+    struct hstex_vbox_builder *previous = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_vbox_builder = &builder;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    int status = 0;
+    for (size_t item = 0U; status == 0 && item < split; ++item) {
+        status = append_vbox_item(engine, items[item], error, error_capacity);
+    }
+    if (status == 0) {
+        int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
+        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = depth;
+        status = finalize_vbox(engine, &builder, true, false, height, box,
+                               error, error_capacity);
+        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = limit;
+    }
+    free(builder.node_identifiers);
+    engine->active_vbox_builder = previous;
+    engine->mode = previous_mode;
+    struct hstex_box rest = {0};
+    rest.kind = HSTEX_BOX_VOID;
+    if (status == 0) {
+        status = prune_split_top(engine, items + split, count - split, &rest,
+                                 error, error_capacity);
+    }
+    free(items);
+    if (status != 0) {
+        return -1;
+    }
+    box->width = source.width;
+    if (rest.kind != HSTEX_BOX_VOID) {
+        rest.width = source.width;
+    }
+    return assign_box(engine, (uint32_t)index, rest, true, error,
                       error_capacity);
 }
 

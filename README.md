@@ -101,9 +101,18 @@ paragraph exactly as one inside a `\vbox` does, and `hstex_engine_run`
 builds the list rather than handing the text back to the caller. The whole
 corpus is typeset that way.
 
-The page builder, the output routine, and PDF emission remain under
-construction, and there is no hyphenation yet. Nothing takes material off
-the main vertical list, so the document is held in one list to the end.
+The page builder is there too. Material appended to the main vertical list
+waits on a contribution list until a box, the end of a paragraph or a penalty
+sets the builder going; it then moves what it can to the current page,
+keeping `\pagetotal` and the rest, and sends the page off at the cheapest
+break it has found. `\box255`, `\outputpenalty` and `\deadcycles` are set
+the way the reference sets them, `\output` runs in a group of its own, and
+`\vsplit` breaks a box the same way. LaTeX's own output routine runs on the
+corpus.
+
+What `\shipout` does not do yet is write anything: there is no page
+description, so no PDF. Insertions, marks and hyphenation are still to
+come.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 107, against `pdflatex`'s 41 seconds
