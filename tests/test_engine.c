@@ -1167,6 +1167,50 @@ static int test_line_breaking(void)
         "[(1.05pt)(1.03pt)][(1.05pt)(1.04pt)]");
 }
 
+/* \accent, and a displaced box in a formula; see docs/DECISIONS.md,
+   accents. */
+static int test_accents(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 "
+        "\\font\\tenrm=cmr10 \\font\\tenti=cmti10 \\font\\tenmi=cmmi10 "
+        "\\font\\tensy=cmsy10 \\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\textfont1=\\tenmi \\textfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont0=\\tenrm \\scriptfont1=\\tenmi "
+        "\\scriptfont2=\\tensy \\scriptfont3=\\tenex "
+        "\\scriptscriptfont0=\\tenrm \\scriptscriptfont1=\\tenmi "
+        "\\scriptscriptfont2=\\tensy \\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu \\tenrm "
+        "\\def\\R{\\vrule width2pt height1pt depth0pt}"
+        "\\def\\m#1{\\setbox0=\\hbox{#1}[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* The kerns around an accent cancel, so the pair is exactly as wide
+           as the character underneath. */
+        "\\m{o}\\m{\\accent23 o}\\m{\\accent23 A}\\m{\\accent23 g}"
+        "\\m{\\accent22 o}"
+        /* An accent with nothing to sit on is an ordinary character, and it
+           only ever covers one. */
+        "\\m{\\accent23}\\m{\\accent23 oo}\\m{\\accent23 \\char111 }"
+        /* The slant of the font moves the accent but not the width. */
+        "\\tenti \\m{\\accent23 o}\\tenrm "
+        "\\fontdimen1\\tenrm=0.5pt \\m{\\accent23 o}\\fontdimen1\\tenrm=0pt "
+        /* \raise and \lower work in a formula, where the box they make is an
+           ordinary atom. */
+        "\\m{$\\raise5pt\\hbox{\\R}$}\\m{$\\lower3pt\\hbox{\\R}$}"
+        "\\m{$\\mathchar\"0030 \\raise5pt\\hbox{\\R}\\mathchar\"0030 $}"
+        "\\m{$\\mathchar\"0030 \\mathrel{\\raise5pt\\hbox{\\R}}"
+        "\\mathchar\"0030 $}"
+        "\\m{\\raise5pt\\hbox{\\R}}%",
+        "[5.00002pt|4.30554pt|0.0pt][5.00002pt|6.94444pt|0.0pt]"
+        "[7.50002pt|9.47221pt|0.0pt]"
+        "[5.00002pt|6.94444pt|1.94444pt]"
+        "[5.00002pt|5.67776pt|0.0pt][7.50002pt|6.94444pt|0.0pt]"
+        "[10.00003pt|6.94444pt|0.0pt][5.00002pt|6.94444pt|0.0pt]"
+        "[5.11108pt|6.94444pt|0.0pt][5.00002pt|6.94444pt|0.0pt]"
+        "[2.0pt|6.0pt|0.0pt][2.0pt|0.0pt|3.0pt]"
+        "[12.00003pt|6.44444pt|0.0pt][17.55545pt|6.44444pt|0.0pt]"
+        "[2.0pt|6.0pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2253,7 +2297,8 @@ int main(void)
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
         test_math_scripts() != 0 || test_alignments() != 0 ||
         test_display_math() != 0 || test_math_choices() != 0 ||
-        test_badness() != 0 || test_line_breaking() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_badness() != 0 || test_line_breaking() != 0 ||
+        test_accents() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

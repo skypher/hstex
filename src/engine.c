@@ -1865,6 +1865,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"scriptscriptstyle", HSTEX_COMMAND_MATH_STYLE,
          (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
+        {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
         {"cr", HSTEX_COMMAND_CR, 0},
         {"crcr", HSTEX_COMMAND_CR, 1},
@@ -7935,6 +7936,9 @@ static int math_append_node(struct hstex_engine *engine,
 static int math_append_box(struct hstex_engine *engine,
                            const struct hstex_box *box, char *error,
                            size_t error_capacity);
+static int math_append_atom(struct hstex_engine *engine,
+                            struct hstex_noad *noad, char *error,
+                            size_t error_capacity);
 static int math_append_box_field(struct hstex_engine *engine,
                                  const struct hstex_box *box,
                                  bool single_character, char *error,
@@ -9133,7 +9137,7 @@ static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
     bool vertical = subtype == (int32_t)HSTEX_SHIFT_MOVE_LEFT ||
                     subtype == (int32_t)HSTEX_SHIFT_MOVE_RIGHT;
     if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
-                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+                 : engine->mode == HSTEX_MODE_VERTICAL) {
         return set_error(error, error_capacity,
                          vertical
                              ? "moveleft and moveright require vertical mode"
@@ -9167,6 +9171,22 @@ static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
             .box_kind = box.kind,
         },
     };
+    /* A displaced box in a formula is an ordinary atom, so that it spaces
+       against its neighbours like any other. */
+    if (engine->mode == HSTEX_MODE_MATH) {
+        uint32_t identifier = 0U;
+        if (store_node(engine, &node, &identifier, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        struct hstex_noad noad = {
+            .kind = (uint8_t)HSTEX_NOAD_ATOM,
+            .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+            .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX,
+                        .node = identifier},
+        };
+        return math_append_atom(engine, &noad, error, error_capacity);
+    }
     return append_current_list_node(engine, &node, error, error_capacity);
 }
 
@@ -13629,6 +13649,7 @@ static bool command_starts_paragraph(const struct hstex_meaning *meaning)
     case HSTEX_COMMAND_VRULE:
     case HSTEX_COMMAND_CONTROL_SPACE:
     case HSTEX_COMMAND_CHAR:
+    case HSTEX_COMMAND_ACCENT:
         return true;
     case HSTEX_COMMAND_UNBOX:
         return meaning->value.integer ==
@@ -16050,6 +16071,163 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     return status;
 }
 
+/* \accent puts an accent over the character that follows it. The two kerns
+   around the accent cancel, so the pair is exactly as wide as the accented
+   character; what shows is the accent being raised to sit above it. See
+   docs/DECISIONS.md, accents. */
+static int execute_accent(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 255) {
+        return set_error(error, error_capacity, "bad accent code (%d)", code);
+    }
+    if (ensure_horizontal_mode(engine, error, error_capacity) != 0 ||
+        flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    if (font == NULL || font->characters == NULL ||
+        font->characters[code].tag < 0) {
+        return set_error(error, error_capacity,
+                         "the current font has no character %d for an accent",
+                         code);
+    }
+    struct hstex_char_metric accent = font->characters[code];
+    int32_t x_height = font->dimen_count >= 5U ? font->dimens[4] : 0;
+    int32_t slant = font->dimen_count >= 1U ? font->dimens[0] : 0;
+
+    /* Whatever follows, after any assignments, is the accented character. */
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space(
+        engine, &token, &location, error, error_capacity);
+    if (result == HSTEX_ENGINE_ERROR) {
+        return -1;
+    }
+    int32_t accented = -1;
+    if (result == HSTEX_ENGINE_TOKEN) {
+        if (hstex_token_is_character(token) &&
+            (token_is_category(token, HSTEX_CAT_LETTER) ||
+             token_is_category(token, HSTEX_CAT_OTHER))) {
+            accented = (int32_t)hstex_token_character_code(token);
+        } else if (hstex_token_is_control_sequence(token)) {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN) {
+                accented = meaning->value.integer;
+            } else if (meaning->command == HSTEX_COMMAND_CHAR) {
+                if (scan_integer(engine, &accented, error, error_capacity) !=
+                    0) {
+                    return -1;
+                }
+            } else if (push_one(engine, token, location, error,
+                                error_capacity) != 0) {
+                return -1;
+            }
+        } else if (push_one(engine, token, location, error, error_capacity) !=
+                   0) {
+            return -1;
+        }
+    }
+    if (accented >= 0 &&
+        (accented > 255 || font->characters[accented].tag < 0)) {
+        return set_error(error, error_capacity,
+                         "the current font has no character %d to accent",
+                         accented);
+    }
+
+    struct hstex_node accent_node = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = accent.width,
+        .height = accent.height,
+        .depth = accent.depth,
+        .value.character = {
+            .font = engine->current_font,
+            .character = (uint32_t)code,
+        },
+    };
+    if (accented < 0) {
+        /* Nothing to accent: the accent is an ordinary character. */
+        engine->space_factor = 1000;
+        return append_hbox_node(engine, &accent_node, error, error_capacity);
+    }
+
+    struct hstex_char_metric under = font->characters[accented];
+    int32_t lift = x_height - under.height;
+    int64_t delta = ((int64_t)under.width - accent.width) / 2 +
+                    ((int64_t)under.height - x_height) *
+                        (int64_t)slant / INT64_C(65536);
+    struct hstex_node before = {
+        .kind = HSTEX_NODE_KERN,
+        .width = (int32_t)delta,
+    };
+    struct hstex_node after = {
+        .kind = HSTEX_NODE_KERN,
+        .width = (int32_t)(-(int64_t)accent.width - delta),
+    };
+    if (append_hbox_node(engine, &before, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (lift == 0) {
+        if (append_hbox_node(engine, &accent_node, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        /* The accent rides in a box of its own so that it can be raised. */
+        struct hstex_hbox_builder builder = {0};
+        struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        engine->active_hbox_builder = &builder;
+        int status = append_hbox_node(engine, &accent_node, error,
+                                      error_capacity);
+        engine->active_hbox_builder = previous;
+        struct hstex_box box = {0};
+        if (status == 0) {
+            status = finalize_hbox(engine, &builder, false, false, 0, &box,
+                                   error, error_capacity);
+        }
+        free(builder.node_identifiers);
+        if (status != 0) {
+            return -1;
+        }
+        struct hstex_node raised = {
+            .kind = HSTEX_NODE_LIST,
+            .width = box.width,
+            .height = box.height,
+            .depth = box.depth,
+            .shift = lift,
+            .value.list = {
+                .node_start = box.node_start,
+                .node_count = box.node_count,
+                .box_kind = box.kind,
+            },
+        };
+        if (append_hbox_node(engine, &raised, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    struct hstex_node body = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = under.width,
+        .height = under.height,
+        .depth = under.depth,
+        .value.character = {
+            .font = engine->current_font,
+            .character = (uint32_t)accented,
+        },
+    };
+    if (append_hbox_node(engine, &after, error, error_capacity) != 0 ||
+        append_hbox_node(engine, &body, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->space_factor = 1000;
+    return 0;
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -17659,6 +17837,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_MATH_CHOICE:
             if (execute_math_choice(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_ACCENT:
+            if (execute_accent(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

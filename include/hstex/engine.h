@@ -210,6 +210,7 @@ enum hstex_command {
     HSTEX_COMMAND_SPAN,
     HSTEX_COMMAND_MATH_STYLE,
     HSTEX_COMMAND_MATH_CHOICE,
+    HSTEX_COMMAND_ACCENT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
