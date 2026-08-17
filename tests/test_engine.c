@@ -1740,6 +1740,35 @@ static int test_parshape(void)
         "3|91.0pt|9.0pt]");
 }
 
+/* \  and \unhbox inside a formula; see docs/DECISIONS.md,
+   control-space and unboxing-in-a-formula. */
+static int test_formula_spacing(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\mathsurround=0pt \\hbadness=10000 \\hfuz"
+        "z=1000pt \\font\\f=cmr10 \\f \\textfont0=\\f \\scriptfont0"
+        "=\\f \\scriptscriptfont0=\\f \\font\\fm=cmmi10 \\textfont1"
+        "=\\fm \\scriptfont1=\\fm \\scriptscriptfont1=\\fm \\font\\"
+        "fs=cmsy10 \\textfont2=\\fs \\scriptfont2=\\fs \\scriptscri"
+        "ptfont2=\\fs \\font\\fx=cmex10 \\textfont3=\\fx \\scriptfo"
+        "nt3=\\fx \\scriptscriptfont3=\\fx \\def\\R#1{\\vrule width"
+        "#1pt height1pt depth0pt}\\def\\M#1{\\setbox1=\\hbox{#1}}\\"
+        "M{\\ }[1|\\the\\wd1]\\M{$\\ $}[2|\\the\\wd1]\\M{x\\spacefa"
+        "ctor=2000 \\ }[3|\\the\\wd1]\\M{x}[4|\\the\\wd1]\\spaceski"
+        "p=7pt plus1pt minus2pt \\M{\\ }[5|\\the\\wd1]\\M{$\\ $}[6|"
+        "\\the\\wd1]\\spaceskip=0pt \\M{$\\scriptstyle\\ $}[7|\\the"
+        "\\wd1]\\M{$\\mathord{\\R{1}}\\ \\mathord{\\R{1}}$}[8|\\the"
+        "\\wd1]\\M{$\\unhbox9$}[9|\\the\\wd1]\\M{$\\unhcopy9$}[10|"
+        "\\the\\wd1]\\M{\\unhcopy9}[11|\\the\\wd1]\\M{$\\mathord{\\"
+        "R{1}}\\unhbox9\\mathord{\\R{1}}$}[12|\\the\\wd1]\\M{$\\mat"
+        "hord{\\R{1}}\\mathord{\\R{1}}$}[13|\\the\\wd1][14|\\the\\f"
+        "ontdimen2\\f|\\the\\fontdimen3\\f|\\the\\fontdimen4\\f]%",
+        "[1|3.33333pt][2|3.33333pt][3|8.61113pt][4|5.2778pt][5|7.0p"
+        "t][6|7.0pt][7|3.33333pt][8|5.33333pt][9|0.0pt][10|0.0pt][1"
+        "1|0.0pt][12|2.0pt][13|2.0pt][14|3.33333pt|1.66666pt|1.1111"
+        "1pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2830,7 +2859,7 @@ int main(void)
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
-        test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

@@ -12906,11 +12906,16 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                     subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
     bool keep = subtype == (int32_t)HSTEX_UNBOX_HORIZONTAL_COPY ||
                 subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
-    if (!vertical && ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+    /* \unhbox is allowed in a formula, where LaTeX's \leavevmode reaches it
+       as \unhbox\voidb@x; only a void register may be unboxed there. See
+       docs/DECISIONS.md, unboxing-in-a-formula. */
+    bool formula = !vertical && engine->mode == HSTEX_MODE_MATH;
+    if (!vertical && !formula &&
+        ensure_horizontal_mode(engine, error, error_capacity) != 0) {
         return -1;
     }
-    if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
-                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+    if (!formula && (vertical ? engine->mode != HSTEX_MODE_VERTICAL
+                              : engine->mode != HSTEX_MODE_HORIZONTAL)) {
         return set_error(error, error_capacity,
                          vertical ? "unvbox requires vertical mode"
                                   : "unhbox requires horizontal mode");
@@ -12927,6 +12932,10 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
     struct hstex_box box = engine->boxes[(size_t)index];
     if (box.kind == HSTEX_BOX_VOID) {
         return 0;
+    }
+    if (formula) {
+        return set_error(error, error_capacity,
+                         "box %d cannot be unboxed into a formula", index);
     }
     enum hstex_box_kind wanted =
         vertical ? HSTEX_BOX_VLIST : HSTEX_BOX_HLIST;
@@ -13960,8 +13969,12 @@ static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
     if (engine->mode == HSTEX_MODE_HORIZONTAL) {
         return 0;
     }
+    uint32_t line = 0U;
+    const char *origin = current_source_line(engine, &line);
     return set_error(error, error_capacity,
-                     "horizontal command used outside horizontal mode");
+                     "horizontal command \\%s used outside horizontal mode, "
+                     "at %s:%u",
+                     engine->executing_name, origin, (unsigned int)line);
 }
 
 /* The commands that begin a paragraph when they are met in vertical mode.
@@ -13988,30 +14001,45 @@ static bool command_starts_paragraph(const struct hstex_meaning *meaning)
 
 /* A control space is the font's own interword glue, with no space-factor
    adjustment; see docs/DECISIONS.md, control-space-and-italic. */
+/* \  takes \spaceskip when that is set and the current font's interword
+   glue otherwise, neither adjusted by the space factor, and a formula gets
+   exactly the same glue as a paragraph does. See docs/DECISIONS.md,
+   control-space. */
 static int execute_control_space(struct hstex_engine *engine, char *error,
                                  size_t error_capacity)
 {
-    if (ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+    if (engine->mode != HSTEX_MODE_MATH &&
+        ensure_horizontal_mode(engine, error, error_capacity) != 0) {
         return -1;
     }
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
     }
-    const struct hstex_font *font =
-        font_by_identifier(engine, engine->current_font);
-    if (font == NULL || font->dimen_count < 4U) {
-        return set_error(error, error_capacity,
-                         "current font does not define interword spacing");
+    struct hstex_glue glue = engine->glue_parameters[HSTEX_GLUE_SPACE_SKIP];
+    if (glue.width == 0 && glue.stretch == 0 && glue.shrink == 0) {
+        const struct hstex_font *font =
+            font_by_identifier(engine, engine->current_font);
+        if (font == NULL || font->dimen_count < 4U) {
+            return set_error(error, error_capacity,
+                             "current font does not define interword spacing");
+        }
+        glue.width = font->dimens[1];
+        glue.stretch = font->dimens[2];
+        glue.shrink = font->dimens[3];
+        glue.stretch_order = 0U;
+        glue.shrink_order = 0U;
     }
     struct hstex_node node = {
         .kind = HSTEX_NODE_GLUE,
-        .width = font->dimens[1],
+        .width = glue.width,
         .value.glue = {
-            .stretch = font->dimens[2],
-            .shrink = font->dimens[3],
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
         },
     };
-    return append_hbox_node(engine, &node, error, error_capacity);
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 /* \/ adds the italic correction of whatever character precedes it. */
