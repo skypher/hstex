@@ -2486,6 +2486,104 @@ static int test_a_number_beside_a_squeezed_equation(void)
 );
 }
 
+/* A ligature made of two characters is read as part of a word only if
+   another character follows it, so it keeps its own italic correction when
+   it ends the run; see docs/DECISIONS.md, math-text-characters. */
+static int test_the_italic_of_a_math_ligature(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\showboxdepth=4 \\showboxbreadth=100 \\"
+        "message{[lig]}\\setbox0=\\hbox{$\\fam0 diff$}\\sho"
+        "wbox0 \\message{[plain]}\\setbox0=\\hbox{$\\fam0 d"
+        "id$}\\showbox0 \\message{[one]}\\setbox0=\\hbox{$"
+        "\\fam0 f$}\\showbox0 \\message{[two]}\\setbox0=\\h"
+        "box{$\\fam0 ff$}\\showbox0%"
+,
+        "[lig]> \\box0=\n\\hbox(6.94444+0.0)x14.9445\n.\\ma"
+        "thon\n.\\tenrm d\n.\\tenrm i\n.\\tenrm ^^K\n.\\ker"
+        "n0.77779\n.\\mathoff\n\n! OK.\n[plain]> \\box0=\n"
+        "\\hbox(6.94444+0.0)x13.88893\n.\\mathon\n.\\tenrm "
+        "d\n.\\tenrm i\n.\\tenrm d\n.\\mathoff\n\n! OK.\n[o"
+        "ne]> \\box0=\n\\hbox(6.94444+0.0)x3.83336\n.\\math"
+        "on\n.\\tenrm f\n.\\kern0.77779\n.\\mathoff\n\n! OK"
+        ".\n[two]> \\box0=\n\\hbox(6.94444+0.0)x6.61115\n."
+        "\\mathon\n.\\tenrm ^^K\n.\\kern0.77779\n.\\mathoff"
+        "\n\n! OK.\n"
+);
+}
+
+/* A box register used in a formula is an ordinary atom holding that box, so
+   braces round it change nothing; see docs/DECISIONS.md,
+   a-box-register-in-a-formula. */
+static int test_a_box_register_in_a_formula(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\catcode`\\_=8 \\catcode`\\^=7 \\showbo"
+        "xdepth=6 \\showboxbreadth=100 \\message{[grp]}\\se"
+        "tbox1=\\hbox{y}\\setbox0=\\hbox{$\\copy1{\\box1}$}"
+        "\\showbox0 \\message{[bare]}\\setbox1=\\hbox{y}\\s"
+        "etbox0=\\hbox{$\\box1$}\\showbox0 \\message{[sub]}"
+        "\\setbox1=\\hbox{y}\\setbox0=\\hbox{$\\box1_a$}\\s"
+        "howbox0 \\message{[void]}\\setbox0=\\hbox{$\\box9 "
+        "x$}\\showbox0%"
+,
+        "[grp]> \\box0=\n\\hbox(4.30554+1.94444)x10.5556\n."
+        "\\mathon\n.\\hbox(4.30554+1.94444)x5.2778\n..\\ten"
+        "rm y\n.\\hbox(4.30554+1.94444)x5.2778\n..\\tenrm y"
+        "\n.\\mathoff\n\n! OK.\n[bare]> \\box0=\n\\hbox(4.3"
+        "0554+1.94444)x5.2778\n.\\mathon\n.\\hbox(4.30554+1"
+        ".94444)x5.2778\n..\\tenrm y\n.\\mathoff\n\n! OK.\n"
+        "[sub]> \\box0=\n\\hbox(4.30554+2.44443)x9.61545\n."
+        "\\mathon\n.\\hbox(4.30554+1.94444)x5.2778\n..\\ten"
+        "rm y\n.\\hbox(3.01389+0.0)x4.33765, shifted 2.4444"
+        "3\n..\\seveni a\n.\\mathoff\n\n! OK.\n[void]> \\bo"
+        "x0=\n\\hbox(4.30554+0.0)x5.71527\n.\\mathon\n.\\te"
+        "ni x\n.\\mathoff\n\n! OK.\n"
+);
+}
+
 /* What stands between \left and \right is spliced into the line rather
    than boxed, and the pieces of an extensible delimiter are stacked flush;
    see docs/DECISIONS.md, what-stands-between-delimiters. */
@@ -2615,6 +2713,77 @@ static int test_a_display_squeezed_to_fit(void)
         "0)x10.0\n.\\penalty 0\n\n! OK.\n"
 );
 }
+
+/* What stands to the left of a display is unknowable when the line before it
+   is stretching or shrinking on glue of the line's own order; see
+   docs/DECISIONS.md, the-size-before-a-display. */
+static int test_the_size_before_a_display(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\hsize=100pt \\parindent=0pt \\baseline"
+        "skip=0pt \\lineskip=0pt \\lineskiplimit=0pt \\parf"
+        "illskip=0pt \\leftskip=0pt \\rightskip=0pt \\above"
+        "displayskip=3pt \\abovedisplayshortskip=1pt \\belo"
+        "wdisplayskip=4pt \\belowdisplayshortskip=2pt \\pre"
+        "displaypenalty=10000 \\postdisplaypenalty=0 \\tole"
+        "rance=10000 \\pretolerance=-1 \\hbadness=10000 \\v"
+        "badness=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\show"
+        "boxdepth=1 \\showboxbreadth=100 \\message{[rigid]}"
+        "\\spaceskip=4pt \\setbox0=\\vbox{\\noindent x x$$"
+        "\\hbox to 10pt{}$$}\\showbox0 \\message{[stretch]}"
+        "\\spaceskip=4pt plus 2pt \\setbox0=\\vbox{\\noinde"
+        "nt x x$$\\hbox to 10pt{}$$}\\showbox0 \\message{[s"
+        "hrink]}\\spaceskip=4pt minus 2pt \\setbox0=\\vbox{"
+        "\\noindent x x$$\\hbox to 10pt{}$$}\\showbox0 \\me"
+        "ssage{[shifted]}\\spaceskip=4pt \\setbox0=\\vbox{"
+        "\\parshape=2 30pt 70pt 0pt 100pt \\noindent x x$$"
+        "\\hbox to 10pt{}$$}\\showbox0%"
+,
+        "[rigid]> \\box0=\n\\vbox(7.30554+0.0)x100.0\n.\\hb"
+        "ox(4.30554+0.0)x100.0 []\n.\\penalty 10000\n.\\glu"
+        "e(\\abovedisplayshortskip) 1.0\n.\\glue(\\baseline"
+        "skip) 0.0\n.\\hbox(0.0+0.0)x10.0, shifted 45.0, di"
+        "splay []\n.\\penalty 0\n.\\glue(\\belowdisplayshor"
+        "tskip) 2.0\n\n! OK.\n[stretch]> \\box0=\n\\vbox(11"
+        ".30554+0.0)x100.0\n.\\hbox(4.30554+0.0)x100.0, glu"
+        "e set 42.7222 []\n.\\penalty 10000\n.\\glue(\\abov"
+        "edisplayskip) 3.0\n.\\glue(\\baselineskip) 0.0\n."
+        "\\hbox(0.0+0.0)x10.0, shifted 45.0, display []\n."
+        "\\penalty 0\n.\\glue(\\belowdisplayskip) 4.0\n\n! "
+        "OK.\n[shrink]> \\box0=\n\\vbox(7.30554+0.0)x100.0"
+        "\n.\\hbox(4.30554+0.0)x100.0 []\n.\\penalty 10000"
+        "\n.\\glue(\\abovedisplayshortskip) 1.0\n.\\glue(\\"
+        "baselineskip) 0.0\n.\\hbox(0.0+0.0)x10.0, shifted "
+        "45.0, display []\n.\\penalty 0\n.\\glue(\\belowdis"
+        "playshortskip) 2.0\n\n! OK.\n[shifted]> \\box0=\n"
+        "\\vbox(11.30554+0.0)x100.0\n.\\hbox(4.30554+0.0)x7"
+        "0.0, shifted 30.0 []\n.\\penalty 10000\n.\\glue(\\"
+        "abovedisplayskip) 3.0\n.\\glue(\\baselineskip) 0.0"
+        "\n.\\hbox(0.0+0.0)x10.0, shifted 45.0, display []"
+        "\n.\\penalty 0\n.\\glue(\\belowdisplayskip) 4.0\n"
+        "\n! OK.\n"
+);}
 
 /* Whether a display takes the short skips is decided by the offset it is
    really given, equation number and all; see docs/DECISIONS.md,
@@ -6358,8 +6527,11 @@ int main(void)
         test_lines_carry_on_past_a_display() != 0 ||
         test_prevdepth_inside_noalign() != 0 ||
         test_a_short_display_skip() != 0 ||
+        test_the_size_before_a_display() != 0 ||
         test_a_display_squeezed_to_fit() != 0 ||
         test_what_stands_between_delimiters() != 0 ||
+        test_a_box_register_in_a_formula() != 0 ||
+        test_the_italic_of_a_math_ligature() != 0 ||
         test_a_number_beside_a_squeezed_equation() != 0 ||
         test_large_operators() != 0 ||
         test_operators_that_are_lists() != 0 ||

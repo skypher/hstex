@@ -10071,6 +10071,11 @@ static int execute_box_reference(struct hstex_engine *engine,
     if (box.kind == HSTEX_BOX_VOID) {
         return 0;
     }
+    /* A box in a formula is an ordinary atom holding it, not a node of its
+       own; see docs/DECISIONS.md, a-box-register-in-a-formula. */
+    if (engine->mode == HSTEX_MODE_MATH) {
+        return math_append_box(engine, &box, error, error_capacity);
+    }
     if (append_box_node(engine, &box, error, error_capacity) != 0) {
         return -1;
     }
@@ -17899,6 +17904,11 @@ static int apply_math_ligatures(struct hstex_engine *engine,
         }
         if (ligatured) {
             left->nucleus.character = ligature;
+            /* The pair became one character; whether that one is read as
+               part of a word depends on what follows it now, which the next
+               turn of this loop settles. See docs/DECISIONS.md,
+               math-text-characters. */
+            left->text_character = false;
             memmove(&builder->noads[index + 1U], &builder->noads[index + 2U],
                     (builder->count - index - 2U) * sizeof(*builder->noads));
             --builder->count;
@@ -19014,14 +19024,17 @@ static int append_display_glue(struct hstex_engine *engine,
    the last visible node makes the width indeterminate. See
    docs/DECISIONS.md, display-math. */
 static int32_t pre_display_size(struct hstex_engine *engine,
-                                const struct hstex_box *line, bool had_line)
+                                const struct hstex_box *line, int32_t shift,
+                                bool had_line)
 {
     if (!had_line) {
         return -HSTEX_MAX_DIMEN;
     }
     const struct hstex_font *font =
         font_by_identifier(engine, engine->current_font);
-    int64_t reach = 0;
+    /* The reach starts where the line itself does; see docs/DECISIONS.md,
+       the-size-before-a-display. */
+    int64_t reach = shift;
     if (font != NULL && font->dimen_count >= 6U) {
         reach += (int64_t)2 * font->dimens[5];
     }
@@ -19050,13 +19063,29 @@ static int32_t pre_display_size(struct hstex_engine *engine,
             width = reach;
             break;
         case HSTEX_NODE_GLUE:
-            /* Only glue that can stretch or shrink without limit makes the
-               reach unknowable; finite glue just counts. */
-            if (node->value.glue.stretch_order != 0U ||
-                node->value.glue.shrink_order != 0U) {
-                indeterminate = true;
+            /* Glue that is taking part in the line's own stretching or
+               shrinking makes the reach unknowable; glue that is not just
+               counts. See docs/DECISIONS.md, the-size-before-a-display. */
+            if (line->glue.sign == (uint8_t)HSTEX_GLUE_SIGN_STRETCHING) {
+                if (node->value.glue.stretch_order == line->glue.order &&
+                    node->value.glue.stretch != 0) {
+                    indeterminate = true;
+                }
+            } else if (line->glue.sign ==
+                       (uint8_t)HSTEX_GLUE_SIGN_SHRINKING) {
+                if (node->value.glue.shrink_order == line->glue.order &&
+                    node->value.glue.shrink != 0) {
+                    indeterminate = true;
+                }
             }
             reach += amount;
+            /* Leaders are something to see, so they settle the reach. */
+            if (node->value.glue.leader != 0U) {
+                if (indeterminate) {
+                    return HSTEX_MAX_DIMEN;
+                }
+                width = reach;
+            }
             break;
         default:
             reach += amount;
@@ -19084,7 +19113,9 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     if (broken != 0) {
         return -1;
     }
-    int32_t size = pre_display_size(engine, &line, had_line);
+    int32_t size = pre_display_size(
+        engine, &line, line_shift_for(engine, engine->prev_graf),
+        had_line);
     /* The display stands where the line after the paragraph so far would,
        plus one: the reference counts the display as taking two. */
     int32_t where = had_line ? engine->paragraph_lines + 2 : 2;
