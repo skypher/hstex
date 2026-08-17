@@ -1506,6 +1506,32 @@ static int test_implicit_characters(void)
         "[N][N][Y][the character '][Y]");
 }
 
+/* Preamble forms: a tab that starts it, and \span that expands into it.
+   See docs/DECISIONS.md, preamble-expansion. */
+static int test_preamble_forms(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 "
+        "\\baselineskip=0pt \\lineskip=0pt \\lineskiplimit=0pt "
+        "\\boxmaxdepth=16383.99998pt \\parindent=0pt \\tabskip=0pt "
+        "\\hbadness=10000 \\hfuzz=1000pt "
+        "\\def\\K#1{\\vrule width#1pt height1pt depth0pt}"
+        "\\def\\pre{&\\K{1}##\\K{2}}"
+        "\\def\\two{##&\\K{3}##}"
+        "\\long\\def\\m#1{\\setbox0=\\vbox{#1}[\\the\\wd0|\\the\\ht0]}"
+        /* A preamble that begins with a tab repeats from its first column. */
+        "\\m{\\halign{&\\K{1}#\\K{2}\\cr\\K{5}&\\K{7}&\\K{3}\\cr}}"
+        "\\m{\\halign{&#\\cr\\K{5}&\\K{7}\\cr\\K{11}&\\K{3}\\cr}}"
+        "\\m{\\halign{#&&\\K{1}#\\cr\\K{2}&\\K{3}&\\K{4}\\cr}}"
+        /* \span expands the token after it, so a preamble may be a macro --
+           which is how amsmath hands one to \halign. */
+        "\\m{\\halign{\\span\\pre\\cr\\K{5}&\\K{7}&\\K{3}\\cr}}"
+        "\\m{\\halign{\\span\\two\\cr\\K{5}&\\K{7}\\cr}}"
+        "\\m{\\halign{#\\span\\relax&\\K{3}#\\cr\\K{5}&\\K{7}\\cr}}%",
+        "[24.0pt|1.0pt][18.0pt|2.0pt][11.0pt|1.0pt]"
+        "[24.0pt|1.0pt][15.0pt|1.0pt][15.0pt|1.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2595,7 +2621,7 @@ int main(void)
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
-        test_left_right() != 0 || test_implicit_characters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

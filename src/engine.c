@@ -16183,10 +16183,31 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 }
                 continue;
             }
+            if (meaning->command == HSTEX_COMMAND_SPAN) {
+                /* \span in a preamble expands the token after it once, which
+                   is how amsmath hands \halign a preamble it built as a
+                   macro; see docs/DECISIONS.md, preamble-expansion. */
+                hstex_token next = 0U;
+                struct hstex_source_location where;
+                if (raw_next(engine, &next, &where, error, error_capacity) !=
+                    HSTEX_ENGINE_TOKEN) {
+                    status = set_error(error, error_capacity,
+                                       "input ended after \\span in a "
+                                       "preamble");
+                    break;
+                }
+                if (expand_token_once(engine, next, where, error,
+                                      error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                continue;
+            }
             if (meaning->command == HSTEX_COMMAND_CR) {
                 if (!seen_marker) {
                     status = set_error(error, error_capacity,
-                                       "an alignment column has no #");
+                                       "an alignment column has no #, after "
+                                       "an empty column");
                     break;
                 }
                 status = 0;
@@ -16206,16 +16227,34 @@ static int scan_align_preamble(struct hstex_engine *engine,
         }
         if (token_is_effective_category(engine, token,
                                         (uint8_t)HSTEX_CAT_ALIGNMENT_TAB)) {
-            /* A second tab where a column would start marks the point the
-               preamble repeats from, which is how && works. */
-            if (!seen_marker && before.count == 0U && count != 0U &&
+            /* A tab where a column would start marks the point the preamble
+               repeats from -- that is what && means, and a preamble that
+               begins with one repeats from its first column. */
+            if (!seen_marker && before.count == 0U &&
                 *out_loop == SIZE_MAX) {
                 *out_loop = count;
                 continue;
             }
             if (!seen_marker) {
+                char collected[192] = {0};
+                size_t used = 0U;
+                for (size_t index = 0U;
+                     index < before.count && used + 2U < sizeof(collected);
+                     ++index) {
+                    char piece[64];
+                    describe_token(engine, before.data[index], piece,
+                                   sizeof(piece));
+                    int written = snprintf(collected + used,
+                                           sizeof(collected) - used, "%s%s",
+                                           index == 0U ? "" : " ", piece);
+                    if (written <= 0) {
+                        break;
+                    }
+                    used += (size_t)written;
+                }
                 status = set_error(error, error_capacity,
-                                   "an alignment column has no #");
+                                   "an alignment column has no #, after: %s",
+                                   collected);
                 break;
             }
             goto finish_column;
