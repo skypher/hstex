@@ -223,6 +223,7 @@ enum hstex_command {
     HSTEX_COMMAND_LEADERS,
     HSTEX_COMMAND_NON_SCRIPT,
     HSTEX_COMMAND_SHIP_OUT,
+    HSTEX_COMMAND_SHOW_BOX,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -977,6 +978,10 @@ struct hstex_node {
                Zero for ordinary glue. See docs/DECISIONS.md, leaders. */
             uint32_t leader;
             uint8_t leader_kind;
+            /* Which glue parameter this came from, one more than its index,
+               or zero for glue that is nobody's parameter. \showbox names
+               it; see docs/DECISIONS.md, showbox. */
+            uint8_t parameter;
         } glue;
         struct {
             uint32_t node_start;

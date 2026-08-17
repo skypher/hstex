@@ -1941,6 +1941,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
         {"nonscript", HSTEX_COMMAND_NON_SCRIPT, 0},
         {"shipout", HSTEX_COMMAND_SHIP_OUT, 0},
+        {"showbox", HSTEX_COMMAND_SHOW_BOX, 0},
         {"parshape", HSTEX_COMMAND_PAR_SHAPE, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
          (int32_t)HSTEX_MARGIN_KERN_LEFT},
@@ -8403,6 +8404,10 @@ static int append_interline_glue(struct hstex_engine *engine,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .parameter = (uint8_t)(1U + (separation < (int64_t)engine->dimen_parameters
+                                                          [HSTEX_DIMEN_LINE_SKIP_LIMIT]
+                                             ? (unsigned)HSTEX_GLUE_LINE_SKIP
+                                             : (unsigned)HSTEX_GLUE_BASELINE_SKIP)),
         },
     };
     return append_vbox_node(engine, &node, error, error_capacity);
@@ -9536,6 +9541,7 @@ static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
             .shrink = top.shrink,
             .stretch_order = top.stretch_order,
             .shrink_order = top.shrink_order,
+            .parameter = 1U + (uint8_t)HSTEX_GLUE_SPLIT_TOP_SKIP,
         },
     };
     uint32_t placed = 0U;
@@ -10671,6 +10677,307 @@ static int contribute_page(struct hstex_engine *engine, char *error,
     return build_page(engine, error, error_capacity);
 }
 
+/* The names \showbox uses for glue that came from a parameter. */
+static const char *glue_parameter_name(uint8_t parameter)
+{
+    static const char *const names[HSTEX_GLUE_PARAMETER_COUNT] = {
+        "parskip",      "abovedisplayskip", "abovedisplayshortskip",
+        "belowdisplayskip", "belowdisplayshortskip", "topskip",
+        "splittopskip", "parfillskip",      "baselineskip",
+        "lineskip",     "leftskip",         "rightskip",
+        "tabskip",      "spaceskip",        "xspaceskip",
+    };
+    if (parameter == 0U || parameter > HSTEX_GLUE_PARAMETER_COUNT) {
+        return NULL;
+    }
+    return names[parameter - 1U];
+}
+
+static void show_scaled(FILE *out, int32_t value)
+{
+    char digits[64];
+    int length = format_scaled_value(value, "", digits, sizeof(digits));
+    if (length > 0) {
+        (void)fwrite(digits, 1U, (size_t)length, out);
+    }
+}
+
+/* A dimension with an order after it: 1.0fil, 1.0fill and so on. */
+static void show_glue_amount(FILE *out, int32_t value, uint8_t order)
+{
+    show_scaled(out, value);
+    if (order == 0U || order > 3U) {
+        return;
+    }
+    (void)fputs("fil", out);
+    for (uint8_t remaining = order; remaining > 1U; --remaining) {
+        (void)fputc('l', out);
+    }
+}
+
+static void show_glue_spec(FILE *out, const struct hstex_node *node)
+{
+    show_scaled(out, packed_dimen(node->width));
+    if (node->value.glue.stretch != 0) {
+        (void)fputs(" plus ", out);
+        show_glue_amount(out, node->value.glue.stretch,
+                         node->value.glue.stretch_order);
+    }
+    if (node->value.glue.shrink != 0) {
+        (void)fputs(" minus ", out);
+        show_glue_amount(out, node->value.glue.shrink,
+                         node->value.glue.shrink_order);
+    }
+}
+
+/* A rule's dimension is written as a star where the enclosing box supplies
+   it. */
+static void show_rule_dimen(FILE *out, int32_t value)
+{
+    if (value == HSTEX_RUNNING_DIMEN) {
+        (void)fputc('*', out);
+        return;
+    }
+    show_scaled(out, value);
+}
+
+static void show_character(struct hstex_engine *engine, FILE *out,
+                           const struct hstex_node *node)
+{
+    const struct hstex_font *font =
+        font_by_identifier(engine, node->value.character.font);
+    (void)fputc('\\', out);
+    size_t length = 0U;
+    const uint8_t *name = NULL;
+    enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
+    if (font != NULL && font->identifier_cs != 0U &&
+        hstex_symbol_name(&engine->lexical_state.symbols,
+                          font->identifier_cs, &kind, &name, &length) == 0 &&
+        name != NULL) {
+        (void)fwrite(name, 1U, length, out);
+    } else if (font != NULL && font->name != NULL) {
+        (void)fputs(font->name, out);
+    }
+    (void)fputc(' ', out);
+    /* The reference writes an unprintable character in ^^ notation. */
+    uint8_t code = (uint8_t)node->value.character.character;
+    if (code < 32U || code == 127U) {
+        (void)fputs("^^", out);
+        (void)fputc(code < 64U ? (int)(code + 64U) : (int)(code - 64U), out);
+    } else if (code >= 128U) {
+        static const char hexadecimal[] = "0123456789abcdef";
+        (void)fputs("^^", out);
+        (void)fputc(hexadecimal[code >> 4U], out);
+        (void)fputc(hexadecimal[code & 0x0fU], out);
+    } else {
+        (void)fputc((int)code, out);
+    }
+}
+
+static void show_node_list(struct hstex_engine *engine, FILE *out,
+                           const uint32_t *items, size_t count, char *prefix,
+                           size_t depth, size_t threshold, size_t breadth);
+
+/* One box, rule, glue, kern, penalty or character of a list. */
+static void show_node(struct hstex_engine *engine, FILE *out,
+                      const struct hstex_node *node, char *prefix,
+                      size_t depth, size_t threshold, size_t breadth)
+{
+    switch (node->kind) {
+    case HSTEX_NODE_LIST: {
+        (void)fputs(node->value.list.box_kind == HSTEX_BOX_VLIST ? "\\vbox("
+                                                                 : "\\hbox(",
+                    out);
+        show_scaled(out, packed_dimen(node->height));
+        (void)fputc('+', out);
+        show_scaled(out, packed_dimen(node->depth));
+        (void)fputs(")x", out);
+        show_scaled(out, packed_dimen(node->width));
+        const struct hstex_glue_set set = node->value.list.glue;
+        if (set.sign != (uint8_t)HSTEX_GLUE_SIGN_NORMAL && set.total != 0) {
+            (void)fputs(", glue set ", out);
+            if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING) {
+                (void)fputs("- ", out);
+            }
+            /* The ratio is kept as the two numbers it came from, so the
+               figure the reference prints is exactly this rounding. */
+            int64_t scaled = ((int64_t)set.needed * 65536 +
+                              (int64_t)set.total / 2) /
+                             set.total;
+            if (scaled > INT64_C(20000) * 65536) {
+                (void)fputc(set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING
+                                ? '<'
+                                : '>',
+                            out);
+                (void)fputc(' ', out);
+                show_glue_amount(out, 20000 * 65536, set.order);
+            } else {
+                show_glue_amount(out, (int32_t)scaled, set.order);
+            }
+        }
+        if (node->shift != 0) {
+            (void)fputs(", shifted ", out);
+            show_scaled(out, node->shift);
+        }
+        if (node->value.list.node_count == 0U) {
+            return;
+        }
+        if (depth + 1U > threshold) {
+            (void)fputs(" []", out);
+            return;
+        }
+        if ((size_t)node->value.list.node_start +
+                node->value.list.node_count <=
+            engine->list_item_count) {
+            show_node_list(engine, out,
+                           engine->list_items + node->value.list.node_start,
+                           node->value.list.node_count, prefix, depth + 1U,
+                           threshold, breadth);
+        }
+        return;
+    }
+    case HSTEX_NODE_RULE:
+        (void)fputs("\\rule(", out);
+        show_rule_dimen(out, node->height);
+        (void)fputc('+', out);
+        show_rule_dimen(out, node->depth);
+        (void)fputs(")x", out);
+        show_rule_dimen(out, node->width);
+        return;
+    case HSTEX_NODE_GLUE: {
+        uint32_t leader = node->value.glue.leader;
+        if (leader != 0U && (size_t)leader <= engine->node_count) {
+            static const char *const kinds[3] = {"\\leaders ", "\\cleaders ",
+                                                 "\\xleaders "};
+            uint8_t which = node->value.glue.leader_kind;
+            (void)fputs(kinds[which > 2U ? 0U : which], out);
+            show_glue_spec(out, node);
+            if (depth + 1U > threshold) {
+                (void)fputs(" []", out);
+                return;
+            }
+            show_node_list(engine, out, &leader, 1U, prefix, depth + 1U,
+                           threshold, breadth);
+            return;
+        }
+        const char *name = glue_parameter_name(node->value.glue.parameter);
+        (void)fputs("\\glue", out);
+        if (name != NULL) {
+            (void)fputs("(\\", out);
+            (void)fputs(name, out);
+            (void)fputc(')', out);
+        }
+        (void)fputc(' ', out);
+        show_glue_spec(out, node);
+        return;
+    }
+    case HSTEX_NODE_KERN:
+        (void)fputs("\\kern", out);
+        if (node->explicit_kern) {
+            (void)fputc(' ', out);
+        }
+        show_scaled(out, packed_dimen(node->width));
+        return;
+    case HSTEX_NODE_PENALTY:
+        (void)fprintf(out, "\\penalty %d", node->value.penalty);
+        return;
+    case HSTEX_NODE_CHARACTER:
+    case HSTEX_NODE_LIGATURE:
+        show_character(engine, out, node);
+        return;
+    }
+}
+
+static void show_node_list(struct hstex_engine *engine, FILE *out,
+                           const uint32_t *items, size_t count, char *prefix,
+                           size_t depth, size_t threshold, size_t breadth)
+{
+    if (depth > threshold) {
+        if (count != 0U) {
+            (void)fputs(" []", out);
+        }
+        return;
+    }
+    if (depth != 0U) {
+        prefix[depth - 1U] = '.';
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        (void)fputc('\n', out);
+        (void)fwrite(prefix, 1U, depth, out);
+        if (index >= breadth) {
+            (void)fputs("etc.", out);
+            return;
+        }
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        show_node(engine, out, &engine->nodes[identifier - 1U], prefix, depth,
+                  threshold, breadth);
+    }
+}
+
+/* \showbox writes a register's contents the way the reference writes them,
+   which is what makes a box comparable against it; see docs/DECISIONS.md,
+   showbox. */
+static int execute_show_box(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
+    }
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] <= 0) {
+        /* There is no log to write to, so nothing is shown. */
+        return 0;
+    }
+    FILE *out = engine->message_stream == NULL ? stdout
+                                               : engine->message_stream;
+    struct hstex_box box = engine->boxes[(size_t)index];
+    (void)fprintf(out, "> \\box%d=", index);
+    if (box.kind == HSTEX_BOX_VOID) {
+        (void)fputs("void\n\n! OK.\n", out);
+        (void)fflush(out);
+        return 0;
+    }
+    int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
+    int32_t breadth = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
+    if (breadth <= 0) {
+        breadth = 5;
+    }
+    if (threshold < 0) {
+        threshold = 0;
+    }
+    if (threshold > 255) {
+        threshold = 255;
+    }
+    char prefix[256];
+    memset(prefix, '.', sizeof(prefix));
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box.width,
+        .height = box.height,
+        .depth = box.depth,
+        .value.list = {
+            .node_start = box.node_start,
+            .node_count = box.node_count,
+            .box_kind = box.kind,
+            .glue = box.glue,
+        },
+    };
+    (void)fputc('\n', out);
+    show_node(engine, out, &node, prefix, 0U, (size_t)threshold,
+              (size_t)breadth);
+    (void)fputs("\n\n! OK.\n", out);
+    (void)fflush(out);
+    return 0;
+}
+
 /* \shipout takes a page: the box is emptied and the count of dead cycles
    starts again. Nothing is written yet. */
 static int ship_out_box(struct hstex_engine *engine, uint32_t index,
@@ -10969,6 +11276,7 @@ static int build_page(struct hstex_engine *engine, char *error,
                         .shrink = top.shrink,
                         .stretch_order = top.stretch_order,
                         .shrink_order = top.shrink_order,
+                        .parameter = 1U + (uint8_t)HSTEX_GLUE_TOP_SKIP,
                     },
                 };
                 uint32_t placed = 0U;
@@ -14035,6 +14343,7 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
                 .shrink = skip.shrink,
                 .stretch_order = skip.stretch_order,
                 .shrink_order = skip.shrink_order,
+                .parameter = 1U + (uint8_t)HSTEX_GLUE_PAR_SKIP,
             },
         };
         if (append_vbox_node(engine, &node, error, error_capacity) != 0) {
@@ -14124,6 +14433,9 @@ struct hstex_break_state {
     size_t active_capacity;
 };
 
+static int emit_parameter_glue(struct hstex_engine *engine,
+                               struct hstex_glue glue, int parameter,
+                               char *error, size_t error_capacity);
 static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
                           char *error, size_t error_capacity);
 
@@ -14530,14 +14842,16 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
         enum hstex_mode previous_mode = engine->mode;
         engine->active_hbox_builder = &builder;
         engine->mode = HSTEX_MODE_HORIZONTAL;
-        status = emit_math_glue(engine, left, error, error_capacity);
+        status = emit_parameter_glue(engine, left, HSTEX_GLUE_LEFT_SKIP,
+                                     error, error_capacity);
         for (size_t index = from; status == 0 && index < to && index < count;
              ++index) {
             status = append_hbox_item(engine, items[index], error,
                                       error_capacity);
         }
         if (status == 0) {
-            status = emit_math_glue(engine, right, error, error_capacity);
+            status = emit_parameter_glue(engine, right, HSTEX_GLUE_RIGHT_SKIP,
+                                         error, error_capacity);
         }
         struct hstex_box box = {0};
         if (status == 0) {
@@ -14708,6 +15022,7 @@ static int finish_paragraph_line(struct hstex_engine *engine,
             .shrink = fill.shrink,
             .stretch_order = fill.stretch_order,
             .shrink_order = fill.shrink_order,
+            .parameter = 1U + (uint8_t)HSTEX_GLUE_PAR_FILL_SKIP,
         },
     };
     if (append_hbox_node(engine, &penalty, error, error_capacity) != 0 ||
@@ -14888,8 +15203,11 @@ static int execute_italic_correction(struct hstex_engine *engine, char *error,
                     .italic;
         }
     }
+    /* The reference marks this kern explicit, which is what \showbox shows
+       and what keeps it from being thrown away at a line break. */
     struct hstex_node kern = {
         .kind = HSTEX_NODE_KERN,
+        .explicit_kern = true,
         .width = correction,
     };
     return append_hbox_node(engine, &kern, error, error_capacity);
@@ -15476,8 +15794,9 @@ static int centre_on_axis(struct hstex_engine *engine, uint8_t size,
     return 0;
 }
 
-static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
-                          char *error, size_t error_capacity)
+static int emit_parameter_glue(struct hstex_engine *engine,
+                               struct hstex_glue glue, int parameter,
+                               char *error, size_t error_capacity)
 {
     struct hstex_node node = {
         .kind = HSTEX_NODE_GLUE,
@@ -15487,9 +15806,16 @@ static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .parameter = parameter < 0 ? 0U : (uint8_t)(parameter + 1),
         },
     };
     return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
+                          char *error, size_t error_capacity)
+{
+    return emit_parameter_glue(engine, glue, -1, error, error_capacity);
 }
 
 static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
@@ -21972,6 +22298,11 @@ handle_token:
         case HSTEX_COMMAND_OVER_UNDER_LINE:
             if (execute_over_under_line(engine, meaning->value.integer == 0,
                                         error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SHOW_BOX:
+            if (execute_show_box(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
