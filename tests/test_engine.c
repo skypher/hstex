@@ -562,6 +562,31 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* A paragraph that fits on one line; see docs/DECISIONS.md, paragraphs. */
+static int test_paragraphs(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f"
+        "\\hsize=100pt \\parindent=20pt \\parskip=0pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt "
+        /* The line is set to \hsize, whichever way the paragraph starts. */
+        "\\setbox0=\\vbox{\\noindent A\\par}"
+        "[\\the\\ht0|\\the\\dp0|\\the\\wd0]"
+        "\\setbox0=\\vbox{\\indent A\\par}[\\the\\ht0|\\the\\wd0]"
+        /* \parskip is added only when the vertical list has something in it. */
+        "\\parskip=3pt plus1pt "
+        "\\setbox0=\\vbox{\\hrule height1pt \\noindent A\\par}[\\the\\ht0]"
+        "\\parskip=0pt \\leftskip=5pt \\rightskip=7pt "
+        "\\setbox0=\\vbox{\\noindent A\\par}[\\the\\ht0|\\the\\wd0]"
+        "\\leftskip=0pt \\rightskip=0pt "
+        /* A descender gives the line depth. */
+        "\\setbox0=\\vbox{\\noindent Ag\\par}[\\the\\ht0|\\the\\dp0]"
+        /* Two paragraphs are separated by interline glue. */
+        "\\setbox0=\\vbox{\\noindent A\\par\\noindent A\\par}[\\the\\ht0]%",
+        "[6.83331pt|0.0pt|100.0pt][6.83331pt|100.0pt][10.83331pt]"
+        "[6.83331pt|100.0pt][6.83331pt|1.94444pt][18.83331pt]");
+}
+
 /* Characters, with the font's ligature and kerning program and interword
    glue; see docs/DECISIONS.md, characters-and-ligatures. */
 static int test_characters(void)
@@ -1669,7 +1694,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_paragraphs() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

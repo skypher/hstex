@@ -7688,6 +7688,10 @@ static int append_character_node(struct hstex_engine *engine, uint8_t code,
 static void advance_space_factor(struct hstex_engine *engine, uint8_t code);
 static int flush_pending_character(struct hstex_engine *engine, char *error,
                                    size_t error_capacity);
+static int start_paragraph(struct hstex_engine *engine, bool indent,
+                           char *error, size_t error_capacity);
+static int finish_paragraph(struct hstex_engine *engine, char *error,
+                            size_t error_capacity);
 static int append_horizontal_character(struct hstex_engine *engine,
                                        uint8_t code, char *error,
                                        size_t error_capacity);
@@ -8356,6 +8360,31 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
             status = -1;
             break;
         }
+        /* A paragraph opened inside this vertical list is still being
+           filled, so its characters and spaces belong to it. */
+        if (engine->building_paragraph) {
+            if (token_is_space(token)) {
+                status = flush_pending_character(engine, error, error_capacity);
+                if (status == 0) {
+                    status =
+                        append_interword_glue(engine, error, error_capacity);
+                }
+                if (status != 0) {
+                    break;
+                }
+                engine->space_factor = 1000;
+                continue;
+            }
+            if (hstex_token_is_character(token)) {
+                status = append_horizontal_character(
+                    engine, hstex_token_character_code(token), error,
+                    error_capacity);
+                if (status != 0) {
+                    break;
+                }
+                continue;
+            }
+        }
         if (token_is_space(token)) {
             continue;
         }
@@ -8530,7 +8559,11 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
     }
     if (result != HSTEX_ENGINE_TOKEN ||
         !hstex_token_is_control_sequence(token)) {
-        return set_error(error, error_capacity, "a box was expected here");
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? token : 0U, found,
+                       sizeof(found));
+        return set_error(error, error_capacity, "a box was expected, found %s",
+                         found);
     }
     const struct hstex_meaning *meaning =
         hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
@@ -8560,7 +8593,10 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
         }
         return 0;
     }
-    return set_error(error, error_capacity, "a box was expected here");
+    char found[128];
+    describe_token(engine, token, found, sizeof(found));
+    return set_error(error, error_capacity, "a box was expected, found %s",
+                     found);
 }
 
 /* \raise and \lower displace a box in a horizontal list, \moveleft and
@@ -12095,9 +12131,7 @@ static int execute_indent(struct hstex_engine *engine, bool indent,
                          "indentation does not accept prefixes");
     }
     if (engine->mode == HSTEX_MODE_VERTICAL) {
-        return set_error(error, error_capacity,
-                         "starting a paragraph requires the paragraph "
-                         "builder");
+        return start_paragraph(engine, indent, error, error_capacity);
     }
     if (engine->mode != HSTEX_MODE_HORIZONTAL) {
         return set_error(error, error_capacity,
@@ -12321,6 +12355,165 @@ static int append_horizontal_character(struct hstex_engine *engine,
     engine->pending_is_ligature = false;
     engine->pending_character = code;
     return 0;
+}
+
+/* Begin a paragraph: the vertical list gets \parskip if it has anything in
+   it, and the horizontal list gets the indentation and \everypar; see
+   docs/DECISIONS.md, paragraphs. */
+static int start_paragraph(struct hstex_engine *engine, bool indent,
+                           char *error, size_t error_capacity)
+{
+    if (engine->paragraph_builder == NULL) {
+        engine->paragraph_builder =
+            calloc(1U, sizeof(*engine->paragraph_builder));
+        if (engine->paragraph_builder == NULL) {
+            return set_error(error, error_capacity,
+                             "paragraph list allocation failed");
+        }
+    }
+    if (engine->active_vbox_builder != NULL &&
+        engine->active_vbox_builder->count != 0U) {
+        struct hstex_glue skip = engine->glue_parameters[HSTEX_GLUE_PAR_SKIP];
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_GLUE,
+            .width = skip.width,
+            .value.glue = {
+                .stretch = skip.stretch,
+                .shrink = skip.shrink,
+                .stretch_order = skip.stretch_order,
+                .shrink_order = skip.shrink_order,
+            },
+        };
+        if (append_vbox_node(engine, &node, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    engine->paragraph_builder->count = 0U;
+    engine->paragraph_builder->width = 0;
+    engine->paragraph_builder->height = 0;
+    engine->paragraph_builder->depth = 0;
+    engine->active_hbox_builder = engine->paragraph_builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    engine->inner_mode = false;
+    engine->building_paragraph = true;
+    engine->space_factor = 1000;
+    engine->has_pending_character = false;
+    if (indent) {
+        struct hstex_box box = {0};
+        box.kind = HSTEX_BOX_HLIST;
+        box.width = engine->dimen_parameters[HSTEX_DIMEN_PAR_INDENT];
+        if (append_box_node(engine, &box, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    uint32_t every_par = engine->token_parameters[HSTEX_TOKEN_EVERY_PAR];
+    if (every_par == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, every_par);
+    struct hstex_source_location location = {0};
+    if (list == NULL ||
+        hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "could not install everypar tokens");
+    }
+    return 0;
+}
+
+/* End a paragraph: the list is finished off and broken into lines, which join
+   the vertical list. Only a paragraph that fits on one line is handled. */
+static int finish_paragraph(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node penalty = {
+        .kind = HSTEX_NODE_PENALTY,
+        .value.penalty = 10000,
+    };
+    struct hstex_glue fill = engine->glue_parameters[HSTEX_GLUE_PAR_FILL_SKIP];
+    struct hstex_node fill_node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = fill.width,
+        .value.glue = {
+            .stretch = fill.stretch,
+            .shrink = fill.shrink,
+            .stretch_order = fill.stretch_order,
+            .shrink_order = fill.shrink_order,
+        },
+    };
+    if (append_hbox_node(engine, &penalty, error, error_capacity) != 0 ||
+        append_hbox_node(engine, &fill_node, error, error_capacity) != 0) {
+        return -1;
+    }
+
+    struct hstex_hbox_builder *paragraph = engine->paragraph_builder;
+    int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
+    struct hstex_glue left = engine->glue_parameters[HSTEX_GLUE_LEFT_SKIP];
+    struct hstex_glue right = engine->glue_parameters[HSTEX_GLUE_RIGHT_SKIP];
+    int64_t natural = paragraph->width + left.width + right.width;
+    /* \parfillskip stretches without limit, so a line that is not already too
+       wide can always be set to \hsize. Anything wider needs a break, and
+       breaking paragraphs is not implemented. */
+    if (natural > hsize) {
+        return set_error(error, error_capacity,
+                         "breaking a paragraph into lines is not implemented");
+    }
+
+    struct hstex_hbox_builder line = {0};
+    int status = 0;
+    if (left.width != 0 || left.stretch != 0 || left.shrink != 0) {
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_GLUE,
+            .width = left.width,
+            .value.glue = {
+                .stretch = left.stretch,
+                .shrink = left.shrink,
+                .stretch_order = left.stretch_order,
+                .shrink_order = left.shrink_order,
+            },
+        };
+        engine->active_hbox_builder = &line;
+        status = append_hbox_node(engine, &node, error, error_capacity);
+    }
+    engine->active_hbox_builder = &line;
+    for (size_t index = 0U; status == 0 && index < paragraph->count; ++index) {
+        status = append_hbox_item(engine, paragraph->node_identifiers[index],
+                                  error, error_capacity);
+    }
+    if (status == 0) {
+        /* \rightskip closes every line, even when it measures nothing. */
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_GLUE,
+            .width = right.width,
+            .value.glue = {
+                .stretch = right.stretch,
+                .shrink = right.shrink,
+                .stretch_order = right.stretch_order,
+                .shrink_order = right.shrink_order,
+            },
+        };
+        status = append_hbox_node(engine, &node, error, error_capacity);
+    }
+    struct hstex_box box;
+    if (status == 0) {
+        status = finalize_hbox(engine, &line, true, false, hsize, &box, error,
+                               error_capacity);
+    }
+    free(line.node_identifiers);
+
+    engine->active_hbox_builder = NULL;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = false;
+    engine->building_paragraph = false;
+    engine->has_pending_character = false;
+    if (status != 0) {
+        return -1;
+    }
+    return append_box_node(engine, &box, error, error_capacity);
 }
 
 static int execute_write(struct hstex_engine *engine, char *error,
@@ -14381,6 +14574,12 @@ handle_token:
                 (void)set_error(error, error_capacity,
                                 "paragraph after definition prefix");
                 return HSTEX_ENGINE_ERROR;
+            }
+            if (engine->building_paragraph) {
+                if (finish_paragraph(engine, error, error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_UNDEFINED:

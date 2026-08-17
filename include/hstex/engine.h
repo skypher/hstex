@@ -873,6 +873,9 @@ struct hstex_engine {
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;
     struct hstex_vbox_builder *page_builder;
+    /* The horizontal list of the paragraph being built, if any. */
+    struct hstex_hbox_builder *paragraph_builder;
+    bool building_paragraph;
     struct hstex_vbox_builder *active_vbox_builder;
 };
 
