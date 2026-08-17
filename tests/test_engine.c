@@ -562,6 +562,28 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* The five glue commands measure the same in both directions; see
+   docs/DECISIONS.md, horizontal-glue. */
+static int test_horizontal_glue(void)
+{
+    return run_snippet(
+        "\\setbox0=\\hbox{\\hskip3pt plus2fil minus1pt "
+        "\\global\\skip1=\\lastskip \\global\\count1=\\lastnodetype}"
+        "[\\the\\skip1|\\the\\count1]"
+        "\\setbox0=\\hbox{\\hfil \\global\\skip2=\\lastskip}[\\the\\skip2]"
+        "\\setbox0=\\hbox{\\hfill \\global\\skip3=\\lastskip}[\\the\\skip3]"
+        "\\setbox0=\\hbox{\\hss \\global\\skip4=\\lastskip}[\\the\\skip4]"
+        "\\setbox0=\\hbox{\\hfilneg \\global\\skip5=\\lastskip}[\\the\\skip5]"
+        /* Infinite glue measures nothing until the box is set to a width. */
+        "\\setbox0=\\hbox{\\hskip3pt}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\hfil}[\\the\\wd0]"
+        "\\setbox0=\\hbox to 10pt{\\hfil}[\\the\\wd0]"
+        "[\\the\\interlinepenalty|\\the\\postdisplaypenalty]%",
+        "[3.0pt plus 2.0fil minus 1.0pt|11][0.0pt plus 1.0fil]"
+        "[0.0pt plus 1.0fill][0.0pt plus 1.0fil minus 1.0fil]"
+        "[0.0pt plus -1.0fil][3.0pt][0.0pt][10.0pt][0|0]");
+}
+
 /* Unboxing and the colour stacks; see docs/DECISIONS.md, unboxing and
    colour-stacks. */
 static int test_unboxing_and_colour_stacks(void)
@@ -1613,6 +1635,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
+        test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

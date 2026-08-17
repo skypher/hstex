@@ -1704,21 +1704,26 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     static const struct {
         const char *name;
         int32_t subtype;
-    } vertical_glue_primitives[] = {
-        {"vskip", 0},
-        {"vfil", 1},
-        {"vfill", 2},
-        {"vss", 3},
-        {"vfilneg", 4},
+        enum hstex_command command;
+    } skip_primitives[] = {
+        {"vskip", 0, HSTEX_COMMAND_VSKIP},
+        {"vfil", 1, HSTEX_COMMAND_VSKIP},
+        {"vfill", 2, HSTEX_COMMAND_VSKIP},
+        {"vss", 3, HSTEX_COMMAND_VSKIP},
+        {"vfilneg", 4, HSTEX_COMMAND_VSKIP},
+        {"hskip", 0, HSTEX_COMMAND_HSKIP},
+        {"hfil", 1, HSTEX_COMMAND_HSKIP},
+        {"hfill", 2, HSTEX_COMMAND_HSKIP},
+        {"hss", 3, HSTEX_COMMAND_HSKIP},
+        {"hfilneg", 4, HSTEX_COMMAND_HSKIP},
     };
     for (size_t index = 0U;
-         index < sizeof(vertical_glue_primitives) /
-                     sizeof(vertical_glue_primitives[0]);
+         index < sizeof(skip_primitives) / sizeof(skip_primitives[0]);
          ++index) {
         if (register_integer_primitive(
-                engine, vertical_glue_primitives[index].name,
-                HSTEX_COMMAND_VSKIP,
-                vertical_glue_primitives[index].subtype, error,
+                engine, skip_primitives[index].name,
+                skip_primitives[index].command,
+                skip_primitives[index].subtype, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2036,6 +2041,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"displaywidowpenalty", HSTEX_INTEGER_DISPLAY_WIDOW_PENALTY},
         {"brokenpenalty", HSTEX_INTEGER_BROKEN_PENALTY},
         {"predisplaypenalty", HSTEX_INTEGER_PRE_DISPLAY_PENALTY},
+        {"postdisplaypenalty", HSTEX_INTEGER_POST_DISPLAY_PENALTY},
+        {"interlinepenalty", HSTEX_INTEGER_INTERLINE_PENALTY},
         {"doublehyphendemerits", HSTEX_INTEGER_DOUBLE_HYPHEN_DEMERITS},
         {"finalhyphendemerits", HSTEX_INTEGER_FINAL_HYPHEN_DEMERITS},
         {"adjdemerits", HSTEX_INTEGER_ADJ_DEMERITS},
@@ -7956,13 +7963,20 @@ static int append_current_list_node(struct hstex_engine *engine,
                      "list node is not supported in math mode");
 }
 
-static int execute_vertical_glue(struct hstex_engine *engine, int32_t subtype,
-                                 char *error, size_t error_capacity)
+/* The five glue commands are the same in both directions; only the list they
+   join differs. */
+static int execute_glue(struct hstex_engine *engine, int32_t subtype,
+                        bool vertical, char *error, size_t error_capacity)
 {
-    if (engine->mode != HSTEX_MODE_VERTICAL ||
-        engine->pending_global || engine->pending_macro_flags != 0U) {
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
         return set_error(error, error_capacity,
-                         "vertical glue requires unprefixed vertical mode");
+                         "glue does not accept prefixes");
+    }
+    if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
+                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         vertical ? "vertical glue requires vertical mode"
+                                  : "horizontal glue requires horizontal mode");
     }
     struct hstex_glue glue = {0};
     if (subtype == 0) {
@@ -7984,8 +7998,7 @@ static int execute_vertical_glue(struct hstex_engine *engine, int32_t subtype,
         glue.stretch = -INT32_C(65536);
         glue.stretch_order = 1U;
     } else {
-        return set_error(error, error_capacity,
-                         "invalid vertical-glue subtype");
+        return set_error(error, error_capacity, "invalid glue subtype");
     }
     struct hstex_node node = {
         .kind = HSTEX_NODE_GLUE,
@@ -7999,7 +8012,8 @@ static int execute_vertical_glue(struct hstex_engine *engine, int32_t subtype,
             .shrink_order = glue.shrink_order,
         },
     };
-    return append_vbox_node(engine, &node, error, error_capacity);
+    return vertical ? append_vbox_node(engine, &node, error, error_capacity)
+                    : append_hbox_node(engine, &node, error, error_capacity);
 }
 
 static int execute_penalty(struct hstex_engine *engine, char *error,
@@ -13545,8 +13559,10 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_VSKIP:
-            if (execute_vertical_glue(engine, meaning->value.integer, error,
-                                      error_capacity) != 0) {
+        case HSTEX_COMMAND_HSKIP:
+            if (execute_glue(engine, meaning->value.integer,
+                             meaning->command == HSTEX_COMMAND_VSKIP, error,
+                             error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
