@@ -1937,6 +1937,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"middle", HSTEX_COMMAND_LEFT_RIGHT, 2},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
+        {"nonscript", HSTEX_COMMAND_NON_SCRIPT, 0},
         {"parshape", HSTEX_COMMAND_PAR_SHAPE, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
          (int32_t)HSTEX_MARGIN_KERN_LEFT},
@@ -15416,6 +15417,28 @@ static int translate_math_list(struct hstex_engine *engine,
                             error_capacity) != 0) {
             return -1;
         }
+        if (noad->kind == (uint8_t)HSTEX_NOAD_NONSCRIPT) {
+            /* In a script the glue or kern that follows goes away with it;
+               see docs/DECISIONS.md, nonscript. */
+            if (style >= (uint8_t)HSTEX_STYLE_SCRIPT &&
+                index + 1U < builder->count) {
+                const struct hstex_noad *next = &builder->noads[index + 1U];
+                bool removable =
+                    next->kind == (uint8_t)HSTEX_NOAD_MU_GLUE ||
+                    next->kind == (uint8_t)HSTEX_NOAD_MU_KERN;
+                if (!removable && next->kind == (uint8_t)HSTEX_NOAD_NODE &&
+                    next->node != 0U && next->node <= engine->node_count) {
+                    enum hstex_node_kind following =
+                        engine->nodes[next->node - 1U].kind;
+                    removable = following == HSTEX_NODE_GLUE ||
+                                following == HSTEX_NODE_KERN;
+                }
+                if (removable) {
+                    ++index;
+                }
+            }
+            continue;
+        }
         bool middle_atom = noad->kind == (uint8_t)HSTEX_NOAD_MIDDLE;
         if (middle_atom) {
             /* While the group is being measured the delimiter is not there
@@ -16839,6 +16862,20 @@ static int execute_parshape(struct hstex_engine *engine, char *error,
         return -1;
     }
     return finish_assignment(engine, 0, error, error_capacity);
+}
+
+/* \nonscript marks the glue after it as one a script does not want; see
+   docs/DECISIONS.md, nonscript. */
+static int execute_non_script(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_MATH ||
+        current_math_list(engine) == NULL) {
+        return set_error(error, error_capacity,
+                         "\\nonscript is only allowed in a formula");
+    }
+    struct hstex_noad noad = {.kind = (uint8_t)HSTEX_NOAD_NONSCRIPT};
+    return math_append(engine, &noad, error, error_capacity);
 }
 
 /* \radical names a delimiter and then reads one field, which becomes what
@@ -21162,6 +21199,11 @@ handle_token:
         case HSTEX_COMMAND_OVER_UNDER_LINE:
             if (execute_over_under_line(engine, meaning->value.integer == 0,
                                         error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_NON_SCRIPT:
+            if (execute_non_script(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

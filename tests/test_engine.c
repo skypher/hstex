@@ -2023,6 +2023,44 @@ static int test_middle_delimiters(void)
         "50009pt]");
 }
 
+/* \nonscript; see docs/DECISIONS.md, nonscript. */
+static int test_nonscript(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\mathsurr"
+        "ound=0pt \\hbadness=10000 \\hfuzz=1000pt \\scriptspace=0.5"
+        "pt \\thinmuskip=3mu \\medmuskip=4mu plus2mu minus4mu \\thi"
+        "ckmuskip=5mu plus5mu \\font\\tenrm=cmr10 \\font\\tenmi=cmm"
+        "i10 \\font\\tensy=cmsy10 \\font\\tenex=cmex10 \\font\\seve"
+        "nrm=cmr7 \\font\\seveni=cmmi7 \\font\\sevensy=cmsy7 \\font"
+        "\\fiverm=cmr5 \\font\\fivei=cmmi5 \\font\\fivesy=cmsy5 \\t"
+        "extfont0=\\tenrm \\scriptfont0=\\sevenrm \\scriptscriptfon"
+        "t0=\\fiverm \\textfont1=\\tenmi \\scriptfont1=\\seveni \\s"
+        "criptscriptfont1=\\fivei \\textfont2=\\tensy \\scriptfont2"
+        "=\\sevensy \\scriptscriptfont2=\\fivesy \\textfont3=\\tene"
+        "x \\scriptfont3=\\tenex \\scriptscriptfont3=\\tenex \\tenr"
+        "m \\def\\R#1{\\vrule width#1pt height1pt depth0pt}\\def\\O"
+        "{\\mathord{\\R{5}}}\\def\\M#1{\\setbox0=\\hbox{$#1$}}\\M{"
+        "\\O\\nonscript\\mskip9mu\\O}[1|\\the\\wd0]\\M{\\scriptstyl"
+        "e\\O\\nonscript\\mskip9mu\\O}[2|\\the\\wd0]\\M{\\O\\mskip9"
+        "mu\\O}[3|\\the\\wd0]\\M{\\scriptstyle\\O\\mskip9mu\\O}[4|"
+        "\\the\\wd0]\\M{\\O\\nonscript\\hskip7pt\\O}[5|\\the\\wd0]"
+        "\\M{\\scriptstyle\\O\\nonscript\\hskip7pt\\O}[6|\\the\\wd0"
+        "]\\M{\\O\\nonscript\\kern7pt\\O}[7|\\the\\wd0]\\M{\\script"
+        "style\\O\\nonscript\\kern7pt\\O}[8|\\the\\wd0]\\M{\\O\\non"
+        "script\\O}[9|\\the\\wd0]\\M{\\scriptstyle\\O\\nonscript\\O"
+        "}[10|\\the\\wd0]\\M{\\scriptscriptstyle\\O\\nonscript\\msk"
+        "ip9mu\\O}[11|\\the\\wd0]\\M{\\displaystyle\\O\\nonscript\\"
+        "mskip9mu\\O}[12|\\the\\wd0]\\M{\\O^{\\O\\nonscript\\mskip9"
+        "mu\\O}}[13|\\the\\wd0]\\M{\\O\\nonscript\\mkern9mu\\O}[14|"
+        "\\the\\wd0]\\M{\\scriptstyle\\O\\nonscript\\mkern9mu\\O}[1"
+        "5|\\the\\wd0]%",
+        "[1|14.99988pt][2|10.0pt][3|14.99988pt][4|14.09721pt][5|17."
+        "0pt][6|10.0pt][7|17.0pt][8|10.0pt][9|10.0pt][10|10.0pt][11"
+        "|10.0pt][12|14.99988pt][13|15.5pt][14|14.99988pt][15|10.0p"
+        "t]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -3121,7 +3159,7 @@ int main(void)
         test_over_and_underline() != 0 ||
         test_missing_characters() != 0 || test_leaders() != 0 ||
         test_string_bytes() != 0 ||
-        test_middle_delimiters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_middle_delimiters() != 0 || test_nonscript() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

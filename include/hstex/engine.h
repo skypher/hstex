@@ -221,6 +221,7 @@ enum hstex_command {
     HSTEX_COMMAND_PAR_SHAPE,
     HSTEX_COMMAND_OVER_UNDER_LINE,
     HSTEX_COMMAND_LEADERS,
+    HSTEX_COMMAND_NON_SCRIPT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -759,6 +760,8 @@ enum hstex_noad_kind {
     /* \middle: a delimiter as tall as the \left group that holds it, whose
        size is only known once that group has been measured. */
     HSTEX_NOAD_MIDDLE,
+    /* \nonscript: takes away the glue or kern after it in a script. */
+    HSTEX_NOAD_NONSCRIPT,
 };
 
 enum hstex_math_field_kind {
