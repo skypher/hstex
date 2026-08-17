@@ -562,6 +562,32 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* Characters, with the font's ligature and kerning program and interword
+   glue; see docs/DECISIONS.md, characters-and-ligatures. */
+static int test_characters(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f"
+        "\\setbox0=\\hbox{A}[\\the\\wd0|\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\hbox{ABC}[\\the\\wd0]"
+        /* A descender has depth. */
+        "\\setbox0=\\hbox{g}[\\the\\ht0|\\the\\dp0]"
+        /* A space becomes glue from the font, stretched by the space factor,
+           which an uppercase letter sets to 999. */
+        "\\setbox0=\\hbox{A \\global\\skip1=\\lastskip}[\\the\\skip1]"
+        "\\setbox0=\\hbox{A B}[\\the\\wd0]"
+        /* AV is kerned, ff is a ligature and reports as one. */
+        "\\setbox0=\\hbox{AV}[\\the\\wd0]"
+        "\\setbox0=\\hbox{ff\\global\\count1=\\lastnodetype}"
+        "[\\the\\wd0|\\the\\count1]"
+        "\\setbox0=\\hbox{ffi}[\\the\\wd0]"
+        /* A command between the two breaks the pair. */
+        "\\setbox0=\\hbox{f\\relax f}[\\the\\wd0]%",
+        "[7.50002pt|6.83331pt|0.0pt][21.8056pt][4.30554pt|1.94444pt]"
+        "[3.33333pt plus 1.66498pt minus 1.11221pt][17.9167pt][13.8889pt]"
+        "[5.83336pt|7][8.33336pt][6.11115pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1643,7 +1669,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_horizontal_glue() != 0 ||
+        test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

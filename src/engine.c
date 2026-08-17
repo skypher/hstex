@@ -746,6 +746,7 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
         size_t italic_index = (size_t)(info[2] >> 2);
         struct hstex_char_metric *metric = &characters[code];
         metric->tag = (int32_t)(info[2] & 0x03U);
+        metric->remainder = (int32_t)info[3];
         metric->width = scale_fix_word(
             read_big_endian_i32(input.data + (width_base + width_index) * 4U),
             size);
@@ -770,6 +771,47 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
     }
     free(font->characters);
     font->characters = characters;
+
+    /* The ligature and kerning program, and the kerns it refers to. */
+    size_t lig_kern_base = italic_base + (size_t)fields[7];
+    size_t kern_base = lig_kern_base + (size_t)fields[8];
+    struct hstex_lig_kern *lig_kern = NULL;
+    int32_t *kerns = NULL;
+    if (fields[8] != 0U) {
+        lig_kern = calloc((size_t)fields[8], sizeof(*lig_kern));
+        if (lig_kern == NULL) {
+            hstex_input_close(&input);
+            return set_error(error, error_capacity,
+                             "font ligature program allocation failed");
+        }
+        for (size_t index = 0U; index < (size_t)fields[8]; ++index) {
+            const uint8_t *step = input.data + (lig_kern_base + index) * 4U;
+            lig_kern[index].skip = step[0];
+            lig_kern[index].next = step[1];
+            lig_kern[index].operation = step[2];
+            lig_kern[index].remainder = step[3];
+        }
+    }
+    if (fields[9] != 0U) {
+        kerns = calloc((size_t)fields[9], sizeof(*kerns));
+        if (kerns == NULL) {
+            free(lig_kern);
+            hstex_input_close(&input);
+            return set_error(error, error_capacity,
+                             "font kern table allocation failed");
+        }
+        for (size_t index = 0U; index < (size_t)fields[9]; ++index) {
+            kerns[index] = scale_fix_word(
+                read_big_endian_i32(input.data + (kern_base + index) * 4U),
+                size);
+        }
+    }
+    free(font->lig_kern);
+    free(font->kerns);
+    font->lig_kern = lig_kern;
+    font->lig_kern_count = (size_t)fields[8];
+    font->kerns = kerns;
+    font->kern_count = (size_t)fields[9];
 
     size_t parameter_count = fields[11];
     size_t parameter_word =
@@ -1718,6 +1760,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"hfilneg", 4, HSTEX_COMMAND_HSKIP},
         {"indent", 1, HSTEX_COMMAND_INDENT},
         {"noindent", 0, HSTEX_COMMAND_INDENT},
+        {"spacefactor", 0, HSTEX_COMMAND_SPACE_FACTOR},
     };
     for (size_t index = 0U;
          index < sizeof(skip_primitives) / sizeof(skip_primitives[0]);
@@ -2310,6 +2353,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->fonts[index].name);
         free(engine->fonts[index].dimens);
         free(engine->fonts[index].characters);
+        free(engine->fonts[index].lig_kern);
+        free(engine->fonts[index].kerns);
     }
     free(engine->meanings);
     free(engine->macros);
@@ -3195,6 +3240,14 @@ static int integer_from_control_sequence(
             return set_error(error, error_capacity,
                              "invalid engine-state integer subtype");
         }
+    case HSTEX_COMMAND_SPACE_FACTOR:
+        if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+            return set_error(error, error_capacity,
+                             "spacefactor is only available in horizontal "
+                             "mode");
+        }
+        *value = engine->space_factor;
+        return 0;
     case HSTEX_COMMAND_LAST_ITEM: {
         const struct hstex_node *node = current_list_last_node(engine);
         if (meaning->value.integer == (int32_t)HSTEX_LAST_NODE_TYPE) {
@@ -3910,6 +3963,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_FONT_CHAR_CODE:
     case HSTEX_COMMAND_PDF_LAST_NUMBER:
     case HSTEX_COMMAND_LAST_ITEM:
+    case HSTEX_COMMAND_SPACE_FACTOR:
     case HSTEX_COMMAND_BOX_DIMEN:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
@@ -7628,6 +7682,21 @@ static int scan_rule_dimensions(struct hstex_engine *engine,
 
 static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
+static int append_character_node(struct hstex_engine *engine, uint8_t code,
+                                 bool ligature, char *error,
+                                 size_t error_capacity);
+static void advance_space_factor(struct hstex_engine *engine, uint8_t code);
+static int flush_pending_character(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity);
+static int append_horizontal_character(struct hstex_engine *engine,
+                                       uint8_t code, char *error,
+                                       size_t error_capacity);
+static int append_interword_glue(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity);
+static int font_lig_kern(const struct hstex_font *font, uint8_t left,
+                         uint8_t right, bool *kerned, int32_t *kern,
+                         bool *ligatured, uint8_t *ligature, char *error,
+                         size_t error_capacity);
 static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
 
@@ -8076,6 +8145,10 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
 
+    int32_t previous_space_factor = engine->space_factor;
+    bool previous_has_pending = engine->has_pending_character;
+    engine->space_factor = 1000;
+    engine->has_pending_character = false;
     int status = 0;
     for (;;) {
         hstex_token token = 0U;
@@ -8090,17 +8163,32 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
             break;
         }
         if (token_is_space(token)) {
+            status = flush_pending_character(engine, error, error_capacity);
+            if (status == 0) {
+                status = append_interword_glue(engine, error, error_capacity);
+            }
+            if (status != 0) {
+                break;
+            }
+            engine->space_factor = 1000;
             continue;
         }
-        if (hstex_token_is_character(token)) {
-            status = set_error(error, error_capacity,
-                               "character metrics inside hbox are not implemented");
-        } else {
+        if (!hstex_token_is_character(token)) {
             status = set_error(error, error_capacity,
                                "unsupported horizontal-mode token inside hbox");
+            break;
         }
-        break;
+        status = append_horizontal_character(
+            engine, hstex_token_character_code(token), error, error_capacity);
+        if (status != 0) {
+            break;
+        }
     }
+    if (status == 0) {
+        status = flush_pending_character(engine, error, error_capacity);
+    }
+    engine->space_factor = previous_space_factor;
+    engine->has_pending_character = previous_has_pending;
 
     engine->active_hbox_builder = previous_builder;
     engine->mode = previous_mode;
@@ -11473,6 +11561,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 11;
     case HSTEX_NODE_KERN:
         return 12;
+    case HSTEX_NODE_LIGATURE:
+        return 7;
     case HSTEX_NODE_PENALTY:
         return 13;
     }
@@ -12020,6 +12110,217 @@ static int execute_indent(struct hstex_engine *engine, bool indent,
     box.kind = HSTEX_BOX_HLIST;
     box.width = engine->dimen_parameters[HSTEX_DIMEN_PAR_INDENT];
     return append_box_node(engine, &box, error, error_capacity);
+}
+
+/* Walk a font's ligature and kerning program for a pair of characters. On a
+   kern, *kern receives the amount; on a ligature, *ligature receives the
+   replacement. Only the plain `=:' ligature is handled — the seven variants
+   that keep one or both originals are refused rather than guessed; see
+   docs/DECISIONS.md, ligatures-and-kerning. */
+static int font_lig_kern(const struct hstex_font *font, uint8_t left,
+                         uint8_t right, bool *kerned, int32_t *kern,
+                         bool *ligatured, uint8_t *ligature, char *error,
+                         size_t error_capacity)
+{
+    *kerned = false;
+    *ligatured = false;
+    if (font->characters == NULL || font->lig_kern_count == 0U) {
+        return 0;
+    }
+    const struct hstex_char_metric *metric = &font->characters[left];
+    if (metric->tag != 1) {
+        return 0;
+    }
+    size_t step = (size_t)metric->remainder;
+    if (step >= font->lig_kern_count) {
+        return 0;
+    }
+    /* A first step that skips more than the table is a long jump to the real
+       start of the program. */
+    if (font->lig_kern[step].skip > 128U) {
+        step = (size_t)font->lig_kern[step].operation * 256U +
+               (size_t)font->lig_kern[step].remainder;
+        if (step >= font->lig_kern_count) {
+            return 0;
+        }
+    }
+    for (;;) {
+        const struct hstex_lig_kern *entry = &font->lig_kern[step];
+        if (entry->skip <= 128U && entry->next == right) {
+            if (entry->operation >= 128U) {
+                size_t index = (size_t)(entry->operation - 128U) * 256U +
+                               (size_t)entry->remainder;
+                if (index >= font->kern_count) {
+                    return set_error(error, error_capacity,
+                                     "font kern index is out of range");
+                }
+                *kerned = true;
+                *kern = font->kerns[index];
+                return 0;
+            }
+            if (entry->operation != 0U) {
+                return set_error(error, error_capacity,
+                                 "ligature operation %u is not implemented",
+                                 (unsigned int)entry->operation);
+            }
+            *ligatured = true;
+            *ligature = entry->remainder;
+            return 0;
+        }
+        if (entry->skip >= 128U) {
+            return 0;
+        }
+        step += (size_t)entry->skip + 1U;
+        if (step >= font->lig_kern_count) {
+            return 0;
+        }
+    }
+}
+
+/* A character sets the space factor from its \sfcode, which the next space
+   then uses. */
+static void advance_space_factor(struct hstex_engine *engine, uint8_t code)
+{
+    int32_t factor = engine->code_tables[0][code];
+    if (factor == 1000) {
+        engine->space_factor = 1000;
+    } else if (factor == 0) {
+        return;
+    } else if (factor < 1000) {
+        engine->space_factor = factor;
+    } else {
+        engine->space_factor =
+            engine->space_factor < 1000 ? 1000 : factor;
+    }
+}
+
+/* Interword glue: the font's own, with the stretch scaled by the space factor
+   and the shrink scaled against it. */
+static int append_interword_glue(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity)
+{
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    if (font == NULL || font->dimen_count < 4U) {
+        return set_error(error, error_capacity,
+                         "current font does not define interword spacing");
+    }
+    struct hstex_glue glue = engine->glue_parameters[HSTEX_GLUE_SPACE_SKIP];
+    if (glue.width == 0 && glue.stretch == 0 && glue.shrink == 0) {
+        int32_t factor = engine->space_factor;
+        glue.width = font->dimens[1];
+        glue.stretch = font->dimens[2];
+        glue.shrink = font->dimens[3];
+        if (factor >= 2000 && font->dimen_count >= 7U) {
+            glue.width += font->dimens[6];
+        }
+        if (factor != 1000 && factor > 0) {
+            glue.stretch =
+                (int32_t)(((int64_t)glue.stretch * factor) / 1000);
+            glue.shrink =
+                (int32_t)(((int64_t)glue.shrink * 1000) / factor);
+        }
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* Put a character, or a ligature standing for several, into the list. */
+static int append_character_node(struct hstex_engine *engine, uint8_t code,
+                                 bool ligature, char *error,
+                                 size_t error_capacity)
+{
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    if (font == NULL || font->characters == NULL ||
+        font->characters[code].tag < 0) {
+        return set_error(error, error_capacity,
+                         "the current font has no character %u",
+                         (unsigned int)code);
+    }
+    const struct hstex_char_metric *metric = &font->characters[code];
+    struct hstex_node node = {
+        .kind = ligature ? HSTEX_NODE_LIGATURE : HSTEX_NODE_CHARACTER,
+        .width = metric->width,
+        .height = metric->height,
+        .depth = metric->depth,
+        .value.character = {
+            .font = engine->current_font,
+            .character = code,
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* Put the held-back character into the list. Everything that is not another
+   character does this first, so a command between two characters breaks the
+   pair exactly as it does in the reference. */
+static int flush_pending_character(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    if (!engine->has_pending_character) {
+        return 0;
+    }
+    uint8_t code = engine->pending_character;
+    bool ligature = engine->pending_is_ligature;
+    engine->has_pending_character = false;
+    int status = append_character_node(engine, code, ligature, error,
+                                       error_capacity);
+    advance_space_factor(engine, code);
+    return status;
+}
+
+/* Take one character into the horizontal list, consulting the font's
+   ligature and kerning program against the character held back before it. */
+static int append_horizontal_character(struct hstex_engine *engine,
+                                       uint8_t code, char *error,
+                                       size_t error_capacity)
+{
+    if (engine->has_pending_character) {
+        const struct hstex_font *font =
+            font_by_identifier(engine, engine->current_font);
+        bool kerned = false;
+        bool ligatured = false;
+        int32_t kern = 0;
+        uint8_t ligature = 0U;
+        if (font != NULL &&
+            font_lig_kern(font, engine->pending_character, code, &kerned,
+                          &kern, &ligatured, &ligature, error,
+                          error_capacity) != 0) {
+            return -1;
+        }
+        if (ligatured) {
+            /* The pair becomes one character, which may ligature again. */
+            engine->pending_character = ligature;
+            engine->pending_is_ligature = true;
+            return 0;
+        }
+        if (flush_pending_character(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (kerned) {
+            struct hstex_node node = {
+                .kind = HSTEX_NODE_KERN,
+                .width = kern,
+            };
+            if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
+                return -1;
+            }
+        }
+    }
+    engine->has_pending_character = true;
+    engine->pending_is_ligature = false;
+    engine->pending_character = code;
+    return 0;
 }
 
 static int execute_write(struct hstex_engine *engine, char *error,
@@ -13304,6 +13605,12 @@ handle_token:
             return HSTEX_ENGINE_TOKEN;
         }
 
+        /* Anything that is not a character ends the pair the ligature and
+           kerning program was waiting on. */
+        if (engine->has_pending_character &&
+            flush_pending_character(engine, error, error_capacity) != 0) {
+            return HSTEX_ENGINE_ERROR;
+        }
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(*token));
         switch (meaning->command) {
@@ -13588,6 +13895,32 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_SPACE_FACTOR: {
+            if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+                (void)set_error(error, error_capacity,
+                                "spacefactor is only assignable in horizontal "
+                                "mode");
+                return HSTEX_ENGINE_ERROR;
+            }
+            int32_t factor = 0;
+            if (finish_assignment(
+                    engine,
+                    scan_optional_equals(engine, error, error_capacity) != 0 ||
+                            scan_integer(engine, &factor, error,
+                                         error_capacity) != 0
+                        ? -1
+                        : 0,
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            if (factor <= 0 || factor > 32767) {
+                (void)set_error(error, error_capacity,
+                                "spacefactor must lie between 1 and 32767");
+                return HSTEX_ENGINE_ERROR;
+            }
+            engine->space_factor = factor;
+            continue;
+        }
         case HSTEX_COMMAND_INDENT:
             if (execute_indent(engine, meaning->value.integer != 0, error,
                                error_capacity) != 0) {

@@ -189,6 +189,7 @@ enum hstex_command {
     HSTEX_COMMAND_UNBOX,
     HSTEX_COMMAND_HSKIP,
     HSTEX_COMMAND_INDENT,
+    HSTEX_COMMAND_SPACE_FACTOR,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -575,8 +576,10 @@ struct hstex_char_metric {
     int32_t height;
     int32_t depth;
     int32_t italic;
-    /* The metric file's tag, or -1 for a character it does not define. */
+    /* The metric file's tag, or -1 for a character it does not define, and
+       the tag's operand: where the ligature and kerning program starts. */
     int32_t tag;
+    int32_t remainder;
     /* Protrusion and expansion settings. These belong to the font, not to a
        group, so they are never restored; see docs/DECISIONS.md,
        protrusion-codes. */
@@ -589,9 +592,21 @@ struct hstex_char_metric {
 
 #define HSTEX_FONT_CHARACTER_COUNT 256U
 
+/* One step of a metric file's ligature and kerning program. */
+struct hstex_lig_kern {
+    uint8_t skip;
+    uint8_t next;
+    uint8_t operation;
+    uint8_t remainder;
+};
+
 struct hstex_font {
     char *name;
     struct hstex_char_metric *characters;
+    struct hstex_lig_kern *lig_kern;
+    size_t lig_kern_count;
+    int32_t *kerns;
+    size_t kern_count;
     int32_t design_size;
     /* The control sequence \the\font reports for this font. Re-declaring an
        already loaded font reuses it and renames it to the newer control
@@ -647,6 +662,7 @@ enum hstex_node_kind {
     HSTEX_NODE_PENALTY,
     HSTEX_NODE_LIST,
     HSTEX_NODE_KERN,
+    HSTEX_NODE_LIGATURE,
 };
 
 struct hstex_node {
@@ -831,6 +847,14 @@ struct hstex_engine {
     char *job_name;
     enum hstex_mode mode;
     int32_t prev_depth;
+    /* The space factor of the horizontal list being built. */
+    int32_t space_factor;
+    /* A character held back so that the font's ligature and kerning program
+       can see it beside the next one. It is flushed before anything else
+       happens, so the list is never observed mid-pair. */
+    bool has_pending_character;
+    bool pending_is_ligature;
+    uint8_t pending_character;
     enum hstex_interaction_mode interaction_mode;
     bool inner_mode;
     hstex_token after_assignment_token;
