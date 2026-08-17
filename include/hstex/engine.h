@@ -696,6 +696,23 @@ enum hstex_box_kind {
     HSTEX_BOX_VLIST,
 };
 
+/* How a box's glue was set when it was packed: which order was used, whether
+   it stretched or shrank, and the ratio as the two numbers it came from, so
+   that each glue's share can be worked out exactly. See docs/DECISIONS.md,
+   glue-set. */
+enum hstex_glue_sign {
+    HSTEX_GLUE_SIGN_NORMAL = 0,
+    HSTEX_GLUE_SIGN_STRETCHING,
+    HSTEX_GLUE_SIGN_SHRINKING,
+};
+
+struct hstex_glue_set {
+    int32_t needed;
+    int32_t total;
+    uint8_t sign;
+    uint8_t order;
+};
+
 struct hstex_box {
     enum hstex_box_kind kind;
     int32_t width;
@@ -703,6 +720,7 @@ struct hstex_box {
     int32_t depth;
     uint32_t node_start;
     uint32_t node_count;
+    struct hstex_glue_set glue;
 };
 
 /* A rule dimension the enclosing box supplies. It survives packaging and is
@@ -964,6 +982,7 @@ struct hstex_node {
             uint32_t node_start;
             uint32_t node_count;
             enum hstex_box_kind box_kind;
+            struct hstex_glue_set glue;
         } list;
         int32_t penalty;
     } value;

@@ -8209,6 +8209,40 @@ static struct hstex_glue list_total_glue(const struct hstex_engine *engine,
     return total;
 }
 
+/* Work out how a box's glue has to be set to reach its target: which order
+   answers, and the ratio as the two numbers it came from. A box that cannot
+   be shrunk far enough shrinks as far as it goes. See docs/DECISIONS.md,
+   glue-set. */
+static struct hstex_glue_set packing_glue_set(int64_t natural, int64_t target,
+                                              const struct hstex_glue *total)
+{
+    struct hstex_glue_set set = {0};
+    int64_t needed = target - natural;
+    if (needed > 0) {
+        if (total->stretch == 0) {
+            return set;
+        }
+        set.sign = (uint8_t)HSTEX_GLUE_SIGN_STRETCHING;
+        set.order = total->stretch_order;
+        set.total = total->stretch;
+    } else if (needed < 0) {
+        if (total->shrink == 0) {
+            return set;
+        }
+        needed = -needed;
+        if (total->shrink_order == 0U && needed > total->shrink) {
+            needed = total->shrink;
+        }
+        set.sign = (uint8_t)HSTEX_GLUE_SIGN_SHRINKING;
+        set.order = total->shrink_order;
+        set.total = total->shrink;
+    } else {
+        return set;
+    }
+    set.needed = (int32_t)(uint32_t)(uint64_t)needed;
+    return set;
+}
+
 /* What a box that has just been packed to a width reports through \badness:
    nothing if it fits, the badness of the glue it had to move, or a million
    if it could not be shrunk far enough. */
@@ -8943,6 +8977,7 @@ static int finalize_hbox(struct hstex_engine *engine,
     struct hstex_glue total =
         list_total_glue(engine, builder->node_identifiers, builder->count);
     engine->badness = packing_badness(builder->width, box->width, &total);
+    box->glue = packing_glue_set(builder->width, box->width, &total);
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
         box->node_count = (uint32_t)builder->count;
@@ -9191,8 +9226,10 @@ static int finalize_vbox(struct hstex_engine *engine,
     struct hstex_glue total =
         list_total_glue(engine, builder->node_identifiers, builder->count);
     engine->badness = packing_badness(natural, height, &total);
+    struct hstex_glue_set set = packing_glue_set(natural, height, &total);
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_VLIST;
+    box->glue = set;
     box->width = builder->width;
     box->height = (int32_t)(uint32_t)(uint64_t)height;
     box->depth = depth;
@@ -9296,6 +9333,7 @@ static int append_shifted_box_node(struct hstex_engine *engine,
             .node_start = box->node_start,
             .node_count = box->node_count,
             .box_kind = box->kind,
+            .glue = box->glue,
         },
     };
     return append_current_list_node(engine, &node, error, error_capacity);
@@ -9626,6 +9664,7 @@ static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
     box->depth = node->depth;
     box->node_start = node->value.list.node_start;
     box->node_count = node->value.list.node_count;
+    box->glue = node->value.list.glue;
 
     return drop_last_list_node(engine, error, error_capacity);
 }
@@ -9742,6 +9781,7 @@ static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
             .node_start = box.node_start,
             .node_count = box.node_count,
             .box_kind = box.kind,
+            .glue = box.glue,
         },
     };
     /* A displaced box in a formula is an ordinary atom, so that it spaces
@@ -14524,6 +14564,7 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                 .node_start = box.node_start,
                 .node_count = box.node_count,
                 .box_kind = box.kind,
+                .glue = box.glue,
             },
         };
         status = append_vbox_node(engine, &line_node, error, error_capacity);
@@ -15113,6 +15154,7 @@ static int math_append_box_field(struct hstex_engine *engine,
             .node_start = box->node_start,
             .node_count = box->node_count,
             .box_kind = box->kind,
+            .glue = box->glue,
         },
     };
     uint32_t identifier = 0U;
@@ -15684,6 +15726,7 @@ static int math_field_box(struct hstex_engine *engine,
         box->depth = node->depth;
         box->node_start = node->value.list.node_start;
         box->node_count = node->value.list.node_count;
+        box->glue = node->value.list.glue;
         return 0;
     }
     if (field->kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
@@ -15731,6 +15774,7 @@ static int store_box_node(struct hstex_engine *engine,
             .node_start = box->node_start,
             .node_count = box->node_count,
             .box_kind = box->kind,
+            .glue = box->glue,
         },
     };
     return store_node(engine, &node, identifier, error, error_capacity);
@@ -16551,6 +16595,7 @@ static int extensible_box(struct hstex_engine *engine,
                     .node_start = piece_box.node_start,
                     .node_count = piece_box.node_count,
                     .box_kind = piece_box.kind,
+                    .glue = piece_box.glue,
                 },
             };
             status = append_vbox_node(engine, &node, error, error_capacity);
@@ -17724,6 +17769,7 @@ static int append_display_line(struct hstex_engine *engine,
                 .node_start = equation.node_start,
                 .node_count = equation.node_count,
                 .box_kind = equation.kind,
+                .glue = equation.glue,
             },
         };
         return append_vbox_node(engine, &node, error, error_capacity);
@@ -17771,6 +17817,7 @@ static int append_display_line(struct hstex_engine *engine,
             .node_start = line.node_start,
             .node_count = line.node_count,
             .box_kind = line.kind,
+            .glue = line.glue,
         },
     };
     return append_vbox_node(engine, &node, error, error_capacity);
@@ -17848,6 +17895,7 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                 .node_start = number.node_start,
                 .node_count = number.node_count,
                 .box_kind = number.kind,
+                .glue = number.glue,
             },
         };
         if (append_vbox_node(engine, &node, error, error_capacity) != 0 ||
@@ -17877,6 +17925,7 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                 .node_start = number.node_start,
                 .node_count = number.node_count,
                 .box_kind = number.kind,
+                .glue = number.glue,
             },
         };
         if (append_vbox_node(engine, &infinite, error, error_capacity) != 0 ||
@@ -19391,6 +19440,7 @@ static int execute_accent(struct hstex_engine *engine, char *error,
                 .node_start = box.node_start,
                 .node_count = box.node_count,
                 .box_kind = box.kind,
+                .glue = box.glue,
             },
         };
         if (append_hbox_node(engine, &raised, error, error_capacity) != 0) {

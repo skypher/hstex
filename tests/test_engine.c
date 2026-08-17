@@ -129,6 +129,78 @@ static int run_document(const char *source, const char *expected)
 }
 
 /* Page totals; see docs/DECISIONS.md, the-page-builder. */
+/* How a packed box's glue was set. The reference only shows this through
+   \showbox, so the four numbers are read off its "glue set" line and the
+   geometry that produced it; see docs/DECISIONS.md, glue-set. */
+static int test_glue_set(void)
+{
+    static const char source[] =
+        "\\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vfuzz=1000pt "
+        "\\boxmaxdepth=16383.99998pt "
+        "\\def\\R#1{\\vrule width#1pt height1pt depth0pt}"
+        "\\def\\H#1{\\hrule height#1pt}"
+        "\\setbox0=\\hbox to100pt{\\hskip0pt plus1fil\\R{5}\\hskip0pt plus2fil}"
+        "\\setbox1=\\hbox to30pt{\\hskip10pt plus5pt minus2pt\\R{7}}"
+        "\\setbox2=\\hbox to5pt{\\hskip20pt minus3pt}"
+        "\\setbox3=\\hbox spread5pt{\\hskip0pt minus1pt}"
+        "\\setbox4=\\hbox to9pt{\\R{5}\\hskip0pt plus1fill\\hskip0pt plus1fil}"
+        "\\setbox5=\\vbox to40pt{\\H{2}\\vskip4pt plus1fill\\H{3}}"
+        "\\setbox6=\\hbox to5pt{\\hskip20pt minus1fil}%";
+    /* index, sign, order, needed, total -- the reference's ratios are
+       31.66667fil, 2.6, - 1.0, none, 4.0fill, 31.0fill and - 15.0fil. */
+    static const struct {
+        size_t box;
+        uint8_t sign;
+        uint8_t order;
+        int32_t needed;
+        int32_t total;
+    } expected[] = {
+        {0U, 1U, 1U, 95 * 65536, 3 * 65536},
+        {1U, 1U, 0U, 13 * 65536, 5 * 65536},
+        {2U, 2U, 0U, 3 * 65536, 3 * 65536},
+        {3U, 0U, 0U, 0, 0},
+        {4U, 1U, 2U, 4 * 65536, 65536},
+        {5U, 1U, 2U, 31 * 65536, 65536},
+        {6U, 2U, 1U, 15 * 65536, 65536},
+    };
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    int status = result != HSTEX_ENGINE_EOF;
+    for (size_t index = 0U;
+         status == 0 && index < sizeof(expected) / sizeof(expected[0]);
+         ++index) {
+        const struct hstex_glue_set set = engine.boxes[expected[index].box].glue;
+        if (set.sign != expected[index].sign ||
+            set.order != expected[index].order ||
+            set.needed != expected[index].needed ||
+            set.total != expected[index].total) {
+            (void)fprintf(stderr,
+                          "glue set of box %zu is %u/%u %d over %d\n",
+                          expected[index].box, (unsigned int)set.sign,
+                          (unsigned int)set.order, set.needed, set.total);
+            status = 1;
+        }
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 /* The output routine; see docs/DECISIONS.md, the-output-routine. */
 static int test_output_routine(void)
 {
@@ -3371,7 +3443,7 @@ int main(void)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
