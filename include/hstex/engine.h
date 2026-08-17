@@ -215,6 +215,7 @@ enum hstex_command {
     HSTEX_COMMAND_EQUATION_NUMBER,
     HSTEX_COMMAND_VCENTER,
     HSTEX_COMMAND_MARGIN_KERN,
+    HSTEX_COMMAND_DELIMITER,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the

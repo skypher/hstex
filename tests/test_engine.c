@@ -1377,6 +1377,45 @@ static int test_alignment_entries(void)
         "[macro:->N]");
 }
 
+/* \delimiter on its own, and a character the font does not have; see
+   docs/DECISIONS.md, delimiters. */
+static int test_delimiters(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\textfont1=\\tenmi \\textfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont0=\\tenrm \\scriptfont1=\\tenmi "
+        "\\scriptfont2=\\tensy \\scriptfont3=\\tenex "
+        "\\scriptscriptfont0=\\tenrm \\scriptscriptfont1=\\tenmi "
+        "\\scriptscriptfont2=\\tensy \\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu "
+        "\\scriptspace=.5pt \\nullfont "
+        "\\def\\m#1{\\setbox0=\\hbox{$#1$}"
+        "[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* A delimiter used on its own is its small variant, which is the
+           number's top fifteen bits -- the same thing \mathchar would make
+           of them. */
+        "\\m{\\delimiter\"426830A }\\m{\\mathchar\"4268 }"
+        "\\m{\\delimiter\"028300 }"
+        /* A character the font does not have contributes nothing at all. */
+        "\\m{\\mathchar\"0283 }"
+        /* The class in the number still decides the spacing. */
+        "\\m{\\mathchar\"0030 \\delimiter\"426830A \\mathchar\"0030 }"
+        "\\m{\\mathchar\"0030 \\mathopen{\\mathchar\"0030 }\\mathchar\"0030 }"
+        "\\m{\\delimiter\"0 }"
+        /* Scripts attach to it as they would to any atom. */
+        "\\m{\\delimiter\"426830A ^\\mathchar\"0030 }"
+        /* A missing character still leaves an atom that spaces. */
+        "\\m{\\mathchar\"0030 \\mathchar\"0283 \\mathchar\"0030 }%",
+        "[3.8889pt|7.5pt|2.5pt][3.8889pt|7.5pt|2.5pt]"
+        "[3.8889pt|7.5pt|2.5pt][0.0pt|0.0pt|0.0pt]"
+        "[13.88893pt|7.5pt|2.5pt][15.00005pt|6.44444pt|0.0pt]"
+        "[6.25002pt|6.83331pt|0.0pt][9.38892pt|10.07336pt|2.5pt]"
+        "[10.00003pt|6.44444pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2465,7 +2504,7 @@ int main(void)
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
-        test_alignment_entries() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_alignment_entries() != 0 || test_delimiters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

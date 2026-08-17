@@ -1866,6 +1866,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"scriptscriptstyle", HSTEX_COMMAND_MATH_STYLE,
          (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
+        {"delimiter", HSTEX_COMMAND_DELIMITER, 0},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
@@ -14246,6 +14247,9 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
     }
 }
 
+/* Returns 1 when the character is there, 0 when the font simply does not
+   have it -- which the reference reports and then carries on without, so
+   the atom contributes nothing. */
 static int math_character_metric(struct hstex_engine *engine,
                                  const struct hstex_math_field *field,
                                  uint8_t size, const struct hstex_font **font,
@@ -14261,14 +14265,11 @@ static int math_character_metric(struct hstex_engine *engine,
     }
     if (resolved->characters == NULL ||
         resolved->characters[field->character].tag < 0) {
-        return set_error(error, error_capacity,
-                         "math family %u has no character %u",
-                         (unsigned int)field->family,
-                         (unsigned int)field->character);
+        return 0;
     }
     *font = resolved;
     *metric = &resolved->characters[field->character];
-    return 0;
+    return 1;
 }
 
 /* Two adjacent ordinary characters of the same family go through that
@@ -14301,9 +14302,14 @@ static int apply_math_ligatures(struct hstex_engine *engine,
         }
         const struct hstex_font *font = NULL;
         const struct hstex_char_metric *metric = NULL;
-        if (math_character_metric(engine, &left->nucleus, size, &font, &metric,
-                                  error, error_capacity) != 0) {
+        int present = math_character_metric(engine, &left->nucleus, size, &font,
+                                            &metric, error, error_capacity);
+        if (present < 0) {
             return -1;
+        }
+        if (present == 0) {
+            ++index;
+            continue;
         }
         bool kerned = false;
         bool ligatured = false;
@@ -14798,9 +14804,20 @@ static int translate_math_list(struct hstex_engine *engine,
         } else if (nucleus_is_character) {
             const struct hstex_font *font = NULL;
             const struct hstex_char_metric *metric = NULL;
-            if (math_character_metric(engine, &noad->nucleus, size, &font,
-                                      &metric, error, error_capacity) != 0) {
+            int present = math_character_metric(engine, &noad->nucleus, size,
+                                                &font, &metric, error,
+                                                error_capacity);
+            if (present < 0) {
                 return -1;
+            }
+            if (present == 0) {
+                /* The font has no such character; the reference carries on
+                   without it. */
+                if (attach_math_scripts(engine, noad, style, 0, 0, true, 0,
+                                        error, error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
             }
             struct hstex_node node = {
                 .kind = HSTEX_NODE_CHARACTER,
@@ -15548,6 +15565,27 @@ static int execute_math_choice(struct hstex_engine *engine, char *error,
     builder->choice_remaining = 4U;
     builder->choice_index = 0U;
     return 0;
+}
+
+/* \delimiter names a small and a large variant. Used on its own it is the
+   small one, which is the top fifteen bits of the number; see
+   docs/DECISIONS.md, delimiters. */
+static int execute_delimiter(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 0x7FFFFFF) {
+        return set_error(error, error_capacity,
+                         "delimiter %d is outside 0..134217727", code);
+    }
+    if (engine->mode != HSTEX_MODE_MATH) {
+        return set_error(error, error_capacity,
+                         "a delimiter is only allowed in a formula");
+    }
+    return math_append_code(engine, code / 4096, error, error_capacity);
 }
 
 static int execute_math_class(struct hstex_engine *engine, int32_t class_code,
@@ -18209,6 +18247,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_MATH_CHOICE:
             if (execute_math_choice(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DELIMITER:
+            if (execute_delimiter(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
