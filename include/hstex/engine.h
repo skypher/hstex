@@ -749,6 +749,8 @@ enum hstex_noad_kind {
     /* All four lists of a \mathchoice; which is used is settled when the
        list is set, not when it is read. */
     HSTEX_NOAD_CHOICE,
+    /* \radical: a delimiter over a nucleus, built when the list is set. */
+    HSTEX_NOAD_RADICAL,
 };
 
 enum hstex_math_field_kind {
@@ -856,6 +858,8 @@ struct hstex_noad {
     int32_t kern;
     /* The four lists of a \mathchoice, as sub-formula records. */
     uint32_t choices[4];
+    /* The delimiter of a \radical. */
+    int32_t delimiter;
 };
 
 /* Which slot the next atom fills, when a script mark is waiting. */
@@ -863,6 +867,8 @@ enum hstex_math_slot {
     HSTEX_MATH_SLOT_NONE = 0,
     HSTEX_MATH_SLOT_SUPERSCRIPT,
     HSTEX_MATH_SLOT_SUBSCRIPT,
+    /* The field \radical is waiting for. */
+    HSTEX_MATH_SLOT_RADICAND,
 };
 
 struct hstex_math_builder {

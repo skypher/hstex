@@ -1791,6 +1791,57 @@ static int test_conditionals_across_boxes(void)
         "0pt|1.0pt][7|8.0pt]");
 }
 
+/* \radical, and the math codes a letter and a digit start with; see
+   docs/DECISIONS.md, radicals and initex-math-codes. */
+static int test_radicals(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\mathsurr"
+        "ound=0pt \\hbadness=10000 \\hfuzz=1000pt \\nulldelimitersp"
+        "ace=1.2pt \\scriptspace=0.5pt \\font\\tenrm=cmr10 \\font\\"
+        "tenmi=cmmi10 \\font\\tensy=cmsy10 \\font\\tenex=cmex10 \\f"
+        "ont\\sevenrm=cmr7 \\font\\seveni=cmmi7 \\font\\sevensy=cms"
+        "y7 \\font\\fiverm=cmr5 \\font\\fivei=cmmi5 \\font\\fivesy="
+        "cmsy5 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\script"
+        "scriptfont0=\\fiverm \\textfont1=\\tenmi \\scriptfont1=\\s"
+        "eveni \\scriptscriptfont1=\\fivei \\textfont2=\\tensy \\sc"
+        "riptfont2=\\sevensy \\scriptscriptfont2=\\fivesy \\textfon"
+        "t3=\\tenex \\scriptfont3=\\tenex \\scriptscriptfont3=\\ten"
+        "ex \\tenrm \\def\\R#1#2#3{\\vrule width#1pt height#2pt dep"
+        "th#3pt}\\def\\C{\\mathchoice{\\R{1}{1}{0}}{\\R{2}{1}{0}}{"
+        "\\R{3}{1}{0}}{\\R{4}{1}{0}}}\\def\\M#1{\\setbox0=\\hbox{$#"
+        "1$}}\\M{\\radical\"270370{\\R{5}{3}{1}}}[1|\\the\\wd0|\\th"
+        "e\\ht0|\\the\\dp0]\\M{\\displaystyle\\radical\"270370{\\R{"
+        "5}{3}{1}}}[2|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\script"
+        "style\\radical\"270370{\\R{5}{3}{1}}}[3|\\the\\wd0|\\the\\"
+        "ht0|\\the\\dp0]\\M{\\scriptscriptstyle\\radical\"270370{\\"
+        "R{5}{3}{1}}}[4|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\radi"
+        "cal\"270370{\\R{5}{0}{0}}}[5|\\the\\wd0|\\the\\ht0|\\the\\"
+        "dp0]\\M{\\radical\"270370{\\R{5}{20}{0}}}[6|\\the\\wd0|\\t"
+        "he\\ht0|\\the\\dp0]\\M{\\displaystyle\\radical\"270370{\\R"
+        "{5}{20}{0}}}[7|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\radi"
+        "cal\"270370{\\C}}[8|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{"
+        "\\displaystyle\\radical\"270370{\\C}}[9|\\the\\wd0|\\the\\"
+        "ht0|\\the\\dp0]\\M{\\mathord{\\R{1}{1}{0}}\\radical\"27037"
+        "0{\\R{5}{3}{1}}\\mathord{\\R{1}{1}{0}}}[10|\\the\\wd0|\\th"
+        "e\\ht0|\\the\\dp0]\\M{\\radical\"270370{\\radical\"270370{"
+        "\\R{5}{3}{1}}}}[11|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\"
+        "radical\"270370{\\R{5}{3}{1}}^{\\R{2}{2}{0}}}[12|\\the\\wd"
+        "0|\\the\\ht0|\\the\\dp0]\\M{\\radical\"270370 x}[13|\\the"
+        "\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\radical\"270370{}}[14|\\"
+        "the\\wd0|\\the\\ht0|\\the\\dp0][15|\\the\\mathcode`x|\\the"
+        "\\mathcode`X|\\the\\mathcode`0]%",
+        "[1|13.33336pt|6.84995pt|3.55002pt][2|13.33336pt|7.33815pt|"
+        "3.06181pt][3|11.56947pt|5.25995pt|2.08002pt][4|10.4862pt|4"
+        ".16998pt|1.11002pt][5|13.33336pt|5.84995pt|4.55002pt][6|15"
+        ".00002pt|22.85007pt|1.55014pt][7|15.00002pt|23.33827pt|1.0"
+        "6194pt][8|10.33336pt|6.34995pt|4.05002pt][9|9.33336pt|6.83"
+        "815pt|3.56181pt][10|15.33336pt|6.84995pt|3.55002pt][11|23."
+        "33337pt|8.49997pt|3.90012pt][12|15.83336pt|6.84995pt|3.550"
+        "02pt][13|14.04863pt|8.00272pt|2.39725pt][14|8.33336pt|5.84"
+        "995pt|4.55002pt][15|29048|29016|28720]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2882,7 +2933,7 @@ int main(void)
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
-        test_conditionals_across_boxes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_conditionals_across_boxes() != 0 || test_radicals() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

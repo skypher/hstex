@@ -1675,18 +1675,27 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     }
     /* A full stop is the one character that names no delimiter at all. */
     engine->code_tables[4][(size_t)'.'] = 0;
+    /* A letter is a variable-family italic and a digit a variable-family
+       roman before any format has said otherwise; see
+       docs/DECISIONS.md, initex-math-codes. */
+    for (uint32_t character = (uint32_t)'0'; character <= (uint32_t)'9';
+         ++character) {
+        engine->code_tables[3][character] = (int32_t)(character + 0x7000U);
+    }
     for (uint32_t character = (uint32_t)'A'; character <= (uint32_t)'Z';
          ++character) {
         engine->code_tables[0][character] = 999;
         engine->code_tables[1][character] =
             (int32_t)(character + ((uint32_t)'a' - (uint32_t)'A'));
         engine->code_tables[2][character] = (int32_t)character;
+        engine->code_tables[3][character] = (int32_t)(character + 0x7100U);
     }
     for (uint32_t character = (uint32_t)'a'; character <= (uint32_t)'z';
          ++character) {
         engine->code_tables[1][character] = (int32_t)character;
         engine->code_tables[2][character] =
             (int32_t)(character - ((uint32_t)'a' - (uint32_t)'A'));
+        engine->code_tables[3][character] = (int32_t)(character + 0x7100U);
     }
 
     time_t now = time(NULL);
@@ -14199,6 +14208,8 @@ static int math_append_atom(struct hstex_engine *engine,
         struct hstex_noad *target = &builder->noads[builder->slot_target];
         if (builder->slot == (uint8_t)HSTEX_MATH_SLOT_SUPERSCRIPT) {
             target->superscript = noad->nucleus;
+        } else if (builder->slot == (uint8_t)HSTEX_MATH_SLOT_RADICAND) {
+            target->nucleus = noad->nucleus;
         } else {
             target->subscript = noad->nucleus;
         }
@@ -14655,6 +14666,10 @@ static int translate_math_list(struct hstex_engine *engine,
 static int translate_math_fraction(struct hstex_engine *engine,
                                    struct hstex_math_builder *builder,
                                    char *error, size_t error_capacity);
+
+static int build_math_radical(struct hstex_engine *engine,
+                              struct hstex_noad *noad, uint8_t style,
+                              char *error, size_t error_capacity);
 
 /* Pack one field into a box at the given style. An empty field gives an empty
    box, a character gives that character with its italic correction, and a box
@@ -15248,6 +15263,11 @@ static int translate_math_list(struct hstex_engine *engine,
             all_spacing = style < (uint8_t)HSTEX_STYLE_SCRIPT;
             continue;
         }
+        if (noad->kind == (uint8_t)HSTEX_NOAD_RADICAL &&
+            build_math_radical(engine, noad, style, error, error_capacity) !=
+                0) {
+            return -1;
+        }
         if (noad->kind == (uint8_t)HSTEX_NOAD_NODE) {
             if (append_hbox_item(engine, noad->node, error, error_capacity) !=
                 0) {
@@ -15791,6 +15811,13 @@ static uint8_t math_denominator_style(uint8_t style)
     return (uint8_t)(2U * (style / 2U) + 3U - 2U * (style / 6U));
 }
 
+/* The cramped variant of a style: the same size, with superscripts kept
+   lower. */
+static uint8_t math_cramped_style(uint8_t style)
+{
+    return (uint8_t)(style | 1U);
+}
+
 /* Set part of a math list -- one side of a fraction -- as a box of its own. */
 static int math_range_box(struct hstex_engine *engine,
                           const struct hstex_math_builder *builder,
@@ -15881,6 +15908,140 @@ static int math_rebox(struct hstex_engine *engine, struct hstex_box *box,
         *box = packed;
     }
     return status;
+}
+
+/* \radical puts a sign of its own height beside the radicand, with a rule
+   over it. All of the arithmetic here was measured; see docs/DECISIONS.md,
+   radicals. */
+static int build_math_radical(struct hstex_engine *engine,
+                              struct hstex_noad *noad, uint8_t style,
+                              char *error, size_t error_capacity)
+{
+    uint8_t size = math_size_of_style(style);
+    int32_t thickness = 0;
+    if (math_extension_parameter(engine, size, 8U, &thickness, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box radicand = {0};
+    if (math_field_box(engine, &noad->nucleus, math_cramped_style(style),
+                       &radicand, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* How much room to leave over the radicand: a quarter of the x height in
+       display, a quarter of the rule's own thickness otherwise. */
+    int32_t reference = thickness;
+    if (style < (uint8_t)HSTEX_STYLE_TEXT &&
+        math_symbol_parameter(engine, size, 5U, &reference, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    if (reference < 0) {
+        reference = -reference;
+    }
+    int64_t clearance = (int64_t)thickness + reference / 4;
+    int64_t wanted =
+        (int64_t)radicand.height + radicand.depth + clearance + thickness;
+    if (wanted > HSTEX_MAX_DIMEN) {
+        wanted = HSTEX_MAX_DIMEN;
+    }
+    struct hstex_box sign = {0};
+    if (variant_delimiter(engine, noad->delimiter, size, (int32_t)wanted,
+                          &sign, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* A sign taller than it needs to be spreads the extra room evenly. */
+    int64_t excess = (int64_t)sign.depth -
+                     ((int64_t)radicand.height + radicand.depth + clearance);
+    if (excess > 0) {
+        clearance += half_of(excess);
+    }
+
+    struct hstex_vbox_builder body = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_vbox_builder = &body;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    /* The bar over the radicand is as thick as the sign is tall, and sits
+       that same distance below the top of the whole thing; the default rule
+       thickness only decides how much room is left over the radicand. */
+    struct hstex_node above = {.kind = HSTEX_NODE_KERN, .width = sign.height};
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = HSTEX_RUNNING_DIMEN,
+        .height = sign.height,
+        .depth = 0,
+    };
+    struct hstex_node gap = {.kind = HSTEX_NODE_KERN,
+                             .width = (int32_t)clearance};
+    uint32_t identifier = 0U;
+    int status = append_vbox_node(engine, &above, error, error_capacity);
+    if (status == 0) {
+        status = append_vbox_node(engine, &rule, error, error_capacity);
+    }
+    if (status == 0) {
+        status = append_vbox_node(engine, &gap, error, error_capacity);
+    }
+    if (status == 0 &&
+        (store_box_node(engine, &radicand, 0, &identifier, error,
+                        error_capacity) != 0 ||
+         append_vbox_item(engine, identifier, error, error_capacity) != 0)) {
+        status = -1;
+    }
+    struct hstex_box over = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &body, false, false, 0, &over, error,
+                               error_capacity);
+    }
+    free(body.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    over.width = radicand.width;
+    over.height = (int32_t)(2 * (int64_t)sign.height + clearance +
+                            radicand.height);
+    over.depth = radicand.depth;
+
+    struct hstex_hbox_builder whole = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &whole;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    status = 0;
+    int32_t shift =
+        (int32_t)(-((int64_t)radicand.height + clearance));
+    identifier = 0U;
+    if (store_box_node(engine, &sign, shift, &identifier, error,
+                       error_capacity) != 0 ||
+        append_hbox_item(engine, identifier, error, error_capacity) != 0 ||
+        store_box_node(engine, &over, 0, &identifier, error,
+                       error_capacity) != 0 ||
+        append_hbox_item(engine, identifier, error, error_capacity) != 0) {
+        status = -1;
+    }
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &whole, false, false, 0, &packed, error,
+                               error_capacity);
+    }
+    free(whole.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    identifier = 0U;
+    if (store_box_node(engine, &packed, 0, &identifier, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    noad->kind = (uint8_t)HSTEX_NOAD_ATOM;
+    noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+    memset(&noad->nucleus, 0, sizeof(noad->nucleus));
+    noad->nucleus.kind = (uint8_t)HSTEX_MATH_FIELD_BOX;
+    noad->nucleus.node = identifier;
+    return 0;
 }
 
 /* Set a list that holds a generalized fraction. All of the arithmetic here
@@ -16329,6 +16490,41 @@ static int execute_parshape(struct hstex_engine *engine, char *error,
     return finish_assignment(engine, 0, error, error_capacity);
 }
 
+/* \radical names a delimiter and then reads one field, which becomes what
+   the sign is put over. See docs/DECISIONS.md, radicals. */
+static int execute_radical(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || builder == NULL) {
+        return set_error(error, error_capacity,
+                         "\\radical is only allowed in a formula");
+    }
+    if (builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        return set_error(error, error_capacity,
+                         "\\radical met where a field was expected");
+    }
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 0x7FFFFFF) {
+        return set_error(error, error_capacity,
+                         "radical %d is outside 0..134217727", code);
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_RADICAL,
+        .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+        .delimiter = code,
+    };
+    if (math_append(engine, &noad, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->slot = (uint8_t)HSTEX_MATH_SLOT_RADICAND;
+    builder->slot_target = builder->count - 1U;
+    return 0;
+}
+
 /* \over and its relatives split the list being read: what has been read so
    far is the numerator and what follows is the denominator. See
    docs/DECISIONS.md, fractions. */
@@ -16752,6 +16948,8 @@ static int begin_math_group(struct hstex_engine *engine, char *error,
             style = math_superscript_style(outer->current_style);
         } else if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_SUBSCRIPT) {
             style = math_subscript_style(outer->current_style);
+        } else if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_RADICAND) {
+            style = math_cramped_style(outer->current_style);
         }
     }
     return push_math_list(engine, style, error, error_capacity);
@@ -20573,6 +20771,10 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_RADICAL:
+            if (execute_radical(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_MARKS:
         case HSTEX_COMMAND_MATH_PRIMITIVE:
             return HSTEX_ENGINE_TOKEN;
