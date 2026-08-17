@@ -191,6 +191,39 @@ static bool token_is_effective_begin_group(struct hstex_engine *engine,
            token_is_category(meaning->value.token, HSTEX_CAT_BEGIN_GROUP);
 }
 
+/* The preamble is read without expansion, so a control sequence \let to a
+   parameter or tab character has to be recognised by its meaning -- which is
+   how LaTeX's \@sharp reaches \halign. */
+static bool token_is_effective_category(struct hstex_engine *engine,
+                                        hstex_token token, uint8_t category)
+{
+    if (token_is_category(token, category)) {
+        return true;
+    }
+    if (engine == NULL || !hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+           token_is_category(meaning->value.token, category);
+}
+
+static bool token_is_effective_end_group(struct hstex_engine *engine,
+                                         hstex_token token)
+{
+    if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+        return true;
+    }
+    if (engine == NULL || !hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning = hstex_engine_meaning(
+        engine, hstex_token_control_sequence_id(token));
+    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+           token_is_category(meaning->value.token, HSTEX_CAT_END_GROUP);
+}
+
 
 static int code_table_index(enum hstex_command command)
 {
@@ -1825,6 +1858,12 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"mathclose", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_CLOSE},
         {"mathpunct", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_PUNCT},
         {"mathinner", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_INNER},
+        {"halign", HSTEX_COMMAND_HALIGN, 0},
+        {"cr", HSTEX_COMMAND_CR, 0},
+        {"crcr", HSTEX_COMMAND_CR, 1},
+        {"noalign", HSTEX_COMMAND_NO_ALIGN, 0},
+        {"omit", HSTEX_COMMAND_OMIT, 0},
+        {"span", HSTEX_COMMAND_SPAN, 0},
         {"limits", HSTEX_COMMAND_MATH_LIMITS, 1},
         {"nolimits", HSTEX_COMMAND_MATH_LIMITS, 0},
         {"displaylimits", HSTEX_COMMAND_MATH_LIMITS, 2},
@@ -14237,6 +14276,816 @@ static int execute_math_skip(struct hstex_engine *engine, bool kern,
     return math_append(engine, &noad, error, error_capacity);
 }
 
+/* ---------------------------------------------------------------------- */
+/* Alignments.                                                            */
+/*                                                                        */
+/* \halign reads a preamble of column templates, then rows of entries.    */
+/* Each entry is packaged at its natural width; once every row has been   */
+/* read the columns are as wide as their widest entry, and the entries    */
+/* are set again to that width. See docs/DECISIONS.md, alignments.        */
+/* ---------------------------------------------------------------------- */
+
+static void destroy_align_columns(struct hstex_align_column *columns,
+                                  size_t count)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        free(columns[index].before);
+        free(columns[index].after);
+    }
+    free(columns);
+}
+
+static void destroy_align_rows(struct hstex_align_row *rows, size_t count)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        free(rows[index].cells);
+        free(rows[index].items);
+    }
+    free(rows);
+}
+
+/* The preamble is read without expanding anything, the way the reference
+   does, except that a \tabskip assignment is carried out where it stands and
+   sets the glue for the boundary it appears at. */
+static int scan_align_preamble(struct hstex_engine *engine,
+                               struct hstex_align_column **out_columns,
+                               size_t *out_count, size_t *out_loop,
+                               char *error, size_t error_capacity)
+{
+    *out_loop = SIZE_MAX;
+    struct hstex_align_column *columns = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    struct token_vector before = {0};
+    struct token_vector after = {0};
+    bool seen_marker = false;
+    int status = 0;
+
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result =
+            raw_next(engine, &token, &location, error, error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN) {
+            status = set_error(error, error_capacity,
+                               "input ended inside an alignment preamble");
+            break;
+        }
+        if (hstex_token_is_control_sequence(token)) {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_GLUE_PARAMETER &&
+                meaning->value.integer == (int32_t)HSTEX_GLUE_TAB_SKIP) {
+                struct hstex_glue glue = {0};
+                if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+                    scan_glue(engine, &glue, error, error_capacity) != 0 ||
+                    assign_glue_parameter(engine,
+                                          (uint32_t)HSTEX_GLUE_TAB_SKIP, glue,
+                                          false, error, error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                continue;
+            }
+            if (meaning->command == HSTEX_COMMAND_CR) {
+                if (!seen_marker) {
+                    status = set_error(error, error_capacity,
+                                       "an alignment column has no #");
+                    break;
+                }
+                status = 0;
+                goto finish_column;
+            }
+        }
+        if (token_is_effective_category(engine, token,
+                                        (uint8_t)HSTEX_CAT_PARAMETER)) {
+            if (seen_marker) {
+                status = set_error(error, error_capacity,
+                                   "only one # is allowed per alignment "
+                                   "column");
+                break;
+            }
+            seen_marker = true;
+            continue;
+        }
+        if (token_is_effective_category(engine, token,
+                                        (uint8_t)HSTEX_CAT_ALIGNMENT_TAB)) {
+            /* A second tab where a column would start marks the point the
+               preamble repeats from, which is how && works. */
+            if (!seen_marker && before.count == 0U && count != 0U &&
+                *out_loop == SIZE_MAX) {
+                *out_loop = count;
+                continue;
+            }
+            if (!seen_marker) {
+                status = set_error(error, error_capacity,
+                                   "an alignment column has no #");
+                break;
+            }
+            goto finish_column;
+        }
+        if (vector_push(seen_marker ? &after : &before, token, error,
+                        error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        continue;
+
+    finish_column:
+        if (count == capacity) {
+            size_t next = capacity == 0U ? 4U : capacity * 2U;
+            if (next > SIZE_MAX / sizeof(*columns)) {
+                status = set_error(error, error_capacity,
+                                   "alignment column overflow");
+                break;
+            }
+            void *allocation = realloc(columns, next * sizeof(*columns));
+            if (allocation == NULL) {
+                status = set_error(error, error_capacity,
+                                   "alignment column allocation failed");
+                break;
+            }
+            columns = allocation;
+            capacity = next;
+        }
+        struct hstex_align_column *column = &columns[count++];
+        memset(column, 0, sizeof(*column));
+        column->before = before.data;
+        column->before_count = before.count;
+        column->after = after.data;
+        column->after_count = after.count;
+        column->tabskip = engine->glue_parameters[HSTEX_GLUE_TAB_SKIP];
+        memset(&before, 0, sizeof(before));
+        memset(&after, 0, sizeof(after));
+        seen_marker = false;
+        if (hstex_token_is_control_sequence(token)) {
+            /* \cr ended the preamble. */
+            *out_columns = columns;
+            *out_count = count;
+            return 0;
+        }
+    }
+    vector_destroy(&before);
+    vector_destroy(&after);
+    destroy_align_columns(columns, count);
+    return status == 0 ? -1 : status;
+}
+
+/* Repeat the preamble from its && point until the wanted column exists. */
+static int extend_align_columns(struct hstex_align_column **columns,
+                                size_t *count, size_t *capacity,
+                                size_t loop_start, size_t wanted, char *error,
+                                size_t error_capacity)
+{
+    if (wanted < *count) {
+        return 0;
+    }
+    if (loop_start == SIZE_MAX || loop_start >= *count) {
+        return set_error(error, error_capacity,
+                         "an alignment row has more entries than the "
+                         "preamble has columns");
+    }
+    size_t period = *count - loop_start;
+    while (wanted >= *count) {
+        if (*count == *capacity) {
+            size_t next = *capacity == 0U ? 4U : *capacity * 2U;
+            if (next > SIZE_MAX / sizeof(**columns)) {
+                return set_error(error, error_capacity,
+                                 "alignment column overflow");
+            }
+            void *allocation = realloc(*columns, next * sizeof(**columns));
+            if (allocation == NULL) {
+                return set_error(error, error_capacity,
+                                 "alignment column allocation failed");
+            }
+            *columns = allocation;
+            *capacity = next;
+        }
+        const struct hstex_align_column *source =
+            &(*columns)[loop_start + (*count - loop_start) % period];
+        struct hstex_align_column copy = *source;
+        copy.before = NULL;
+        copy.after = NULL;
+        copy.width = 0;
+        if (source->before_count != 0U) {
+            copy.before = malloc(source->before_count * sizeof(*copy.before));
+            if (copy.before == NULL) {
+                return set_error(error, error_capacity,
+                                 "alignment column allocation failed");
+            }
+            memcpy(copy.before, source->before,
+                   source->before_count * sizeof(*copy.before));
+        }
+        if (source->after_count != 0U) {
+            copy.after = malloc(source->after_count * sizeof(*copy.after));
+            if (copy.after == NULL) {
+                free(copy.before);
+                return set_error(error, error_capacity,
+                                 "alignment column allocation failed");
+            }
+            memcpy(copy.after, source->after,
+                   source->after_count * sizeof(*copy.after));
+        }
+        (*columns)[(*count)++] = copy;
+    }
+    return 0;
+}
+
+enum hstex_align_end {
+    HSTEX_ALIGN_END_TAB = 0,
+    HSTEX_ALIGN_END_SPAN,
+    HSTEX_ALIGN_END_CR,
+};
+
+/* Run one entry. The templates around it are pushed as token lists, so the
+   entry sees exactly what the reference's u and v parts give it. \span
+   carries on into the next column with the same box. */
+static int evaluate_align_cell(struct hstex_engine *engine,
+                               const struct hstex_align_column *columns,
+                               size_t column_count, size_t first_column,
+                               bool omit, struct hstex_hbox_builder *builder,
+                               enum hstex_align_end *ending, uint32_t *span,
+                               char *error, size_t error_capacity)
+{
+    uint32_t base_group_level = engine->group_level;
+    uint32_t previous_group_floor = engine->output_group_floor;
+    size_t previous_conditional_floor = engine->output_conditional_floor;
+    struct hstex_hbox_builder *previous_builder = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    bool previous_inner_mode = engine->inner_mode;
+    uint32_t previous_stop_level = engine->group_stop_level;
+    bool previous_stop_armed = engine->group_stop_armed;
+    bool previous_stop_hit = engine->group_stop_hit;
+    size_t previous_math_depth = engine->math_depth;
+    int32_t previous_space_factor = engine->space_factor;
+    bool previous_has_pending = engine->has_pending_character;
+    bool previous_building = engine->building_alignment;
+
+    if (begin_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->output_group_floor = engine->group_level;
+    engine->output_conditional_floor = engine->conditional_count;
+    engine->group_stop_armed = false;
+    engine->group_stop_hit = false;
+    engine->math_depth = 0U;
+    engine->active_hbox_builder = builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    engine->inner_mode = true;
+    engine->space_factor = 1000;
+    engine->has_pending_character = false;
+    engine->building_alignment = true;
+
+    size_t column = first_column;
+    *span = 1U;
+    *ending = HSTEX_ALIGN_END_CR;
+    int status = 0;
+    bool in_after = false;
+    bool finished = false;
+    bool segment_omit = omit;
+    struct hstex_source_location origin = {0};
+    if (!omit && column < column_count && columns[column].before_count != 0U &&
+        hstex_source_push_tokens(&engine->sources, columns[column].before,
+                                 columns[column].before_count, origin, error,
+                                 error_capacity) != 0) {
+        status = -1;
+    }
+    while (status == 0 && !finished) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_ERROR) {
+            status = -1;
+            break;
+        }
+        if (result == HSTEX_ENGINE_EOF) {
+            if (!in_after) {
+                status = set_error(error, error_capacity,
+                                   "input ended inside an alignment entry");
+                break;
+            }
+            /* The v part is exhausted: the entry, or this span of it, ends. */
+            if (hstex_source_pop_boundary(&engine->sources, error,
+                                          error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            in_after = false;
+            if (*ending != HSTEX_ALIGN_END_SPAN) {
+                finished = true;
+                break;
+            }
+            ++column;
+            ++*span;
+            *ending = HSTEX_ALIGN_END_CR;
+            /* \omit may follow \span, and drops the next column's
+               templates just as it does at the start of an entry. */
+            segment_omit = false;
+            hstex_token next = 0U;
+            struct hstex_source_location where;
+            enum hstex_engine_result got =
+                expanded_next_non_space_unrestricted(engine, &next, &where,
+                                                     error, error_capacity);
+            if (got == HSTEX_ENGINE_ERROR) {
+                status = -1;
+                break;
+            }
+            if (got == HSTEX_ENGINE_TOKEN) {
+                if (hstex_token_is_control_sequence(next) &&
+                    hstex_engine_meaning(
+                        engine, hstex_token_control_sequence_id(next))
+                            ->command == HSTEX_COMMAND_OMIT) {
+                    segment_omit = true;
+                } else if (push_one(engine, next, where, error,
+                                    error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+            }
+            if (!segment_omit && column < column_count &&
+                columns[column].before_count != 0U &&
+                hstex_source_push_tokens(&engine->sources,
+                                         columns[column].before,
+                                         columns[column].before_count, origin,
+                                         error, error_capacity) != 0) {
+                status = -1;
+            }
+            continue;
+        }
+        enum hstex_align_end found = HSTEX_ALIGN_END_CR;
+        bool terminator = false;
+        if (hstex_token_is_character(token)) {
+            if (token_is_category(token, HSTEX_CAT_ALIGNMENT_TAB)) {
+                found = HSTEX_ALIGN_END_TAB;
+                terminator = true;
+            }
+        } else {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_CR) {
+                found = HSTEX_ALIGN_END_CR;
+                terminator = true;
+            } else if (meaning->command == HSTEX_COMMAND_SPAN) {
+                found = HSTEX_ALIGN_END_SPAN;
+                terminator = true;
+            }
+        }
+        if (terminator) {
+            if (in_after) {
+                status = set_error(error, error_capacity,
+                                   "an alignment template ended the entry "
+                                   "twice");
+                break;
+            }
+            *ending = found;
+            in_after = true;
+            if (hstex_source_push_boundary(&engine->sources, error,
+                                           error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            if (!segment_omit && column < column_count &&
+                columns[column].after_count != 0U &&
+                hstex_source_push_tokens(&engine->sources,
+                                         columns[column].after,
+                                         columns[column].after_count, origin,
+                                         error, error_capacity) != 0) {
+                status = -1;
+            }
+            continue;
+        }
+        if (token_is_space(token)) {
+            status = flush_pending_character(engine, error, error_capacity);
+            if (status == 0) {
+                status = append_interword_glue(engine, error, error_capacity);
+            }
+            engine->space_factor = 1000;
+            continue;
+        }
+        if (!hstex_token_is_character(token)) {
+            char found_name[128];
+            describe_token(engine, token, found_name, sizeof(found_name));
+            status = set_error(error, error_capacity,
+                               "%s is not supported inside an alignment entry",
+                               found_name);
+            break;
+        }
+        status = append_horizontal_character(
+            engine, hstex_token_character_code(token), error, error_capacity);
+    }
+    if (status == 0) {
+        status = flush_pending_character(engine, error, error_capacity);
+    }
+    engine->space_factor = previous_space_factor;
+    engine->has_pending_character = previous_has_pending;
+    engine->active_hbox_builder = previous_builder;
+    engine->mode = previous_mode;
+    engine->inner_mode = previous_inner_mode;
+    engine->output_group_floor = previous_group_floor;
+    engine->output_conditional_floor = previous_conditional_floor;
+    engine->group_stop_level = previous_stop_level;
+    engine->group_stop_armed = previous_stop_armed;
+    engine->group_stop_hit = previous_stop_hit;
+    engine->building_alignment = previous_building;
+    while (engine->math_depth > previous_math_depth) {
+        pop_math_list(engine);
+    }
+    engine->math_depth = previous_math_depth;
+    while (engine->group_level > base_group_level) {
+        if (end_group(engine, error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+    }
+    return status;
+}
+
+/* The columns are as wide as their widest single entry; an entry that spans
+   several columns widens the last one it covers when it does not fit. Then
+   every row becomes an hbox of tabskip, entry, tabskip, ... set to the width
+   the whole alignment came to. */
+static int finish_alignment(struct hstex_engine *engine,
+                            struct hstex_align_column *columns,
+                            size_t column_count, struct hstex_glue leading,
+                            const struct hstex_align_row *rows,
+                            size_t row_count, bool matched_to,
+                            bool matched_spread, int32_t requested_width,
+                            char *error, size_t error_capacity)
+{
+    for (size_t index = 0U; index < column_count; ++index) {
+        columns[index].width = 0;
+    }
+    /* Short spans first, so that a wide one only has to make up what the
+       columns it covers still lack. */
+    for (size_t pass = 1U; pass <= column_count; ++pass) {
+        for (size_t index = 0U; index < row_count; ++index) {
+            if (rows[index].noalign) {
+                continue;
+            }
+            size_t column = 0U;
+            for (size_t cell = 0U; cell < rows[index].cell_count; ++cell) {
+                const struct hstex_align_cell *entry = &rows[index].cells[cell];
+                if (entry->span == pass &&
+                    column + entry->span <= column_count) {
+                    int64_t covered = 0;
+                    for (size_t step = 0U; step < entry->span; ++step) {
+                        covered += columns[column + step].width;
+                        if (step + 1U < entry->span) {
+                            covered += columns[column + step].tabskip.width;
+                        }
+                    }
+                    if ((int64_t)entry->width > covered) {
+                        columns[column + entry->span - 1U].width +=
+                            (int32_t)((int64_t)entry->width - covered);
+                    }
+                }
+                column += entry->span;
+            }
+        }
+    }
+
+    int64_t natural = leading.width;
+    for (size_t index = 0U; index < column_count; ++index) {
+        natural += columns[index].width;
+        natural += columns[index].tabskip.width;
+    }
+    int64_t final_width = natural;
+    if (matched_to) {
+        final_width = requested_width;
+    } else if (matched_spread) {
+        final_width = natural + requested_width;
+    }
+    if (final_width < -INT64_C(1073741823) ||
+        final_width > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "alignment width exceeds TeX's dimension range");
+    }
+
+    for (size_t index = 0U; index < row_count; ++index) {
+        if (rows[index].noalign) {
+            for (size_t item = 0U; item < rows[index].item_count; ++item) {
+                if (append_vbox_item(engine, rows[index].items[item], error,
+                                     error_capacity) != 0) {
+                    return -1;
+                }
+            }
+            continue;
+        }
+        struct hstex_hbox_builder line = {0};
+        struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        enum hstex_mode previous_mode = engine->mode;
+        engine->active_hbox_builder = &line;
+        engine->mode = HSTEX_MODE_HORIZONTAL;
+        int status = 0;
+        struct hstex_glue skip = leading;
+        size_t column = 0U;
+        for (size_t cell = 0U; status == 0 && cell < rows[index].cell_count;
+             ++cell) {
+            status = emit_math_glue(engine, skip, error, error_capacity);
+            if (status != 0) {
+                break;
+            }
+            const struct hstex_align_cell *entry = &rows[index].cells[cell];
+            if (entry->box == 0U || entry->box > engine->node_count) {
+                status = set_error(error, error_capacity,
+                                   "an alignment entry lost its box");
+                break;
+            }
+            struct hstex_node set = engine->nodes[entry->box - 1U];
+            int64_t width = 0;
+            for (size_t step = 0U;
+                 step < entry->span && column + step < column_count; ++step) {
+                width += columns[column + step].width;
+                if (step + 1U < entry->span) {
+                    width += columns[column + step].tabskip.width;
+                }
+            }
+            set.width = (int32_t)width;
+            status = append_hbox_node(engine, &set, error, error_capacity);
+            size_t last = column + entry->span - 1U;
+            skip = last < column_count ? columns[last].tabskip : leading;
+            column += entry->span;
+        }
+        /* A row that stops early still carries the glue of the columns it
+           did not reach, so that every row is the same shape. */
+        for (; status == 0 && column <= column_count; ++column) {
+            status = emit_math_glue(engine, skip, error, error_capacity);
+            if (column < column_count) {
+                skip = columns[column].tabskip;
+            }
+        }
+        struct hstex_box packed = {0};
+        if (status == 0) {
+            status = finalize_hbox(engine, &line, true, false,
+                                   (int32_t)final_width, &packed, error,
+                                   error_capacity);
+        }
+        free(line.node_identifiers);
+        engine->active_hbox_builder = previous;
+        engine->mode = previous_mode;
+        if (status != 0) {
+            return -1;
+        }
+        if (append_box_node(engine, &packed, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int reserve_align_rows(struct hstex_align_row **rows, size_t *capacity,
+                              size_t required, char *error,
+                              size_t error_capacity)
+{
+    if (required <= *capacity) {
+        return 0;
+    }
+    size_t next = *capacity == 0U ? 8U : *capacity;
+    while (next < required) {
+        if (next > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity, "alignment row overflow");
+        }
+        next *= 2U;
+    }
+    if (next > SIZE_MAX / sizeof(**rows)) {
+        return set_error(error, error_capacity, "alignment row overflow");
+    }
+    void *allocation = realloc(*rows, next * sizeof(**rows));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "alignment row allocation failed");
+    }
+    *rows = allocation;
+    *capacity = next;
+    return 0;
+}
+
+/* \halign: read the preamble, read every row at its natural width, then set
+   the columns to the width of their widest entry and put the rows in the
+   enclosing vertical list. */
+static int execute_halign(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "an alignment does not accept prefixes");
+    }
+    if (engine->mode != HSTEX_MODE_VERTICAL) {
+        return set_error(error, error_capacity,
+                         "\\halign requires vertical mode");
+    }
+    bool matched_to = false;
+    bool matched_spread = false;
+    int32_t requested_width = 0;
+    if (try_keyword(engine, "to", &matched_to, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!matched_to &&
+        try_keyword(engine, "spread", &matched_spread, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if ((matched_to || matched_spread) &&
+        scan_dimension(engine, &requested_width, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
+        engine, &opening, &location, error, error_capacity);
+    if (result != HSTEX_ENGINE_TOKEN ||
+        !token_is_effective_begin_group(engine, opening)) {
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
+                       found, sizeof(found));
+        return set_error(error, error_capacity,
+                         "an alignment requires a braced body, found %s",
+                         found);
+    }
+
+    uint32_t base_group_level = engine->group_level;
+    /* The glue before the first column is \tabskip as it stood when the
+       alignment began; the preamble's own assignments set the later ones. */
+    struct hstex_glue leading = engine->glue_parameters[HSTEX_GLUE_TAB_SKIP];
+    if (begin_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_align_column *columns = NULL;
+    size_t column_count = 0U;
+    size_t column_capacity = 0U;
+    size_t loop_start = SIZE_MAX;
+    struct hstex_align_row *rows = NULL;
+    size_t row_count = 0U;
+    size_t row_capacity = 0U;
+    int status = scan_align_preamble(engine, &columns, &column_count,
+                                     &loop_start, error, error_capacity);
+    column_capacity = column_count;
+    bool previous_building = engine->building_alignment;
+    engine->building_alignment = true;
+
+    while (status == 0) {
+        hstex_token token = 0U;
+        struct hstex_source_location peek;
+        enum hstex_engine_result peeked = expanded_next_non_space_unrestricted(
+            engine, &token, &peek, error, error_capacity);
+        if (peeked == HSTEX_ENGINE_ERROR) {
+            status = -1;
+            break;
+        }
+        if (peeked == HSTEX_ENGINE_EOF) {
+            status = set_error(error, error_capacity,
+                               "input ended inside an alignment");
+            break;
+        }
+        if (token_is_effective_end_group(engine, token)) {
+            break;
+        }
+        if (hstex_token_is_control_sequence(token)) {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_CR &&
+                meaning->value.integer != 0) {
+                continue; /* \crcr between rows does nothing */
+            }
+            if (meaning->command == HSTEX_COMMAND_NO_ALIGN) {
+                hstex_token brace = 0U;
+                struct hstex_source_location where;
+                if (expanded_next_non_space_unrestricted(
+                        engine, &brace, &where, error, error_capacity) !=
+                        HSTEX_ENGINE_TOKEN ||
+                    !token_is_effective_begin_group(engine, brace)) {
+                    status = set_error(error, error_capacity,
+                                       "\\noalign requires a braced list");
+                    break;
+                }
+                struct hstex_vbox_builder between = {0};
+                status = evaluate_vbox_contents(engine, &between, error,
+                                                error_capacity);
+                if (status == 0) {
+                    status = reserve_align_rows(&rows, &row_capacity,
+                                                row_count + 1U, error,
+                                                error_capacity);
+                }
+                if (status != 0) {
+                    free(between.node_identifiers);
+                    break;
+                }
+                struct hstex_align_row *entry = &rows[row_count++];
+                memset(entry, 0, sizeof(*entry));
+                entry->noalign = true;
+                entry->items = between.node_identifiers;
+                entry->item_count = between.count;
+                continue;
+            }
+        }
+        if (push_one(engine, token, peek, error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        /* One row. */
+        if (reserve_align_rows(&rows, &row_capacity, row_count + 1U, error,
+                               error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        struct hstex_align_row *row = &rows[row_count++];
+        memset(row, 0, sizeof(*row));
+        size_t cell_capacity = 0U;
+        size_t column = 0U;
+        for (;;) {
+            hstex_token first = 0U;
+            struct hstex_source_location start;
+            enum hstex_engine_result got = expanded_next_non_space_unrestricted(
+                engine, &first, &start, error, error_capacity);
+            if (got != HSTEX_ENGINE_TOKEN) {
+                status = set_error(error, error_capacity,
+                                   "input ended inside an alignment row");
+                break;
+            }
+            bool omit = false;
+            if (hstex_token_is_control_sequence(first) &&
+                hstex_engine_meaning(engine,
+                                     hstex_token_control_sequence_id(first))
+                        ->command == HSTEX_COMMAND_OMIT) {
+                omit = true;
+            } else if (push_one(engine, first, start, error, error_capacity) !=
+                       0) {
+                status = -1;
+                break;
+            }
+            if (extend_align_columns(&columns, &column_count,
+                                     &column_capacity, loop_start, column,
+                                     error, error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            struct hstex_hbox_builder cell = {0};
+            enum hstex_align_end ending = HSTEX_ALIGN_END_CR;
+            uint32_t span = 1U;
+            status = evaluate_align_cell(engine, columns, column_count, column,
+                                         omit, &cell, &ending, &span, error,
+                                         error_capacity);
+            struct hstex_box box = {0};
+            if (status == 0) {
+                status = finalize_hbox(engine, &cell, false, false, 0, &box,
+                                       error, error_capacity);
+            }
+            free(cell.node_identifiers);
+            if (status != 0) {
+                break;
+            }
+            uint32_t identifier = 0U;
+            if (store_box_node(engine, &box, 0, &identifier, error,
+                               error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            if (row->cell_count == cell_capacity) {
+                size_t next = cell_capacity == 0U ? 4U : cell_capacity * 2U;
+                void *allocation =
+                    realloc(row->cells, next * sizeof(*row->cells));
+                if (allocation == NULL) {
+                    status = set_error(error, error_capacity,
+                                       "alignment entry allocation failed");
+                    break;
+                }
+                row->cells = allocation;
+                cell_capacity = next;
+            }
+            struct hstex_align_cell *entry = &row->cells[row->cell_count++];
+            entry->box = identifier;
+            entry->width = box.width;
+            entry->span = span;
+            column += span;
+            if (ending == HSTEX_ALIGN_END_CR) {
+                break;
+            }
+        }
+        if (status != 0) {
+            break;
+        }
+    }
+    engine->building_alignment = previous_building;
+    if (status == 0) {
+        status = finish_alignment(engine, columns, column_count, leading,
+                                  rows, row_count, matched_to, matched_spread,
+                                  requested_width, error, error_capacity);
+    }
+    destroy_align_columns(columns, column_count);
+    destroy_align_rows(rows, row_count);
+    while (engine->group_level > base_group_level) {
+        if (end_group(engine, error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+    }
+    return status;
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -15789,6 +16638,28 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_HALIGN:
+            if (execute_halign(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_CR:
+        case HSTEX_COMMAND_NO_ALIGN:
+        case HSTEX_COMMAND_OMIT:
+        case HSTEX_COMMAND_SPAN:
+            /* These belong to an alignment, which reads them itself. */
+            if (!engine->building_alignment) {
+                char misplaced[128];
+                describe_token(engine, *token, misplaced, sizeof(misplaced));
+                uint32_t line = 0U;
+                const char *origin = current_source_line(engine, &line);
+                (void)set_error(error, error_capacity,
+                                "%s is only allowed inside an alignment, at "
+                                "%s:%u",
+                                misplaced, origin, (unsigned int)line);
+                return HSTEX_ENGINE_ERROR;
+            }
+            return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_MATH_LIMITS:
             /* Limit placement only shows in display style, which is not
                implemented; in text style the reference measures the same

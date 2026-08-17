@@ -70,11 +70,14 @@ and their family's ligature program. Superscripts and subscripts are set in
 the script and scriptscript styles with the reference's shift arithmetic,
 which is where `\scriptfont` and `\scriptscriptfont` come in.
 
-Line breaking, alignments, the page builder, the output routine, and PDF
-emission remain under construction. `\halign` is the next thing the corpus
-wants: `\begin{tabular}` inside report.cls's `\@maketitle`. A paragraph
-wider than `\hsize` reports an error rather than being set as one overfull
-line.
+`\halign` builds alignments: the preamble's templates, `\tabskip` glue at
+every boundary, `\omit`, `\span`, `\noalign`, and the `&&` repeat. That is
+what `\begin{tabular}` needs, so the corpus now runs through `\maketitle`,
+the abstract and the table of contents and into its first chapter.
+
+Line breaking, display math, the page builder, the output routine, and PDF
+emission remain under construction. A paragraph wider than `\hsize` reports
+an error rather than being set as one overfull line.
 
 ## Build
 

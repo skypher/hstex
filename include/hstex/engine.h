@@ -203,6 +203,11 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_SKIP,
     HSTEX_COMMAND_MATH_KERN,
     HSTEX_COMMAND_MATH_LIMITS,
+    HSTEX_COMMAND_HALIGN,
+    HSTEX_COMMAND_CR,
+    HSTEX_COMMAND_NO_ALIGN,
+    HSTEX_COMMAND_OMIT,
+    HSTEX_COMMAND_SPAN,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -709,6 +714,34 @@ enum hstex_math_field_kind {
     HSTEX_MATH_FIELD_BOX,
 };
 
+/* One column of an alignment preamble: the token lists that surround the
+   entry, and the glue that follows the column. */
+struct hstex_align_column {
+    hstex_token *before;
+    size_t before_count;
+    hstex_token *after;
+    size_t after_count;
+    struct hstex_glue tabskip;
+    int32_t width;
+};
+
+/* One entry of a row: an unset box of its natural width, and how many
+   columns it covers. */
+struct hstex_align_cell {
+    uint32_t box;
+    int32_t width;
+    uint32_t span;
+};
+
+/* A row of entries, or a run of vertical material contributed by \noalign. */
+struct hstex_align_row {
+    bool noalign;
+    struct hstex_align_cell *cells;
+    size_t cell_count;
+    uint32_t *items;
+    size_t item_count;
+};
+
 /* The styles, numbered so that the odd ones are the cramped variants and the
    pair for one size is adjacent. Display style is not implemented. */
 enum hstex_math_style {
@@ -995,6 +1028,9 @@ struct hstex_engine {
        group level each was last set at so they restore like other registers. */
     uint32_t math_fonts[HSTEX_MATH_SIZE_COUNT][16];
     uint32_t math_font_levels[HSTEX_MATH_SIZE_COUNT][16];
+    /* True while an alignment is reading its body, so that \cr and its
+       relatives are recognised instead of being errors. */
+    bool building_alignment;
     /* The math lists being built, innermost last; empty outside math. */
     struct hstex_math_builder *math_stack;
     size_t math_depth;

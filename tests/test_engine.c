@@ -839,6 +839,75 @@ static int test_math_scripts(void)
         "[8.98615pt|8.14003pt|0.0pt][23.93051pt|8.14003pt|0.0pt]");
 }
 
+/* Alignments: the columns are as wide as their widest entry, the tabskip
+   glue surrounds every one of them, and the rows are all the same width.
+   See docs/DECISIONS.md, alignments. */
+static int test_alignments(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 "
+        "\\baselineskip=0pt \\lineskip=0pt \\lineskiplimit=0pt "
+        "\\boxmaxdepth=16383.99998pt \\parindent=0pt \\tabskip=0pt "
+        "\\def\\K#1{\\vrule width#1 height1pt depth0pt}"
+        "\\def\\m#1{\\setbox0=\\vbox{#1}[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        "\\def\\mr#1{\\setbox0=\\vbox{#1}"
+        "\\setbox1=\\vbox{\\unvbox0 \\global\\setbox2=\\lastbox}"
+        "[\\the\\wd2|\\the\\ht2|\\the\\dp2]}"
+        /* Two columns, each as wide as its widest entry. */
+        "\\m{\\halign{#&#\\cr\\K{5pt}&\\K{7pt}\\cr\\K{11pt}&\\K{3pt}\\cr}}"
+        /* \tabskip goes before the first column, between, and after the last:
+           three of them for two columns. */
+        "\\tabskip=2pt "
+        "\\m{\\halign{#&#\\cr\\K{5pt}&\\K{7pt}\\cr\\K{11pt}&\\K{3pt}\\cr}}"
+        "\\tabskip=0pt "
+        /* The template counts towards the column's width. */
+        "\\m{\\halign{\\K{1pt}#\\K{2pt}&#\\cr\\K{5pt}&\\K{7pt}\\cr}}"
+        /* A row may stop early, and is still packed to the full width. */
+        "\\m{\\halign{#&#\\cr\\K{5pt}\\cr\\K{11pt}&\\K{3pt}\\cr}}"
+        "\\mr{\\halign{#&#\\cr\\K{11pt}&\\K{3pt}\\cr\\K{5pt}\\cr}}"
+        /* \noalign puts vertical material between rows. */
+        "\\m{\\halign{#&#\\cr\\K{5pt}&\\K{7pt}\\cr\\noalign{\\kern4pt}"
+        "\\K{11pt}&\\K{3pt}\\cr}}"
+        /* \omit drops the template of the entry it starts. */
+        "\\m{\\halign{\\K{1pt}#\\K{2pt}&#\\cr\\omit\\K{5pt}&\\K{7pt}\\cr}}"
+        "\\m{\\halign to 50pt{#&#\\cr\\K{5pt}&\\K{7pt}\\cr}}"
+        /* \crcr after \cr adds nothing. */
+        "\\m{\\halign{#&#\\cr\\K{5pt}&\\K{7pt}\\crcr}}"
+        /* A spanned entry widens the last column it covers, and only by what
+           the columns it covers still lack. */
+        "\\m{\\halign{#&#\\cr\\K{2pt}&\\K{3pt}\\cr\\K{20pt}\\span\\omit\\cr}}"
+        "\\m{\\halign{#&#\\cr\\K{11pt}&\\K{7pt}\\cr\\K{4pt}\\span\\omit\\cr}}"
+        "\\tabskip=2pt "
+        "\\m{\\halign{#&#\\cr\\K{2pt}&\\K{3pt}\\cr\\K{20pt}\\span\\omit\\cr}}"
+        "\\tabskip=0pt "
+        /* && repeats the rest of the preamble for as many columns as come. */
+        "\\m{\\halign{#&&\\K{1pt}#\\cr\\K{2pt}&\\K{3pt}&\\K{4pt}\\cr}}"
+        "\\m{\\halign{#&\\K{1pt}#\\K{2pt}\\cr\\K{5pt}&\\omit\\K{7pt}\\cr}}"
+        "\\m{\\halign{#&#&#\\cr\\K{5pt}\\cr\\K{1pt}&\\K{9pt}\\cr"
+        "\\K{2pt}&\\K{2pt}&\\K{6pt}\\cr}}"
+        /* \tabskip may be set inside the preamble, for that boundary. */
+        "\\m{\\halign{#\\tabskip=3pt&#\\tabskip=0pt\\cr\\K{5pt}&\\K{7pt}\\cr}}"
+        "\\m{\\halign{#\\cr\\K{5pt}\\cr\\noalign{\\hrule height3pt}"
+        "\\K{11pt}\\cr}}"
+        /* Rows are separated by interline glue like any other boxes. */
+        "\\baselineskip=10pt "
+        "\\m{\\halign{#&#\\cr\\K{5pt}&\\K{7pt}\\cr\\K{11pt}&\\K{3pt}\\cr}}"
+        "\\baselineskip=0pt "
+        /* The deepest entry gives the row its depth. */
+        "\\m{\\halign{#&#\\cr\\vrule width5pt height1pt depth2pt&\\K{7pt}"
+        "\\cr}}%",
+        "[18.0pt|2.0pt|0.0pt][24.0pt|2.0pt|0.0pt]"
+        "[15.0pt|1.0pt|0.0pt][14.0pt|2.0pt|0.0pt]"
+        "[14.0pt|1.0pt|0.0pt][18.0pt|6.0pt|0.0pt]"
+        "[12.0pt|1.0pt|0.0pt][50.0pt|1.0pt|0.0pt]"
+        "[12.0pt|1.0pt|0.0pt][20.0pt|2.0pt|0.0pt]"
+        "[18.0pt|2.0pt|0.0pt][24.0pt|2.0pt|0.0pt]"
+        "[11.0pt|1.0pt|0.0pt][12.0pt|1.0pt|0.0pt]"
+        "[20.0pt|3.0pt|0.0pt][15.0pt|1.0pt|0.0pt]"
+        "[11.0pt|5.0pt|0.0pt][18.0pt|11.0pt|0.0pt]"
+        "[12.0pt|1.0pt|2.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1923,7 +1992,7 @@ int main(void)
         test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
-        test_math_scripts() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_math_scripts() != 0 || test_alignments() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
