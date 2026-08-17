@@ -1601,6 +1601,78 @@ static int test_every_cr(void)
         "[1|3][2|1][3|2][4|2][5|2][6|3][7|2][8|11.0pt]");
 }
 
+/* \over and its relatives; see docs/DECISIONS.md, fractions. */
+static int test_fractions(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\font\\te"
+        "nrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 \\font"
+        "\\tenex=cmex10 \\font\\sevenrm=cmr7 \\font\\seveni=cmmi7 "
+        "\\font\\sevensy=cmsy7 \\font\\fiverm=cmr5 \\font\\fivei=cm"
+        "mi5 \\font\\fivesy=cmsy5 \\textfont0=\\tenrm \\scriptfont0"
+        "=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfont1=\\tenm"
+        "i \\scriptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscriptfont2"
+        "=\\fivesy \\textfont3=\\tenex \\scriptfont3=\\tenex \\scri"
+        "ptscriptfont3=\\tenex \\delcode`\\(=\"028300 \\delcode`\\)"
+        "=\"029301 \\delcode`\\[=\"05B302 \\delcode`\\]=\"05D303 \\"
+        "delcode`\\.=0 \\nulldelimiterspace=1.2pt \\scriptspace=0.5"
+        "pt \\hbadness=10000 \\hfuzz=1000pt \\tenrm \\def\\K#1#2#3{"
+        "\\vrule width#1pt height#2pt depth#3pt}\\def\\C{\\mathchoi"
+        "ce{\\K{1}{1}{0}}{\\K{2}{1}{0}}{\\K{3}{1}{0}}{\\K{4}{1}{0}}"
+        "}\\def\\M#1{\\setbox0=\\hbox{$#1$}}\\M{\\K{5}{3}{1}\\over"
+        "\\K{7}{2}{4}}[1|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\K{5"
+        "}{3}{1}\\atop\\K{7}{2}{4}}[2|\\the\\wd0|\\the\\ht0|\\the\\"
+        "dp0]\\M{\\K{5}{3}{1}\\above2pt\\K{7}{2}{4}}[3|\\the\\wd0|"
+        "\\the\\ht0|\\the\\dp0]\\M{\\K{5}{3}{1}\\overwithdelims()\\"
+        "K{7}{2}{4}}[4|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\K{5}{"
+        "3}{1}\\atopwithdelims[]\\K{7}{2}{4}}[5|\\the\\wd0|\\the\\h"
+        "t0|\\the\\dp0]\\M{\\K{5}{3}{1}\\abovewithdelims..3pt\\K{7}"
+        "{2}{4}}[6|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\displayst"
+        "yle{\\K{5}{3}{1}\\over\\K{7}{2}{4}}}[7|\\the\\wd0|\\the\\h"
+        "t0|\\the\\dp0]\\M{\\displaystyle{\\K{5}{3}{1}\\atop\\K{7}{"
+        "2}{4}}}[8|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\scriptsty"
+        "le{\\K{5}{0}{0}\\over\\K{7}{0}{0}}}[9|\\the\\wd0|\\the\\ht"
+        "0|\\the\\dp0]\\M{\\scriptstyle{\\K{5}{0}{0}\\atop\\K{7}{0}"
+        "{0}}}[10|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\scriptscri"
+        "ptstyle{\\K{5}{0}{0}\\over\\K{7}{0}{0}}}[11|\\the\\wd0|\\t"
+        "he\\ht0|\\the\\dp0]\\M{\\K{15}{3}{1}\\over\\K{7}{2}{4}}[12"
+        "|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{{}\\over\\K{7}{5}{4}"
+        "}[13|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\K{5}{3}{5}\\ov"
+        "er}[14|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\K{5}{3}{5}\\"
+        "atop\\K{7}{5}{4}}[15|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{"
+        "\\displaystyle{\\K{5}{3}{9}\\atop\\K{7}{9}{4}}}[16|\\the\\"
+        "wd0|\\the\\ht0|\\the\\dp0]\\M{\\displaystyle{\\K{5}{3}{9}"
+        "\\over\\K{7}{9}{4}}}[17|\\the\\wd0|\\the\\ht0|\\the\\dp0]"
+        "\\M{\\displaystyle{\\C\\over\\C}}[18|\\the\\wd0|\\the\\ht0"
+        "|\\the\\dp0]\\M{{\\C\\over\\C}}[19|\\the\\wd0|\\the\\ht0|"
+        "\\the\\dp0]\\M{\\scriptstyle{\\C\\over\\C}}[20|\\the\\wd0|"
+        "\\the\\ht0|\\the\\dp0]\\M{\\displaystyle{\\K{5}{3}{1}\\ove"
+        "rwithdelims()\\K{7}{2}{4}}}[21|\\the\\wd0|\\the\\ht0|\\the"
+        "\\dp0]\\M{\\scriptstyle{\\K{5}{3}{1}\\overwithdelims()\\K{"
+        "7}{2}{4}}}[22|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{{\\math"
+        "ord{\\K{1}{1}{0}}^{\\K{1}{1}{0}}\\above20pt\\mathord{\\K{1"
+        "}{1}{0}}^{\\K{1}{1}{0}}}}[23|\\the\\wd0|\\the\\ht0|\\the\\"
+        "dp0]\\M{{{\\K{5}{0}{0}\\over\\K{7}{0}{0}}\\over\\K{9}{0}{0"
+        "}}}[24|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\displaystyle"
+        "{{\\K{5}{0}{0}\\over\\K{7}{0}{0}}\\over\\K{9}{0}{0}}}[25|"
+        "\\the\\wd0|\\the\\ht0|\\the\\dp0]%",
+        "[1|9.4pt|7.09998pt|7.44841pt][2|9.4pt|7.4373pt|7.44841pt]["
+        "3|9.4pt|9.5pt|7.44841pt][4|16.16672pt|8.50005pt|7.44841pt]"
+        "[5|15.33337pt|8.50005pt|7.44841pt][6|9.4pt|11.0pt|8.0pt][7"
+        "|9.4pt|9.76508pt|10.85951pt][8|9.4pt|9.76508pt|10.85951pt]"
+        "[9|9.4pt|2.68732pt|2.4095pt][10|9.4pt|3.29843pt|2.4095pt]["
+        "11|9.4pt|1.93732pt|2.65953pt][12|17.4pt|7.09998pt|7.44841p"
+        "t][13|9.4pt|3.93732pt|7.44841pt][14|7.4pt|11.09998pt|3.448"
+        "41pt][15|9.4pt|9.09442pt|9.10553pt][16|9.4pt|13.3527pt|14."
+        "44714pt][17|9.4pt|15.89993pt|11.89993pt][18|4.4pt|7.76508p"
+        "t|6.85951pt][19|5.4pt|4.93732pt|3.44841pt][20|6.4pt|3.6873"
+        "2pt|2.4095pt][21|21.72229pt|14.5001pt|10.85951pt][22|14.77"
+        "78pt|6.75pt|6.4095pt][23|4.9pt|36.51779pt|30.49998pt][24|1"
+        "1.79999pt|8.1968pt|3.44841pt][25|11.79999pt|11.28566pt|6.8"
+        "5951pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2691,7 +2763,7 @@ int main(void)
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
-        test_every_cr() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_every_cr() != 0 || test_fractions() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

@@ -1927,13 +1927,25 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
-    static const char *math_primitives[] = {
+    static const char *fraction_primitives[] = {
         "over",
         "atop",
         "above",
         "overwithdelims",
         "atopwithdelims",
         "abovewithdelims",
+    };
+    for (size_t index = 0U;
+         index < sizeof(fraction_primitives) / sizeof(fraction_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(engine, fraction_primitives[index],
+                                       HSTEX_COMMAND_FRACTION, (int32_t)index,
+                                       error, error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const char *math_primitives[] = {
         "overline",
     };
     for (size_t index = 0U;
@@ -2498,6 +2510,14 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     for (size_t index = 0U; index < engine->math_depth; ++index) {
         free(engine->math_stack[index].noads);
     }
+    free(engine->math_items);
+    engine->math_items = NULL;
+    engine->math_item_count = 0U;
+    engine->math_item_capacity = 0U;
+    free(engine->math_sublists);
+    engine->math_sublists = NULL;
+    engine->math_sublist_count = 0U;
+    engine->math_sublist_capacity = 0U;
     free(engine->math_stack);
     engine->math_stack = NULL;
     engine->math_depth = 0U;
@@ -8015,7 +8035,8 @@ static int math_append_atom(struct hstex_engine *engine,
                             size_t error_capacity);
 static int math_append_box_field(struct hstex_engine *engine,
                                  const struct hstex_box *box,
-                                 bool single_character, char *error,
+                                 bool single_character, uint32_t sublist,
+                                 uint8_t list_style, char *error,
                                  size_t error_capacity);
 static void pop_math_list(struct hstex_engine *engine);
 
@@ -14154,7 +14175,8 @@ static int math_append_character(struct hstex_engine *engine, uint8_t code,
 
 static int math_append_box_field(struct hstex_engine *engine,
                                  const struct hstex_box *box,
-                                 bool single_character, char *error,
+                                 bool single_character, uint32_t sublist,
+                                 uint8_t list_style, char *error,
                                  size_t error_capacity)
 {
     struct hstex_node node = {
@@ -14177,7 +14199,9 @@ static int math_append_box_field(struct hstex_engine *engine,
         .atom_class = (uint8_t)HSTEX_ATOM_ORD,
         .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX,
                     .single_character = single_character ? 1U : 0U,
-                    .node = identifier},
+                    .node = identifier,
+                    .sublist = sublist,
+                    .list_style = list_style},
     };
     return math_append_atom(engine, &noad, error, error_capacity);
 }
@@ -14186,7 +14210,8 @@ static int math_append_box(struct hstex_engine *engine,
                            const struct hstex_box *box, char *error,
                            size_t error_capacity)
 {
-    return math_append_box_field(engine, box, false, error, error_capacity);
+    return math_append_box_field(engine, box, false, 0U, 0U, error,
+                                 error_capacity);
 }
 
 /* Glue, kerns and penalties keep the shape they already have. */
@@ -14510,9 +14535,186 @@ static int translate_math_list(struct hstex_engine *engine,
                                struct hstex_math_builder *builder, char *error,
                                size_t error_capacity);
 
+static int translate_math_fraction(struct hstex_engine *engine,
+                                   struct hstex_math_builder *builder,
+                                   char *error, size_t error_capacity);
+
 /* Pack one field into a box at the given style. An empty field gives an empty
    box, a character gives that character with its italic correction, and a box
    field is the box that is already there. */
+static int store_box_node(struct hstex_engine *engine,
+                          const struct hstex_box *box, int32_t shift,
+                          uint32_t *identifier, char *error,
+                          size_t error_capacity);
+
+/* Keep a sub-formula where a field can point at it. The records live as long
+   as the engine, so a field never owns what it refers to. */
+static int store_math_sublist(struct hstex_engine *engine,
+                              const struct hstex_math_builder *list,
+                              uint32_t *index, char *error,
+                              size_t error_capacity)
+{
+    *index = 0U;
+    size_t count = list->count;
+    uint32_t start = 0U;
+    if (count != 0U) {
+        if (engine->math_item_count + count > engine->math_item_capacity) {
+            size_t capacity = engine->math_item_capacity == 0U
+                                  ? 64U
+                                  : engine->math_item_capacity;
+            while (capacity < engine->math_item_count + count) {
+                if (capacity > SIZE_MAX / 2U) {
+                    return set_error(error, error_capacity,
+                                     "sub-formula arena overflow");
+                }
+                capacity *= 2U;
+            }
+            if (capacity > SIZE_MAX / sizeof(*engine->math_items)) {
+                return set_error(error, error_capacity,
+                                 "sub-formula arena overflow");
+            }
+            void *allocation = realloc(engine->math_items,
+                                       capacity * sizeof(*engine->math_items));
+            if (allocation == NULL) {
+                return set_error(error, error_capacity,
+                                 "sub-formula arena allocation failed");
+            }
+            engine->math_items = allocation;
+            engine->math_item_capacity = capacity;
+        }
+        if (engine->math_item_count + count > (size_t)UINT32_MAX) {
+            return set_error(error, error_capacity,
+                             "sub-formula arena overflow");
+        }
+        start = (uint32_t)engine->math_item_count;
+        memcpy(engine->math_items + engine->math_item_count, list->noads,
+               count * sizeof(*list->noads));
+        engine->math_item_count += count;
+    }
+    if (engine->math_sublist_count == engine->math_sublist_capacity) {
+        size_t capacity = engine->math_sublist_capacity == 0U
+                              ? 32U
+                              : engine->math_sublist_capacity * 2U;
+        if (capacity > SIZE_MAX / sizeof(*engine->math_sublists)) {
+            return set_error(error, error_capacity,
+                             "sub-formula record overflow");
+        }
+        void *allocation = realloc(engine->math_sublists,
+                                   capacity * sizeof(*engine->math_sublists));
+        if (allocation == NULL) {
+            return set_error(error, error_capacity,
+                             "sub-formula record allocation failed");
+        }
+        engine->math_sublists = allocation;
+        engine->math_sublist_capacity = capacity;
+    }
+    if (engine->math_sublist_count >= (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity, "sub-formula record overflow");
+    }
+    struct hstex_math_sublist *record =
+        &engine->math_sublists[engine->math_sublist_count++];
+    record->start = start;
+    record->count = (uint32_t)count;
+    record->style = list->style;
+    record->has_fraction = list->has_fraction;
+    record->fraction_at = list->fraction_at;
+    record->fraction_thickness = list->fraction_thickness;
+    record->fraction_default_thickness = list->fraction_default_thickness;
+    record->fraction_left = list->fraction_left;
+    record->fraction_right = list->fraction_right;
+    *index = (uint32_t)engine->math_sublist_count;
+    return 0;
+}
+
+/* Fill a list from a kept sub-formula, to be set in the style asked for. */
+static int load_math_sublist(struct hstex_engine *engine, uint32_t index,
+                             uint8_t style, struct hstex_math_builder *list,
+                             char *error, size_t error_capacity)
+{
+    memset(list, 0, sizeof(*list));
+    list->forced_class = -1;
+    list->style = style;
+    list->current_style = style;
+    if (index == 0U || (size_t)index > engine->math_sublist_count) {
+        return set_error(error, error_capacity,
+                         "a sub-formula record went missing");
+    }
+    const struct hstex_math_sublist *record =
+        &engine->math_sublists[index - 1U];
+    list->has_fraction = record->has_fraction;
+    list->fraction_at = record->fraction_at;
+    list->fraction_thickness = record->fraction_thickness;
+    list->fraction_default_thickness = record->fraction_default_thickness;
+    list->fraction_left = record->fraction_left;
+    list->fraction_right = record->fraction_right;
+    if (record->count == 0U) {
+        return 0;
+    }
+    if (reserve_noads(list, record->count, error, error_capacity) != 0) {
+        return -1;
+    }
+    memcpy(list->noads, engine->math_items + record->start,
+           record->count * sizeof(*list->noads));
+    list->count = record->count;
+    return 0;
+}
+
+/* Set a sub-formula again, in the style it has turned out to be wanted in.
+   Nothing happens unless the style differs from the one it was read in. */
+static int math_field_restyle(struct hstex_engine *engine,
+                              struct hstex_math_field *field, uint8_t style,
+                              char *error, size_t error_capacity)
+{
+    if (field->kind != (uint8_t)HSTEX_MATH_FIELD_BOX || field->sublist == 0U ||
+        field->list_style == style) {
+        return 0;
+    }
+    struct hstex_math_builder part = {0};
+    if (load_math_sublist(engine, field->sublist, style, &part, error,
+                          error_capacity) != 0) {
+        free(part.noads);
+        return -1;
+    }
+    struct hstex_hbox_builder packed = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &packed;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    int status = translate_math_list(engine, &part, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    struct hstex_box box = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &packed, false, false, 0, &box, error,
+                               error_capacity);
+    }
+    free(packed.node_identifiers);
+    free(part.noads);
+    if (status != 0) {
+        return -1;
+    }
+    bool single = false;
+    if (box.node_count == 1U &&
+        (size_t)box.node_start < engine->list_item_count) {
+        uint32_t item = engine->list_items[box.node_start];
+        if (item != 0U && item <= engine->node_count) {
+            const struct hstex_node *node = &engine->nodes[item - 1U];
+            single = (node->kind == HSTEX_NODE_CHARACTER ||
+                      node->kind == HSTEX_NODE_LIGATURE) &&
+                     node->shift == 0;
+        }
+    }
+    uint32_t identifier = 0U;
+    if (store_box_node(engine, &box, 0, &identifier, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    field->node = identifier;
+    field->single_character = single ? 1U : 0U;
+    field->list_style = style;
+    return 0;
+}
+
 static int math_field_box(struct hstex_engine *engine,
                           const struct hstex_math_field *field, uint8_t style,
                           struct hstex_box *box, char *error,
@@ -14520,6 +14722,12 @@ static int math_field_box(struct hstex_engine *engine,
 {
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_HLIST;
+    struct hstex_math_field restyled = *field;
+    if (math_field_restyle(engine, &restyled, style, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    field = &restyled;
     if (field->kind == (uint8_t)HSTEX_MATH_FIELD_BOX) {
         if (field->node == 0U || field->node > engine->node_count) {
             return set_error(error, error_capacity,
@@ -14806,10 +15014,106 @@ static int attach_math_scripts(struct hstex_engine *engine,
 
 /* Translate one finished math list into the horizontal list the engine is
    building. The caller has already pointed active_hbox_builder at it. */
+/* Put the branch of every \mathchoice that the style in force asks for in
+   the list's place, before anything else is done with the list. A branch may
+   hold a \mathchoice of its own, so the list is swept until none is left. */
+static int expand_math_choices(struct hstex_engine *engine,
+                               struct hstex_math_builder *builder, char *error,
+                               size_t error_capacity)
+{
+    for (size_t sweep = 0U; sweep < 64U; ++sweep) {
+        bool any = false;
+        for (size_t index = 0U; index < builder->count; ++index) {
+            if (builder->noads[index].kind == (uint8_t)HSTEX_NOAD_CHOICE) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) {
+            return 0;
+        }
+        struct hstex_math_builder out = {0};
+        uint8_t style = builder->style;
+        int status = 0;
+        for (size_t index = 0U; status == 0 && index < builder->count;
+             ++index) {
+            const struct hstex_noad *noad = &builder->noads[index];
+            if (noad->kind == (uint8_t)HSTEX_NOAD_STYLE) {
+                style = noad->atom_class;
+            }
+            if (noad->kind != (uint8_t)HSTEX_NOAD_CHOICE) {
+                if (reserve_noads(&out, out.count + 1U, error,
+                                  error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                out.noads[out.count++] = *noad;
+                continue;
+            }
+            uint32_t record = noad->choices[style / 2U];
+            if (record == 0U ||
+                (size_t)record > engine->math_sublist_count) {
+                continue;
+            }
+            const struct hstex_math_sublist *chosen =
+                &engine->math_sublists[record - 1U];
+            if (chosen->has_fraction) {
+                /* A branch that is a fraction cannot be spliced, because a
+                   fraction is a property of the list it ends: it goes in as
+                   one atom, to be set when the style is known. */
+                struct hstex_noad atom = {
+                    .kind = (uint8_t)HSTEX_NOAD_ATOM,
+                    .atom_class = (uint8_t)HSTEX_ATOM_INNER,
+                    .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX,
+                                .sublist = record,
+                                .list_style = (uint8_t)0xFFU},
+                };
+                if (reserve_noads(&out, out.count + 1U, error,
+                                  error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                out.noads[out.count++] = atom;
+                continue;
+            }
+            if (chosen->count == 0U) {
+                continue;
+            }
+            if (reserve_noads(&out, out.count + chosen->count, error,
+                              error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            memcpy(&out.noads[out.count], engine->math_items + chosen->start,
+                   chosen->count * sizeof(*out.noads));
+            out.count += chosen->count;
+        }
+        if (status != 0) {
+            free(out.noads);
+            return -1;
+        }
+        free(builder->noads);
+        builder->noads = out.noads;
+        builder->count = out.count;
+        builder->capacity = out.capacity;
+    }
+    return set_error(error, error_capacity,
+                     "\\mathchoice branches nest too deeply");
+}
+
 static int translate_math_list(struct hstex_engine *engine,
                                struct hstex_math_builder *builder, char *error,
                                size_t error_capacity)
 {
+    /* A fraction is split before anything else, because each of its sides
+       is set in a style of its own -- which is what decides a \mathchoice
+       inside it. */
+    if (builder->has_fraction) {
+        return translate_math_fraction(engine, builder, error, error_capacity);
+    }
+    if (expand_math_choices(engine, builder, error, error_capacity) != 0) {
+        return -1;
+    }
     uint8_t style = builder->style;
     uint8_t size = math_size_of_style(style);
     bool all_spacing = style < (uint8_t)HSTEX_STYLE_SCRIPT;
@@ -14883,6 +15187,13 @@ static int translate_math_list(struct hstex_engine *engine,
         int32_t nucleus_depth = 0;
         int32_t italic = 0;
         bool nucleus_is_character =
+            noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            noad->nucleus.single_character != 0U;
+        if (math_field_restyle(engine, &noad->nucleus, style, error,
+                               error_capacity) != 0) {
+            return -1;
+        }
+        nucleus_is_character =
             noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
             noad->nucleus.single_character != 0U;
         if (noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_BOX) {
@@ -15346,6 +15657,300 @@ static int variant_delimiter(struct hstex_engine *engine, int32_t code,
                          box, error, error_capacity);
 }
 
+/* The style a fraction sets its numerator in, and its denominator, which is
+   the cramped variant of the same size. Both were measured with
+   \mathchoice; see docs/DECISIONS.md, fractions. */
+static uint8_t math_numerator_style(uint8_t style)
+{
+    return (uint8_t)(style + 2U - 2U * (style / 6U));
+}
+
+static uint8_t math_denominator_style(uint8_t style)
+{
+    return (uint8_t)(2U * (style / 2U) + 3U - 2U * (style / 6U));
+}
+
+/* Set part of a math list -- one side of a fraction -- as a box of its own. */
+static int math_range_box(struct hstex_engine *engine,
+                          const struct hstex_math_builder *builder,
+                          size_t begin, size_t end, uint8_t style,
+                          struct hstex_box *box, char *error,
+                          size_t error_capacity)
+{
+    struct hstex_math_builder part = {0};
+    part.forced_class = -1;
+    part.style = style;
+    part.current_style = style;
+    size_t count = end - begin;
+    if (count != 0U) {
+        if (reserve_noads(&part, count, error, error_capacity) != 0) {
+            return -1;
+        }
+        memcpy(part.noads, builder->noads + begin,
+               count * sizeof(*part.noads));
+        part.count = count;
+    }
+    struct hstex_hbox_builder packed = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &packed;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    int status = translate_math_list(engine, &part, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    if (status == 0) {
+        status = finalize_hbox(engine, &packed, false, false, 0, box, error,
+                               error_capacity);
+    }
+    free(packed.node_identifiers);
+    free(part.noads);
+    return status;
+}
+
+/* Widen a box to match the other side of the fraction, its contents centred
+   between two \hss. A box with nothing in it is simply declared wider. */
+static int math_rebox(struct hstex_engine *engine, struct hstex_box *box,
+                      int32_t width, char *error, size_t error_capacity)
+{
+    if (box->width == width) {
+        return 0;
+    }
+    if (box->node_count == 0U) {
+        box->width = width;
+        return 0;
+    }
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    struct hstex_node fill = {
+        .kind = HSTEX_NODE_GLUE,
+        .value.glue = {
+            .stretch = INT32_C(65536),
+            .shrink = INT32_C(65536),
+            .stretch_order = 1U,
+            .shrink_order = 1U,
+        },
+    };
+    int status = append_hbox_node(engine, &fill, error, error_capacity);
+    for (uint32_t offset = 0U; status == 0 && offset < box->node_count;
+         ++offset) {
+        size_t slot = (size_t)box->node_start + offset;
+        if (slot >= engine->list_item_count) {
+            status = set_error(error, error_capacity,
+                               "a fraction lost part of its list");
+            break;
+        }
+        status = append_hbox_item(engine, engine->list_items[slot], error,
+                                  error_capacity);
+    }
+    if (status == 0) {
+        status = append_hbox_node(engine, &fill, error, error_capacity);
+    }
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, true, false, width, &packed,
+                               error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    if (status == 0) {
+        *box = packed;
+    }
+    return status;
+}
+
+/* Set a list that holds a generalized fraction. All of the arithmetic here
+   was measured; see docs/DECISIONS.md, fractions. */
+static int translate_math_fraction(struct hstex_engine *engine,
+                                   struct hstex_math_builder *builder,
+                                   char *error, size_t error_capacity)
+{
+    uint8_t style = builder->style;
+    uint8_t size = math_size_of_style(style);
+    bool display = style < (uint8_t)HSTEX_STYLE_TEXT;
+    int32_t axis = 0;
+    int32_t default_thickness = 0;
+    if (math_symbol_parameter(engine, size, 22U, &axis, error,
+                              error_capacity) != 0 ||
+        math_extension_parameter(engine, size, 8U, &default_thickness, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    int32_t thickness = builder->fraction_default_thickness
+                            ? default_thickness
+                            : builder->fraction_thickness;
+
+    struct hstex_box numerator = {0};
+    struct hstex_box denominator = {0};
+    if (math_range_box(engine, builder, 0U, builder->fraction_at,
+                       math_numerator_style(style), &numerator, error,
+                       error_capacity) != 0 ||
+        math_range_box(engine, builder, builder->fraction_at, builder->count,
+                       math_denominator_style(style), &denominator, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    int32_t width = numerator.width > denominator.width ? numerator.width
+                                                        : denominator.width;
+    if (math_rebox(engine, &numerator, width, error, error_capacity) != 0 ||
+        math_rebox(engine, &denominator, width, error, error_capacity) != 0) {
+        return -1;
+    }
+
+    /* Where the two sides sit before the space between them is checked. */
+    int32_t shift_up = 0;
+    int32_t shift_down = 0;
+    if (math_symbol_parameter(engine, size, display ? 8U : (thickness != 0 ? 9U : 10U),
+                              &shift_up, error, error_capacity) != 0 ||
+        math_symbol_parameter(engine, size, display ? 11U : 12U, &shift_down,
+                              error, error_capacity) != 0) {
+        return -1;
+    }
+
+    int32_t above = 0;
+    int32_t below = 0;
+    if (thickness == 0) {
+        /* Nothing between the two sides, so the whole gap is checked at
+           once and any shortfall is shared equally. */
+        int64_t clearance = display ? 7 * (int64_t)default_thickness
+                                    : 3 * (int64_t)default_thickness;
+        int64_t gap = ((int64_t)shift_up - numerator.depth) -
+                      ((int64_t)denominator.height - shift_down);
+        if (gap < clearance) {
+            int32_t share = half_of(clearance - gap);
+            shift_up += share;
+            shift_down += share;
+        }
+        above = (int32_t)(((int64_t)shift_up - numerator.depth) -
+                          ((int64_t)denominator.height - shift_down));
+    } else {
+        /* The rule sits on the axis, and each side is kept clear of it. */
+        int64_t clearance = display ? 3 * (int64_t)thickness : thickness;
+        int32_t half = half_of(thickness);
+        int64_t over = ((int64_t)shift_up - numerator.depth) -
+                       ((int64_t)axis + half);
+        if (over < clearance) {
+            shift_up += (int32_t)(clearance - over);
+            over = clearance;
+        }
+        int64_t under = ((int64_t)axis - half) -
+                        ((int64_t)denominator.height - shift_down);
+        if (under < clearance) {
+            shift_down += (int32_t)(clearance - under);
+            under = clearance;
+        }
+        above = (int32_t)over;
+        below = (int32_t)under;
+    }
+
+    struct hstex_vbox_builder body = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_vbox_builder = &body;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    int status = 0;
+    uint32_t identifier = 0U;
+    if (store_box_node(engine, &numerator, 0, &identifier, error,
+                       error_capacity) != 0 ||
+        append_vbox_item(engine, identifier, error, error_capacity) != 0) {
+        status = -1;
+    }
+    struct hstex_node gap = {.kind = HSTEX_NODE_KERN, .width = above};
+    if (status == 0 &&
+        append_vbox_node(engine, &gap, error, error_capacity) != 0) {
+        status = -1;
+    }
+    if (status == 0 && thickness != 0) {
+        struct hstex_node rule = {
+            .kind = HSTEX_NODE_RULE,
+            .width = HSTEX_RUNNING_DIMEN,
+            .height = thickness,
+            .depth = 0,
+        };
+        struct hstex_node second = {.kind = HSTEX_NODE_KERN, .width = below};
+        if (append_vbox_node(engine, &rule, error, error_capacity) != 0 ||
+            append_vbox_node(engine, &second, error, error_capacity) != 0) {
+            status = -1;
+        }
+    }
+    if (status == 0 &&
+        (store_box_node(engine, &denominator, 0, &identifier, error,
+                        error_capacity) != 0 ||
+         append_vbox_item(engine, identifier, error, error_capacity) != 0)) {
+        status = -1;
+    }
+    struct hstex_box vertical = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &body, false, false, 0, &vertical, error,
+                               error_capacity);
+    }
+    free(body.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    vertical.width = width;
+    vertical.height = (int32_t)((int64_t)shift_up + numerator.height);
+    vertical.depth = (int32_t)((int64_t)denominator.depth + shift_down);
+
+    /* The delimiters are as tall as the style asks for, whatever the
+       fraction itself came to. */
+    int32_t wanted = 0;
+    if (math_symbol_parameter(engine, size, display ? 20U : 21U, &wanted, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box left = {0};
+    struct hstex_box right = {0};
+    if (variant_delimiter(engine, builder->fraction_left, size, wanted, &left,
+                          error, error_capacity) != 0 ||
+        variant_delimiter(engine, builder->fraction_right, size, wanted, &right,
+                          error, error_capacity) != 0) {
+        return -1;
+    }
+
+    struct hstex_hbox_builder whole = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &whole;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    status = 0;
+    struct hstex_box *parts[3] = {&left, &vertical, &right};
+    for (size_t index = 0U; status == 0 && index < 3U; ++index) {
+        int32_t shift = index == 1U ? 0
+                                    : half_of((int64_t)parts[index]->height -
+                                              parts[index]->depth) -
+                                          axis;
+        identifier = 0U;
+        if (store_box_node(engine, parts[index], shift, &identifier, error,
+                           error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        status = append_hbox_item(engine, identifier, error, error_capacity);
+    }
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &whole, false, false, 0, &packed, error,
+                               error_capacity);
+    }
+    free(whole.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    identifier = 0U;
+    if (store_box_node(engine, &packed, 0, &identifier, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    return append_hbox_item(engine, identifier, error, error_capacity);
+}
+
 /* A delimiter is named either by a character, whose \delcode says which one
    it is, or by \delimiter and a number. */
 static int scan_delimiter(struct hstex_engine *engine, int32_t *code,
@@ -15534,6 +16139,44 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
     box.height = axis + half_of(total);
     box.depth = (int32_t)(total - box.height);
     return math_append_box(engine, &box, error, error_capacity);
+}
+
+/* \over and its relatives split the list being read: what has been read so
+   far is the numerator and what follows is the denominator. See
+   docs/DECISIONS.md, fractions. */
+static int execute_fraction(struct hstex_engine *engine, int32_t subtype,
+                            char *error, size_t error_capacity)
+{
+    struct hstex_math_builder *list = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || list == NULL) {
+        return set_error(error, error_capacity,
+                         "a fraction is only allowed in a formula");
+    }
+    if (list->has_fraction) {
+        return set_error(error, error_capacity,
+                         "a list may hold only one fraction; brace one of them");
+    }
+    bool delimited = subtype >= 3;
+    int32_t kind = subtype % 3;
+    int32_t left = 0;
+    int32_t right = 0;
+    if (delimited &&
+        (scan_delimiter(engine, &left, error, error_capacity) != 0 ||
+         scan_delimiter(engine, &right, error, error_capacity) != 0)) {
+        return -1;
+    }
+    int32_t thickness = 0;
+    if (kind == 2 &&
+        scan_dimension(engine, &thickness, error, error_capacity) != 0) {
+        return -1;
+    }
+    list->has_fraction = true;
+    list->fraction_at = list->count;
+    list->fraction_thickness = thickness;
+    list->fraction_default_thickness = kind == 0;
+    list->fraction_left = left;
+    list->fraction_right = right;
+    return 0;
 }
 
 /* \eqno and \leqno end the equation and begin its number, which is set in
@@ -15936,19 +16579,15 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
     }
     struct hstex_math_builder *outer = &engine->math_stack[engine->math_depth - 2U];
     if (outer->choice_remaining != 0U) {
-        /* One branch of a \mathchoice. Every branch is read, so its side
-           effects happen; only the branch the style asks for is kept, and it
-           is spliced rather than boxed so that its atoms keep their classes. */
-        bool wanted = outer->choice_index == outer->current_style / 2U;
-        int status = 0;
-        if (wanted && inner->count != 0U) {
-            status = reserve_noads(outer, outer->count + inner->count, error,
-                                   error_capacity);
-            if (status == 0) {
-                memcpy(&outer->noads[outer->count], inner->noads,
-                       inner->count * sizeof(*inner->noads));
-                outer->count += inner->count;
-            }
+        /* One branch of a \mathchoice. All four are kept, because which one
+           is wanted depends on the style the list is finally set in, and a
+           fraction settles that only when \over is read. */
+        uint32_t record = 0U;
+        int status =
+            store_math_sublist(engine, inner, &record, error, error_capacity);
+        if (status == 0 && outer->choice_noad < outer->count) {
+            outer->noads[outer->choice_noad].choices[outer->choice_index] =
+                record;
         }
         ++outer->choice_index;
         --outer->choice_remaining;
@@ -15978,7 +16617,15 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "a script mark was left without a script");
     }
-    int status = translate_math_list(engine, inner, error, error_capacity);
+    /* The list is kept as well as the box, because a fraction sets each of
+       its sides in a style that is not known until \over is read. */
+    uint32_t record = 0U;
+    uint8_t item_style = inner->style;
+    int status = store_math_sublist(engine, inner, &record, error,
+                                    error_capacity);
+    if (status == 0) {
+        status = translate_math_list(engine, inner, error, error_capacity);
+    }
     engine->active_hbox_builder = previous;
     struct hstex_box box = {0};
     if (status == 0) {
@@ -16004,7 +16651,8 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
                      node->shift == 0;
         }
     }
-    return math_append_box_field(engine, &box, single, error, error_capacity);
+    return math_append_box_field(engine, &box, single, record, item_style,
+                                 error, error_capacity);
 }
 
 /* Leaving a formula puts \mathsurround on both sides of the translation and
@@ -16129,8 +16777,13 @@ static int execute_math_choice(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "one \\mathchoice followed another");
     }
+    struct hstex_noad noad = {.kind = (uint8_t)HSTEX_NOAD_CHOICE};
+    if (math_append(engine, &noad, error, error_capacity) != 0) {
+        return -1;
+    }
     builder->choice_remaining = 4U;
     builder->choice_index = 0U;
+    builder->choice_noad = builder->count - 1U;
     return 0;
 }
 
@@ -19710,6 +20363,12 @@ handle_token:
                 continue;
             }
             return HSTEX_ENGINE_TOKEN;
+        case HSTEX_COMMAND_FRACTION:
+            if (execute_fraction(engine, meaning->value.integer, error,
+                                 error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_RADICAL:
         case HSTEX_COMMAND_MARKS:
         case HSTEX_COMMAND_MATH_PRIMITIVE:

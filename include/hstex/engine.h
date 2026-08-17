@@ -217,6 +217,7 @@ enum hstex_command {
     HSTEX_COMMAND_MARGIN_KERN,
     HSTEX_COMMAND_DELIMITER,
     HSTEX_COMMAND_LEFT_RIGHT,
+    HSTEX_COMMAND_FRACTION,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -743,6 +744,9 @@ enum hstex_noad_kind {
     /* Glue and kerns measured in mu, converted when the list is translated. */
     HSTEX_NOAD_MU_GLUE,
     HSTEX_NOAD_MU_KERN,
+    /* All four lists of a \mathchoice; which is used is settled when the
+       list is set, not when it is read. */
+    HSTEX_NOAD_CHOICE,
 };
 
 enum hstex_math_field_kind {
@@ -814,6 +818,27 @@ struct hstex_math_field {
     uint32_t character;
     /* Identifier of the stored node, for a box field. */
     uint32_t node;
+    /* A sub-formula keeps its own list as well as the box it was set as, so
+       that it can be set again if it turns out to be wanted in another
+       style -- which is what a fraction does to its two sides. One-based
+       index into the engine's sub-formula records; zero for none. See
+       docs/DECISIONS.md, fractions. */
+    uint32_t sublist;
+    /* The style the stored box was set in. */
+    uint8_t list_style;
+};
+
+/* A sub-formula kept so that it can be set again in another style. */
+struct hstex_math_sublist {
+    uint32_t start;
+    uint32_t count;
+    uint8_t style;
+    bool has_fraction;
+    size_t fraction_at;
+    int32_t fraction_thickness;
+    bool fraction_default_thickness;
+    int32_t fraction_left;
+    int32_t fraction_right;
 };
 
 /* One item of a math list. */
@@ -827,6 +852,8 @@ struct hstex_noad {
     uint32_t node;
     struct hstex_glue glue;
     int32_t kern;
+    /* The four lists of a \mathchoice, as sub-formula records. */
+    uint32_t choices[4];
 };
 
 /* Which slot the next atom fills, when a script mark is waiting. */
@@ -856,9 +883,19 @@ struct hstex_math_builder {
     /* Branches of a \mathchoice still to be read, and which one is next. */
     uint8_t choice_remaining;
     uint8_t choice_index;
+    size_t choice_noad;
     /* Set for the list \left opened, with the delimiter it named. */
     bool is_left_group;
     int32_t left_delimiter;
+    /* A generalized fraction: the noads before `fraction_at` are its
+       numerator and the rest are its denominator; see docs/DECISIONS.md,
+       fractions. */
+    bool has_fraction;
+    size_t fraction_at;
+    int32_t fraction_thickness;
+    bool fraction_default_thickness;
+    int32_t fraction_left;
+    int32_t fraction_right;
 };
 
 enum hstex_node_kind {
@@ -1119,6 +1156,14 @@ struct hstex_engine {
     /* What \badness reports about the box packed most recently. */
     int32_t badness;
     /* The math lists being built, innermost last; empty outside math. */
+    /* Sub-formula lists, kept for the lifetime of the engine so that a field
+       may refer to one without owning it. */
+    struct hstex_noad *math_items;
+    size_t math_item_count;
+    size_t math_item_capacity;
+    struct hstex_math_sublist *math_sublists;
+    size_t math_sublist_count;
+    size_t math_sublist_capacity;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;
