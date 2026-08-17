@@ -587,11 +587,21 @@ static int test_box_grammar_and_spacing(void)
         /* A control space ignores the space factor, unlike a real space. */
         "\\setbox0=\\hbox{A\\ \\global\\skip1=\\lastskip}[\\the\\skip1]"
         "\\setbox0=\\hbox{A \\global\\skip2=\\lastskip}[\\the\\skip2]"
-        "\\setbox0=\\hbox{\\char65}[\\the\\wd0]%",
+        "\\setbox0=\\hbox{\\char65}[\\the\\wd0]"
+        /* \unskip, \unkern and \unpenalty remove the last node only when it
+           is of their own kind. */
+        "\\setbox0=\\hbox{\\vrule width1pt\\hskip5pt\\unskip}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\vrule width1pt\\kern5pt\\unskip}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\vrule width1pt\\kern5pt\\unkern}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\vrule width1pt\\unskip}[\\the\\wd0]"
+        "\\setbox0=\\vbox{\\hrule height2pt\\vskip5pt\\unskip}[\\the\\ht0]"
+        "\\setbox0=\\hbox{\\vrule width1pt\\penalty50 \\unpenalty"
+        "\\global\\count1=\\lastnodetype}[\\the\\count1]%",
         "[5.0pt|2.0pt][5.0pt|9.0pt][0.0pt|10.0pt][0.0pt|0.0pt]"
         "[V][16383.99998pt|V]"
         "[3.33333pt plus 1.66666pt minus 1.11111pt]"
-        "[3.33333pt plus 1.66498pt minus 1.11221pt][7.50002pt]");
+        "[3.33333pt plus 1.66498pt minus 1.11221pt][7.50002pt]"
+        "[1.0pt][6.0pt][1.0pt][1.0pt][2.0pt][3]");
 }
 
 /* A paragraph that fits on one line; see docs/DECISIONS.md, paragraphs. */

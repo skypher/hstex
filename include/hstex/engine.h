@@ -196,6 +196,7 @@ enum hstex_command {
     HSTEX_COMMAND_CONTROL_SPACE,
     HSTEX_COMMAND_ITALIC_CORRECTION,
     HSTEX_COMMAND_CHAR,
+    HSTEX_COMMAND_REMOVE_LAST,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the

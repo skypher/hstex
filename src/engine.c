@@ -1321,7 +1321,8 @@ static int assign_box(struct hstex_engine *engine, uint32_t index,
 {
     if ((size_t)index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     bool global = assignment_is_global(engine, requested_global);
     if (!global && engine->group_level != 0U) {
@@ -1767,6 +1768,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"indent", 1, HSTEX_COMMAND_INDENT},
         {"noindent", 0, HSTEX_COMMAND_INDENT},
         {"spacefactor", 0, HSTEX_COMMAND_SPACE_FACTOR},
+        {"unskip", (int32_t)HSTEX_NODE_GLUE, HSTEX_COMMAND_REMOVE_LAST},
+        {"unkern", (int32_t)HSTEX_NODE_KERN, HSTEX_COMMAND_REMOVE_LAST},
+        {"unpenalty", (int32_t)HSTEX_NODE_PENALTY, HSTEX_COMMAND_REMOVE_LAST},
     };
     for (size_t index = 0U;
          index < sizeof(skip_primitives) / sizeof(skip_primitives[0]);
@@ -3564,8 +3568,12 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
             if (hstex_symbol_name(&engine->lexical_state.symbols,
                                   hstex_token_control_sequence_id(token), &kind,
                                   &name, &length) == 0) {
-                return set_error(error, error_capacity, "%s scanning \\%.*s",
-                                 reason, (int)length, (const char *)name);
+                uint32_t line = 0U;
+                const char *origin = current_source_line(engine, &line);
+                return set_error(error, error_capacity,
+                                 "%s scanning \\%.*s, at %s:%u", reason,
+                                 (int)length, (const char *)name, origin,
+                                 (unsigned int)line);
             }
             return -1;
         }
@@ -3878,11 +3886,14 @@ static int dimen_from_meaning(struct hstex_engine *engine,
     }
     if (meaning->command == HSTEX_COMMAND_BOX_DIMEN) {
         int32_t index = 0;
-        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
-            index < 0 || (size_t)index >= engine->count_capacity) {
-            return set_error(error, error_capacity,
-                             "box register outside supported range");
-        }
+        if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
+    }
         const struct hstex_box *box = &engine->boxes[(size_t)index];
         /* A void box measures zero in every direction. */
         if (box->kind == HSTEX_BOX_VOID) {
@@ -7692,6 +7703,8 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
                        char *error, size_t error_capacity);
 static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
                          char *error, size_t error_capacity);
+static int drop_last_list_node(struct hstex_engine *engine, char *error,
+                               size_t error_capacity);
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
                                  bool ligature, char *error,
                                  size_t error_capacity);
@@ -7700,6 +7713,8 @@ static int flush_pending_character(struct hstex_engine *engine, char *error,
                                    size_t error_capacity);
 static int start_paragraph(struct hstex_engine *engine, bool indent,
                            char *error, size_t error_capacity);
+static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity);
 static int finish_paragraph(struct hstex_engine *engine, char *error,
                             size_t error_capacity);
 static int append_horizontal_character(struct hstex_engine *engine,
@@ -8056,6 +8071,9 @@ static int execute_glue(struct hstex_engine *engine, int32_t subtype,
     if (engine->pending_global || engine->pending_macro_flags != 0U) {
         return set_error(error, error_capacity,
                          "glue does not accept prefixes");
+    }
+    if (!vertical && ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+        return -1;
     }
     if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
                  : engine->mode != HSTEX_MODE_HORIZONTAL) {
@@ -8576,16 +8594,72 @@ static int append_box_node(struct hstex_engine *engine,
 /* \vsplit takes the top of a vertical list, leaving the rest behind. A void
    register splits to nothing, which is the whole of what is implemented; see
    docs/DECISIONS.md, vtop-and-lastbox. */
+/* Take the last node off the list being built. The builder's totals were
+   accumulated forwards and include maxima the node may have set, so they are
+   recomputed from what remains rather than undone. */
+static int drop_last_list_node(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
+{
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        struct hstex_hbox_builder *builder = engine->active_hbox_builder;
+        uint32_t *identifiers = builder->node_identifiers;
+        size_t count = builder->count - 1U;
+        builder->count = 0U;
+        builder->width = 0;
+        builder->height = 0;
+        builder->depth = 0;
+        for (size_t index = 0U; index < count; ++index) {
+            if (append_hbox_item(engine, identifiers[index], error,
+                                 error_capacity) != 0) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+    struct hstex_vbox_builder *builder = engine->active_vbox_builder;
+    uint32_t *identifiers = builder->node_identifiers;
+    size_t count = builder->count - 1U;
+    builder->count = 0U;
+    builder->extent = 0;
+    builder->trailing_depth = 0;
+    builder->width = 0;
+    for (size_t index = 0U; index < count; ++index) {
+        if (append_vbox_item(engine, identifiers[index], error,
+                             error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* \unskip, \unkern and \unpenalty each remove the last node if it is of
+   their own kind, and do nothing otherwise. */
+static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
+                               char *error, size_t error_capacity)
+{
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_node *node = current_list_last_node(engine);
+    if (node == NULL || node->kind != (enum hstex_node_kind)kind) {
+        return 0;
+    }
+    return drop_last_list_node(engine, error, error_capacity);
+}
+
 static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
                        char *error, size_t error_capacity)
 {
     int32_t index = 0;
     int32_t height = 0;
     bool matched = false;
-    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        (size_t)index >= engine->count_capacity) {
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     if (try_keyword(engine, "to", &matched, error, error_capacity) != 0) {
         return -1;
@@ -8642,36 +8716,7 @@ static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
     box->node_start = node->value.list.node_start;
     box->node_count = node->value.list.node_count;
 
-    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
-        struct hstex_hbox_builder *builder = engine->active_hbox_builder;
-        uint32_t *identifiers = builder->node_identifiers;
-        size_t count = builder->count - 1U;
-        builder->count = 0U;
-        builder->width = 0;
-        builder->height = 0;
-        builder->depth = 0;
-        for (size_t index = 0U; index < count; ++index) {
-            if (append_hbox_item(engine, identifiers[index], error,
-                                 error_capacity) != 0) {
-                return -1;
-            }
-        }
-        return 0;
-    }
-    struct hstex_vbox_builder *builder = engine->active_vbox_builder;
-    uint32_t *identifiers = builder->node_identifiers;
-    size_t count = builder->count - 1U;
-    builder->count = 0U;
-    builder->extent = 0;
-    builder->trailing_depth = 0;
-    builder->width = 0;
-    for (size_t index = 0U; index < count; ++index) {
-        if (append_vbox_item(engine, identifiers[index], error,
-                             error_capacity) != 0) {
-            return -1;
-        }
-    }
-    return 0;
+    return drop_last_list_node(engine, error, error_capacity);
 }
 
 /* TeX's <box>: an explicit \hbox or \vbox, or a register fetched with \box,
@@ -8716,11 +8761,14 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
     if (meaning->command == HSTEX_COMMAND_BOX ||
         meaning->command == HSTEX_COMMAND_COPY) {
         int32_t index = 0;
-        if (scan_integer(engine, &index, error, error_capacity) != 0 ||
-            index < 0 || (size_t)index >= engine->count_capacity) {
-            return set_error(error, error_capacity,
-                             "box register outside supported range");
-        }
+        if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
+    }
         *box = engine->boxes[(size_t)index];
         if (meaning->command == HSTEX_COMMAND_BOX) {
             struct hstex_box empty = {0};
@@ -8798,10 +8846,13 @@ static int execute_box_reference(struct hstex_engine *engine,
                          "box reference does not accept prefixes");
     }
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        (size_t)index >= engine->count_capacity) {
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     struct hstex_box box = engine->boxes[(size_t)index];
     if (command == HSTEX_COMMAND_BOX) {
@@ -8862,11 +8913,13 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
     engine->pending_macro_flags = 0U;
 
     int32_t register_index = 0;
-    if (scan_integer(engine, &register_index, error, error_capacity) != 0 ||
-        register_index < 0 ||
-        (size_t)register_index >= engine->count_capacity) {
+    if (scan_integer(engine, &register_index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (register_index < 0 || (size_t)register_index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", register_index,
+                         engine->count_capacity - 1U);
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0) {
         return -1;
@@ -9691,10 +9744,13 @@ static int scan_box_dimen_assignment(struct hstex_engine *engine,
 {
     int32_t index = 0;
     int32_t value = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        (size_t)index >= engine->count_capacity) {
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_dimension(engine, &value, error, error_capacity) != 0) {
@@ -12005,7 +12061,8 @@ static int execute_pdf_xform(struct hstex_engine *engine, char *error,
         free(attributes);
         free(resources);
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     struct hstex_pdf_record *record =
         add_pdf_record(engine, HSTEX_PDF_RECORD_FORM, error, error_capacity);
@@ -12230,6 +12287,9 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                     subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
     bool keep = subtype == (int32_t)HSTEX_UNBOX_HORIZONTAL_COPY ||
                 subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
+    if (!vertical && ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
                  : engine->mode != HSTEX_MODE_HORIZONTAL) {
         return set_error(error, error_capacity,
@@ -12237,10 +12297,13 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                                   : "unhbox requires horizontal mode");
     }
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        (size_t)index >= engine->count_capacity) {
+    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (index < 0 || (size_t)index >= engine->count_capacity) {
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     struct hstex_box box = engine->boxes[(size_t)index];
     if (box.kind == HSTEX_BOX_VOID) {
@@ -12674,14 +12737,23 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
     return append_box_node(engine, &box, error, error_capacity);
 }
 
+/* A horizontal command met in vertical mode starts a paragraph, indented. */
+static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_VERTICAL) {
+        return 0;
+    }
+    return start_paragraph(engine, true, error, error_capacity);
+}
+
 /* A control space is the font's own interword glue, with no space-factor
    adjustment; see docs/DECISIONS.md, control-space-and-italic. */
 static int execute_control_space(struct hstex_engine *engine, char *error,
                                  size_t error_capacity)
 {
-    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
-        return set_error(error, error_capacity,
-                         "a control space requires horizontal mode");
+    if (ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+        return -1;
     }
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
@@ -12707,9 +12779,8 @@ static int execute_control_space(struct hstex_engine *engine, char *error,
 static int execute_italic_correction(struct hstex_engine *engine, char *error,
                                      size_t error_capacity)
 {
-    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
-        return set_error(error, error_capacity,
-                         "an italic correction requires horizontal mode");
+    if (ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+        return -1;
     }
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
@@ -13646,7 +13717,8 @@ static int scan_if_box(struct hstex_engine *engine, int32_t subtype,
         (size_t)index >= engine->count_capacity) {
         engine->conditional_count = conditional;
         return set_error(error, error_capacity,
-                         "box register outside supported range");
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
     }
     enum hstex_box_kind kind = engine->boxes[(size_t)index].kind;
     bool condition = subtype == (int32_t)HSTEX_IF_BOX_HORIZONTAL
@@ -14355,6 +14427,12 @@ handle_token:
             engine->space_factor = factor;
             continue;
         }
+        case HSTEX_COMMAND_REMOVE_LAST:
+            if (execute_remove_last(engine, meaning->value.integer, error,
+                                    error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_CONTROL_SPACE:
             if (execute_control_space(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
