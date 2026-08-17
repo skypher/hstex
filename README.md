@@ -133,25 +133,28 @@ with math nodes carrying `\mathsurround`, and a binary operator or a relation
 leaves `\binoppenalty` or `\relpenalty` behind it.
 
 Together these are enough for the corpus's first chapter to match `pdflatex`
-almost exactly: 46,139 lines of `\showbox` output for the whole chapter,
-differing in eighteen. What is left there is one hyphenation placement and
-one penalty.
+node for node -- 51,925 lines of `\showbox` output for the front matter and
+the whole chapter, and not one of them different -- and for the first two
+chapters to differ in 2,680 lines of 1.79 million.
 
-Everything a line is made of is now pinned the same way: protrusion kerns
-that look inside boxes, accent kerns rounded once rather than twice,
-`\pdfcolorstack` nodes, the `\finalhyphendemerits` charged at the end of a
-paragraph, and the operator centring, superscript floors and display marks a
-formula needs.
+Everything a line is made of is pinned the same way: protrusion kerns that
+look inside boxes and are dropped again when the paragraph's last line is
+measured, accent kerns rounded once rather than twice, `\pdfcolorstack` and
+`\pdfdest` nodes, the `\finalhyphendemerits` charged at the end of a
+paragraph, and the operator centring, limits, accents, superscript floors and
+display marks a formula needs. `\tracingparagraphs` writes the passes out the
+way the reference does, which is how the last few of those were found.
 
 What `\shipout` does not do yet is write anything: there is no page
 description, so no PDF. Insertions and marks are still to come. The corpus
-comes to 2,303 pages against `pdflatex`'s 2,335.
+comes to 2,332 pages against `pdflatex`'s 2,335, and its `.aux` agrees with
+`pdflatex`'s for its first 1,603 labels.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
 for the same source with a prebuilt format and an 11 MB PDF at the end. A
 large part of that is allocation: a definition is a fresh record every time,
-so the bootstrap alone leaves 417,000 of them and the corpus 7.8 million.
+so the bootstrap alone leaves 417,000 of them and the corpus 8.2 million.
 Nothing has been tuned yet; correctness came first.
 
 ## Build
