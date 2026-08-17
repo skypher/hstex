@@ -168,6 +168,23 @@ enum hstex_command {
     HSTEX_COMMAND_HRULE,
     HSTEX_COMMAND_SCAN_TOKENS,
     HSTEX_COMMAND_FONT_CHAR_DIMEN,
+    HSTEX_COMMAND_FONT_CHAR_CODE,
+    HSTEX_COMMAND_IF_FONT_CHAR,
+    HSTEX_COMMAND_IF_BOX,
+};
+
+/* Which question \ifhbox, \ifvbox and \ifvoid ask about a box register. */
+enum hstex_if_box {
+    HSTEX_IF_BOX_HORIZONTAL = 0,
+    HSTEX_IF_BOX_VERTICAL,
+    HSTEX_IF_BOX_VOID,
+};
+
+enum hstex_font_char_code {
+    HSTEX_FONT_CODE_LEFT_PROTRUSION = 0,
+    HSTEX_FONT_CODE_RIGHT_PROTRUSION,
+    HSTEX_FONT_CODE_EXPANSION,
+    HSTEX_FONT_CODE_TAG,
 };
 
 enum hstex_font_char_dimen {
@@ -428,7 +445,17 @@ struct hstex_char_metric {
     int32_t height;
     int32_t depth;
     int32_t italic;
+    /* The metric file's tag, or -1 for a character it does not define. */
+    int32_t tag;
+    /* Protrusion and expansion settings. These belong to the font, not to a
+       group, so they are never restored; see docs/DECISIONS.md,
+       protrusion-codes. */
+    int32_t left_protrusion;
+    int32_t right_protrusion;
+    int32_t expansion_factor;
 };
+
+#define HSTEX_DEFAULT_EXPANSION_FACTOR 1000
 
 #define HSTEX_FONT_CHARACTER_COUNT 256U
 
@@ -552,6 +579,10 @@ struct hstex_conditional {
        that belongs to no branch yet, and yields \relax instead; see
        docs/DECISIONS.md, unevaluated-conditionals. */
     bool evaluated;
+    /* Where the conditional was opened, so that an unbalanced \else or \fi
+       can say which one it belongs to. */
+    uint32_t line;
+    const char *origin;
 };
 
 enum hstex_mode {

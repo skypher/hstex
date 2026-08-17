@@ -562,6 +562,41 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \iffontchar, \ifhbox, \ifvbox and \ifvoid. An unimplemented conditional is
+   worse than a missing command: a skipped branch miscounts its \else. */
+static int test_box_and_font_conditionals(void)
+{
+    return run_snippet(
+        "\\font\\fa=cmr10 \\setbox1=\\hbox{}\\setbox2=\\vbox{}"
+        "[\\iffontchar\\fa 65 T\\else F\\fi|\\iffontchar\\fa 128 T\\else F\\fi]"
+        "[\\ifhbox1 T\\else F\\fi|\\ifhbox2 T\\else F\\fi|\\ifhbox3 T\\else F\\fi]"
+        "[\\ifvbox1 T\\else F\\fi|\\ifvbox2 T\\else F\\fi|\\ifvbox3 T\\else F\\fi]"
+        "[\\ifvoid1 T\\else F\\fi|\\ifvoid2 T\\else F\\fi|\\ifvoid3 T\\else F\\fi]"
+        /* Skipping counts them, so a nested \else is not mistaken for ours. */
+        "\\iffalse\\ifhbox1 A\\else B\\fi\\else C\\fi"
+        "\\iffalse\\iffontchar\\fa 65 A\\else B\\fi\\else D\\fi%",
+        "[T|F][T|F|F][F|T|F][F|F|T]CD");
+}
+
+/* Protrusion and expansion codes belong to the font, not to a group; the tag
+   comes from the metric file; see docs/DECISIONS.md, protrusion-codes. */
+static int test_protrusion_codes(void)
+{
+    return run_snippet(
+        "\\font\\fa=cmr10 \\font\\fb=cmex10 "
+        "[\\the\\lpcode\\fa 65|\\the\\rpcode\\fa 65"
+        "|\\the\\efcode\\fa 65|\\the\\tagcode\\fa 65]"
+        "\\lpcode\\fa 65=100 \\rpcode\\fa 65=-50 \\efcode\\fa 65=800 "
+        "[\\the\\lpcode\\fa 65|\\the\\rpcode\\fa 65|\\the\\efcode\\fa 65]"
+        /* A setting made inside a group outlives it. */
+        "{\\lpcode\\fa 65=7 }[\\the\\lpcode\\fa 65]"
+        /* An undefined character still has codes, but no tag. */
+        "[\\the\\lpcode\\fa 128|\\the\\efcode\\fa 128"
+        "|\\the\\tagcode\\fa 128]"
+        "[\\the\\tagcode\\fa 48|\\the\\tagcode\\fb 16]%",
+        "[0|0|1000|1][100|-50|800][7][0|1000|-1][0|2]");
+}
+
 /* Character metrics come from the TFM tables, and a font without `at` is used
    at its design size; see docs/DECISIONS.md, font-character-metrics. */
 static int test_font_character_metrics(void)
@@ -1438,7 +1473,8 @@ int main(void)
         run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
                     "\\o{A}\\x{P}{Q}%",
                     "[P|Q|A]") != 0 ||
-        test_font_character_metrics() != 0 ||
+        test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
+        test_box_and_font_conditionals() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||
         test_box_shift_and_packaging() != 0 || test_kerns_and_rules() != 0 ||

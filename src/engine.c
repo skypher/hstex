@@ -712,6 +712,10 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
         return set_error(error, error_capacity,
                          "font character metric allocation failed");
     }
+    for (size_t index = 0U; index < HSTEX_FONT_CHARACTER_COUNT; ++index) {
+        characters[index].tag = -1;
+        characters[index].expansion_factor = HSTEX_DEFAULT_EXPANSION_FACTOR;
+    }
     for (size_t index = 0U; index < character_count; ++index) {
         size_t code = (size_t)bc + index;
         if (code >= HSTEX_FONT_CHARACTER_COUNT) {
@@ -726,6 +730,7 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
         size_t depth_index = (size_t)(info[1] & 0x0FU);
         size_t italic_index = (size_t)(info[2] >> 2);
         struct hstex_char_metric *metric = &characters[code];
+        metric->tag = (int32_t)(info[2] & 0x03U);
         metric->width = scale_fix_word(
             read_big_endian_i32(input.data + (width_base + width_index) * 4U),
             size);
@@ -1556,6 +1561,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"ifodd", HSTEX_COMMAND_IF_ODD},
         {"ifcase", HSTEX_COMMAND_IF_CASE},
         {"or", HSTEX_COMMAND_OR},
+        {"iffontchar", HSTEX_COMMAND_IF_FONT_CHAR},
         {"unless", HSTEX_COMMAND_UNLESS},
         {"lowercase", HSTEX_COMMAND_LOWER_CASE},
         {"uppercase", HSTEX_COMMAND_UPPER_CASE},
@@ -1759,6 +1765,46 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
                 engine, shift_box_primitives[index].name,
                 HSTEX_COMMAND_SHIFT_BOX,
                 (int32_t)shift_box_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_if_box subtype;
+    } if_box_primitives[] = {
+        {"ifhbox", HSTEX_IF_BOX_HORIZONTAL},
+        {"ifvbox", HSTEX_IF_BOX_VERTICAL},
+        {"ifvoid", HSTEX_IF_BOX_VOID},
+    };
+    for (size_t index = 0U;
+         index < sizeof(if_box_primitives) / sizeof(if_box_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, if_box_primitives[index].name, HSTEX_COMMAND_IF_BOX,
+                (int32_t)if_box_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_font_char_code subtype;
+    } font_code_primitives[] = {
+        {"lpcode", HSTEX_FONT_CODE_LEFT_PROTRUSION},
+        {"rpcode", HSTEX_FONT_CODE_RIGHT_PROTRUSION},
+        {"efcode", HSTEX_FONT_CODE_EXPANSION},
+        {"tagcode", HSTEX_FONT_CODE_TAG},
+    };
+    for (size_t index = 0U;
+         index < sizeof(font_code_primitives) / sizeof(font_code_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, font_code_primitives[index].name,
+                HSTEX_COMMAND_FONT_CHAR_CODE,
+                (int32_t)font_code_primitives[index].subtype, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2974,6 +3020,41 @@ static int integer_from_control_sequence(
             return set_error(error, error_capacity,
                              "invalid engine-state integer subtype");
         }
+    case HSTEX_COMMAND_FONT_CHAR_CODE: {
+        uint32_t identifier = 0U;
+        int32_t code = 0;
+        if (scan_font_identifier(engine, &identifier, error, error_capacity) !=
+                0 ||
+            scan_integer(engine, &code, error, error_capacity) != 0) {
+            return -1;
+        }
+        const struct hstex_font *font = font_by_identifier(engine, identifier);
+        if (font == NULL || font->characters == NULL) {
+            return set_error(error, error_capacity,
+                             "font code requires a defined font");
+        }
+        if (code < 0 || (size_t)code >= HSTEX_FONT_CHARACTER_COUNT) {
+            return set_error(error, error_capacity, "bad character code (%d)",
+                             code);
+        }
+        const struct hstex_char_metric *metric =
+            &font->characters[(size_t)code];
+        switch ((enum hstex_font_char_code)meaning->value.integer) {
+        case HSTEX_FONT_CODE_LEFT_PROTRUSION:
+            *value = metric->left_protrusion;
+            return 0;
+        case HSTEX_FONT_CODE_RIGHT_PROTRUSION:
+            *value = metric->right_protrusion;
+            return 0;
+        case HSTEX_FONT_CODE_EXPANSION:
+            *value = metric->expansion_factor;
+            return 0;
+        case HSTEX_FONT_CODE_TAG:
+            *value = metric->tag;
+            return 0;
+        }
+        return set_error(error, error_capacity, "invalid font code subtype");
+    }
     case HSTEX_COMMAND_DIMEN_REGISTER:
     case HSTEX_COMMAND_DIMEN_PARAMETER:
     case HSTEX_COMMAND_DIMEN:
@@ -3610,6 +3691,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
     case HSTEX_COMMAND_PAGE_INTEGER:
     case HSTEX_COMMAND_FONT_CHAR_DIMEN:
+    case HSTEX_COMMAND_FONT_CHAR_CODE:
     case HSTEX_COMMAND_BOX_DIMEN:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
@@ -6122,6 +6204,10 @@ static int execute_fi(struct hstex_engine *engine, char *error,
                       size_t error_capacity);
 static int skip_case_remainder(struct hstex_engine *engine, size_t target,
                                char *error, size_t error_capacity);
+static int scan_if_font_char(struct hstex_engine *engine, char *error,
+                             size_t error_capacity);
+static int scan_if_box(struct hstex_engine *engine, int32_t subtype,
+                       char *error, size_t error_capacity);
 static int expand_meaning(struct hstex_engine *engine,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity);
@@ -6353,6 +6439,13 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     }
     if (meaning->command == HSTEX_COMMAND_IF_ODD) {
         return scan_if_odd(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_FONT_CHAR) {
+        return scan_if_font_char(engine, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_IF_BOX) {
+        return scan_if_box(engine, meaning->value.integer, error,
+                           error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_IF_CASE) {
         return scan_if_case(engine, error, error_capacity);
@@ -6665,6 +6758,19 @@ enum hstex_engine_result hstex_engine_next_expanded(
         }
         if (meaning->command == HSTEX_COMMAND_IF_CASE) {
             if (scan_if_case(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_FONT_CHAR) {
+            if (scan_if_font_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_IF_BOX) {
+            if (scan_if_box(engine, meaning->value.integer, error,
+                            error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -8162,7 +8268,8 @@ static int execute_else(struct hstex_engine *engine, char *error,
         &engine->conditionals[engine->conditional_count - 1U];
     if (conditional->else_seen) {
         return set_error(error, error_capacity,
-                         "second else in one conditional");
+                         "second else in the conditional opened at %s:%u",
+                         conditional->origin, (unsigned int)conditional->line);
     }
     conditional->else_seen = true;
     return skip_conditional(engine, engine->conditional_count - 1U, false,
@@ -8972,6 +9079,49 @@ static int scan_box_dimen_assignment(struct hstex_engine *engine,
     }
     return assign_box(engine, (uint32_t)index, box, requested_global, error,
                       error_capacity);
+}
+
+/* Protrusion and expansion settings belong to the font rather than to a
+   group, so they bypass the save stack and \global changes nothing. */
+static int scan_font_char_code_assignment(struct hstex_engine *engine,
+                                          int32_t subtype, char *error,
+                                          size_t error_capacity)
+{
+    if (subtype == (int32_t)HSTEX_FONT_CODE_TAG) {
+        return set_error(error, error_capacity,
+                         "the metric file's tag cannot be assigned");
+    }
+    uint32_t identifier = 0U;
+    int32_t code = 0;
+    int32_t value = 0;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0 ||
+        scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &value, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL || font->characters == NULL) {
+        return set_error(error, error_capacity,
+                         "font code requires a defined font");
+    }
+    if (code < 0 || (size_t)code >= HSTEX_FONT_CHARACTER_COUNT) {
+        return set_error(error, error_capacity, "bad character code (%d)",
+                         code);
+    }
+    struct hstex_char_metric *metric = &font->characters[(size_t)code];
+    if (subtype == (int32_t)HSTEX_FONT_CODE_LEFT_PROTRUSION) {
+        metric->left_protrusion = value;
+    } else if (subtype == (int32_t)HSTEX_FONT_CODE_RIGHT_PROTRUSION) {
+        metric->right_protrusion = value;
+    } else {
+        metric->expansion_factor = value;
+    }
+    return 0;
 }
 
 static int scan_prev_depth_assignment(struct hstex_engine *engine,
@@ -10900,6 +11050,8 @@ static bool command_starts_conditional(enum hstex_command command)
            command == HSTEX_COMMAND_IF_FALSE ||
            command == HSTEX_COMMAND_IF_EOF ||
            command == HSTEX_COMMAND_IF_DEFINED ||
+           command == HSTEX_COMMAND_IF_FONT_CHAR ||
+           command == HSTEX_COMMAND_IF_BOX ||
            command == HSTEX_COMMAND_IF_CS_NAME;
 }
 
@@ -11166,6 +11318,22 @@ static int skip_case_remainder(struct hstex_engine *engine, size_t target,
     }
 }
 
+/* The innermost file being read, and the line reached in it. */
+static const char *current_source_line(const struct hstex_engine *engine,
+                                       uint32_t *line)
+{
+    for (size_t index = engine->sources.count; index > 0U; --index) {
+        const struct hstex_source_frame *frame =
+            &engine->sources.frames[index - 1U];
+        if (frame->kind == HSTEX_SOURCE_FILE) {
+            *line = frame->value.file.mouth.line_number;
+            return frame->value.file.path;
+        }
+    }
+    *line = 0U;
+    return "<no file>";
+}
+
 static int push_conditional(struct hstex_engine *engine, size_t *index,
                             char *error, size_t error_capacity)
 {
@@ -11180,6 +11348,7 @@ static int push_conditional(struct hstex_engine *engine, size_t *index,
     entry->case_conditional = false;
     entry->negate = engine->negate_next_conditional;
     entry->evaluated = false;
+    entry->origin = current_source_line(engine, &entry->line);
     engine->negate_next_conditional = false;
     return 0;
 }
@@ -11370,6 +11539,58 @@ static int scan_if_odd(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity, "invalid ifodd integer");
     }
     return finish_conditional(engine, conditional, value % 2 != 0, error,
+                              error_capacity);
+}
+
+/* \iffontchar asks whether the font defines a character at all. */
+static int scan_if_font_char(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    size_t conditional = 0U;
+    if (push_conditional(engine, &conditional, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint32_t identifier = 0U;
+    int32_t code = 0;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0 ||
+        scan_integer(engine, &code, error, error_capacity) != 0) {
+        engine->conditional_count = conditional;
+        return -1;
+    }
+    if (code < 0 || (size_t)code >= HSTEX_FONT_CHARACTER_COUNT) {
+        engine->conditional_count = conditional;
+        return set_error(error, error_capacity, "bad character code (%d)",
+                         code);
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    bool defined = font != NULL && font->characters != NULL &&
+                   font->characters[(size_t)code].tag >= 0;
+    return finish_conditional(engine, conditional, defined, error,
+                              error_capacity);
+}
+
+/* \ifhbox, \ifvbox and \ifvoid each ask one question about a register. */
+static int scan_if_box(struct hstex_engine *engine, int32_t subtype,
+                       char *error, size_t error_capacity)
+{
+    size_t conditional = 0U;
+    if (push_conditional(engine, &conditional, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        engine->conditional_count = conditional;
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    enum hstex_box_kind kind = engine->boxes[(size_t)index].kind;
+    bool condition = subtype == (int32_t)HSTEX_IF_BOX_HORIZONTAL
+                         ? kind == HSTEX_BOX_HLIST
+                         : subtype == (int32_t)HSTEX_IF_BOX_VERTICAL
+                               ? kind == HSTEX_BOX_VLIST
+                               : kind == HSTEX_BOX_VOID;
+    return finish_conditional(engine, conditional, condition, error,
                               error_capacity);
 }
 
@@ -11994,6 +12215,15 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_FONT_CHAR_CODE:
+            if (finish_assignment(
+                    engine,
+                    scan_font_char_code_assignment(
+                        engine, meaning->value.integer, error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_FONT_CHAR_DIMEN:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity,
@@ -12319,6 +12549,17 @@ handle_token:
             continue;
         case HSTEX_COMMAND_IF_CASE:
             if (scan_if_case(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_FONT_CHAR:
+            if (scan_if_font_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_IF_BOX:
+            if (scan_if_box(engine, meaning->value.integer, error,
+                            error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
