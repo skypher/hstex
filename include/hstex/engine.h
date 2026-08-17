@@ -884,6 +884,12 @@ struct hstex_engine {
     struct hstex_hbox_builder *paragraph_builder;
     bool building_paragraph;
     struct hstex_vbox_builder *active_vbox_builder;
+    /* A box body runs on the live input and ends when the group the box
+       opened ends. The executor stops and hands control back to the box
+       builder when the level falls to group_stop_level. */
+    uint32_t group_stop_level;
+    bool group_stop_armed;
+    bool group_stop_hit;
     /* Name of the primitive the executor is currently running, for
        diagnostics: a scan that fails names the command that asked for the
        value, which is otherwise invisible from inside the scanner. */

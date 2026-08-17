@@ -191,20 +191,6 @@ static bool token_is_effective_begin_group(struct hstex_engine *engine,
            token_is_category(meaning->value.token, HSTEX_CAT_BEGIN_GROUP);
 }
 
-static bool token_is_effective_end_group(struct hstex_engine *engine,
-                                         hstex_token token)
-{
-    if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
-        return true;
-    }
-    if (engine == NULL || !hstex_token_is_control_sequence(token)) {
-        return false;
-    }
-    const struct hstex_meaning *meaning = hstex_engine_meaning(
-        engine, hstex_token_control_sequence_id(token));
-    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
-           token_is_category(meaning->value.token, HSTEX_CAT_END_GROUP);
-}
 
 static int code_table_index(enum hstex_command command)
 {
@@ -5894,13 +5880,11 @@ static bool token_is_paragraph(const struct hstex_engine *engine,
                engine->lexical_state.paragraph_control_sequence;
 }
 
-/* A macro argument counts only explicit braces, the way TeX compares tokens;
-   a box body counts implicit ones too, because it is a real group and ends
-   when the group ends. See docs/DECISIONS.md, implicit-braces. */
-static int scan_balanced_group_kind(struct hstex_engine *engine,
-                                    struct token_vector *argument,
-                                    bool long_macro, bool implicit_braces,
-                                    char *error, size_t error_capacity)
+/* Balanced text counts only explicit braces, the way the reference compares
+   tokens; see docs/DECISIONS.md, implicit-braces. */
+static int scan_balanced_group(struct hstex_engine *engine,
+                               struct token_vector *argument, bool long_macro,
+                               char *error, size_t error_capacity)
 {
     size_t depth = 1U;
     while (depth != 0U) {
@@ -5917,15 +5901,9 @@ static int scan_balanced_group_kind(struct hstex_engine *engine,
             return set_error(error, error_capacity,
                              "paragraph ended a non-long macro argument");
         }
-        bool opens = implicit_braces
-                         ? token_is_effective_begin_group(engine, token)
-                         : token_is_category(token, HSTEX_CAT_BEGIN_GROUP);
-        bool closes = implicit_braces
-                          ? token_is_effective_end_group(engine, token)
-                          : token_is_category(token, HSTEX_CAT_END_GROUP);
-        if (opens) {
+        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
-        } else if (closes) {
+        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
             --depth;
             if (depth == 0U) {
                 break;
@@ -5938,13 +5916,6 @@ static int scan_balanced_group_kind(struct hstex_engine *engine,
     return 0;
 }
 
-static int scan_balanced_group(struct hstex_engine *engine,
-                               struct token_vector *argument, bool long_macro,
-                               char *error, size_t error_capacity)
-{
-    return scan_balanced_group_kind(engine, argument, long_macro, false, error,
-                                    error_capacity);
-}
 
 static int case_shift_active_character(struct hstex_engine *engine,
                                        hstex_token *token, size_t table,
@@ -8208,21 +8179,13 @@ static int execute_penalty(struct hstex_engine *engine, char *error,
     return append_current_list_node(engine, &node, error, error_capacity);
 }
 
+/* The body runs on the live input, the way the reference executes it, so a
+   box may be opened by one macro and closed by an \egroup another produces.
+   See docs/DECISIONS.md, streaming-box-bodies. */
 static int evaluate_hbox_contents(struct hstex_engine *engine,
-                                  struct token_vector *contents,
                                   struct hstex_hbox_builder *builder,
                                   char *error, size_t error_capacity)
 {
-    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
-        0) {
-        return -1;
-    }
-    if (push_owned_vector(engine, contents, (struct hstex_source_location){0},
-                          error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-        return -1;
-    }
-
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
     size_t previous_conditional_floor = engine->output_conditional_floor;
@@ -8230,12 +8193,17 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         engine->active_hbox_builder;
     enum hstex_mode previous_mode = engine->mode;
     bool previous_inner_mode = engine->inner_mode;
+    uint32_t previous_stop_level = engine->group_stop_level;
+    bool previous_stop_armed = engine->group_stop_armed;
+    bool previous_stop_hit = engine->group_stop_hit;
     if (begin_group(engine, error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
         return -1;
     }
     engine->output_group_floor = engine->group_level;
     engine->output_conditional_floor = engine->conditional_count;
+    engine->group_stop_level = base_group_level;
+    engine->group_stop_armed = true;
+    engine->group_stop_hit = false;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -8282,6 +8250,15 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     if (status == 0) {
         status = flush_pending_character(engine, error, error_capacity);
     }
+    if (status == 0 && !engine->group_stop_hit) {
+        status = set_error(error, error_capacity,
+                           "input ended inside an hbox");
+    }
+    if (status == 0 &&
+        engine->conditional_count != engine->output_conditional_floor) {
+        status = set_error(error, error_capacity,
+                           "hbox body ended inside a conditional");
+    }
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
 
@@ -8290,9 +8267,9 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->inner_mode = previous_inner_mode;
     engine->output_group_floor = previous_group_floor;
     engine->output_conditional_floor = previous_conditional_floor;
-    if (hstex_source_pop_boundary(&engine->sources, error, error_capacity) != 0) {
-        status = -1;
-    }
+    engine->group_stop_level = previous_stop_level;
+    engine->group_stop_armed = previous_stop_armed;
+    engine->group_stop_hit = previous_stop_hit;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -8389,22 +8366,9 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
                          "hbox requires a braced token list, found %s at %s:%u",
                          found, origin, (unsigned int)line);
     }
-    struct token_vector contents = {0};
-    if (scan_balanced_group_kind(engine, &contents, true, true, error,
-                                 error_capacity) != 0) {
-        vector_destroy(&contents);
-        char reason[256];
-        (void)snprintf(reason, sizeof(reason), "%s", error);
-        uint32_t line = 0U;
-        const char *origin = current_source_line(engine, &line);
-        return set_error(error, error_capacity,
-                         "%s, in a box body opened at %s:%u", reason, origin,
-                         (unsigned int)location.line);
-    }
     struct hstex_hbox_builder builder = {0};
-    int status = evaluate_hbox_contents(engine, &contents, &builder, error,
+    int status = evaluate_hbox_contents(engine, &builder, error,
                                         error_capacity);
-    vector_destroy(&contents);
     if (status == 0) {
         status = finalize_hbox(engine, &builder, matched_to, matched_spread,
                               requested_width, box, error, error_capacity);
@@ -8414,20 +8378,9 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
 }
 
 static int evaluate_vbox_contents(struct hstex_engine *engine,
-                                  struct token_vector *contents,
                                   struct hstex_vbox_builder *builder,
                                   char *error, size_t error_capacity)
 {
-    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
-        0) {
-        return -1;
-    }
-    if (push_owned_vector(engine, contents, (struct hstex_source_location){0},
-                          error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-        return -1;
-    }
-
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
     size_t previous_conditional_floor = engine->output_conditional_floor;
@@ -8438,12 +8391,17 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     enum hstex_mode previous_mode = engine->mode;
     bool previous_inner_mode = engine->inner_mode;
     int32_t previous_depth = engine->prev_depth;
+    uint32_t previous_stop_level = engine->group_stop_level;
+    bool previous_stop_armed = engine->group_stop_armed;
+    bool previous_stop_hit = engine->group_stop_hit;
     if (begin_group(engine, error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
         return -1;
     }
     engine->output_group_floor = engine->group_level;
     engine->output_conditional_floor = engine->conditional_count;
+    engine->group_stop_level = base_group_level;
+    engine->group_stop_armed = true;
+    engine->group_stop_hit = false;
     engine->active_hbox_builder = NULL;
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
@@ -8502,6 +8460,14 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
         break;
     }
 
+    if (status == 0 && !engine->group_stop_hit) {
+        status = set_error(error, error_capacity, "input ended inside a vbox");
+    }
+    if (status == 0 &&
+        engine->conditional_count != engine->output_conditional_floor) {
+        status = set_error(error, error_capacity,
+                           "vbox body ended inside a conditional");
+    }
     engine->active_hbox_builder = previous_hbox_builder;
     engine->active_vbox_builder = previous_vbox_builder;
     engine->mode = previous_mode;
@@ -8509,9 +8475,9 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->prev_depth = previous_depth;
     engine->output_group_floor = previous_group_floor;
     engine->output_conditional_floor = previous_conditional_floor;
-    if (hstex_source_pop_boundary(&engine->sources, error, error_capacity) != 0) {
-        status = -1;
-    }
+    engine->group_stop_level = previous_stop_level;
+    engine->group_stop_armed = previous_stop_armed;
+    engine->group_stop_hit = previous_stop_hit;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -8616,22 +8582,9 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
                          "vbox requires a braced token list, found %s at %s:%u",
                          found, origin, (unsigned int)line);
     }
-    struct token_vector contents = {0};
-    if (scan_balanced_group_kind(engine, &contents, true, true, error,
-                                 error_capacity) != 0) {
-        vector_destroy(&contents);
-        char reason[256];
-        (void)snprintf(reason, sizeof(reason), "%s", error);
-        uint32_t line = 0U;
-        const char *origin = current_source_line(engine, &line);
-        return set_error(error, error_capacity,
-                         "%s, in a box body opened at %s:%u", reason, origin,
-                         (unsigned int)location.line);
-    }
     struct hstex_vbox_builder builder = {0};
-    int status = evaluate_vbox_contents(engine, &contents, &builder, error,
+    int status = evaluate_vbox_contents(engine, &builder, error,
                                         error_capacity);
-    vector_destroy(&contents);
     if (status == 0) {
         status = finalize_vbox(engine, &builder, matched_to, matched_spread,
                               requested_height, box, error, error_capacity);
@@ -13002,8 +12955,19 @@ static int execute_error_message(struct hstex_engine *engine, char *error,
         return -1;
     }
     int precision = byte_count > (size_t)INT_MAX ? INT_MAX : (int)byte_count;
-    int status = set_error(error, error_capacity, "%.*s", precision,
-                           bytes == NULL ? "" : (const char *)bytes);
+    uint32_t line = 0U;
+    const char *origin = current_source_line(engine, &line);
+    /* LaTeX's \GenericError prints its diagnosis itself and then raises an
+       \errmessage with nothing in it, so an empty message is not a bug. */
+    int status =
+        byte_count == 0U
+            ? set_error(error, error_capacity,
+                        "the document raised an error at %s:%u; its own "
+                        "diagnosis is above",
+                        origin, (unsigned int)line)
+            : set_error(error, error_capacity, "%.*s, at %s:%u", precision,
+                        bytes == NULL ? "" : (const char *)bytes, origin,
+                        (unsigned int)line);
     free(bytes);
     return status;
 }
@@ -14126,8 +14090,12 @@ static int set_undefined_control_sequence_error(
                          "undefined active character: %.*s", printable_length,
                          (const char *)name);
     }
-    return set_error(error, error_capacity, "undefined control sequence: \\%.*s",
-                     printable_length, (const char *)name);
+    uint32_t line = 0U;
+    const char *origin = current_source_line(engine, &line);
+    return set_error(error, error_capacity,
+                     "undefined control sequence: \\%.*s, at %s:%u",
+                     printable_length, (const char *)name, origin,
+                     (unsigned int)line);
 }
 
 static int execute_ignore_spaces(struct hstex_engine *engine, char *error,
@@ -14169,6 +14137,9 @@ enum hstex_engine_result hstex_engine_next_output(
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, token, location, error, error_capacity);
         if (result == HSTEX_ENGINE_EOF) {
+            if (engine->group_stop_hit) {
+                return result;
+            }
             if (engine->group_level != engine->output_group_floor) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a group");
@@ -14206,6 +14177,14 @@ handle_token:
             if (token_is_category(*token, HSTEX_CAT_END_GROUP)) {
                 if (end_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
+                }
+                /* A box body is executed on the live input; when the group it
+                   opened closes, the box is complete and the builder takes
+                   over again. */
+                if (engine->group_stop_armed &&
+                    engine->group_level <= engine->group_stop_level) {
+                    engine->group_stop_hit = true;
+                    return HSTEX_ENGINE_EOF;
                 }
                 continue;
             }

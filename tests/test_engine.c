@@ -700,6 +700,27 @@ static int test_implicit_braces(void)
         "[5.0pt][5.0pt][20.0pt][0.0pt][7.0pt][3.0pt][1]");
 }
 
+/* A box body is executed, not read ahead over, so one macro may open a box
+   and another close it; see docs/DECISIONS.md, streaming-box-bodies. */
+static int test_streaming_box_bodies(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f\\let\\bgroup={\\let\\egroup=}"
+        "\\def\\openh{\\hbox\\bgroup\\kern3pt}\\def\\closeh{\\kern4pt\\egroup}"
+        "\\setbox0=\\openh\\closeh[\\the\\wd0]"
+        "\\def\\openv{\\vbox\\bgroup\\kern3pt}\\def\\closev{\\kern4pt\\egroup}"
+        "\\setbox1=\\openv\\closev[\\the\\ht1]"
+        "\\def\\wrap#1{\\setbox2=\\hbox\\bgroup #1\\egroup}"
+        "\\wrap{\\kern9pt}[\\the\\wd2]"
+        /* A conditional may span the body, and must be closed inside it. */
+        "\\setbox3=\\hbox{\\kern1pt\\ifnum1=1 \\kern2pt\\fi\\kern4pt}"
+        "[\\the\\wd3]"
+        /* The body is a group: assignments are local unless made global. */
+        "\\count0=5 \\setbox4=\\hbox{\\count0=6 \\global\\count1=\\count0 }"
+        "[\\the\\count0|\\the\\count1]%",
+        "[7.0pt][7.0pt][9.0pt][7.0pt][5|6]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1782,7 +1803,8 @@ int main(void)
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
         test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
-        test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
+        test_streaming_box_bodies() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
