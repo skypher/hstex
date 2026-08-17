@@ -967,6 +967,11 @@ struct hstex_node {
         struct {
             uint32_t font;
             uint32_t character;
+            /* What a ligature was made of, so that \showbox can name it and
+               a later pass can take it apart again; see
+               docs/DECISIONS.md, ligature-originals. */
+            uint8_t originals[6];
+            uint8_t original_count;
         } character;
         struct {
             int32_t stretch;
@@ -1152,6 +1157,9 @@ struct hstex_engine {
        can see it beside the next one. It is flushed before anything else
        happens, so the list is never observed mid-pair. */
     bool has_pending_character;
+    /* What the character held back was made of, if it is a ligature. */
+    uint8_t pending_originals[6];
+    uint8_t pending_original_count;
     bool pending_is_ligature;
     uint8_t pending_character;
     enum hstex_interaction_mode interaction_mode;

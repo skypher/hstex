@@ -10741,6 +10741,24 @@ static void show_rule_dimen(FILE *out, int32_t value)
     show_scaled(out, value);
 }
 
+/* The reference writes an unprintable character in ^^ notation. */
+static void show_ascii(FILE *out, uint8_t code)
+{
+    if (code < 32U || code == 127U) {
+        (void)fputs("^^", out);
+        (void)fputc(code < 64U ? (int)(code + 64U) : (int)(code - 64U), out);
+        return;
+    }
+    if (code >= 128U) {
+        static const char hexadecimal[] = "0123456789abcdef";
+        (void)fputs("^^", out);
+        (void)fputc(hexadecimal[code >> 4U], out);
+        (void)fputc(hexadecimal[code & 0x0fU], out);
+        return;
+    }
+    (void)fputc((int)code, out);
+}
+
 static void show_character(struct hstex_engine *engine, FILE *out,
                            const struct hstex_node *node)
 {
@@ -10759,19 +10777,7 @@ static void show_character(struct hstex_engine *engine, FILE *out,
         (void)fputs(font->name, out);
     }
     (void)fputc(' ', out);
-    /* The reference writes an unprintable character in ^^ notation. */
-    uint8_t code = (uint8_t)node->value.character.character;
-    if (code < 32U || code == 127U) {
-        (void)fputs("^^", out);
-        (void)fputc(code < 64U ? (int)(code + 64U) : (int)(code - 64U), out);
-    } else if (code >= 128U) {
-        static const char hexadecimal[] = "0123456789abcdef";
-        (void)fputs("^^", out);
-        (void)fputc(hexadecimal[code >> 4U], out);
-        (void)fputc(hexadecimal[code & 0x0fU], out);
-    } else {
-        (void)fputc((int)code, out);
-    }
+    show_ascii(out, (uint8_t)node->value.character.character);
 }
 
 static void show_node_list(struct hstex_engine *engine, FILE *out,
@@ -10882,8 +10888,18 @@ static void show_node(struct hstex_engine *engine, FILE *out,
         (void)fprintf(out, "\\penalty %d", node->value.penalty);
         return;
     case HSTEX_NODE_CHARACTER:
+        show_character(engine, out, node);
+        return;
     case HSTEX_NODE_LIGATURE:
         show_character(engine, out, node);
+        (void)fputs(" (ligature ", out);
+        for (uint8_t index = 0U;
+             index < node->value.character.original_count &&
+             index < sizeof(node->value.character.originals);
+             ++index) {
+            show_ascii(out, node->value.character.originals[index]);
+        }
+        (void)fputc(')', out);
         return;
     }
 }
@@ -14253,6 +14269,12 @@ static int append_character_node(struct hstex_engine *engine, uint8_t code,
             .character = code,
         },
     };
+    if (ligature) {
+        node.value.character.original_count =
+            engine->pending_original_count;
+        memcpy(node.value.character.originals, engine->pending_originals,
+               sizeof(node.value.character.originals));
+    }
     return append_hbox_node(engine, &node, error, error_capacity);
 }
 
@@ -14294,7 +14316,18 @@ static int append_horizontal_character(struct hstex_engine *engine,
             return -1;
         }
         if (ligatured) {
-            /* The pair becomes one character, which may ligature again. */
+            /* The pair becomes one character, which may ligature again; what
+               it was made of is kept so that it can be named and taken
+               apart. See docs/DECISIONS.md, ligature-originals. */
+            if (!engine->pending_is_ligature) {
+                engine->pending_originals[0] = engine->pending_character;
+                engine->pending_original_count = 1U;
+            }
+            if (engine->pending_original_count <
+                sizeof(engine->pending_originals)) {
+                engine->pending_originals[engine->pending_original_count++] =
+                    code;
+            }
             engine->pending_character = ligature;
             engine->pending_is_ligature = true;
             return 0;
@@ -14314,6 +14347,7 @@ static int append_horizontal_character(struct hstex_engine *engine,
     }
     engine->has_pending_character = true;
     engine->pending_is_ligature = false;
+    engine->pending_original_count = 0U;
     engine->pending_character = code;
     return 0;
 }
@@ -14842,8 +14876,13 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
         enum hstex_mode previous_mode = engine->mode;
         engine->active_hbox_builder = &builder;
         engine->mode = HSTEX_MODE_HORIZONTAL;
-        status = emit_parameter_glue(engine, left, HSTEX_GLUE_LEFT_SKIP,
-                                     error, error_capacity);
+        /* The reference only puts \leftskip in front of a line when it is
+           not the zero glue; \rightskip always goes at the end. */
+        status = left.width == 0 && left.stretch == 0 && left.shrink == 0
+                     ? 0
+                     : emit_parameter_glue(engine, left,
+                                           HSTEX_GLUE_LEFT_SKIP, error,
+                                           error_capacity);
         for (size_t index = from; status == 0 && index < to && index < count;
              ++index) {
             status = append_hbox_item(engine, items[index], error,
