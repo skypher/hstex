@@ -1747,6 +1747,125 @@ static int test_only_a_character_is_centred(void)
         "\n! OK.\n");
 }
 
+/* A superscript is lifted to the first of the three parameters in display
+   style, the second elsewhere, and the third in a cramped one; see
+   docs/DECISIONS.md, superscripts-in-display-style. */
+static int test_superscripts_in_display_style(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 \\ca"
+        "tcode`\\_=8 \\tracingonline=1 \\showboxdepth=3 \\showb"
+        "oxbreadth=60 \\hbadness=10000 \\vbadness=10000 \\hfuzz"
+        "=1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt \\"
+        "boxmaxdepth=16383.99998pt \\baselineskip=12pt \\linesk"
+        "ip=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fil "
+        "\\leftskip=0pt \\rightskip=0pt \\tolerance=10000 \\pre"
+        "tolerance=-1 \\spaceskip=4pt \\font\\tenrm=cmr10 \\fon"
+        "t\\sevenrm=cmr7 \\font\\fiverm=cmr5 \\font\\teni=cmmi1"
+        "0 \\font\\seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\ten"
+        "sy=cmsy10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\"
+        "font\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont0=\\"
+        "sevenrm \\scriptscriptfont0=\\fiverm \\textfont1=\\ten"
+        "i \\scriptfont1=\\seveni \\scriptscriptfont1=\\fivei \\"
+        "textfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3=\\t"
+        "enex \\scriptscriptfont3=\\tenex \\tenrm \\mathcode`\\"
+        "+=\"202B \\thinmuskip=3mu \\medmuskip=4mu plus 2mu min"
+        "us 4mu \\thickmuskip=5mu plus 5mu \\abovedisplayskip=1"
+        "0pt plus2pt \\belowdisplayskip=11pt plus2pt \\abovedis"
+        "playshortskip=1pt plus3pt \\belowdisplayshortskip=2pt "
+        "plus3pt \\predisplaypenalty=10000 \\postdisplaypenalty"
+        "=0 \\widowpenalty=150 \\displaywidowpenalty=50 \\clubp"
+        "enalty=0 \\interlinepenalty=0 \\message{[t]}\\setbox0="
+        "\\hbox{$x_a^b$}\\showbox0 \\message{[d]}\\setbox0=\\hb"
+        "ox{$\\displaystyle x_a^b$}\\showbox0 \\message{[c]}\\s"
+        "etbox0=\\hbox{$x_a^{b^c}$}\\showbox0%",
+        "[t]> \\box0=\n\\hbox(8.49002+2.47217)x10.05292\n.\\mat"
+        "hon\n.\\teni x\n.\\vbox(10.96219+0.0)x4.33765, shifted"
+        " 2.47217\n..\\hbox(4.8611+0.0)x3.51666\n...\\seveni b\n"
+        "..\\kern3.0872\n..\\hbox(3.01389+0.0)x4.33765\n...\\se"
+        "veni a\n.\\mathoff\n\n! OK.\n[d]> \\box0=\n\\hbox(8.99"
+        "002+2.47217)x10.05292\n.\\mathon\n.\\teni x\n.\\vbox(1"
+        "1.46219+0.0)x4.33765, shifted 2.47217\n..\\hbox(4.8611"
+        "+0.0)x3.51666\n...\\seveni b\n..\\kern3.5872\n..\\hbox"
+        "(3.01389+0.0)x4.33765\n...\\seveni a\n.\\mathoff\n\n! "
+        "OK.\n[c]> \\box0=\n\\hbox(8.79948+2.47217)x12.47906\n."
+        "\\mathon\n.\\teni x\n.\\vbox(11.27165+0.0)x6.7638, shi"
+        "fted 2.47217\n..\\hbox(5.17056+0.0)x6.7638\n...\\seven"
+        "i b\n...\\hbox(2.15277+0.0)x3.24713, shifted -3.01779 "
+        "[]\n..\\kern3.0872\n..\\hbox(3.01389+0.0)x4.33765\n..."
+        "\\seveni a\n.\\mathoff\n\n! OK.\n");
+}
+
+/* The search for the character that may stick out past a margin looks into
+   a horizontal box and not into a vertical one; see docs/DECISIONS.md,
+   character-protrusion. */
+static int test_protrusion_into_boxes(void)
+{
+    return run_document(
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\tracingonline=1 \\sh"
+        "owboxdepth=2 \\showboxbreadth=40 \\hbadness=10000 \\vb"
+        "adness=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\font\\f=c"
+        "mr10 \\f \\hsize=100pt \\parindent=0pt \\baselineskip="
+        "12pt \\lineskip=0pt \\lineskiplimit=0pt \\parfillskip="
+        "0pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toleranc"
+        "e=10000 \\pretolerance=-1 \\boxmaxdepth=16383.99998pt "
+        "\\spaceskip=4pt \\lpcode\\f`\\(=117 \\rpcode\\f`\\)=11"
+        "7 \\lpcode\\f`\\A=200 \\rpcode\\f`\\B=300 \\pdfprotrud"
+        "echars=2 \\message{[box]}\\setbox1=\\vbox{\\noindent\\"
+        "hbox{(x)} aaa\\par}\\showbox1 \\message{[deep]}\\setbo"
+        "x1=\\vbox{\\noindent\\hbox{\\hbox{A}x} aaa\\par}\\show"
+        "box1 \\message{[vbox]}\\setbox1=\\vbox{\\noindent\\vbo"
+        "x{\\hbox{A}}x aaa\\par}\\showbox1 \\message{[end]}\\se"
+        "tbox1=\\vbox{\\noindent aaa \\hbox{(B)}\\par}\\showbox"
+        "1%",
+        "[box]> \\box1=\n\\vbox(7.5+2.5)x100.0\n.\\hbox(7.5+2.5"
+        ")x100.0, glue set 69.11435fil\n..\\kern-1.17 (left mar"
+        "gin)\n..\\hbox(7.5+2.5)x13.0556 []\n..\\glue(\\spacesk"
+        "ip) 4.0\n..\\f a\n..\\f a\n..\\f a\n..\\penalty 10000\n"
+        "..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\ri"
+        "ghtskip) 0.0\n\n! OK.\n[deep]> \\box1=\n\\vbox(6.83331"
+        "+0.0)x100.0\n.\\hbox(6.83331+0.0)x100.0, glue set 70.2"
+        "2214fil\n..\\kern-2.0 (left margin)\n..\\hbox(6.83331+"
+        "0.0)x12.77782 []\n..\\glue(\\spaceskip) 4.0\n..\\f a\n"
+        "..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\parfil"
+        "lskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n!"
+        " OK.\n[vbox]> \\box1=\n\\vbox(6.83331+0.0)x100.0\n.\\h"
+        "box(6.83331+0.0)x100.0, glue set 68.22214fil\n..\\vbox"
+        "(6.83331+0.0)x7.50002 []\n..\\f x\n..\\glue(\\spaceski"
+        "p) 4.0\n..\\f a\n..\\f a\n..\\f a\n..\\penalty 10000\n"
+        "..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\ri"
+        "ghtskip) 0.0\n\n! OK.\n[end]> \\box1=\n\\vbox(7.5+2.5)"
+        "x100.0\n.\\hbox(7.5+2.5)x100.0, glue set 67.30879fil\n"
+        "..\\f a\n..\\f a\n..\\f a\n..\\glue(\\spaceskip) 4.0\n"
+        "..\\hbox(7.5+2.5)x14.86116 []\n..\\penalty 10000\n..\\"
+        "kern-1.17 (right margin)\n..\\glue(\\parfillskip) 0.0 "
+        "plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
+/* \\/ adds nothing at all unless a character stands at the end of the list;
+   see docs/DECISIONS.md, control-space-and-italic. */
+static int test_italic_correction_needs_a_character(void)
+{
+    return run_document(
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\tracingonline=1 \\sh"
+        "owboxdepth=3 \\showboxbreadth=30 \\hbadness=10000 \\hf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\message{[box]}\\setbo"
+        "x0=\\hbox{a\\hbox{x}\\/b}\\showbox0 \\message{[chr]}\\"
+        "setbox0=\\hbox{a\\/b}\\showbox0 \\message{[kern]}\\set"
+        "box0=\\hbox{a\\kern1pt\\/b}\\showbox0 \\message{[glue]"
+        "}\\setbox0=\\hbox{a\\hskip1pt\\/b}\\showbox0 \\message"
+        "{[none]}\\setbox0=\\hbox{\\/b}\\showbox0%",
+        "[box]> \\box0=\n\\hbox(6.94444+0.0)x15.83339\n.\\f a\n"
+        ".\\hbox(4.30554+0.0)x5.2778\n..\\f x\n.\\f b\n\n! OK.\n"
+        "[chr]> \\box0=\n\\hbox(6.94444+0.0)x10.55559\n.\\f a\n"
+        ".\\kern 0.0\n.\\f b\n\n! OK.\n[kern]> \\box0=\n\\hbox("
+        "6.94444+0.0)x11.55559\n.\\f a\n.\\kern 1.0\n.\\f b\n\n"
+        "! OK.\n[glue]> \\box0=\n\\hbox(6.94444+0.0)x11.55559\n"
+        ".\\f a\n.\\glue 1.0\n.\\f b\n\n! OK.\n[none]> \\box0=\n"
+        "\\hbox(6.94444+0.0)x5.55557\n.\\f b\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4591,6 +4710,9 @@ int main(void)
         test_margin_kerns_of_a_line() != 0 ||
         test_whatsit_text_is_cut() != 0 ||
         test_only_a_character_is_centred() != 0 ||
+        test_superscripts_in_display_style() != 0 ||
+        test_protrusion_into_boxes() != 0 ||
+        test_italic_correction_needs_a_character() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

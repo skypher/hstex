@@ -15171,7 +15171,7 @@ static bool protrusion_passes_over(const struct hstex_node *node)
 }
 
 /* The character at one end of a run of nodes, or zero when the run does not
-   offer one. */
+   offer one. A horizontal box is looked into; a vertical one is not. */
 static uint32_t protruding_character(struct hstex_engine *engine,
                                      const uint32_t *items, size_t from,
                                      size_t to, bool left)
@@ -15183,12 +15183,26 @@ static uint32_t protruding_character(struct hstex_engine *engine,
             return 0U;
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        if (!protrusion_passes_over(node)) {
-            return node->kind == HSTEX_NODE_CHARACTER ||
-                           node->kind == HSTEX_NODE_LIGATURE
-                       ? identifier
-                       : 0U;
+        if (protrusion_passes_over(node)) {
+            continue;
         }
+        if (node->kind == HSTEX_NODE_CHARACTER ||
+            node->kind == HSTEX_NODE_LIGATURE) {
+            return identifier;
+        }
+        if (node->kind == HSTEX_NODE_LIST &&
+            node->value.list.box_kind == HSTEX_BOX_HLIST &&
+            node->value.list.node_count != 0U &&
+            (size_t)node->value.list.node_start +
+                    node->value.list.node_count <=
+                engine->list_item_count) {
+            return protruding_character(
+                engine, engine->list_items, node->value.list.node_start,
+                (size_t)node->value.list.node_start +
+                    node->value.list.node_count,
+                left);
+        }
+        return 0U;
     }
     return 0U;
 }
@@ -16627,17 +16641,19 @@ static int execute_italic_correction(struct hstex_engine *engine, char *error,
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
     }
-    int32_t correction = 0;
+    /* Nothing at all is added unless a character stands at the end of the
+       list; see docs/DECISIONS.md, control-space-and-italic. */
     const struct hstex_node *node = current_list_last_node(engine);
-    if (node != NULL && (node->kind == HSTEX_NODE_CHARACTER ||
-                         node->kind == HSTEX_NODE_LIGATURE)) {
-        const struct hstex_font *font =
-            font_by_identifier(engine, node->value.character.font);
-        if (font != NULL && font->characters != NULL) {
-            correction =
-                font->characters[node->value.character.character & 0xFFU]
-                    .italic;
-        }
+    if (node == NULL || (node->kind != HSTEX_NODE_CHARACTER &&
+                         node->kind != HSTEX_NODE_LIGATURE)) {
+        return 0;
+    }
+    int32_t correction = 0;
+    const struct hstex_font *font =
+        font_by_identifier(engine, node->value.character.font);
+    if (font != NULL && font->characters != NULL) {
+        correction =
+            font->characters[node->value.character.character & 0xFFU].italic;
     }
     /* The reference marks this kern explicit, which is what \showbox shows
        and what keeps it from being thrown away at a line break. */
@@ -17703,10 +17719,14 @@ static int attach_math_scripts(struct hstex_engine *engine,
                                       error_capacity);
     }
 
-    /* A cramped style takes the third superscript parameter, an uncramped one
-       the second; the first belongs to display style, which is not here. */
+    /* A cramped style takes the third superscript parameter, display style
+       the first, and everything else the second. See docs/DECISIONS.md,
+       superscripts-in-display-style. */
+    uint32_t superscript_parameter =
+        (style % 2U) != 0U ? 15U
+                           : (style < (uint8_t)HSTEX_STYLE_TEXT ? 13U : 14U);
     int32_t superscript_floor = 0;
-    if (math_symbol_parameter(engine, size, (style % 2U) != 0U ? 15U : 14U,
+    if (math_symbol_parameter(engine, size, superscript_parameter,
                               &superscript_floor, error, error_capacity) != 0) {
         return -1;
     }
