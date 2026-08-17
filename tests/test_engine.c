@@ -1866,6 +1866,49 @@ static int test_italic_correction_needs_a_character(void)
         "\\hbox(6.94444+0.0)x5.55557\n.\\f b\n\n! OK.\n");
 }
 
+/* A break that falls inside a ligature replaces it: the two halves of the
+   word are set again around the hyphen, and the ligature stands as the text
+   used when the line does not break. See docs/DECISIONS.md,
+   breaking-inside-a-ligature. */
+static int test_breaking_inside_a_ligature(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=20"
+        "0 \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\v"
+        "fuzz=1000pt \\font\\f=cmr10 \\f \\hyphenchar\\f=45 \\h"
+        "size=300pt \\parindent=0pt \\leftskip=0pt \\rightskip="
+        "0pt \\pdfprotrudechars=0 \\baselineskip=12pt \\lineski"
+        "p=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fil \\"
+        "tolerance=10000 \\pretolerance=-1 \\boxmaxdepth=16383."
+        "99998pt \\clubpenalty=0 \\widowpenalty=0 \\interlinepe"
+        "nalty=0 \\brokenpenalty=0 \\uchyph=0 \\lefthyphenmin=1"
+        " \\righthyphenmin=1 \\spaceskip=4pt \\sfcode`\\.=1000 "
+        "\\lccode`\\c=`\\c \\lccode`\\o=`\\o \\lccode`\\e=`\\e "
+        "\\lccode`\\f=`\\f \\lccode`\\i=`\\i \\lccode`\\n=`\\n "
+        "\\lccode`\\t=`\\t \\lccode`\\x=`\\x \\lccode`\\a=`\\a "
+        "\\lccode`\\l=`\\l \\patterns{o1e f1f i1c 1x1 f1l a1f} "
+        "\\message{[ffi]}\\setbox0=\\vbox{\\noindent xx coeffic"
+        "ient\\par}\\showbox0 \\message{[ff]}\\setbox0=\\vbox{\\"
+        "noindent xx affable\\par}\\showbox0%",
+        "[ffi]> \\box0=\n\\vbox(6.94444+0.0)x300.0\n.\\hbox(6.9"
+        "4444+0.0)x300.0, glue set 242.111fil\n..\\f x\n..\\f x"
+        "\n..\\glue(\\spaceskip) 4.0\n..\\f c\n..\\discretionar"
+        "y replacing 2\n...\\f o\n...\\f -\n..\\f o\n..\\kern0."
+        "27779\n..\\f e\n..\\discretionary replacing 1\n...\\f "
+        "f\n...\\f -\n..|\\f ^^L (ligature fi)\n..\\f ^^N (liga"
+        "ture ffi)\n..\\discretionary\n...\\f -\n..\\f c\n..\\f"
+        " i\n..\\f e\n..\\f n\n..\\kern-0.27779\n..\\f t\n..\\p"
+        "enalty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n"
+        "..\\glue(\\rightskip) 0.0\n\n! OK.\n[ff]> \\box0=\n\\v"
+        "box(6.94444+0.0)x300.0\n.\\hbox(6.94444+0.0)x300.0, gl"
+        "ue set 256.8332fil\n..\\f x\n..\\f x\n..\\glue(\\space"
+        "skip) 4.0\n..\\f a\n..\\discretionary\n...\\f -\n..\\d"
+        "iscretionary replacing 1\n...\\f f\n...\\f -\n..|\\f f"
+        "\n..\\f ^^K (ligature ff)\n..\\f a\n..\\f b\n..\\f l\n"
+        "..\\f e\n..\\penalty 10000\n..\\glue(\\parfillskip) 0."
+        "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4713,6 +4756,7 @@ int main(void)
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||
+        test_breaking_inside_a_ligature() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

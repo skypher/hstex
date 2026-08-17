@@ -11207,13 +11207,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             (void)fprintf(out, " replacing %u",
                           (unsigned int)node->value.disc.replace_count);
         }
-        if (depth + 1U > threshold) {
-            if (node->value.disc.pre_count != 0U ||
-                node->value.disc.post_count != 0U) {
-                (void)fputs(" []", out);
-            }
-            return;
-        }
+        /* Each of the two lists says for itself that it was cut. */
         if (node->value.disc.pre_count != 0U &&
             (size_t)node->value.disc.pre_start + node->value.disc.pre_count <=
                 engine->list_item_count) {
@@ -16197,6 +16191,103 @@ static int reserve_hyphenated_items(uint32_t **items, size_t *capacity,
     return 0;
 }
 
+/* Runs the font's ligature and kern program over a run of characters and
+   leaves the nodes it makes in `identifiers`. This is how the two halves of
+   a word are set again when the break falls inside a ligature; see
+   docs/DECISIONS.md, breaking-inside-a-ligature. */
+static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
+                                   const uint8_t *characters, size_t count,
+                                   uint32_t *identifiers, size_t capacity,
+                                   size_t *written, char *error,
+                                   size_t error_capacity)
+{
+    *written = 0U;
+    const struct hstex_font *metrics = font_by_identifier(engine, font);
+    if (metrics == NULL || metrics->characters == NULL) {
+        return set_error(error, error_capacity,
+                         "a word cannot be set again without its font");
+    }
+    bool pending = false;
+    uint8_t held = 0U;
+    bool held_is_ligature = false;
+    uint8_t originals[6];
+    uint8_t original_count = 0U;
+    memset(originals, 0, sizeof(originals));
+    for (size_t index = 0U; index <= count; ++index) {
+        bool last = index == count;
+        uint8_t code = last ? 0U : characters[index];
+        int32_t kern = 0;
+        bool kerned = false;
+        bool ligatured = false;
+        uint8_t ligature = 0U;
+        if (!last && pending &&
+            font_lig_kern(metrics, held, code, &kerned, &kern, &ligatured,
+                          &ligature, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (!last && pending && ligatured) {
+            if (!held_is_ligature) {
+                originals[0] = held;
+                original_count = 1U;
+            }
+            if (original_count < sizeof(originals)) {
+                originals[original_count++] = code;
+            }
+            held = ligature;
+            held_is_ligature = true;
+            continue;
+        }
+        if (pending) {
+            if (metrics->characters[held].tag >= 0) {
+                const struct hstex_char_metric *metric =
+                    &metrics->characters[held];
+                struct hstex_node node = {
+                    .kind = held_is_ligature ? HSTEX_NODE_LIGATURE
+                                             : HSTEX_NODE_CHARACTER,
+                    .width = metric->width,
+                    .height = metric->height,
+                    .depth = metric->depth,
+                    .value.character = {.font = font, .character = held},
+                };
+                if (held_is_ligature) {
+                    node.value.character.original_count = original_count;
+                    memcpy(node.value.character.originals, originals,
+                           sizeof(originals));
+                }
+                if (*written == capacity) {
+                    return set_error(error, error_capacity,
+                                     "a word set again does not fit");
+                }
+                if (store_node(engine, &node, &identifiers[*written], error,
+                               error_capacity) != 0) {
+                    return -1;
+                }
+                ++*written;
+            }
+            if (kerned && kern != 0) {
+                struct hstex_node node = {.kind = HSTEX_NODE_KERN,
+                                          .width = kern};
+                if (*written == capacity) {
+                    return set_error(error, error_capacity,
+                                     "a word set again does not fit");
+                }
+                if (store_node(engine, &node, &identifiers[*written], error,
+                               error_capacity) != 0) {
+                    return -1;
+                }
+                ++*written;
+            }
+        }
+        if (!last) {
+            pending = true;
+            held = code;
+            held_is_ligature = false;
+            original_count = 0U;
+        }
+    }
+    return 0;
+}
+
 /* Puts a discretionary wherever the patterns allow a break in a word, and
    returns the paragraph's nodes again with those discretionaries in them.
    See docs/DECISIONS.md, hyphenation. */
@@ -16312,10 +16403,77 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     result[written++] = items[previous + 1U];
                 }
             }
+            /* A break that falls inside a ligature replaces it: the two
+               halves of the word are set again, and what was there stands
+               as the text that is used when the line does not break. See
+               docs/DECISIONS.md, breaking-inside-a-ligature. */
+            size_t inside = 0U;
+            for (size_t item = 1U; status == 0 && item < here; ++item) {
+                if (breaks[letter + item] != 0U) {
+                    inside = item;
+                    break;
+                }
+            }
+            if (status == 0 && inside != 0U) {
+                const struct hstex_node *node =
+                    &engine->nodes[items[index] - 1U];
+                uint8_t originals[6];
+                uint8_t original_count = node->value.character.original_count;
+                memcpy(originals, node->value.character.originals,
+                       sizeof(originals));
+                uint32_t pre[8];
+                uint32_t post[8];
+                size_t pre_count = 0U;
+                size_t post_count = 0U;
+                uint32_t hyphen = 0U;
+                struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
+                if (inside < original_count &&
+                    reconstitute_characters(engine, word.font, originals,
+                                            inside, pre, 7U, &pre_count, error,
+                                            error_capacity) == 0 &&
+                    reconstitute_characters(
+                        engine, word.font, originals + inside,
+                        (size_t)original_count - inside, post, 8U, &post_count,
+                        error, error_capacity) == 0 &&
+                    make_hyphen_node(engine, word.font, &hyphen, error,
+                                     error_capacity) == 0 &&
+                    hyphen != 0U) {
+                    pre[pre_count++] = hyphen;
+                    uint32_t start = 0U;
+                    if (store_list_run(engine, pre, pre_count, &start, error,
+                                       error_capacity) != 0) {
+                        status = -1;
+                    } else {
+                        disc.value.disc.pre_start = start;
+                        disc.value.disc.pre_count = (uint16_t)pre_count;
+                        if (store_list_run(engine, post, post_count, &start,
+                                           error, error_capacity) != 0) {
+                            status = -1;
+                        } else {
+                            disc.value.disc.post_start = start;
+                            disc.value.disc.post_count = (uint16_t)post_count;
+                            disc.value.disc.replace_count = 1U;
+                            uint32_t placed = 0U;
+                            if (store_node(engine, &disc, &placed, error,
+                                           error_capacity) != 0 ||
+                                reserve_hyphenated_items(&result, &capacity,
+                                                         written + 2U, error,
+                                                         error_capacity) != 0) {
+                                status = -1;
+                            } else {
+                                result[written++] = placed;
+                            }
+                        }
+                    }
+                }
+            }
             if (status == 0 &&
                 reserve_hyphenated_items(&result, &capacity, written + 1U,
                                          error, error_capacity) != 0) {
                 status = -1;
+                break;
+            }
+            if (status != 0) {
                 break;
             }
             result[written++] = items[index];
