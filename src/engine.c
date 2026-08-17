@@ -1866,6 +1866,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
          (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
+        {"vcenter", HSTEX_COMMAND_VCENTER, 0},
         {"eqno", HSTEX_COMMAND_EQUATION_NUMBER, 0},
         {"leqno", HSTEX_COMMAND_EQUATION_NUMBER, 1},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
@@ -8053,8 +8054,12 @@ static int append_hbox_node(struct hstex_engine *engine,
 {
     struct hstex_hbox_builder *builder = engine->active_hbox_builder;
     if (builder == NULL || node == NULL) {
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
         return set_error(error, error_capacity,
-                         "horizontal node used outside an hbox");
+                         "horizontal node used outside an hbox, for %s at "
+                         "%s:%u",
+                         engine->executing_name, origin, (unsigned int)line);
     }
     int64_t width = builder->width + packed_dimen(node->width);
     if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
@@ -8480,6 +8485,10 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     size_t previous_math_depth = engine->math_depth;
     size_t previous_math_floor = engine->math_floor;
     bool previous_displayed = engine->displayed_math;
+    /* A body is not part of whatever paragraph encloses it; it gets a list
+       of its own if it starts one. */
+    bool previous_building_paragraph = engine->building_paragraph;
+    struct hstex_hbox_builder *previous_paragraph = engine->paragraph_builder;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8490,6 +8499,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->group_stop_hit = false;
     engine->math_floor = engine->math_depth;
     engine->displayed_math = false;
+    engine->building_paragraph = false;
+    engine->paragraph_builder = NULL;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -8562,6 +8573,13 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->math_depth = previous_math_depth;
     engine->math_floor = previous_math_floor;
     engine->displayed_math = previous_displayed;
+    if (engine->paragraph_builder != NULL &&
+        engine->paragraph_builder != previous_paragraph) {
+        free(engine->paragraph_builder->node_identifiers);
+        free(engine->paragraph_builder);
+    }
+    engine->paragraph_builder = previous_paragraph;
+    engine->building_paragraph = previous_building_paragraph;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -8692,6 +8710,10 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     size_t previous_math_depth = engine->math_depth;
     size_t previous_math_floor = engine->math_floor;
     bool previous_displayed = engine->displayed_math;
+    /* A body is not part of whatever paragraph encloses it; it gets a list
+       of its own if it starts one. */
+    bool previous_building_paragraph = engine->building_paragraph;
+    struct hstex_hbox_builder *previous_paragraph = engine->paragraph_builder;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8702,6 +8724,8 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->group_stop_hit = false;
     engine->math_floor = engine->math_depth;
     engine->displayed_math = false;
+    engine->building_paragraph = false;
+    engine->paragraph_builder = NULL;
     engine->active_hbox_builder = NULL;
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
@@ -8755,11 +8779,30 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
                     ->command == HSTEX_COMMAND_PAR) {
             continue;
         }
+        if (hstex_token_is_character(token)) {
+            /* A character in a vertical list starts a paragraph, and is read
+               again once \everypar has run. */
+            status = push_one(engine, token, location, error, error_capacity);
+            if (status == 0) {
+                status = start_paragraph(engine, true, error, error_capacity);
+            }
+            if (status != 0) {
+                break;
+            }
+            continue;
+        }
+        char found[128];
+        describe_token(engine, token, found, sizeof(found));
         status = set_error(error, error_capacity,
-                           "paragraph construction inside vbox is not implemented");
+                           "%s is not supported in a vertical list", found);
         break;
     }
 
+    /* A vertical list ends any paragraph it was still filling, the way an
+       implied \par would. */
+    if (status == 0 && engine->building_paragraph) {
+        status = finish_paragraph(engine, error, error_capacity);
+    }
     if (status == 0 && !engine->group_stop_hit) {
         status = set_error(error, error_capacity, "input ended inside a vbox");
     }
@@ -8784,6 +8827,13 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->math_depth = previous_math_depth;
     engine->math_floor = previous_math_floor;
     engine->displayed_math = previous_displayed;
+    if (engine->paragraph_builder != NULL &&
+        engine->paragraph_builder != previous_paragraph) {
+        free(engine->paragraph_builder->node_identifiers);
+        free(engine->paragraph_builder);
+    }
+    engine->paragraph_builder = previous_paragraph;
+    engine->building_paragraph = previous_building_paragraph;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -14900,6 +14950,32 @@ static int package_displayed_formula(struct hstex_engine *engine,
     return status;
 }
 
+/* \vcenter builds a vertical box and hangs it on the axis of the symbol
+   family; see docs/DECISIONS.md, vcenter. */
+static int execute_vcenter(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_math_builder *list = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || list == NULL) {
+        return set_error(error, error_capacity,
+                         "\\vcenter is only allowed in a formula");
+    }
+    uint8_t size = math_size_of_style(list->current_style);
+    struct hstex_box box = {0};
+    if (scan_vbox(engine, false, &box, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t axis = 0;
+    if (math_symbol_parameter(engine, size, 22U, &axis, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    int64_t total = (int64_t)box.height + box.depth;
+    box.height = (int32_t)(axis + (total + 1) / 2);
+    box.depth = (int32_t)(total - box.height);
+    return math_append_box(engine, &box, error, error_capacity);
+}
+
 /* \eqno and \leqno end the equation and begin its number, which is set in
    text style; see docs/DECISIONS.md, equation-numbers. */
 static int execute_equation_number(struct hstex_engine *engine, bool left,
@@ -15717,6 +15793,10 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     size_t previous_math_depth = engine->math_depth;
     size_t previous_math_floor = engine->math_floor;
     bool previous_displayed = engine->displayed_math;
+    /* A body is not part of whatever paragraph encloses it; it gets a list
+       of its own if it starts one. */
+    bool previous_building_paragraph = engine->building_paragraph;
+    struct hstex_hbox_builder *previous_paragraph = engine->paragraph_builder;
     int32_t previous_space_factor = engine->space_factor;
     bool previous_has_pending = engine->has_pending_character;
     bool previous_building = engine->building_alignment;
@@ -15730,6 +15810,8 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     engine->group_stop_hit = false;
     engine->math_floor = engine->math_depth;
     engine->displayed_math = false;
+    engine->building_paragraph = false;
+    engine->paragraph_builder = NULL;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -15895,6 +15977,13 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     engine->math_depth = previous_math_depth;
     engine->math_floor = previous_math_floor;
     engine->displayed_math = previous_displayed;
+    if (engine->paragraph_builder != NULL &&
+        engine->paragraph_builder != previous_paragraph) {
+        free(engine->paragraph_builder->node_identifiers);
+        free(engine->paragraph_builder);
+    }
+    engine->paragraph_builder = previous_paragraph;
+    engine->building_paragraph = previous_building_paragraph;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -17814,6 +17903,15 @@ handle_token:
                     finish_math_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
+                /* A brace that ends a box body ends the paragraph inside it
+                   first, while the parameters that paragraph was set with
+                   are still in force. */
+                if (engine->building_alignment == false &&
+                    engine->building_paragraph && engine->group_stop_armed &&
+                    engine->group_level == engine->group_stop_level + 1U &&
+                    finish_paragraph(engine, error, error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
                 if (end_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
@@ -18069,6 +18167,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_ACCENT:
             if (execute_accent(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_VCENTER:
+            if (execute_vcenter(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

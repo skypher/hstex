@@ -1280,6 +1280,66 @@ static int test_equation_numbers(void)
         "[100.0pt|13.0pt|0.0pt]");
 }
 
+/* \vcenter, and paragraphs that a vertical list starts by itself; see
+   docs/DECISIONS.md, vcenter. */
+static int test_vcenter(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\textfont1=\\tenmi \\textfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont0=\\tenrm \\scriptfont1=\\tenmi "
+        "\\scriptfont2=\\tensy \\scriptfont3=\\tenex "
+        "\\scriptscriptfont0=\\tenrm \\scriptscriptfont1=\\tenmi "
+        "\\scriptscriptfont2=\\tensy \\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu "
+        "\\baselineskip=0pt \\lineskip=0pt \\lineskiplimit=0pt "
+        "\\boxmaxdepth=16383.99998pt \\hsize=100pt \\parindent=7pt "
+        "\\tolerance=10000 \\parfillskip=0pt plus1fil \\pretolerance=-1 "
+        "\\leftskip=0pt \\rightskip=0pt \\hbadness=10000 \\hfuzz=1000pt "
+        "\\def\\R#1#2{\\hrule height#1 depth#2}"
+        "\\def\\m#1{\\setbox0=#1[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        "\\nullfont "
+        /* A vcentred box hangs on the axis: its height is the axis plus half
+           of what it measures, and the rest becomes depth. */
+        "\\m{\\hbox{$\\vcenter{\\R{10pt}{0pt}}$}}"
+        "\\m{\\hbox{$\\vcenter{\\R{10pt}{4pt}}$}}"
+        "\\m{\\hbox{$\\vcenter{\\R{7pt}{0pt}}$}}"
+        "\\m{\\hbox{$\\vcenter{\\R{0pt}{0pt}}$}}"
+        "\\m{\\hbox{$\\vcenter to 20pt{\\R{10pt}{0pt}}$}}"
+        "\\m{\\hbox{$\\vcenter spread 5pt{\\R{10pt}{0pt}}$}}"
+        /* Moving the axis moves it, and an axis high enough leaves the box
+           reaching above the baseline with nothing below it. */
+        "\\fontdimen22\\tensy=0pt \\m{\\hbox{$\\vcenter{\\R{10pt}{0pt}}$}}"
+        "\\fontdimen22\\tensy=6pt \\m{\\hbox{$\\vcenter{\\R{10pt}{0pt}}$}}"
+        "\\fontdimen22\\tensy=2.5pt "
+        /* It is an ordinary atom. */
+        "\\m{\\hbox{$\\mathchar\"0030 \\vcenter{\\R{10pt}{0pt}}"
+        "\\mathchar\"0030 $}}"
+        "\\m{\\hbox{$\\mathchar\"0030 \\mathrel{\\vcenter{\\R{10pt}{0pt}}}"
+        "\\mathchar\"0030 $}}"
+        "\\m{\\hbox{$\\vcenter{\\R{11pt}{0pt}}$}}"
+        "\\tenrm "
+        /* A character in a vertical list starts a paragraph, and the brace
+           that ends the box ends the paragraph while \hsize still holds. */
+        "\\m{\\vbox{\\hsize=100pt A}}"
+        "\\m{\\vbox{\\hsize=100pt AB}}"
+        "\\m{\\vbox{\\hsize=20pt AB AB AB}}"
+        "\\m{\\hbox{\\vbox{\\hsize=100pt A}}}"
+        "\\m{\\vbox{\\hsize=100pt \\hbox{A}}}"
+        "\\m{\\vbox{\\hsize=100pt \\noindent A}}%",
+        "[0.0pt|7.5pt|2.5pt][0.0pt|9.5pt|4.5pt]"
+        "[0.0pt|6.0pt|1.0pt][0.0pt|2.5pt|0.0pt]"
+        "[0.0pt|12.5pt|7.5pt][0.0pt|10.0pt|5.0pt]"
+        "[0.0pt|5.0pt|5.0pt][0.0pt|11.0pt|0.0pt]"
+        "[10.00003pt|7.5pt|2.5pt][15.55545pt|7.5pt|2.5pt]"
+        "[0.0pt|8.0pt|3.0pt][100.0pt|6.83331pt|0.0pt]"
+        "[100.0pt|6.83331pt|0.0pt][20.0pt|20.49994pt|0.0pt]"
+        "[100.0pt|6.83331pt|0.0pt][7.50002pt|6.83331pt|0.0pt]"
+        "[100.0pt|6.83331pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2367,7 +2427,7 @@ int main(void)
         test_math_scripts() != 0 || test_alignments() != 0 ||
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
-        test_accents() != 0 || test_equation_numbers() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

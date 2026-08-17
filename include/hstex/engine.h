@@ -212,6 +212,7 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_CHOICE,
     HSTEX_COMMAND_ACCENT,
     HSTEX_COMMAND_EQUATION_NUMBER,
+    HSTEX_COMMAND_VCENTER,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
