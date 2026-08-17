@@ -1054,6 +1054,47 @@ static int test_whatsits(void)
     return status;
 }
 
+/* \discretionary and \- leave a node that offers the line breaker a third
+   choice; see docs/DECISIONS.md, discretionaries. */
+static int test_discretionaries(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=30 \\"
+        "hbadness=10000 \\vbadness=10000 \\font\\f=cmr10 \\f \\hs"
+        "ize=30pt \\parindent=0pt \\leftskip=0pt \\rightskip=0pt "
+        "\\baselineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt \\"
+        "parfillskip=0pt plus1fil \\tolerance=10000 \\pretoleranc"
+        "e=-1 \\boxmaxdepth=16383.99998pt \\linepenalty=10 \\adjd"
+        "emerits=10000 \\doublehyphendemerits=10000 \\finalhyphen"
+        "demerits=5000 \\clubpenalty=0 \\widowpenalty=0 \\interli"
+        "nepenalty=0 \\brokenpenalty=77 \\hyphenpenalty=50 \\exhy"
+        "phenpenalty=50 \\hfuzz=1000pt \\vfuzz=1000pt \\setbox0=\\"
+        "hbox{a\\discretionary{b}{c}{d}e}\\showbox0 \\setbox0=\\h"
+        "box{a\\-e}\\showbox0 \\setbox0=\\vbox{\\noindent aaaa\\d"
+        "iscretionary{b}{c}{d}aaaa\\par}\\showbox0 \\setbox0=\\vb"
+        "ox{\\noindent aaaa\\discretionary{}{}{}aaaa\\par}\\showb"
+        "ox0 \\message{[\\the\\lastnodetype]}%",
+        "> \\box0=\n\\hbox(6.94444+0.0)x15.00003\n.\\f a\n.\\di"
+        "scretionary replacing 1\n..\\f b\n.|\\f c\n.\\f d\n.\\"
+        "f e\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x9.44446\n"
+        ".\\f a\n.\\discretionary\n..\\f -\n.\\f e\n\n! OK.\n> "
+        "\\box0=\n\\vbox(18.94444+0.0)x30.0\n.\\hbox(6.94444+0."
+        "0)x30.0\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\discr"
+        "etionary\n..\\f b\n..\\glue(\\rightskip) 0.0\n.\\penal"
+        "ty 77\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4.3055"
+        "4+0.0)x30.0, glue set 5.5555fil\n..\\f c\n..\\f a\n..\\"
+        "f a\n..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\p"
+        "arfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0"
+        "\n\n! OK.\n> \\box0=\n\\vbox(16.30554+0.0)x30.0\n.\\hb"
+        "ox(4.30554+0.0)x30.0\n..\\f a\n..\\f a\n..\\f a\n..\\f"
+        " a\n..\\discretionary\n..\\glue(\\rightskip) 0.0\n.\\p"
+        "enalty 77\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4."
+        "30554+0.0)x30.0, glue set 9.99994fil\n..\\f a\n..\\f a"
+        "\n..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\parf"
+        "illskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n"
+        "! OK.\n[-1]");
+}
+
 /* The current font is restored on the way out of a group, and the character
    held back for the ligature program is taken in before that happens. See
    docs/DECISIONS.md, the-current-font-is-grouped. */
@@ -3794,6 +3835,7 @@ int main(void)
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
         test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
         test_the_current_font_is_grouped() != 0 ||
+        test_discretionaries() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

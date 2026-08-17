@@ -197,6 +197,8 @@ enum hstex_command {
     HSTEX_COMMAND_LAST_BOX,
     HSTEX_COMMAND_CONTROL_SPACE,
     HSTEX_COMMAND_ITALIC_CORRECTION,
+    HSTEX_COMMAND_DISCRETIONARY,
+    HSTEX_COMMAND_DISCRETIONARY_HYPHEN,
     HSTEX_COMMAND_CHAR,
     HSTEX_COMMAND_REMOVE_LAST,
     HSTEX_COMMAND_MATH_FONT,
@@ -951,6 +953,7 @@ enum hstex_node_kind {
     HSTEX_NODE_KERN,
     HSTEX_NODE_LIGATURE,
     HSTEX_NODE_WHATSIT,
+    HSTEX_NODE_DISCRETIONARY,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
@@ -1006,6 +1009,17 @@ struct hstex_node {
             enum hstex_box_kind box_kind;
             struct hstex_glue_set glue;
         } list;
+        struct {
+            /* What is set instead of the following `replace_count` nodes
+               when the line breaks here, and what starts the next line.
+               Both are runs in the list arena; see docs/DECISIONS.md,
+               discretionaries. */
+            uint32_t pre_start;
+            uint32_t post_start;
+            uint16_t pre_count;
+            uint16_t post_count;
+            uint8_t replace_count;
+        } disc;
         struct {
             /* An enum hstex_whatsit_kind. */
             uint8_t kind;

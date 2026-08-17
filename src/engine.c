@@ -1837,6 +1837,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"char", HSTEX_COMMAND_CHAR},
         {" ", HSTEX_COMMAND_CONTROL_SPACE},
         {"/", HSTEX_COMMAND_ITALIC_CORRECTION},
+        {"discretionary", HSTEX_COMMAND_DISCRETIONARY},
+        {"-", HSTEX_COMMAND_DISCRETIONARY_HYPHEN},
         {"penalty", HSTEX_COMMAND_PENALTY},
         {"vrule", HSTEX_COMMAND_VRULE},
         {"hrule", HSTEX_COMMAND_HRULE},
@@ -9072,6 +9074,150 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
     return status;
 }
 
+/* Puts a run of nodes in the list arena and reports where it landed, the way
+   a finished box records its own. */
+static int store_list_run(struct hstex_engine *engine,
+                          const uint32_t *identifiers, size_t count,
+                          uint32_t *start, char *error, size_t error_capacity)
+{
+    *start = 0U;
+    if (count == 0U) {
+        return 0;
+    }
+    if (engine->list_item_count > (size_t)UINT32_MAX - count ||
+        reserve_list_items(engine, engine->list_item_count + count, error,
+                           error_capacity) != 0) {
+        return set_error(error, error_capacity, "list arena exhausted");
+    }
+    *start = (uint32_t)engine->list_item_count;
+    memcpy(engine->list_items + engine->list_item_count, identifiers,
+           count * sizeof(*identifiers));
+    engine->list_item_count += count;
+    return 0;
+}
+
+/* One of the three lists of a \discretionary: read as a restricted
+   horizontal list and kept as a run in the arena rather than a box. */
+static int scan_discretionary_list(struct hstex_engine *engine,
+                                   uint32_t *start, uint16_t *count,
+                                   char *error, size_t error_capacity)
+{
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
+        engine, &opening, &location, error, error_capacity);
+    if (result != HSTEX_ENGINE_TOKEN ||
+        !token_is_effective_begin_group(engine, opening)) {
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
+                       found, sizeof(found));
+        uint32_t line = 0U;
+        const char *origin = current_source_line(engine, &line);
+        return set_error(error, error_capacity,
+                         "discretionary requires a braced token list, found "
+                         "%s at %s:%u",
+                         found, origin, (unsigned int)line);
+    }
+    struct hstex_hbox_builder builder = {0};
+    int status = evaluate_hbox_contents(engine, &builder, error,
+                                        error_capacity);
+    if (status == 0 && builder.count > (size_t)UINT16_MAX) {
+        status = set_error(error, error_capacity,
+                           "a discretionary list may hold at most %u nodes",
+                           (unsigned int)UINT16_MAX);
+    }
+    if (status == 0) {
+        status = store_list_run(engine, builder.node_identifiers,
+                                builder.count, start, error, error_capacity);
+    }
+    if (status == 0) {
+        *count = (uint16_t)builder.count;
+    }
+    free(builder.node_identifiers);
+    return status;
+}
+
+/* \discretionary{pre}{post}{no}: the third list joins the enclosing list and
+   is counted, because it is what the other two replace when the line breaks
+   here. See docs/DECISIONS.md, discretionaries. */
+static int execute_discretionary(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity)
+{
+    if (ensure_horizontal_mode(engine, error, error_capacity) != 0 ||
+        flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
+    if (scan_discretionary_list(engine, &node.value.disc.pre_start,
+                                &node.value.disc.pre_count, error,
+                                error_capacity) != 0 ||
+        scan_discretionary_list(engine, &node.value.disc.post_start,
+                                &node.value.disc.post_count, error,
+                                error_capacity) != 0) {
+        return -1;
+    }
+    uint32_t replaced_start = 0U;
+    uint16_t replaced_count = 0U;
+    if (scan_discretionary_list(engine, &replaced_start, &replaced_count,
+                                error, error_capacity) != 0) {
+        return -1;
+    }
+    if (replaced_count > 255U) {
+        return set_error(error, error_capacity,
+                         "a discretionary may replace at most 255 nodes");
+    }
+    node.value.disc.replace_count = (uint8_t)replaced_count;
+    if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (uint16_t index = 0U; index < replaced_count; ++index) {
+        uint32_t identifier = engine->list_items[replaced_start + index];
+        if (append_hbox_item(engine, identifier, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* \- is a discretionary whose pre-break text is the font's hyphen, and
+   nothing at all when that font has no hyphen character. */
+static int execute_discretionary_hyphen(struct hstex_engine *engine,
+                                        char *error, size_t error_capacity)
+{
+    if (ensure_horizontal_mode(engine, error, error_capacity) != 0 ||
+        flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    int32_t hyphen = font == NULL ? -1 : font->hyphen_character;
+    if (hyphen >= 0 && hyphen < 256 && font->characters != NULL &&
+        font->characters[hyphen].tag >= 0) {
+        const struct hstex_char_metric *metric = &font->characters[hyphen];
+        struct hstex_node character = {
+            .kind = HSTEX_NODE_CHARACTER,
+            .width = metric->width,
+            .height = metric->height,
+            .depth = metric->depth,
+            .value.character = {.font = engine->current_font,
+                                .character = (uint32_t)hyphen},
+        };
+        uint32_t identifier = 0U;
+        if (store_node(engine, &character, &identifier, error,
+                       error_capacity) != 0 ||
+            store_list_run(engine, &identifier, 1U, &node.value.disc.pre_start,
+                           error, error_capacity) != 0) {
+            return -1;
+        }
+        node.value.disc.pre_count = 1U;
+    }
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
 /* One token of a vertical list, wherever that list is: the page, a \vbox, or
    a \noalign. A character starts a paragraph, and once one is being built
    its characters and spaces belong to it. See docs/DECISIONS.md,
@@ -10853,7 +10999,8 @@ static void show_character(struct hstex_engine *engine, FILE *out,
 
 static void show_node_list(struct hstex_engine *engine, FILE *out,
                            const uint32_t *items, size_t count, char *prefix,
-                           size_t depth, size_t threshold, size_t breadth);
+                           size_t depth, size_t threshold, size_t breadth,
+                           char mark);
 
 /* One box, rule, glue, kern, penalty or character of a list. */
 static void show_node(struct hstex_engine *engine, FILE *out,
@@ -10909,7 +11056,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             show_node_list(engine, out,
                            engine->list_items + node->value.list.node_start,
                            node->value.list.node_count, prefix, depth + 1U,
-                           threshold, breadth);
+                           threshold, breadth, '.');
         }
         return;
     }
@@ -10934,7 +11081,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
                 return;
             }
             show_node_list(engine, out, &leader, 1U, prefix, depth + 1U,
-                           threshold, breadth);
+                           threshold, breadth, '.');
             return;
         }
         const char *name = glue_parameter_name(node->value.glue.parameter);
@@ -10975,12 +11122,46 @@ static void show_node(struct hstex_engine *engine, FILE *out,
     case HSTEX_NODE_WHATSIT:
         show_whatsit(engine, out, node);
         return;
+    case HSTEX_NODE_DISCRETIONARY: {
+        (void)fputs("\\discretionary", out);
+        if (node->value.disc.replace_count != 0U) {
+            (void)fprintf(out, " replacing %u",
+                          (unsigned int)node->value.disc.replace_count);
+        }
+        if (depth + 1U > threshold) {
+            if (node->value.disc.pre_count != 0U ||
+                node->value.disc.post_count != 0U) {
+                (void)fputs(" []", out);
+            }
+            return;
+        }
+        if (node->value.disc.pre_count != 0U &&
+            (size_t)node->value.disc.pre_start + node->value.disc.pre_count <=
+                engine->list_item_count) {
+            show_node_list(engine, out,
+                           engine->list_items + node->value.disc.pre_start,
+                           node->value.disc.pre_count, prefix, depth + 1U,
+                           threshold, breadth, '.');
+        }
+        if (node->value.disc.post_count != 0U &&
+            (size_t)node->value.disc.post_start + node->value.disc.post_count <=
+                engine->list_item_count) {
+            /* The reference marks the list that starts the next line with a
+               bar in place of the last dot. */
+            show_node_list(engine, out,
+                           engine->list_items + node->value.disc.post_start,
+                           node->value.disc.post_count, prefix, depth + 1U,
+                           threshold, breadth, '|');
+        }
+        return;
+    }
     }
 }
 
 static void show_node_list(struct hstex_engine *engine, FILE *out,
                            const uint32_t *items, size_t count, char *prefix,
-                           size_t depth, size_t threshold, size_t breadth)
+                           size_t depth, size_t threshold, size_t breadth,
+                           char mark)
 {
     if (depth > threshold) {
         if (count != 0U) {
@@ -10989,7 +11170,7 @@ static void show_node_list(struct hstex_engine *engine, FILE *out,
         return;
     }
     if (depth != 0U) {
-        prefix[depth - 1U] = '.';
+        prefix[depth - 1U] = mark;
     }
     for (size_t index = 0U; index < count; ++index) {
         (void)fputc('\n', out);
@@ -13814,6 +13995,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 13;
     case HSTEX_NODE_WHATSIT:
         return 9;
+    case HSTEX_NODE_DISCRETIONARY:
+        return 8;
     }
     return -1;
 }
@@ -14707,6 +14890,29 @@ struct hstex_break_record {
     uint8_t fitness;
     int64_t demerits;
     size_t previous;
+    /* What a line starting here carries in front of it: the text a
+       discretionary puts after the break. See docs/DECISIONS.md,
+       discretionaries. */
+    int32_t entry_width;
+    uint32_t entry_start;
+    uint16_t entry_count;
+    /* This break is a discretionary's, which is what \brokenpenalty and the
+       double-hyphen demerits are about. */
+    bool hyphenated;
+};
+
+/* Everything a breakpoint contributes beyond its position. */
+struct hstex_break_site {
+    int32_t penalty;
+    /* The text a discretionary puts at the end of the line that breaks
+       here, and the text it puts at the start of the next one. */
+    int32_t pre_width;
+    int32_t entry_width;
+    uint32_t entry_start;
+    uint16_t entry_count;
+    /* Where the next line begins, or SIZE_MAX to work it out by pruning. */
+    size_t start;
+    bool hyphenated;
 };
 
 struct hstex_break_state {
@@ -14741,6 +14947,25 @@ static bool node_is_discardable(const struct hstex_node *node)
 
 /* Where the line after a break really begins: the reference throws away the
    glue, penalties and engine-made kerns that follow it. */
+/* The natural width of a run of nodes in the arena: what one of a
+   discretionary's lists adds to a line. */
+static int32_t list_run_width(const struct hstex_engine *engine, uint32_t start,
+                              uint16_t count)
+{
+    int64_t width = 0;
+    if (count == 0U || (size_t)start + count > engine->list_item_count) {
+        return 0;
+    }
+    for (uint16_t index = 0U; index < count; ++index) {
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        width += packed_dimen(engine->nodes[identifier - 1U].width);
+    }
+    return (int32_t)(uint32_t)(uint64_t)width;
+}
+
 static size_t line_start_after(const struct hstex_engine *engine,
                                const uint32_t *items, size_t count,
                                size_t breakpoint)
@@ -14837,9 +15062,10 @@ static int try_break_at(struct hstex_engine *engine,
                         const uint32_t *items, size_t count,
                         const struct hstex_break_totals *background,
                         int32_t line_width, size_t breakpoint,
-                        int32_t penalty, int32_t threshold, bool final_pass,
-                        char *error, size_t error_capacity)
+                        const struct hstex_break_site *site, int32_t threshold,
+                        bool final_pass, char *error, size_t error_capacity)
 {
+    int32_t penalty = site->penalty;
     int64_t minimal[HSTEX_FIT_COUNT];
     size_t best[HSTEX_FIT_COUNT];
     int32_t best_line[HSTEX_FIT_COUNT];
@@ -14857,7 +15083,8 @@ static int try_break_at(struct hstex_engine *engine,
         size_t index = state->active[slot];
         const struct hstex_break_record *record = &state->records[index];
         struct hstex_break_totals totals = *background;
-        totals.width += state->totals[breakpoint].width -
+        totals.width += (int64_t)record->entry_width + site->pre_width +
+                        state->totals[breakpoint].width -
                         state->totals[record->start].width;
         for (size_t order = 0U; order < 4U; ++order) {
             totals.stretch[order] += state->totals[breakpoint].stretch[order] -
@@ -14906,6 +15133,15 @@ static int try_break_at(struct hstex_engine *engine,
             if (fit_gap > 1 || fit_gap < -1) {
                 demerits += adjacent;
             }
+            /* Two hyphenated lines in a row cost extra, and more still when
+               the second of them is the last line of the paragraph. */
+            if (site->hyphenated && record->hyphenated) {
+                demerits += breakpoint >= count
+                                ? engine->integer_parameters
+                                      [HSTEX_INTEGER_FINAL_HYPHEN_DEMERITS]
+                                : engine->integer_parameters
+                                      [HSTEX_INTEGER_DOUBLE_HYPHEN_DEMERITS];
+            }
         }
         demerits += record->demerits;
         if (demerits <= minimal[fitness]) {
@@ -14926,7 +15162,9 @@ static int try_break_at(struct hstex_engine *engine,
         return 0;
     }
     int64_t ceiling = minimum + (adjacent < 0 ? -(int64_t)adjacent : adjacent);
-    size_t start = line_start_after(engine, items, count, breakpoint);
+    size_t start = site->start == SIZE_MAX
+                       ? line_start_after(engine, items, count, breakpoint)
+                       : site->start;
     for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
         if (minimal[fit] > ceiling) {
             continue;
@@ -14936,12 +15174,17 @@ static int try_break_at(struct hstex_engine *engine,
             return -1;
         }
         struct hstex_break_record *record = &state->records[state->record_count];
+        memset(record, 0, sizeof(*record));
         record->breakpoint = breakpoint;
         record->start = start;
         record->line = best_line[fit] + 1;
         record->fitness = (uint8_t)fit;
         record->demerits = minimal[fit];
         record->previous = best[fit];
+        record->entry_width = site->entry_width;
+        record->entry_start = site->entry_start;
+        record->entry_count = site->entry_count;
+        record->hyphenated = site->hyphenated;
         state->active[state->active_count++] = state->record_count;
         ++state->record_count;
     }
@@ -15019,6 +15262,7 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         return -1;
     }
     struct hstex_break_record *first = &state->records[state->record_count];
+    memset(first, 0, sizeof(*first));
     first->breakpoint = 0U;
     first->start = 0U;
     first->line = 0;
@@ -15035,7 +15279,8 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
             continue;
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        int32_t penalty = 0;
+        struct hstex_break_site site = {0};
+        site.start = SIZE_MAX;
         bool legal = false;
         if (node->kind == HSTEX_NODE_GLUE) {
             legal = after_box;
@@ -15046,13 +15291,40 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                         engine->nodes[next - 1U].kind == HSTEX_NODE_GLUE;
             }
         } else if (node->kind == HSTEX_NODE_PENALTY) {
-            penalty = node->value.penalty;
-            legal = penalty < HSTEX_INFINITE_BADNESS;
+            site.penalty = node->value.penalty;
+            legal = site.penalty < HSTEX_INFINITE_BADNESS;
+        } else if (node->kind == HSTEX_NODE_DISCRETIONARY) {
+            /* A discretionary with nothing to put before the break costs
+               \exhyphenpenalty; one that writes a hyphen costs
+               \hyphenpenalty. See docs/DECISIONS.md, discretionaries. */
+            legal = true;
+            site.hyphenated = true;
+            site.penalty =
+                node->value.disc.pre_count == 0U
+                    ? engine->integer_parameters
+                          [HSTEX_INTEGER_EX_HYPHEN_PENALTY]
+                    : engine->integer_parameters[HSTEX_INTEGER_HYPHEN_PENALTY];
+            site.pre_width = list_run_width(engine, node->value.disc.pre_start,
+                                            node->value.disc.pre_count);
+            site.entry_width = list_run_width(
+                engine, node->value.disc.post_start,
+                node->value.disc.post_count);
+            site.entry_start = node->value.disc.post_start;
+            site.entry_count = node->value.disc.post_count;
+            size_t after = index + 1U + node->value.disc.replace_count;
+            if (after > count) {
+                after = count;
+            }
+            /* Nothing is pruned in front of text the discretionary itself
+               put there. */
+            site.start = node->value.disc.post_count != 0U
+                             ? after
+                             : line_start_after(engine, items, count, after);
         }
         if (legal && state->active_count != 0U) {
             int32_t line = state->records[state->active[0]].line + 1;
             if (try_break_at(engine, state, items, count, background,
-                             line_width_for(engine, line), index, penalty,
+                             line_width_for(engine, line), index, &site,
                              threshold, final_pass, error,
                              error_capacity) != 0) {
                 return -1;
@@ -15065,10 +15337,12 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         return 0;
     }
     int32_t last_line = state->records[state->active[0]].line + 1;
+    struct hstex_break_site final_site = {0};
+    final_site.penalty = HSTEX_EJECT_PENALTY;
+    final_site.start = SIZE_MAX;
     if (try_break_at(engine, state, items, count, background,
-                     line_width_for(engine, last_line), count,
-                     HSTEX_EJECT_PENALTY, threshold, final_pass, error,
-                     error_capacity) != 0) {
+                     line_width_for(engine, last_line), count, &final_site,
+                     threshold, final_pass, error, error_capacity) != 0) {
         return -1;
     }
     /* Whatever the forced final break created is the answer; the cheapest of
@@ -15136,10 +15410,50 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                      : emit_parameter_glue(engine, left,
                                            HSTEX_GLUE_LEFT_SKIP, error,
                                            error_capacity);
+        /* A line that starts after a discretionary begins with the text
+           that discretionary put after the break. */
+        const struct hstex_break_record *opening = &state->records[chain[line - 1U]];
+        for (uint16_t item = 0U;
+             status == 0 && item < opening->entry_count &&
+             (size_t)opening->entry_start + opening->entry_count <=
+                 engine->list_item_count;
+             ++item) {
+            status = append_hbox_item(
+                engine, engine->list_items[opening->entry_start + item], error,
+                error_capacity);
+        }
         for (size_t index = from; status == 0 && index < to && index < count;
              ++index) {
             status = append_hbox_item(engine, items[index], error,
                                       error_capacity);
+        }
+        /* A line that ends at a discretionary keeps the node, emptied, and
+           the text that goes before the break follows it. */
+        bool broken = false;
+        if (status == 0 && to < count) {
+            uint32_t identifier = items[to];
+            if (identifier != 0U && (size_t)identifier <= engine->node_count &&
+                engine->nodes[identifier - 1U].kind ==
+                    HSTEX_NODE_DISCRETIONARY) {
+                broken = true;
+                struct hstex_node emptied = {
+                    .kind = HSTEX_NODE_DISCRETIONARY,
+                };
+                uint32_t pre_start =
+                    engine->nodes[identifier - 1U].value.disc.pre_start;
+                uint16_t pre_count =
+                    engine->nodes[identifier - 1U].value.disc.pre_count;
+                status = append_hbox_node(engine, &emptied, error,
+                                          error_capacity);
+                for (uint16_t item = 0U;
+                     status == 0 && item < pre_count &&
+                     (size_t)pre_start + pre_count <= engine->list_item_count;
+                     ++item) {
+                    status = append_hbox_item(
+                        engine, engine->list_items[pre_start + item], error,
+                        error_capacity);
+                }
+            }
         }
         if (status == 0) {
             status = emit_parameter_glue(engine, right, HSTEX_GLUE_RIGHT_SKIP,
@@ -15181,6 +15495,10 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             }
             if (line + 1U == lines) {
                 penalty += widow;
+            }
+            if (broken) {
+                penalty +=
+                    engine->integer_parameters[HSTEX_INTEGER_BROKEN_PENALTY];
             }
             if (penalty != 0) {
                 struct hstex_node node = {
@@ -22324,6 +22642,17 @@ handle_token:
             continue;
         case HSTEX_COMMAND_CONTROL_SPACE:
             if (execute_control_space(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DISCRETIONARY:
+            if (execute_discretionary(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_DISCRETIONARY_HYPHEN:
+            if (execute_discretionary_hyphen(engine, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
