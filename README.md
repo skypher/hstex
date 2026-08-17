@@ -132,10 +132,9 @@ may, and the protrusion counts toward the line's width in the breaker once
 with math nodes carrying `\mathsurround`, and a binary operator or a relation
 leaves `\binoppenalty` or `\relpenalty` behind it.
 
-Together these are enough for the corpus's first chapter to match `pdflatex`
-node for node -- 51,925 lines of `\showbox` output for the front matter and
-the whole chapter, and not one of them different -- and for the first two
-chapters to differ in 2,680 lines of 1.79 million.
+Together these are enough for the corpus's first two chapters to match
+`pdflatex` node for node -- 1,793,175 lines of `\showbox` output for the front
+matter and both chapters, and not one of them different.
 
 Everything a line is made of is pinned the same way: protrusion kerns that
 look inside boxes and are dropped again when the paragraph's last line is
@@ -147,8 +146,11 @@ way the reference does, which is how the last few of those were found.
 
 What `\shipout` does not do yet is write anything: there is no page
 description, so no PDF. Insertions and marks are still to come. The corpus
-comes to 2,332 pages against `pdflatex`'s 2,335, and its `.aux` agrees with
-`pdflatex`'s for its first 1,603 labels.
+comes to 2,335 pages, which is `pdflatex`'s count, and the files it writes
+beside them agree: the table of contents and the bookmark file to the byte,
+and the `.aux` in all 23,372 of its `\newlabel` lines -- every page number,
+section number and cross-reference in a 2,335-page document. Two `\citation`
+lines still come out on the page before the reference's.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds

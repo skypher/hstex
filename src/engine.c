@@ -19132,6 +19132,11 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     /* The display stands where the line after the paragraph so far would,
        plus one: the reference counts the display as taking two. */
     int32_t where = had_line ? engine->paragraph_lines + 2 : 2;
+    if (begin_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* The three parameters belong to the display: they are set inside its
+       group and go back to what they were when it ends. */
     if (assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_PRE_DISPLAY_SIZE,
                                size, false, error, error_capacity) != 0 ||
         assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_WIDTH,
@@ -19142,7 +19147,11 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
                                error_capacity) != 0) {
         return -1;
     }
-    if (begin_group(engine, error, error_capacity) != 0) {
+    /* The lines of the paragraph so far have reached the vertical list, so
+       the page builder runs before the formula is read -- and the output
+       routine it fires sees the display's own parameters already set. See
+       docs/DECISIONS.md, a-page-that-breaks-at-a-display. */
+    if (contribute_page(engine, error, error_capacity) != 0) {
         return -1;
     }
     if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
