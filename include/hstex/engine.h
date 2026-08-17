@@ -219,6 +219,7 @@ enum hstex_command {
     HSTEX_COMMAND_LEFT_RIGHT,
     HSTEX_COMMAND_FRACTION,
     HSTEX_COMMAND_PAR_SHAPE,
+    HSTEX_COMMAND_OVER_UNDER_LINE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -751,6 +752,9 @@ enum hstex_noad_kind {
     HSTEX_NOAD_CHOICE,
     /* \radical: a delimiter over a nucleus, built when the list is set. */
     HSTEX_NOAD_RADICAL,
+    /* \overline and \underline: a rule over or under a nucleus. */
+    HSTEX_NOAD_OVERLINE,
+    HSTEX_NOAD_UNDERLINE,
 };
 
 enum hstex_math_field_kind {

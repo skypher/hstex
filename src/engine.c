@@ -1977,15 +1977,17 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
-    static const char *math_primitives[] = {
+    static const char *line_primitives[] = {
         "overline",
+        "underline",
     };
     for (size_t index = 0U;
-         index < sizeof(math_primitives) / sizeof(math_primitives[0]);
+         index < sizeof(line_primitives) / sizeof(line_primitives[0]);
          ++index) {
-        if (register_integer_primitive(
-                engine, math_primitives[index], HSTEX_COMMAND_MATH_PRIMITIVE,
-                (int32_t)index, error, error_capacity) != 0) {
+        if (register_integer_primitive(engine, line_primitives[index],
+                                       HSTEX_COMMAND_OVER_UNDER_LINE,
+                                       (int32_t)index, error,
+                                       error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
         }
@@ -14172,6 +14174,18 @@ static int reserve_noads(struct hstex_math_builder *builder, size_t required,
     return 0;
 }
 
+/* \radical, \overline and \underline make noads that are ordinary atoms
+   once the list is set: they carry scripts and count for the spacing on
+   either side of them, so everything that looks for an atom must see them
+   too. */
+static bool math_noad_is_atom(uint8_t kind)
+{
+    return kind == (uint8_t)HSTEX_NOAD_ATOM ||
+           kind == (uint8_t)HSTEX_NOAD_RADICAL ||
+           kind == (uint8_t)HSTEX_NOAD_OVERLINE ||
+           kind == (uint8_t)HSTEX_NOAD_UNDERLINE;
+}
+
 static int math_append(struct hstex_engine *engine,
                        const struct hstex_noad *noad, char *error,
                        size_t error_capacity)
@@ -14237,9 +14251,9 @@ static int begin_math_script(struct hstex_engine *engine, bool superscript,
         return set_error(error, error_capacity,
                          "one script mark followed another");
     }
-    bool have_atom = builder->count != 0U &&
-                     builder->noads[builder->count - 1U].kind ==
-                         (uint8_t)HSTEX_NOAD_ATOM;
+    bool have_atom =
+        builder->count != 0U &&
+        math_noad_is_atom(builder->noads[builder->count - 1U].kind);
     if (have_atom) {
         const struct hstex_noad *last = &builder->noads[builder->count - 1U];
         const struct hstex_math_field *taken =
@@ -14358,6 +14372,7 @@ static int math_append_node(struct hstex_engine *engine,
     return math_append(engine, &noad, error, error_capacity);
 }
 
+
 /* The style decides which of the three font tables a family is read from. */
 static uint8_t math_size_of_style(uint8_t style)
 {
@@ -14465,7 +14480,7 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
     int previous = -1;
     for (size_t index = 0U; index < builder->count; ++index) {
         struct hstex_noad *noad = &builder->noads[index];
-        if (noad->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+        if (!math_noad_is_atom(noad->kind)) {
             continue;
         }
         if (noad->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
@@ -14481,7 +14496,7 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
                    noad->atom_class == (uint8_t)HSTEX_ATOM_PUNCT) {
             for (size_t back = index; back != 0U; --back) {
                 struct hstex_noad *earlier = &builder->noads[back - 1U];
-                if (earlier->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+                if (!math_noad_is_atom(earlier->kind)) {
                     continue;
                 }
                 if (earlier->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
@@ -14494,7 +14509,7 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
     }
     for (size_t index = builder->count; index != 0U; --index) {
         struct hstex_noad *noad = &builder->noads[index - 1U];
-        if (noad->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+        if (!math_noad_is_atom(noad->kind)) {
             continue;
         }
         if (noad->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
@@ -14670,6 +14685,10 @@ static int translate_math_fraction(struct hstex_engine *engine,
 static int build_math_radical(struct hstex_engine *engine,
                               struct hstex_noad *noad, uint8_t style,
                               char *error, size_t error_capacity);
+
+static int build_math_line(struct hstex_engine *engine,
+                           struct hstex_noad *noad, uint8_t style, bool over,
+                           char *error, size_t error_capacity);
 
 /* Pack one field into a box at the given style. An empty field gives an empty
    box, a character gives that character with its italic correction, and a box
@@ -15266,6 +15285,13 @@ static int translate_math_list(struct hstex_engine *engine,
         if (noad->kind == (uint8_t)HSTEX_NOAD_RADICAL &&
             build_math_radical(engine, noad, style, error, error_capacity) !=
                 0) {
+            return -1;
+        }
+        if ((noad->kind == (uint8_t)HSTEX_NOAD_OVERLINE ||
+             noad->kind == (uint8_t)HSTEX_NOAD_UNDERLINE) &&
+            build_math_line(engine, noad, style,
+                            noad->kind == (uint8_t)HSTEX_NOAD_OVERLINE, error,
+                            error_capacity) != 0) {
             return -1;
         }
         if (noad->kind == (uint8_t)HSTEX_NOAD_NODE) {
@@ -16044,6 +16070,94 @@ static int build_math_radical(struct hstex_engine *engine,
     return 0;
 }
 
+/* \overline and \underline put a rule of the default thickness over or under
+   what follows, three thicknesses clear of it. See docs/DECISIONS.md,
+   over-and-underline. */
+static int build_math_line(struct hstex_engine *engine,
+                           struct hstex_noad *noad, uint8_t style, bool over,
+                           char *error, size_t error_capacity)
+{
+    uint8_t size = math_size_of_style(style);
+    int32_t thickness = 0;
+    if (math_extension_parameter(engine, size, 8U, &thickness, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    /* A bar over cramps what is under it; a bar under does not. */
+    struct hstex_box inner = {0};
+    if (math_field_box(engine, &noad->nucleus,
+                       over ? math_cramped_style(style) : style, &inner, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = HSTEX_RUNNING_DIMEN,
+        .height = thickness,
+        .depth = 0,
+    };
+    struct hstex_node edge = {.kind = HSTEX_NODE_KERN, .width = thickness};
+    struct hstex_node gap = {.kind = HSTEX_NODE_KERN,
+                             .width = (int32_t)(3 * (int64_t)thickness)};
+
+    struct hstex_vbox_builder body = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_vbox_builder = &body;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    uint32_t identifier = 0U;
+    int status = 0;
+    if (over) {
+        if (append_vbox_node(engine, &edge, error, error_capacity) != 0 ||
+            append_vbox_node(engine, &rule, error, error_capacity) != 0 ||
+            append_vbox_node(engine, &gap, error, error_capacity) != 0 ||
+            store_box_node(engine, &inner, 0, &identifier, error,
+                           error_capacity) != 0 ||
+            append_vbox_item(engine, identifier, error, error_capacity) != 0) {
+            status = -1;
+        }
+    } else if (store_box_node(engine, &inner, 0, &identifier, error,
+                              error_capacity) != 0 ||
+               append_vbox_item(engine, identifier, error, error_capacity) !=
+                   0 ||
+               append_vbox_node(engine, &gap, error, error_capacity) != 0 ||
+               append_vbox_node(engine, &rule, error, error_capacity) != 0) {
+        status = -1;
+    }
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &body, false, false, 0, &packed, error,
+                               error_capacity);
+    }
+    free(body.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    packed.width = inner.width;
+    if (over) {
+        packed.height = (int32_t)(5 * (int64_t)thickness + inner.height);
+        packed.depth = inner.depth;
+    } else {
+        /* One thickness more of clear space is left under the rule. */
+        packed.height = inner.height;
+        packed.depth =
+            (int32_t)((int64_t)inner.depth + 5 * (int64_t)thickness);
+    }
+    identifier = 0U;
+    if (store_box_node(engine, &packed, 0, &identifier, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    noad->kind = (uint8_t)HSTEX_NOAD_ATOM;
+    noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+    memset(&noad->nucleus, 0, sizeof(noad->nucleus));
+    noad->nucleus.kind = (uint8_t)HSTEX_MATH_FIELD_BOX;
+    noad->nucleus.node = identifier;
+    return 0;
+}
+
 /* Set a list that holds a generalized fraction. All of the arithmetic here
    was measured; see docs/DECISIONS.md, fractions. */
 static int translate_math_fraction(struct hstex_engine *engine,
@@ -16516,6 +16630,33 @@ static int execute_radical(struct hstex_engine *engine, char *error,
         .kind = (uint8_t)HSTEX_NOAD_RADICAL,
         .atom_class = (uint8_t)HSTEX_ATOM_ORD,
         .delimiter = code,
+    };
+    if (math_append(engine, &noad, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->slot = (uint8_t)HSTEX_MATH_SLOT_RADICAND;
+    builder->slot_target = builder->count - 1U;
+    return 0;
+}
+
+/* \overline and \underline read one field, exactly as \radical does. */
+static int execute_over_under_line(struct hstex_engine *engine, bool over,
+                                   char *error, size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || builder == NULL) {
+        return set_error(error, error_capacity,
+                         "%s is only allowed in a formula",
+                         over ? "\\overline" : "\\underline");
+    }
+    if (builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        return set_error(error, error_capacity,
+                         "%s met where a field was expected",
+                         over ? "\\overline" : "\\underline");
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)(over ? HSTEX_NOAD_OVERLINE : HSTEX_NOAD_UNDERLINE),
+        .atom_class = (uint8_t)HSTEX_ATOM_ORD,
     };
     if (math_append(engine, &noad, error, error_capacity) != 0) {
         return -1;
@@ -20767,6 +20908,12 @@ handle_token:
         case HSTEX_COMMAND_FRACTION:
             if (execute_fraction(engine, meaning->value.integer, error,
                                  error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_OVER_UNDER_LINE:
+            if (execute_over_under_line(engine, meaning->value.integer == 0,
+                                        error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

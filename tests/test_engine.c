@@ -1842,6 +1842,61 @@ static int test_radicals(void)
         "995pt|4.55002pt][15|29048|29016|28720]");
 }
 
+/* \overline and \underline; see docs/DECISIONS.md,
+   over-and-underline. */
+static int test_over_and_underline(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\mathsurr"
+        "ound=0pt \\hbadness=10000 \\hfuzz=1000pt \\scriptspace=0.5"
+        "pt \\thinmuskip=3mu \\medmuskip=4mu plus2mu minus4mu \\thi"
+        "ckmuskip=5mu plus5mu \\font\\tenrm=cmr10 \\font\\tenmi=cmm"
+        "i10 \\font\\tensy=cmsy10 \\font\\tenex=cmex10 \\font\\seve"
+        "nrm=cmr7 \\font\\seveni=cmmi7 \\font\\sevensy=cmsy7 \\font"
+        "\\fiverm=cmr5 \\font\\fivei=cmmi5 \\font\\fivesy=cmsy5 \\t"
+        "extfont0=\\tenrm \\scriptfont0=\\sevenrm \\scriptscriptfon"
+        "t0=\\fiverm \\textfont1=\\tenmi \\scriptfont1=\\seveni \\s"
+        "criptscriptfont1=\\fivei \\textfont2=\\tensy \\scriptfont2"
+        "=\\sevensy \\scriptscriptfont2=\\fivesy \\textfont3=\\tene"
+        "x \\scriptfont3=\\tenex \\scriptscriptfont3=\\tenex \\tenr"
+        "m \\def\\R#1#2#3{\\vrule width#1pt height#2pt depth#3pt}\\"
+        "def\\C{\\mathchoice{\\R{1}{1}{0}}{\\R{2}{1}{0}}{\\R{3}{1}{"
+        "0}}{\\R{4}{1}{0}}}\\def\\S{\\mathord{\\R{1}{1}{0}}^{\\R{1}"
+        "{1}{0}}}\\def\\M#1{\\setbox0=\\hbox{$#1$}}\\M{\\overline{"
+        "\\R{5}{3}{1}}}[1|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\di"
+        "splaystyle\\overline{\\R{5}{3}{1}}}[2|\\the\\wd0|\\the\\ht"
+        "0|\\the\\dp0]\\M{\\scriptstyle\\overline{\\R{5}{3}{1}}}[3|"
+        "\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\underline{\\R{5}{3}"
+        "{1}}}[4|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\displaystyl"
+        "e\\underline{\\R{5}{3}{1}}}[5|\\the\\wd0|\\the\\ht0|\\the"
+        "\\dp0]\\M{\\scriptstyle\\underline{\\R{5}{3}{1}}}[6|\\the"
+        "\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\overline{\\C}}[7|\\the\\"
+        "wd0|\\the\\ht0|\\the\\dp0]\\M{\\underline{\\C}}[8|\\the\\w"
+        "d0|\\the\\ht0|\\the\\dp0]\\M{\\mathord{\\R{1}{1}{0}}\\over"
+        "line{\\R{5}{3}{1}}\\mathord{\\R{1}{1}{0}}}[9|\\the\\wd0|\\"
+        "the\\ht0|\\the\\dp0]\\M{\\overline{\\R{5}{3}{1}}^{\\R{2}{2"
+        "}{0}}}[10|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\underline"
+        "{\\R{5}{3}{1}}_{\\R{2}{0}{2}}}[11|\\the\\wd0|\\the\\ht0|\\"
+        "the\\dp0]\\M{\\overline{\\S}}[12|\\the\\wd0|\\the\\ht0|\\t"
+        "he\\dp0]\\M{\\underline{\\S}}[13|\\the\\wd0|\\the\\ht0|\\t"
+        "he\\dp0]\\M{\\overline{\\overline{\\R{5}{3}{1}}}}[14|\\the"
+        "\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\overline{\\R{5}{3}{1}}\\"
+        "mathbin{\\R{1}{1}{0}}\\mathord{\\R{1}{1}{0}}}[15|\\the\\wd"
+        "0|\\the\\ht0|\\the\\dp0]\\M{\\mathord{\\R{1}{1}{0}}\\mathb"
+        "in{\\R{1}{1}{0}}\\mathord{\\R{1}{1}{0}}}[16|\\the\\wd0|\\t"
+        "he\\ht0|\\the\\dp0]\\M{\\underline{\\R{5}{3}{1}}\\mathbin{"
+        "\\R{1}{1}{0}}\\mathord{\\R{1}{1}{0}}}[17|\\the\\wd0|\\the"
+        "\\ht0|\\the\\dp0]%",
+        "[1|5.0pt|4.9999pt|1.0pt][2|5.0pt|4.9999pt|1.0pt][3|5.0pt|4"
+        ".9999pt|1.0pt][4|5.0pt|3.0pt|2.9999pt][5|5.0pt|3.0pt|2.999"
+        "9pt][6|5.0pt|3.0pt|2.9999pt][7|2.0pt|2.9999pt|0.0pt][8|2.0"
+        "pt|1.0pt|1.9999pt][9|7.0pt|4.9999pt|1.0pt][10|7.5pt|5.6289"
+        "2pt|1.0pt][11|7.5pt|3.0pt|5.49988pt][12|2.5pt|5.88878pt|0."
+        "0pt][13|2.5pt|4.62892pt|1.9999pt][14|5.0pt|6.99979pt|1.0pt"
+        "][15|11.44434pt|4.9999pt|1.0pt][16|7.44434pt|1.0pt|0.0pt]["
+        "17|11.44434pt|3.0pt|2.9999pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2933,7 +2988,8 @@ int main(void)
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
-        test_conditionals_across_boxes() != 0 || test_radicals() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
+        test_over_and_underline() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
