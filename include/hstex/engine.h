@@ -81,6 +81,7 @@ enum hstex_command {
     HSTEX_COMMAND_OPEN_OUT,
     HSTEX_COMMAND_WRITE,
     HSTEX_COMMAND_CLOSE_OUT,
+    HSTEX_COMMAND_SPECIAL,
     HSTEX_COMMAND_OPEN_IN,
     HSTEX_COMMAND_READ,
     HSTEX_COMMAND_READ_LINE,
@@ -948,6 +949,16 @@ enum hstex_node_kind {
     HSTEX_NODE_LIST,
     HSTEX_NODE_KERN,
     HSTEX_NODE_LIGATURE,
+    HSTEX_NODE_WHATSIT,
+};
+
+/* What a whatsit does when the page it sits on is shipped out. See
+   docs/DECISIONS.md, whatsits. */
+enum hstex_whatsit_kind {
+    HSTEX_WHATSIT_WRITE = 0,
+    HSTEX_WHATSIT_OPEN_OUT,
+    HSTEX_WHATSIT_CLOSE_OUT,
+    HSTEX_WHATSIT_SPECIAL,
 };
 
 struct hstex_node {
@@ -994,6 +1005,16 @@ struct hstex_node {
             enum hstex_box_kind box_kind;
             struct hstex_glue_set glue;
         } list;
+        struct {
+            /* An enum hstex_whatsit_kind. */
+            uint8_t kind;
+            /* The stream the reference stores: 0..15 as given, 16 for any
+               larger number, 17 for a negative one. */
+            uint8_t stream;
+            /* The unexpanded text of a \write, the already expanded text of
+               a \special, or the file name of an \openout. */
+            uint32_t tokens;
+        } whatsit;
         int32_t penalty;
     } value;
 };
@@ -1225,6 +1246,12 @@ struct hstex_engine {
     int32_t middle_delimiter_size;
     /* Where \message writes; the standard output when this is null. */
     FILE *message_stream;
+    /* A box or rule has reached the current page, so it is no longer empty;
+       see docs/DECISIONS.md, whatsits-on-an-empty-page. */
+    bool page_has_box;
+    /* \immediate was just read, so the next output command acts now instead
+       of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
+    bool immediate_pending;
     /* The box \leaders read, waiting for the glue that will repeat it. */
     uint32_t pending_leader;
     uint8_t pending_leader_kind;

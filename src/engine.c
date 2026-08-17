@@ -1801,6 +1801,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"openout", HSTEX_COMMAND_OPEN_OUT},
         {"write", HSTEX_COMMAND_WRITE},
         {"closeout", HSTEX_COMMAND_CLOSE_OUT},
+        {"special", HSTEX_COMMAND_SPECIAL},
         {"openin", HSTEX_COMMAND_OPEN_IN},
         {"read", HSTEX_COMMAND_READ},
         {"readline", HSTEX_COMMAND_READ_LINE},
@@ -2757,6 +2758,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->output_group_floor = 0U;
     engine->output_conditional_floor = 0U;
     engine->active_hbox_builder = NULL;
+    engine->page_has_box = false;
     engine->page_builder->count = 0U;
     engine->page_builder->extent = 0;
     engine->page_builder->trailing_depth = 0;
@@ -8641,6 +8643,27 @@ static int append_current_list_node(struct hstex_engine *engine,
     return math_append_node(engine, node, error, error_capacity);
 }
 
+/* Every output command that \immediate did not claim leaves one of these on
+   the list it was written in, to be done when the page reaches the shipper.
+   See docs/DECISIONS.md, whatsits. */
+static int new_whatsit(struct hstex_engine *engine,
+                       enum hstex_whatsit_kind kind, int32_t stream,
+                       uint32_t tokens, char *error, size_t error_capacity)
+{
+    /* The reference keeps one byte for the stream, so anything above fifteen
+       becomes sixteen and anything negative becomes seventeen. */
+    int32_t stored = stream < 0 ? 17 : (stream > 15 ? 16 : stream);
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {
+            .kind = (uint8_t)kind,
+            .stream = (uint8_t)stored,
+            .tokens = tokens,
+        },
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
 /* The five glue commands are the same in both directions; only the list they
    join differs. */
 static int execute_glue(struct hstex_engine *engine, int32_t subtype,
@@ -10656,9 +10679,13 @@ static int scan_dimen_parameter_assignment(struct hstex_engine *engine,
 /* The page stays empty until a box or rule reaches it; glue, kerns and
    penalties contributed before that are discarded. See docs/DECISIONS.md,
    the-page-builder. */
+/* The page counts as empty until a box or a rule has reached it. A whatsit
+   joins the page without settling anything, so a page carrying only whatsits
+   is still empty and still throws away the glue in front of its first box.
+   See docs/DECISIONS.md, whatsits-on-an-empty-page. */
 static bool page_is_empty(const struct hstex_engine *engine)
 {
-    return engine->page_builder == NULL || engine->page_builder->count == 0U;
+    return engine->page_builder == NULL || !engine->page_has_box;
 }
 
 static int build_page(struct hstex_engine *engine, char *error,
@@ -10757,6 +10784,50 @@ static void show_ascii(FILE *out, uint8_t code)
         return;
     }
     (void)fputc((int)code, out);
+}
+
+static int stored_token_list_text(struct hstex_engine *engine,
+                                  uint32_t identifier, uint8_t **bytes,
+                                  size_t *byte_count, char *error,
+                                  size_t error_capacity);
+
+/* A whatsit is shown as the command that left it there, with the text it is
+   still holding; see docs/DECISIONS.md, whatsits. */
+static void show_whatsit(struct hstex_engine *engine, FILE *out,
+                         const struct hstex_node *node)
+{
+    uint8_t kind = node->value.whatsit.kind;
+    static const char *const names[4] = {"write", "openout", "closeout",
+                                         "special"};
+    (void)fputc('\\', out);
+    (void)fputs(names[kind > 3U ? 0U : kind], out);
+    if (kind != (uint8_t)HSTEX_WHATSIT_SPECIAL) {
+        uint8_t stream = node->value.whatsit.stream;
+        if (stream < 16U) {
+            (void)fprintf(out, "%u", (unsigned int)stream);
+        } else {
+            (void)fputc(stream == 16U ? '*' : '-', out);
+        }
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_CLOSE_OUT) {
+        return;
+    }
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    char ignored[256];
+    if (stored_token_list_text(engine, node->value.whatsit.tokens, &bytes,
+                               &byte_count, ignored, sizeof(ignored)) != 0) {
+        free(bytes);
+        return;
+    }
+    (void)fputc(kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT ? '=' : '{', out);
+    if (byte_count != 0U) {
+        (void)fwrite(bytes, 1U, byte_count, out);
+    }
+    if (kind != (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
+        (void)fputc('}', out);
+    }
+    free(bytes);
 }
 
 static void show_character(struct hstex_engine *engine, FILE *out,
@@ -10901,6 +10972,9 @@ static void show_node(struct hstex_engine *engine, FILE *out,
         }
         (void)fputc(')', out);
         return;
+    case HSTEX_NODE_WHATSIT:
+        show_whatsit(engine, out, node);
+        return;
     }
 }
 
@@ -10996,6 +11070,25 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
 
 /* \shipout takes a page: the box is emptied and the count of dead cycles
    starts again. Nothing is written yet. */
+static int perform_shipout_whatsits(struct hstex_engine *engine,
+                                    const struct hstex_box *box, char *error,
+                                    size_t error_capacity);
+
+/* A page leaves the engine here, whether \shipout was written out or the
+   page builder reached the end of a page by itself. */
+static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
+                    char *error, size_t error_capacity)
+{
+    /* Whatever the page was carrying is done now, in the order it was
+       written; see docs/DECISIONS.md, whatsits. */
+    if (perform_shipout_whatsits(engine, box, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
+    engine->shipped_pages += 1;
+    return 0;
+}
+
 static int ship_out_box(struct hstex_engine *engine, uint32_t index,
                         char *error, size_t error_capacity)
 {
@@ -11004,14 +11097,13 @@ static int ship_out_box(struct hstex_engine *engine, uint32_t index,
                          "box register %u is outside 0..%zu",
                          (unsigned int)index, engine->count_capacity - 1U);
     }
+    struct hstex_box shipped = engine->boxes[index];
     struct hstex_box empty = {0};
     empty.kind = HSTEX_BOX_VOID;
     if (assign_box(engine, index, empty, true, error, error_capacity) != 0) {
         return -1;
     }
-    engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
-    engine->shipped_pages += 1;
-    return 0;
+    return ship_out(engine, &shipped, error, error_capacity);
 }
 
 /* What \end puts in front of itself so that whatever is left comes out: an
@@ -11093,6 +11185,7 @@ static void forget_page_break(struct hstex_engine *engine)
     engine->best_page_break = 0U;
     engine->best_page_penalty = HSTEX_INFINITE_PENALTY;
     engine->best_page_size = 0;
+    engine->page_has_box = false;
 }
 
 static void reset_page_state(struct hstex_engine *engine)
@@ -11271,13 +11364,18 @@ static int build_page(struct hstex_engine *engine, char *error,
             struct hstex_node node = engine->nodes[identifier - 1U];
             bool is_box =
                 node.kind == HSTEX_NODE_RULE || node.kind == HSTEX_NODE_LIST;
-            if (page_is_empty(engine)) {
+            if (node.kind == HSTEX_NODE_WHATSIT) {
+                /* A whatsit joins the page wherever it stands and settles
+                   nothing; see docs/DECISIONS.md,
+                   whatsits-on-an-empty-page. */
+            } else if (page_is_empty(engine)) {
                 if (!is_box) {
                     continue;
                 }
                 /* The first box settles the page's goal and gets \topskip
                    glue in front of it, shortened by however tall it is. */
                 reset_page_state(engine);
+                engine->page_has_box = true;
                 engine->page_dimens[HSTEX_PAGE_GOAL] =
                     engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
                 struct hstex_glue top =
@@ -12112,17 +12210,32 @@ static char *output_path(struct hstex_engine *engine, const char *filename)
                      filename);
 }
 
-static int execute_open_out(struct hstex_engine *engine, char *error,
-                            size_t error_capacity)
+/* Plain text kept where a token list is expected: how a whatsit remembers a
+   file name. */
+static int store_text_as_token_list(struct hstex_engine *engine,
+                                    const char *text, uint32_t *identifier,
+                                    char *error, size_t error_capacity)
 {
-    int32_t stream = 0;
-    char *filename = NULL;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
-        scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
-        free(filename);
-        return -1;
+    struct token_vector tokens = {0};
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        uint8_t byte = (uint8_t)*cursor;
+        uint8_t category = byte == (uint8_t)' ' ? (uint8_t)HSTEX_CAT_SPACE
+                                                : (uint8_t)HSTEX_CAT_OTHER;
+        if (vector_push(&tokens, hstex_token_character(category, byte), error,
+                        error_capacity) != 0) {
+            vector_destroy(&tokens);
+            return -1;
+        }
     }
+    return store_token_list(engine, &tokens, identifier, error, error_capacity);
+}
+
+/* The file a stream is opened on, once the whatsit that asked for it is
+   shipped or \immediate has claimed it. */
+static int open_write_stream(struct hstex_engine *engine, int32_t stream,
+                             char *filename, char *error,
+                             size_t error_capacity)
+{
     if (stream < 0 || stream >= 16) {
         free(filename);
         return 0;
@@ -12149,13 +12262,9 @@ static int execute_open_out(struct hstex_engine *engine, char *error,
     return 0;
 }
 
-static int execute_close_out(struct hstex_engine *engine, char *error,
-                             size_t error_capacity)
+static int close_write_stream(struct hstex_engine *engine, int32_t stream,
+                              char *error, size_t error_capacity)
 {
-    int32_t stream = 0;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
-        return -1;
-    }
     if (stream >= 0 && stream < 16 &&
         engine->write_streams[(size_t)stream] != NULL) {
         if (fclose(engine->write_streams[(size_t)stream]) != 0) {
@@ -12166,6 +12275,48 @@ static int execute_close_out(struct hstex_engine *engine, char *error,
         engine->write_streams[(size_t)stream] = NULL;
     }
     return 0;
+}
+
+/* \openout reads its file name where it stands, whether or not the opening
+   itself waits for the page to be shipped. */
+static int execute_open_out(struct hstex_engine *engine, bool immediate,
+                            char *error, size_t error_capacity)
+{
+    int32_t stream = 0;
+    char *filename = NULL;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+        scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        free(filename);
+        return -1;
+    }
+    if (immediate) {
+        return open_write_stream(engine, stream, filename, error,
+                                 error_capacity);
+    }
+    uint32_t tokens = 0U;
+    int status = store_text_as_token_list(engine, filename, &tokens, error,
+                                          error_capacity);
+    free(filename);
+    if (status != 0) {
+        return -1;
+    }
+    return new_whatsit(engine, HSTEX_WHATSIT_OPEN_OUT, stream, tokens, error,
+                       error_capacity);
+}
+
+static int execute_close_out(struct hstex_engine *engine, bool immediate,
+                             char *error, size_t error_capacity)
+{
+    int32_t stream = 0;
+    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (immediate) {
+        return close_write_stream(engine, stream, error, error_capacity);
+    }
+    return new_whatsit(engine, HSTEX_WHATSIT_CLOSE_OUT, stream, 0U, error,
+                       error_capacity);
 }
 
 static int serialize_control_sequence(struct hstex_engine *engine,
@@ -12639,39 +12790,19 @@ static int expand_meaning(struct hstex_engine *engine,
     return 0;
 }
 
-static int scan_expanded_general_text(struct hstex_engine *engine,
-                                      uint8_t **bytes, size_t *byte_count,
-                                      char *error, size_t error_capacity)
+/* Reads whatever the sources have to give down to the boundary the caller
+   pushed, expanding as it goes, and lays it out as the bytes a stream would
+   receive. The boundary is popped here. */
+static int expand_to_bytes(struct hstex_engine *engine, uint8_t **bytes,
+                           size_t *byte_count, char *error,
+                           size_t error_capacity)
 {
-    hstex_token opening = 0U;
-    struct hstex_source_location location;
-    if (expanded_next_non_space_unrestricted(
-            engine, &opening, &location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
-        return set_error(error, error_capacity,
-                         "write requires a braced token list");
-    }
-    struct token_vector text = {0};
-    if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
-        vector_destroy(&text);
-        return -1;
-    }
-    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) != 0) {
-        vector_destroy(&text);
-        return -1;
-    }
-    if (push_owned_vector(engine, &text, location, error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-        vector_destroy(&text);
-        return -1;
-    }
-
     uint8_t *result = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
     for (;;) {
         hstex_token token = 0U;
+        struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
         engine->inhibit_protected_expansion = true;
         enum hstex_engine_result expansion_result = hstex_engine_next_expanded(
@@ -12717,6 +12848,126 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
     *bytes = result;
     *byte_count = count;
     return 0;
+}
+
+static int scan_expanded_general_text(struct hstex_engine *engine,
+                                      uint8_t **bytes, size_t *byte_count,
+                                      char *error, size_t error_capacity)
+{
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space_unrestricted(
+            engine, &opening, &location, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "write requires a braced token list");
+    }
+    struct token_vector text = {0};
+    if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
+        vector_destroy(&text);
+        return -1;
+    }
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) != 0) {
+        vector_destroy(&text);
+        return -1;
+    }
+    if (push_owned_vector(engine, &text, location, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(&text);
+        return -1;
+    }
+    return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
+}
+
+/* The text of a \write is kept as it was written, so it can be expanded when
+   the page reaches the shipper. See docs/DECISIONS.md, whatsits. */
+static int scan_general_text(struct hstex_engine *engine,
+                             struct token_vector *text, char *error,
+                             size_t error_capacity)
+{
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space_unrestricted(engine, &opening, &location, error,
+                                             error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "write requires a braced token list");
+    }
+    if (scan_balanced_group(engine, text, true, error, error_capacity) != 0) {
+        vector_destroy(text);
+        return -1;
+    }
+    return 0;
+}
+
+/* The bytes a stored token list stands for, with no expansion: what
+   \showbox prints for a whatsit. */
+static int stored_token_list_text(struct hstex_engine *engine,
+                                  uint32_t identifier, uint8_t **bytes,
+                                  size_t *byte_count, char *error,
+                                  size_t error_capacity)
+{
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, identifier);
+    uint8_t *result = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    for (size_t index = 0U; list != NULL && index < list->count; ++index) {
+        hstex_token token = list->tokens[index];
+        if (hstex_token_is_character(token)) {
+            uint8_t character = hstex_token_character_code(token);
+            if ((token_is_category(token, HSTEX_CAT_PARAMETER) &&
+                 append_byte(&result, &count, &capacity, character, error,
+                             error_capacity) != 0) ||
+                append_byte(&result, &count, &capacity, character, error,
+                            error_capacity) != 0) {
+                free(result);
+                return -1;
+            }
+        } else if (serialize_control_sequence(engine, token, &result, &count,
+                                              &capacity, true, error,
+                                              error_capacity) != 0) {
+            free(result);
+            return -1;
+        }
+    }
+    *bytes = result;
+    *byte_count = count;
+    return 0;
+}
+
+/* The bytes a stored token list stands for once it is expanded, which is what
+   a deferred \write sends when its page is shipped. */
+static int expand_stored_token_list(struct hstex_engine *engine,
+                                    uint32_t identifier, uint8_t **bytes,
+                                    size_t *byte_count, char *error,
+                                    size_t error_capacity)
+{
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, identifier);
+    struct token_vector text = {0};
+    for (size_t index = 0U; list != NULL && index < list->count; ++index) {
+        if (vector_push(&text, list->tokens[index], error, error_capacity) !=
+            0) {
+            vector_destroy(&text);
+            return -1;
+        }
+    }
+    struct hstex_source_location location = {0};
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        vector_destroy(&text);
+        return -1;
+    }
+    if (push_owned_vector(engine, &text, location, error, error_capacity) !=
+        0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(&text);
+        return -1;
+    }
+    return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
 
 static int hex_digit_value(uint8_t byte)
@@ -13561,6 +13812,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 7;
     case HSTEX_NODE_PENALTY:
         return 13;
+    case HSTEX_NODE_WHATSIT:
+        return 9;
     }
     return -1;
 }
@@ -19830,36 +20083,215 @@ static int execute_accent(struct hstex_engine *engine, char *error,
     return 0;
 }
 
-static int execute_write(struct hstex_engine *engine, char *error,
-                         size_t error_capacity)
+/* A write to a stream that is not open goes to the log, and also to the
+   terminal unless the stream number is negative. \typeout relies on this: it
+   writes to an allocated but never opened stream. HSTeX has one diagnostic
+   surface so far, so both destinations are where \message writes. */
+static int write_stream_bytes(struct hstex_engine *engine, int32_t stream,
+                              const uint8_t *bytes, size_t byte_count,
+                              char *error, size_t error_capacity)
+{
+    FILE *destination = engine->message_stream == NULL ? stdout
+                                                       : engine->message_stream;
+    if (stream >= 0 && stream < 16 &&
+        engine->write_streams[(size_t)stream] != NULL) {
+        destination = engine->write_streams[(size_t)stream];
+    } else if (stream < 0) {
+        return 0;
+    }
+    if ((byte_count != 0U &&
+         fwrite(bytes, 1U, byte_count, destination) != byte_count) ||
+        fputc('\n', destination) == EOF || fflush(destination) != 0) {
+        return set_error(error, error_capacity, "write stream failed");
+    }
+    return 0;
+}
+
+static int execute_write(struct hstex_engine *engine, bool immediate,
+                         char *error, size_t error_capacity)
 {
     int32_t stream = 0;
+    /* \write accepts any stream number; only 0..15 can name an open file. */
+    if (scan_integer(engine, &stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!immediate) {
+        /* The text is kept as it was written and expanded when the page is
+           shipped, which is what lets \write{\thepage} name the page it
+           landed on. See docs/DECISIONS.md, whatsits. */
+        struct token_vector text = {0};
+        uint32_t tokens = 0U;
+        if (scan_general_text(engine, &text, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (store_token_list(engine, &text, &tokens, error, error_capacity) !=
+            0) {
+            vector_destroy(&text);
+            return -1;
+        }
+        return new_whatsit(engine, HSTEX_WHATSIT_WRITE, stream, tokens, error,
+                           error_capacity);
+    }
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    /* \write accepts any stream number; only 0..15 can name an open file. */
-    if (scan_integer(engine, &stream, error, error_capacity) != 0 ||
-        scan_expanded_general_text(engine, &bytes, &byte_count, error,
+    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
                                    error_capacity) != 0) {
         free(bytes);
         return -1;
     }
-    /* A write to a stream that is not open goes to the log, and also to the
-       terminal unless the stream number is negative. \typeout relies on this:
-       it writes to an allocated but never opened stream. HSTeX has one
-       diagnostic surface so far, so both destinations are stdout. */
-    FILE *destination = stdout;
-    if (stream >= 0 && stream < 16 &&
-        engine->write_streams[(size_t)stream] != NULL) {
-        destination = engine->write_streams[(size_t)stream];
+    int status = write_stream_bytes(engine, stream, bytes, byte_count, error,
+                                    error_capacity);
+    free(bytes);
+    return status;
+}
+
+/* \special is expanded where it stands, and only its writing waits for the
+   page; see docs/DECISIONS.md, whatsits. */
+static int execute_special(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
     }
-    int status = 0;
-    if (destination != NULL &&
-        ((byte_count != 0U &&
-          fwrite(bytes, 1U, byte_count, destination) != byte_count) ||
-         fputc('\n', destination) == EOF || fflush(destination) != 0)) {
-        status = set_error(error, error_capacity, "write stream failed");
+    struct token_vector tokens = {0};
+    for (size_t index = 0U; index < byte_count; ++index) {
+        uint8_t category = bytes[index] == (uint8_t)' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
+        if (vector_push(&tokens,
+                        hstex_token_character(category, bytes[index]), error,
+                        error_capacity) != 0) {
+            vector_destroy(&tokens);
+            free(bytes);
+            return -1;
+        }
     }
     free(bytes);
+    uint32_t identifier = 0U;
+    if (store_token_list(engine, &tokens, &identifier, error, error_capacity) !=
+        0) {
+        vector_destroy(&tokens);
+        return -1;
+    }
+    return new_whatsit(engine, HSTEX_WHATSIT_SPECIAL, 0, identifier, error,
+                       error_capacity);
+}
+
+/* Gathers the whatsits of a shipped box, innermost list last, so that they
+   can be done in the order they were written. The identifiers are collected
+   first because doing one of them may expand macros and move the arenas. */
+static int collect_whatsits(struct hstex_engine *engine, const uint32_t *items,
+                            size_t count, uint32_t **found, size_t *found_count,
+                            size_t *capacity, char *error,
+                            size_t error_capacity)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_WHATSIT) {
+            if (*found_count == *capacity) {
+                size_t next = *capacity == 0U ? 8U : *capacity * 2U;
+                uint32_t *grown = realloc(*found, next * sizeof(**found));
+                if (grown == NULL) {
+                    return set_error(error, error_capacity,
+                                     "whatsit list allocation failed");
+                }
+                *found = grown;
+                *capacity = next;
+            }
+            (*found)[(*found_count)++] = identifier;
+        } else if (node->kind == HSTEX_NODE_LIST &&
+                   node->value.list.node_count != 0U &&
+                   (size_t)node->value.list.node_start +
+                           node->value.list.node_count <=
+                       engine->list_item_count &&
+                   collect_whatsits(engine,
+                                    engine->list_items +
+                                        node->value.list.node_start,
+                                    node->value.list.node_count, found,
+                                    found_count, capacity, error,
+                                    error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
+                           char *error, size_t error_capacity)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0;
+    }
+    /* The node is read again after each step, because expansion may move the
+       arena out from under a pointer. */
+    uint8_t kind = engine->nodes[identifier - 1U].value.whatsit.kind;
+    uint8_t stored = engine->nodes[identifier - 1U].value.whatsit.stream;
+    uint32_t tokens = engine->nodes[identifier - 1U].value.whatsit.tokens;
+    /* Seventeen is how a negative stream was stored. */
+    int32_t stream = stored == 17U ? -1 : (int32_t)stored;
+    if (kind == (uint8_t)HSTEX_WHATSIT_CLOSE_OUT) {
+        return close_write_stream(engine, stream, error, error_capacity);
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL) {
+        /* Nothing carries a \special yet: there is no page description to
+           put it in. See docs/DECISIONS.md, whatsits. */
+        return 0;
+    }
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
+        if (stored_token_list_text(engine, tokens, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+            return -1;
+        }
+        char *filename = malloc(byte_count + 1U);
+        if (filename == NULL) {
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "output path allocation failed");
+        }
+        memcpy(filename, bytes, byte_count);
+        filename[byte_count] = '\0';
+        free(bytes);
+        return open_write_stream(engine, stream, filename, error,
+                                 error_capacity);
+    }
+    if (expand_stored_token_list(engine, tokens, &bytes, &byte_count, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    int status = write_stream_bytes(engine, stream, bytes, byte_count, error,
+                                    error_capacity);
+    free(bytes);
+    return status;
+}
+
+static int perform_shipout_whatsits(struct hstex_engine *engine,
+                                    const struct hstex_box *box, char *error,
+                                    size_t error_capacity)
+{
+    if (box->kind == HSTEX_BOX_VOID || box->node_count == 0U ||
+        (size_t)box->node_start + box->node_count > engine->list_item_count) {
+        return 0;
+    }
+    uint32_t *found = NULL;
+    size_t found_count = 0U;
+    size_t capacity = 0U;
+    int status = collect_whatsits(engine, engine->list_items + box->node_start,
+                                  box->node_count, &found, &found_count,
+                                  &capacity, error, error_capacity);
+    for (size_t index = 0U; status == 0 && index < found_count; ++index) {
+        status = perform_whatsit(engine, found[index], error, error_capacity);
+    }
+    free(found);
     return status;
 }
 
@@ -21412,6 +21844,10 @@ handle_token:
             continue;
         }
         record_executing_name(engine, *token);
+        /* \immediate reaches exactly as far as the command it stands in
+           front of; see docs/DECISIONS.md, whatsits. */
+        bool immediate = engine->immediate_pending;
+        engine->immediate_pending = false;
         switch (meaning->command) {
         case HSTEX_COMMAND_RELAX:
             engine->pending_global = false;
@@ -22156,6 +22592,7 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_IMMEDIATE:
+            engine->immediate_pending = true;
             continue;
         case HSTEX_COMMAND_MESSAGE:
             if (execute_message(engine, error, error_capacity) != 0) {
@@ -22163,17 +22600,24 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_OPEN_OUT:
-            if (execute_open_out(engine, error, error_capacity) != 0) {
+            if (execute_open_out(engine, immediate, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
         case HSTEX_COMMAND_WRITE:
-            if (execute_write(engine, error, error_capacity) != 0) {
+            if (execute_write(engine, immediate, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
         case HSTEX_COMMAND_CLOSE_OUT:
-            if (execute_close_out(engine, error, error_capacity) != 0) {
+            if (execute_close_out(engine, immediate, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SPECIAL:
+            if (execute_special(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -22351,8 +22795,9 @@ handle_token:
                 0) {
                 return HSTEX_ENGINE_ERROR;
             }
-            engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
-            engine->shipped_pages += 1;
+            if (ship_out(engine, &shipped, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
             continue;
         }
         case HSTEX_COMMAND_NON_SCRIPT:

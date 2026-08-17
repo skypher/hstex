@@ -990,8 +990,9 @@ static int test_file_streams(void)
     char source[1024];
     int length = snprintf(
         source, sizeof(source),
-        "\\chardef\\stream=3 \\openout\\stream=%s \\def\\expected{abc }"
-        "\\write\\stream{\\expected}\\closeout\\stream "
+        "\\chardef\\stream=3 \\immediate\\openout\\stream=%s "
+        "\\def\\expected{abc }"
+        "\\immediate\\write\\stream{\\expected}\\immediate\\closeout\\stream "
         "\\openin\\stream=\"%s\" \\ifeof\\stream F\\else "
         "\\read\\stream to \\actual "
         "\\ifx\\actual\\expected T\\else F\\fi\\fi "
@@ -1009,6 +1010,74 @@ static int test_file_streams(void)
     int status = run_snippet(source, "TT");
     (void)unlink(stream_path);
     return status;
+}
+
+/* An output command without \immediate leaves a whatsit on the list, and the
+   text of a \write is expanded only when the page is shipped; see
+   docs/DECISIONS.md, whatsits. */
+static int test_whatsits(void)
+{
+    char stream_path[64];
+    if (open_snippet("", stream_path) != 0 || unlink(stream_path) != 0) {
+        return 1;
+    }
+    char source[2048];
+    int length = snprintf(
+        source, sizeof(source),
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbreadth=20 "
+        "\\count0=7 \\def\\x{\\the\\count0}"
+        "\\immediate\\openout1=%s "
+        "\\setbox0=\\hbox{\\write1{now \\x}\\special{ps \\x}"
+        "\\openout2=zz \\closeout2 \\write-5{}\\write16{}}"
+        "\\showbox0 "
+        "\\setbox2=\\hbox{\\write1{now \\x}}"
+        "\\count0=8 \\shipout\\box2 \\immediate\\closeout1 "
+        "\\openin1=\"%s\" \\read1 to \\line \\closein1 "
+        "\\message{[\\line]}%%",
+        stream_path, stream_path);
+    if (length < 0 || (size_t)length >= sizeof(source)) {
+        return 1;
+    }
+    int status = run_document(source,
+                              "> \\box0=\n"
+                              "\\hbox(0.0+0.0)x0.0\n"
+                              ".\\write1{now \\x }\n"
+                              ".\\special{ps 7}\n"
+                              ".\\openout2=zz\n"
+                              ".\\closeout2\n"
+                              ".\\write-{}\n"
+                              ".\\write*{}\n"
+                              "\n"
+                              "! OK.\n"
+                              "[now 8 ]");
+    (void)unlink(stream_path);
+    return status;
+}
+
+/* Glue, kerns and penalties in front of the first box of a page are thrown
+   away, and a whatsit is not: it joins the page and leaves it empty. See
+   docs/DECISIONS.md, whatsits-on-an-empty-page. */
+static int test_whatsits_on_an_empty_page(void)
+{
+    return run_document(
+        "\\vsize=100pt \\topskip=0pt \\maxdepth=0pt \\hsize=100pt "
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=10 "
+        "\\output={\\message{[FIRE \\the\\outputpenalty]}\\showbox255 "
+        "\\shipout\\box255 }"
+        "\\message{[A]}\\penalty-10000 "
+        "\\message{[B]}\\vskip5pt \\penalty-10000 "
+        "\\message{[C]}\\kern7pt \\penalty-10000 "
+        "\\message{[D]}\\write-1{w}\\message{[\\the\\pagegoal]}"
+        "\\hbox{}\\penalty-10000 "
+        "\\message{[E]}%",
+        "[A][B][C][D][16383.99998pt][FIRE -10000]> \\box255=\n"
+        "\\vbox(100.0+0.0)x0.0\n"
+        ".\\write-{w}\n"
+        ".\\glue(\\topskip) 0.0\n"
+        ".\\hbox(0.0+0.0)x0.0\n"
+        "\n"
+        "! OK.\n"
+        "[E]");
 }
 
 /* expl3 selects its backend from these, so the values must match the engine
@@ -3682,6 +3751,7 @@ int main(void)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
