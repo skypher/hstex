@@ -1448,6 +1448,24 @@ static int test_math_text_characters(void)
         "tenrm M\n\n! OK.\n");
 }
 
+/* A penalty of ten thousand forbids a page break rather than costing that
+   much; see docs/DECISIONS.md, the-page-builder. */
+static int test_infinite_page_penalty(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=2 \\showboxbreadth=30"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\hsize=100pt \\vsize=50pt \\topskip=0pt \\"
+        "maxdepth=0pt \\output={\\message{[F \\the\\outputpenal"
+        "ty]}\\showbox255 \\shipout\\box255 } \\hbox{}\\penalty"
+        "-100 \\vskip10pt \\penalty10000 \\vskip100pt \\hbox{} "
+        "\\penalty-10000 \\message{[done]}%",
+        "[F -100]> \\box255=\n\\vbox(50.0+0.0)x0.0\n.\\glue(\\t"
+        "opskip) 0.0\n.\\hbox(0.0+0.0)x0.0\n\n! OK.\n[F -10000]"
+        "> \\box255=\n\\vbox(50.0+0.0)x0.0\n.\\glue(\\topskip) "
+        "0.0\n.\\hbox(0.0+0.0)x0.0\n\n! OK.\n[done]");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4285,6 +4303,7 @@ int main(void)
         test_math_nodes() != 0 || test_hyphenating_ligatures() != 0 ||
         test_what_a_line_keeps_of_its_break() != 0 ||
         test_math_text_characters() != 0 ||
+        test_infinite_page_penalty() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

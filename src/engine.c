@@ -11634,8 +11634,10 @@ static int build_page(struct hstex_engine *engine, char *error,
                                     HSTEX_NODE_GLUE;
                     }
                 } else if (node.kind == HSTEX_NODE_PENALTY) {
-                    legal = true;
+                    /* A penalty of ten thousand forbids the break rather
+                       than costing that much. */
                     penalty = node.value.penalty;
+                    legal = penalty < HSTEX_INFINITE_PENALTY;
                 }
                 if (legal) {
                     int64_t cost = page_break_cost(engine, penalty);
