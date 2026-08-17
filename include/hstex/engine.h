@@ -1143,7 +1143,10 @@ struct hstex_engine {
     uint32_t output_group_floor;
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;
+    /* The current page, and the list material is contributed to before the
+       page builder moves it there; see docs/DECISIONS.md, the-page-builder. */
     struct hstex_vbox_builder *page_builder;
+    struct hstex_vbox_builder *contribution_builder;
     /* The horizontal list of the paragraph being built, if any. */
     struct hstex_hbox_builder *paragraph_builder;
     bool building_paragraph;
@@ -1176,6 +1179,8 @@ struct hstex_engine {
        while the group is still being measured; see docs/DECISIONS.md,
        middle-delimiters. */
     int32_t middle_delimiter_size;
+    /* Where \message writes; the standard output when this is null. */
+    FILE *message_stream;
     /* The box \leaders read, waiting for the glue that will repeat it. */
     uint32_t pending_leader;
     uint8_t pending_leader_kind;
@@ -1251,6 +1256,9 @@ enum hstex_engine_result hstex_engine_next_output(
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity);
+/* Where \message writes. NULL, the default, means the standard output. */
+void hstex_engine_set_message_stream(struct hstex_engine *engine,
+                                     FILE *stream);
 const struct hstex_meaning *hstex_engine_meaning(
     const struct hstex_engine *engine, hstex_cs_id identifier);
 

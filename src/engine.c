@@ -1641,6 +1641,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->hyphen_roots =
         calloc(engine->count_capacity, sizeof(*engine->hyphen_roots));
     engine->page_builder = calloc(1U, sizeof(*engine->page_builder));
+    engine->contribution_builder =
+        calloc(1U, sizeof(*engine->contribution_builder));
     if (engine->counts == NULL || engine->count_levels == NULL ||
         engine->dimens == NULL || engine->dimen_levels == NULL ||
         engine->glues == NULL || engine->glue_levels == NULL ||
@@ -1648,7 +1650,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         engine->token_registers == NULL ||
         engine->token_register_levels == NULL || engine->boxes == NULL ||
         engine->box_levels == NULL || engine->hyphen_roots == NULL ||
-        engine->page_builder == NULL) {
+        engine->page_builder == NULL || engine->contribution_builder == NULL) {
         (void)set_error(error, error_capacity,
                         "register allocation failed");
         hstex_engine_destroy(engine);
@@ -1669,7 +1671,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->dimen_parameters[HSTEX_DIMEN_PDF_PX_DIMEN] = 65782;
     engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES] = 25;
     engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
-    engine->active_vbox_builder = engine->page_builder;
+    engine->active_vbox_builder = engine->contribution_builder;
     engine->interaction_mode = HSTEX_INTERACTION_ERROR_STOP;
     for (size_t character = 0U; character < 256U; ++character) {
         engine->code_tables[0][character] = 1000;
@@ -2625,6 +2627,10 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->page_builder->node_identifiers);
     }
     free(engine->page_builder);
+    if (engine->contribution_builder != NULL) {
+        free(engine->contribution_builder->node_identifiers);
+    }
+    free(engine->contribution_builder);
     clear_match_groups(engine);
     for (size_t index = 0U; index < engine->pdf_object_count; ++index) {
         free(engine->pdf_objects[index].attributes);
@@ -2753,7 +2759,12 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->page_builder->extent = 0;
     engine->page_builder->trailing_depth = 0;
     engine->page_builder->width = 0;
-    engine->active_vbox_builder = engine->page_builder;
+    engine->contribution_builder->count = 0U;
+    engine->contribution_builder->extent = 0;
+    engine->contribution_builder->trailing_depth = 0;
+    engine->contribution_builder->width = 0;
+    memset(engine->page_dimens, 0, sizeof(engine->page_dimens));
+    engine->active_vbox_builder = engine->contribution_builder;
     if (hstex_engine_push_file(engine, path, error, error_capacity) != 0) {
         return -1;
     }
@@ -4082,6 +4093,9 @@ static int glue_from_meaning(struct hstex_engine *engine,
 
 static bool page_is_empty(const struct hstex_engine *engine);
 
+static int contribute_page(struct hstex_engine *engine, char *error,
+                           size_t error_capacity);
+
 static int dimen_from_meaning(struct hstex_engine *engine,
                               const struct hstex_meaning *meaning,
                               int32_t *value, char *error,
@@ -4194,15 +4208,12 @@ static int dimen_from_meaning(struct hstex_engine *engine,
             return set_error(error, error_capacity,
                              "invalid page-dimen meaning");
         }
-        /* While the page is empty the page dimensions read as a fixed pair:
-           the goal is \maxdimen and every other total is zero. Once a box has
-           reached the page the totals come from the page builder, which does
-           not exist yet; reporting the stored zeros would diverge silently. */
-        if (!page_is_empty(engine)) {
-            return set_error(error, error_capacity,
-                             "page totals require the page builder");
-        }
-        *value = index == (int32_t)HSTEX_PAGE_GOAL ? HSTEX_MAX_DIMEN : 0;
+        /* While the page is empty the goal reads as \maxdimen and every
+           other total as zero; once a box has reached it the page builder's
+           own figures are what show. */
+        *value = page_is_empty(engine)
+                     ? (index == (int32_t)HSTEX_PAGE_GOAL ? HSTEX_MAX_DIMEN : 0)
+                     : engine->page_dimens[(size_t)index];
         return 1;
     }
     if (meaning->command == HSTEX_COMMAND_DIMEN) {
@@ -9574,7 +9585,10 @@ static int execute_box_reference(struct hstex_engine *engine,
     if (box.kind == HSTEX_BOX_VOID) {
         return 0;
     }
-    return append_box_node(engine, &box, error, error_capacity);
+    if (append_box_node(engine, &box, error, error_capacity) != 0) {
+        return -1;
+    }
+    return contribute_page(engine, error, error_capacity);
 }
 
 static int execute_box_constructor(struct hstex_engine *engine,
@@ -9610,9 +9624,13 @@ static int execute_box_constructor(struct hstex_engine *engine,
     if (status != 0) {
         return -1;
     }
-    return engine->mode == HSTEX_MODE_MATH
-               ? math_append_box(engine, &box, error, error_capacity)
-               : append_box_node(engine, &box, error, error_capacity);
+    if (engine->mode == HSTEX_MODE_MATH) {
+        return math_append_box(engine, &box, error, error_capacity);
+    }
+    if (append_box_node(engine, &box, error, error_capacity) != 0) {
+        return -1;
+    }
+    return contribute_page(engine, error, error_capacity);
 }
 
 static int execute_set_box(struct hstex_engine *engine, char *error,
@@ -10380,26 +10398,138 @@ static int scan_dimen_parameter_assignment(struct hstex_engine *engine,
                                   requested_global, error, error_capacity);
 }
 
-/* The page stays empty until a box or rule reaches the main vertical list;
-   glue and penalties contributed before that are discarded by the page
-   builder and leave the page totals untouched. */
+/* The page stays empty until a box or rule reaches it; glue, kerns and
+   penalties contributed before that are discarded. See docs/DECISIONS.md,
+   the-page-builder. */
 static bool page_is_empty(const struct hstex_engine *engine)
 {
-    const struct hstex_vbox_builder *page = engine->page_builder;
-    if (page == NULL) {
-        return true;
+    return engine->page_builder == NULL || engine->page_builder->count == 0U;
+}
+
+static int build_page(struct hstex_engine *engine, char *error,
+                      size_t error_capacity);
+
+/* The page builder runs only for the outermost vertical list, and only
+   where the reference runs it: after a box has been appended there, after a
+   paragraph has ended, and at \end. */
+static int contribute_page(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_VERTICAL ||
+        engine->active_vbox_builder != engine->contribution_builder) {
+        return 0;
     }
-    for (size_t index = 0U; index < page->count; ++index) {
-        uint32_t identifier = page->node_identifiers[index];
+    return build_page(engine, error, error_capacity);
+}
+
+/* Move everything waiting on the contribution list onto the current page,
+   keeping the page totals as it goes. */
+static int build_page(struct hstex_engine *engine, char *error,
+                      size_t error_capacity)
+{
+    struct hstex_vbox_builder *contributions = engine->contribution_builder;
+    struct hstex_vbox_builder *page = engine->page_builder;
+    if (contributions == NULL || page == NULL || contributions->count == 0U) {
+        return 0;
+    }
+    for (size_t index = 0U; index < contributions->count; ++index) {
+        uint32_t identifier = contributions->node_identifiers[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
-        enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
-        if (kind == HSTEX_NODE_RULE || kind == HSTEX_NODE_LIST) {
-            return false;
+        struct hstex_node node = engine->nodes[identifier - 1U];
+        bool is_box =
+            node.kind == HSTEX_NODE_RULE || node.kind == HSTEX_NODE_LIST;
+        if (page_is_empty(engine)) {
+            if (!is_box) {
+                continue;
+            }
+            /* The first box settles the page's goal and gets \topskip glue
+               in front of it, shortened by however tall the box is. */
+            engine->page_dimens[HSTEX_PAGE_GOAL] =
+                engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
+            engine->page_dimens[HSTEX_PAGE_TOTAL] = 0;
+            engine->page_dimens[HSTEX_PAGE_DEPTH] = 0;
+            engine->page_dimens[HSTEX_PAGE_STRETCH] = 0;
+            engine->page_dimens[HSTEX_PAGE_FIL_STRETCH] = 0;
+            engine->page_dimens[HSTEX_PAGE_FILL_STRETCH] = 0;
+            engine->page_dimens[HSTEX_PAGE_FILLL_STRETCH] = 0;
+            engine->page_dimens[HSTEX_PAGE_SHRINK] = 0;
+            struct hstex_glue top =
+                engine->glue_parameters[HSTEX_GLUE_TOP_SKIP];
+            int32_t height = packed_dimen(node.height);
+            top.width = top.width > height ? top.width - height : 0;
+            struct hstex_node glue = {
+                .kind = HSTEX_NODE_GLUE,
+                .width = top.width,
+                .value.glue = {
+                    .stretch = top.stretch,
+                    .shrink = top.shrink,
+                    .stretch_order = top.stretch_order,
+                    .shrink_order = top.shrink_order,
+                },
+            };
+            uint32_t placed = 0U;
+            if (reserve_vbox_items(page, page->count + 1U, error,
+                                   error_capacity) != 0 ||
+                store_node(engine, &glue, &placed, error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+            page->node_identifiers[page->count++] = placed;
+            engine->page_dimens[HSTEX_PAGE_TOTAL] = top.width;
+            if (top.stretch_order == 0U) {
+                engine->page_dimens[HSTEX_PAGE_STRETCH] += top.stretch;
+            } else {
+                engine->page_dimens[HSTEX_PAGE_STRETCH +
+                                    top.stretch_order] += top.stretch;
+            }
+            engine->page_dimens[HSTEX_PAGE_SHRINK] += top.shrink;
+            /* The node is looked up again: storing the glue may have moved
+               the arena. */
+            node = engine->nodes[identifier - 1U];
+        }
+        int64_t total = engine->page_dimens[HSTEX_PAGE_TOTAL];
+        if (is_box) {
+            total += engine->page_dimens[HSTEX_PAGE_DEPTH] +
+                     packed_dimen(node.height);
+            int32_t depth = packed_dimen(node.depth);
+            int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_MAX_DEPTH];
+            if (depth > limit) {
+                total += (int64_t)depth - limit;
+                depth = limit;
+            }
+            engine->page_dimens[HSTEX_PAGE_DEPTH] = depth;
+        } else if (node.kind == HSTEX_NODE_GLUE ||
+                   node.kind == HSTEX_NODE_KERN) {
+            total += engine->page_dimens[HSTEX_PAGE_DEPTH] +
+                     packed_dimen(node.width);
+            engine->page_dimens[HSTEX_PAGE_DEPTH] = 0;
+            if (node.kind == HSTEX_NODE_GLUE) {
+                engine->page_dimens[HSTEX_PAGE_STRETCH +
+                                    node.value.glue.stretch_order] +=
+                    node.value.glue.stretch;
+                engine->page_dimens[HSTEX_PAGE_SHRINK] +=
+                    node.value.glue.shrink;
+            }
+        }
+        engine->page_dimens[HSTEX_PAGE_TOTAL] =
+            (int32_t)(uint32_t)(uint64_t)total;
+        if (reserve_vbox_items(page, page->count + 1U, error,
+                               error_capacity) != 0) {
+            return -1;
+        }
+        page->node_identifiers[page->count++] = identifier;
+        int32_t reach = packed_dimen(node.width) + node.shift;
+        if (is_box && reach > page->width) {
+            page->width = reach;
         }
     }
-    return true;
+    contributions->count = 0U;
+    contributions->extent = 0;
+    contributions->trailing_depth = 0;
+    contributions->width = 0;
+    return 0;
 }
 
 /* Page state is not saved by grouping, so these assignments bypass the save
@@ -14075,10 +14205,11 @@ static int normal_paragraph(struct hstex_engine *engine, char *error,
 static int finish_paragraph(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
-    if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0) {
+    if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0 ||
+        normal_paragraph(engine, error, error_capacity) != 0) {
         return -1;
     }
-    return normal_paragraph(engine, error, error_capacity);
+    return contribute_page(engine, error, error_capacity);
 }
 
 /* A horizontal command met in vertical mode starts an indented paragraph and
@@ -18817,10 +18948,12 @@ static int execute_message(struct hstex_engine *engine, char *error,
         free(bytes);
         return -1;
     }
+    FILE *stream = engine->message_stream == NULL ? stdout
+                                                 : engine->message_stream;
     int status = 0;
     if ((byte_count != 0U &&
-         fwrite(bytes, 1U, byte_count, stdout) != byte_count) ||
-        fflush(stdout) != 0) {
+         fwrite(bytes, 1U, byte_count, stream) != byte_count) ||
+        fflush(stream) != 0) {
         status = set_error(error, error_capacity, "message output failed");
     }
     free(bytes);
@@ -20028,6 +20161,12 @@ static int execute_ignore_spaces(struct hstex_engine *engine, char *error,
 /* Run the document: everything the executor does not handle itself belongs
    to the main vertical list, which is built exactly as a \vbox body is. See
    docs/DECISIONS.md, the-main-vertical-list. */
+void hstex_engine_set_message_stream(struct hstex_engine *engine,
+                                     FILE *stream)
+{
+    engine->message_stream = stream;
+}
+
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity)

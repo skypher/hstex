@@ -79,6 +79,87 @@ static int prepare_engine(struct hstex_engine *engine, const char *path,
     return 0;
 }
 
+/* Run a snippet the way the driver runs a document -- the engine builds the
+   main vertical list itself -- and compare what \message wrote. */
+static int run_document(const char *source, const char *expected)
+{
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "prepare failed: %s\n", error);
+        (void)unlink(path);
+        return 1;
+    }
+    char *captured = NULL;
+    size_t captured_length = 0U;
+    FILE *sink = open_memstream(&captured, &captured_length);
+    if (sink == NULL) {
+        (void)fprintf(stderr, "could not capture messages for %s\n", source);
+        hstex_engine_destroy(&engine);
+        (void)unlink(path);
+        return 1;
+    }
+    hstex_engine_set_message_stream(&engine, sink);
+    struct hstex_source_location last = {0};
+    int status = 0;
+    if (hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "engine failed for %s: %s\n", source, error);
+        status = 1;
+    }
+    (void)fclose(sink);
+    size_t expected_length = strlen(expected);
+    if (status == 0 &&
+        (captured_length != expected_length ||
+         memcmp(captured, expected, expected_length) != 0)) {
+        (void)fprintf(stderr,
+                      "message mismatch for %s: got %zu bytes, expected %zu\n",
+                      source, captured_length, expected_length);
+        (void)fprintf(stderr, "actual messages: [%s]\n",
+                      captured == NULL ? "" : captured);
+        status = 1;
+    }
+    free(captured);
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+/* Page totals; see docs/DECISIONS.md, the-page-builder. */
+static int test_page_totals(void)
+{
+    return run_document(
+        "\\vsize=200pt \\maxdepth=2pt \\topskip=10pt plus 1pt minus"
+        " 3pt \\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\lin"
+        "eskip=0pt \\lineskiplimit=0pt \\hbadness=10000 \\vbadness="
+        "10000 \\vfuzz=1000pt \\hfuzz=1000pt \\parindent=0pt \\pars"
+        "kip=0pt \\parfillskip=0pt plus1fil \\tolerance=10000 \\hsi"
+        "ze=100pt \\def\\P#1{\\message{[#1|\\the\\pagegoal|\\the\\p"
+        "agetotal|\\the\\pagedepth|\\the\\pagestretch|\\the\\pagesh"
+        "rink|\\the\\pagefilstretch|\\the\\pagefillstretch]}}\\def"
+        "\\R#1#2#3{\\vrule width#1pt height#2pt depth#3pt}\\P{1}\\v"
+        "skip 7pt \\P{2}\\hrule height5pt depth1pt \\P{3}\\vskip3pt"
+        " plus 2pt minus 1pt \\P{4}\\hbox{\\R{4}{6}{3}}\\P{5}\\pena"
+        "lty 33 \\P{6}\\kern4pt \\P{7}\\vskip0pt plus1fil \\P{8}\\h"
+        "box{\\R{4}{3}{0}}\\P{9}\\vfill\\hbox{\\R{4}{3}{0}}\\P{10}"
+        "\\vsize=50pt \\hbox{\\R{4}{3}{0}}\\P{11}\\noindent\\R{5}{8"
+        "}{1}\\par\\P{12}%",
+        "[1|16383.99998pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt][2|16"
+        "383.99998pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt][3|16383.9"
+        "9998pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt][4|16383.99998p"
+        "t|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt|0.0pt][5|200.0pt|21.0pt|2."
+        "0pt|3.0pt|4.0pt|0.0pt|0.0pt][6|200.0pt|21.0pt|2.0pt|3.0pt|"
+        "4.0pt|0.0pt|0.0pt][7|200.0pt|21.0pt|2.0pt|3.0pt|4.0pt|0.0p"
+        "t|0.0pt][8|200.0pt|21.0pt|2.0pt|3.0pt|4.0pt|0.0pt|0.0pt][9"
+        "|200.0pt|36.0pt|0.0pt|3.0pt|4.0pt|1.0pt|0.0pt][10|200.0pt|"
+        "48.0pt|0.0pt|3.0pt|4.0pt|1.0pt|1.0pt][11|200.0pt|60.0pt|0."
+        "0pt|3.0pt|4.0pt|1.0pt|1.0pt][12|200.0pt|72.0pt|1.0pt|3.0pt"
+        "|4.0pt|1.0pt|1.0pt]");
+}
+
 static int run_snippet(const char *source, const char *expected)
 {
     char path[64];
@@ -2702,19 +2783,24 @@ static int test_vertical_lists(void)
     const struct hstex_node *standalone_vbox = engine.node_count >= 4U
                                                    ? &engine.nodes[3]
                                                    : NULL;
+    /* The first box to reach the page gets \topskip glue in front of it;
+       see docs/DECISIONS.md, the-page-builder. */
+    const struct hstex_node *topskip = engine.node_count >= 5U
+                                           ? &engine.nodes[4]
+                                           : NULL;
     /* The two top-level boxes are separated by interline glue, which the
        reference also emits even when it measures zero. */
-    const struct hstex_node *interline = engine.node_count >= 5U
-                                             ? &engine.nodes[4]
+    const struct hstex_node *interline = engine.node_count >= 6U
+                                             ? &engine.nodes[5]
                                              : NULL;
-    const struct hstex_node *standalone_hbox = engine.node_count >= 6U
-                                                   ? &engine.nodes[5]
+    const struct hstex_node *standalone_hbox = engine.node_count >= 7U
+                                                   ? &engine.nodes[6]
                                                    : NULL;
     int status =
         result != HSTEX_ENGINE_EOF || box.kind != HSTEX_BOX_VLIST ||
         box.width != 0 || box.height != 131072 || box.depth != 0 ||
         box.node_count != 3U || engine.list_item_count != 3U ||
-        engine.node_count != 6U || glue == NULL ||
+        engine.node_count != 7U || glue == NULL ||
         glue->kind != HSTEX_NODE_GLUE || glue->width != 131072 ||
         glue->value.glue.stretch != 65536 ||
         glue->value.glue.stretch_order != 1U || penalty == NULL ||
@@ -2725,6 +2811,8 @@ static int test_vertical_lists(void)
         fil->value.glue.stretch_order != 1U || standalone_vbox == NULL ||
         standalone_vbox->kind != HSTEX_NODE_LIST ||
         standalone_vbox->value.list.box_kind != HSTEX_BOX_VLIST ||
+        topskip == NULL || topskip->kind != HSTEX_NODE_GLUE ||
+        topskip->width != 0 ||
         interline == NULL || interline->kind != HSTEX_NODE_GLUE ||
         interline->width != 0 || standalone_hbox == NULL ||
         standalone_hbox->kind != HSTEX_NODE_LIST ||
@@ -3231,7 +3319,7 @@ int main(void)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
@@ -3246,8 +3334,12 @@ int main(void)
                     "\\immediate\\write-1{C}X%",
                     "X") != 0 ||
         run_snippet("A\\end B%", "A") != 0 ||
-        expect_failure("\\hbox{}\\the\\pagegoal%",
-                       "page totals require the page builder") != 0 ||
+        /* The first box on the page settles its goal; see
+           docs/DECISIONS.md, the-page-builder. */
+        run_snippet("\\the\\pagegoal%", "16383.99998pt") != 0 ||
+        run_snippet("\\vsize=123pt \\topskip=0pt "
+                    "\\hbox{}\\the\\pagegoal|\\the\\pagetotal%",
+                    "123.0pt|0.0pt") != 0 ||
         test_dimensions_and_glue() != 0 || test_token_lists() != 0 ||
         test_empty_hboxes() != 0 || test_vertical_lists() != 0 ||
         test_pdf_file_size() != 0) {
