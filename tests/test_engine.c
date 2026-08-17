@@ -1472,6 +1472,40 @@ static int test_left_right(void)
         "[16.72229pt|15.0pt|9.50012pt]");
 }
 
+/* A control sequence \let to a character is that character; see
+   docs/DECISIONS.md, implicit-characters. */
+static int test_implicit_characters(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\&=4 \\catcode`\\^=7 \\catcode`\\_=8 "
+        "\\let\\a={\\let\\b=}\\let\\c=$\\let\\d=&\\let\\e=#\\let\\f=^"
+        "\\let\\g=_\\let\\h=x\\let\\i='\\let\\j=\\relax"
+        "\\catcode`\\~=13 \\let~=y\\let\\k=~"
+        "\\def\\eat#1#2{}"
+        "\\def\\q{[\\meaning\\tk][\\ifx'\\tk Y\\else N\\fi]\\eat}"
+        "\\def\\p{\\futurelet\\tk\\q}"
+        /* Each category has a name of its own. */
+        "[\\meaning\\a][\\meaning\\b][\\meaning\\c][\\meaning\\d]"
+        "[\\meaning\\e][\\meaning\\f][\\meaning\\g][\\meaning\\h]"
+        "[\\meaning\\i][\\meaning\\j][\\meaning\\k]"
+        /* An explicit character reports the same way. */
+        "[\\meaning x][\\meaning ']"
+        /* \ifx sees through the alias, in either order. */
+        "[\\ifx\\h x Y\\else N\\fi][\\ifx x\\h Y\\else N\\fi]"
+        "[\\ifx\\h y Y\\else N\\fi][\\ifx\\h\\i Y\\else N\\fi]"
+        "[\\ifx\\a\\a Y\\else N\\fi]"
+        /* Which is what \futurelet plus \ifx needs, and what LaTeX's run of
+           primes is built on. */
+        "\\p'x%",
+        "[begin-group character {][end-group character }]"
+        "[math shift character $][alignment tab character &]"
+        "[macro parameter character #]"
+        "[superscript character ^][subscript character _]"
+        "[the letter x][the character '][\\relax]"
+        "[the letter y][the letter x][the character '][ Y][Y]"
+        "[N][N][Y][the character '][Y]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2561,7 +2595,7 @@ int main(void)
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
-        test_left_right() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_left_right() != 0 || test_implicit_characters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

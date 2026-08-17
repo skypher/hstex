@@ -11202,6 +11202,48 @@ static int append_defined_register_meaning(struct hstex_engine *engine,
                              error_capacity);
 }
 
+/* What the reference calls a character token: the category has a name of its
+   own, and the character follows it. See docs/DECISIONS.md,
+   implicit-characters. */
+static int append_character_meaning(struct hstex_engine *engine,
+                                    hstex_token token, uint8_t **bytes,
+                                    size_t *count, size_t *capacity,
+                                    char *error, size_t error_capacity)
+{
+    static const struct {
+        uint8_t category;
+        const char *name;
+    } names[] = {
+        {(uint8_t)HSTEX_CAT_BEGIN_GROUP, "begin-group character "},
+        {(uint8_t)HSTEX_CAT_END_GROUP, "end-group character "},
+        {(uint8_t)HSTEX_CAT_MATH_SHIFT, "math shift character "},
+        {(uint8_t)HSTEX_CAT_ALIGNMENT_TAB, "alignment tab character "},
+        {(uint8_t)HSTEX_CAT_PARAMETER, "macro parameter character "},
+        {(uint8_t)HSTEX_CAT_SUPERSCRIPT, "superscript character "},
+        {(uint8_t)HSTEX_CAT_SUBSCRIPT, "subscript character "},
+        {(uint8_t)HSTEX_CAT_SPACE, "blank space "},
+        {(uint8_t)HSTEX_CAT_LETTER, "the letter "},
+        {(uint8_t)HSTEX_CAT_OTHER, "the character "},
+    };
+    (void)engine;
+    uint8_t category = hstex_token_category(token);
+    const char *name = "the character ";
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]);
+         ++index) {
+        if (names[index].category == category) {
+            name = names[index].name;
+            break;
+        }
+    }
+    if (append_text_bytes(bytes, count, capacity, name, error,
+                          error_capacity) != 0) {
+        return -1;
+    }
+    return append_byte(bytes, count, capacity,
+                       hstex_token_character_code(token), error,
+                       error_capacity);
+}
+
 static int expand_meaning(struct hstex_engine *engine,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity)
@@ -11217,9 +11259,7 @@ static int expand_meaning(struct hstex_engine *engine,
     size_t count = 0U;
     size_t capacity = 0U;
     if (hstex_token_is_character(subject)) {
-        if (append_text_bytes(&bytes, &count, &capacity, "the character ", error,
-                              error_capacity) != 0 ||
-            append_token_description(engine, subject, &bytes, &count, &capacity,
+        if (append_character_meaning(engine, subject, &bytes, &count, &capacity,
                                      error, error_capacity) != 0) {
             free(bytes);
             return -1;
@@ -11227,7 +11267,17 @@ static int expand_meaning(struct hstex_engine *engine,
     } else if (hstex_token_is_control_sequence(subject)) {
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(subject));
-        if (meaning->command == HSTEX_COMMAND_MACRO &&
+        /* A control sequence \\let to a character has that character's
+           meaning, not a name of its own. */
+        if (meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+            hstex_token_is_character(meaning->value.token)) {
+            if (append_character_meaning(engine, meaning->value.token, &bytes,
+                                         &count, &capacity, error,
+                                         error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+        } else if (meaning->command == HSTEX_COMMAND_MACRO &&
             meaning->value.macro_identifier != 0U &&
             (size_t)meaning->value.macro_identifier <= engine->macro_count) {
             const struct hstex_macro *macro =
@@ -17480,6 +17530,22 @@ static bool ifx_tokens_equal(const struct hstex_engine *engine,
 {
     left = normalize_one_shot_token(left);
     right = normalize_one_shot_token(right);
+    /* A control sequence \\let to a character is that character as far as
+       \\ifx is concerned; LaTeX's prime machinery turns on it. */
+    if (hstex_token_is_control_sequence(left) &&
+        hstex_token_is_character(right)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(left));
+        return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+               meaning->value.token == right;
+    }
+    if (hstex_token_is_control_sequence(right) &&
+        hstex_token_is_character(left)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(right));
+        return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+               meaning->value.token == left;
+    }
     if (hstex_token_is_character(left) || hstex_token_is_character(right)) {
         return left == right;
     }
