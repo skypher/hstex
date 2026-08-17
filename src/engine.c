@@ -1716,6 +1716,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"hfill", 2, HSTEX_COMMAND_HSKIP},
         {"hss", 3, HSTEX_COMMAND_HSKIP},
         {"hfilneg", 4, HSTEX_COMMAND_HSKIP},
+        {"indent", 1, HSTEX_COMMAND_INDENT},
+        {"noindent", 0, HSTEX_COMMAND_INDENT},
     };
     for (size_t index = 0U;
          index < sizeof(skip_primitives) / sizeof(skip_primitives[0]);
@@ -11992,6 +11994,34 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                       error_capacity);
 }
 
+/* \indent puts an empty box of width \parindent in the horizontal list;
+   \noindent puts nothing. From vertical mode either starts a paragraph, which
+   needs the paragraph builder; see docs/DECISIONS.md, indentation. */
+static int execute_indent(struct hstex_engine *engine, bool indent,
+                          char *error, size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "indentation does not accept prefixes");
+    }
+    if (engine->mode == HSTEX_MODE_VERTICAL) {
+        return set_error(error, error_capacity,
+                         "starting a paragraph requires the paragraph "
+                         "builder");
+    }
+    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         "indentation is not supported in math mode");
+    }
+    if (!indent) {
+        return 0;
+    }
+    struct hstex_box box = {0};
+    box.kind = HSTEX_BOX_HLIST;
+    box.width = engine->dimen_parameters[HSTEX_DIMEN_PAR_INDENT];
+    return append_box_node(engine, &box, error, error_capacity);
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -13555,6 +13585,12 @@ handle_token:
         case HSTEX_COMMAND_COPY:
             if (execute_box_reference(engine, meaning->command, error,
                                       error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_INDENT:
+            if (execute_indent(engine, meaning->value.integer != 0, error,
+                               error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

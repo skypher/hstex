@@ -188,6 +188,7 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_COLOR_STACK_INIT,
     HSTEX_COMMAND_UNBOX,
     HSTEX_COMMAND_HSKIP,
+    HSTEX_COMMAND_INDENT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the

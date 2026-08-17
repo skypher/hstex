@@ -578,10 +578,18 @@ static int test_horizontal_glue(void)
         "\\setbox0=\\hbox{\\hskip3pt}[\\the\\wd0]"
         "\\setbox0=\\hbox{\\hfil}[\\the\\wd0]"
         "\\setbox0=\\hbox to 10pt{\\hfil}[\\the\\wd0]"
-        "[\\the\\interlinepenalty|\\the\\postdisplaypenalty]%",
+        "[\\the\\interlinepenalty|\\the\\postdisplaypenalty]"
+        /* \indent puts an empty box of \parindent width in a horizontal
+           list; \noindent puts nothing. */
+        "\\parindent=17pt "
+        "\\setbox0=\\hbox{\\indent}[\\the\\wd0|\\the\\ht0]"
+        "\\setbox0=\\hbox{\\noindent}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\indent\\indent}[\\the\\wd0]"
+        "\\parindent=0pt \\setbox0=\\hbox{\\indent}[\\the\\wd0]%",
         "[3.0pt plus 2.0fil minus 1.0pt|11][0.0pt plus 1.0fil]"
         "[0.0pt plus 1.0fill][0.0pt plus 1.0fil minus 1.0fil]"
-        "[0.0pt plus -1.0fil][3.0pt][0.0pt][10.0pt][0|0]");
+        "[0.0pt plus -1.0fil][3.0pt][0.0pt][10.0pt][0|0]"
+        "[17.0pt|0.0pt][0.0pt][34.0pt][0.0pt]");
 }
 
 /* Unboxing and the colour stacks; see docs/DECISIONS.md, unboxing and
