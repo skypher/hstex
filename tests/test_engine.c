@@ -1098,6 +1098,35 @@ static int test_discretionaries(void)
         "\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
 }
 
+/* The outermost vertical list gets \parskip in front of a paragraph however
+   little is waiting to be contributed; see docs/DECISIONS.md,
+   parskip-in-the-outermost-list. */
+static int test_parskip_in_the_outermost_list(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=1 \\showboxbreadth=30 \\"
+        "hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vfuzz=1"
+        "000pt \\font\\f=cmr10 \\f \\hsize=100pt \\vsize=200pt \\"
+        "topskip=0pt \\maxdepth=0pt \\parindent=0pt \\parskip=3pt"
+        " plus1pt \\baselineskip=12pt \\lineskip=0pt \\lineskipli"
+        "mit=0pt \\parfillskip=0pt plus1fil \\leftskip=0pt \\righ"
+        "tskip=0pt \\tolerance=10000 \\pretolerance=-1 \\clubpena"
+        "lty=0 \\widowpenalty=0 \\interlinepenalty=0 \\brokenpena"
+        "lty=0 \\output={\\showbox255 \\shipout\\box255 }\\hbox{}"
+        "\\hbox{}\\noindent A\\par \\penalty-10000 %",
+        "> \\box255=\n"
+        "\\vbox(200.0+0.0)x100.0, glue set 173.0\n"
+        ".\\glue(\\topskip) 0.0\n"
+        ".\\hbox(0.0+0.0)x0.0\n"
+        ".\\glue(\\baselineskip) 12.0\n"
+        ".\\hbox(0.0+0.0)x0.0\n"
+        ".\\glue(\\parskip) 3.0 plus 1.0\n"
+        ".\\glue(\\baselineskip) 5.16669\n"
+        ".\\hbox(6.83331+0.0)x100.0, glue set 92.49998fil []\n"
+        "\n"
+        "! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -3929,6 +3958,7 @@ int main(void)
         test_the_current_font_is_grouped() != 0 ||
         test_discretionaries() != 0 || test_hyphenation() != 0 ||
         test_interword_glue() != 0 ||
+        test_parskip_in_the_outermost_list() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

@@ -14816,8 +14816,8 @@ static int append_horizontal_character(struct hstex_engine *engine,
 }
 
 /* Begin a paragraph: the vertical list gets \parskip if it has anything in
-   it, and the horizontal list gets the indentation and \everypar; see
-   docs/DECISIONS.md, paragraphs. */
+   it, and always in the outermost one, and the horizontal list gets the
+   indentation and \everypar; see docs/DECISIONS.md, paragraphs. */
 static int start_paragraph(struct hstex_engine *engine, bool indent,
                            char *error, size_t error_capacity)
 {
@@ -14829,8 +14829,13 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
                              "paragraph list allocation failed");
         }
     }
+    /* The outermost vertical list gets \parskip whether or not anything is
+       waiting to be contributed, because what came before may already have
+       been moved to the page; an inner one gets it only when it is not
+       empty. See docs/DECISIONS.md, parskip-in-the-outermost-list. */
     if (engine->active_vbox_builder != NULL &&
-        engine->active_vbox_builder->count != 0U) {
+        (engine->active_vbox_builder == engine->contribution_builder ||
+         engine->active_vbox_builder->count != 0U)) {
         struct hstex_glue skip = engine->glue_parameters[HSTEX_GLUE_PAR_SKIP];
         struct hstex_node node = {
             .kind = HSTEX_NODE_GLUE,
