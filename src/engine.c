@@ -19279,6 +19279,9 @@ static int extensible_box(struct hstex_engine *engine,
                     .glue = piece_box.glue,
                 },
             };
+            /* The pieces are stacked flush, with no interline glue between
+               them; see docs/DECISIONS.md, extensible-delimiters. */
+            engine->prev_depth = HSTEX_IGNORE_DEPTH;
             status = append_vbox_node(engine, &node, error, error_capacity);
         }
     }
@@ -20639,13 +20642,15 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
     engine->active_hbox_builder = &whole;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     status = 0;
-    struct hstex_box *parts[3] = {&left_box, &inner, &right_box};
-    for (size_t index = 0U; status == 0 && index < 3U; ++index) {
-        /* A delimiter is centred on the axis; the contents are not moved. */
-        int32_t shift = index == 1U ? 0
-                                    : half_of((int64_t)parts[index]->height -
-                                              parts[index]->depth) -
-                                          axis;
+    struct hstex_box *parts[2] = {&left_box, &right_box};
+    for (size_t index = 0U; status == 0 && index < 2U; ++index) {
+        /* A delimiter is centred on the axis; what stands between them is
+           not boxed at all but spliced in as it is, so that its glue still
+           belongs to the line. See docs/DECISIONS.md,
+           what-stands-between-delimiters. */
+        int32_t shift = half_of((int64_t)parts[index]->height -
+                                parts[index]->depth) -
+                        axis;
         uint32_t identifier = 0U;
         if (store_box_node(engine, parts[index], shift, &identifier, error,
                            error_capacity) != 0) {
@@ -20653,6 +20658,16 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
             break;
         }
         status = append_hbox_item(engine, identifier, error, error_capacity);
+        if (status == 0 && index == 0U &&
+            (size_t)inner.node_start + inner.node_count <=
+                engine->list_item_count) {
+            for (uint32_t item = 0U; status == 0 && item < inner.node_count;
+                 ++item) {
+                status = append_hbox_item(
+                    engine, engine->list_items[inner.node_start + item], error,
+                    error_capacity);
+            }
+        }
     }
     struct hstex_box packed = {0};
     if (status == 0) {
@@ -20960,7 +20975,21 @@ static int equation_number_fits(struct hstex_engine *engine,
                               error, error_capacity) != 0) {
         return -1;
     }
-    *fits = (int64_t)equation->width + number->width + quad <= width;
+    /* The equation may shrink to make room for its number; see
+       docs/DECISIONS.md, a-number-beside-a-squeezed-equation. */
+    struct hstex_glue spare = {0};
+    if ((size_t)equation->node_start + equation->node_count <=
+        engine->list_item_count) {
+        spare = list_total_glue(engine,
+                                engine->list_items + equation->node_start,
+                                equation->node_count);
+    }
+    if (spare.shrink_order != 0U) {
+        *fits = true;
+        return 0;
+    }
+    *fits = (int64_t)equation->width - spare.shrink + number->width + quad <=
+            width;
     return 0;
 }
 
@@ -20971,12 +21000,37 @@ static int append_display_line(struct hstex_engine *engine,
                                bool dropped, char *error,
                                size_t error_capacity)
 {
-    (void)error;
-    (void)error_capacity;
     int32_t e = number == NULL || dropped ? 0 : number->width;
+    if (e != 0) {
+        /* The equation is set to exactly the room the number leaves it; see
+           docs/DECISIONS.md, a-number-beside-a-squeezed-equation. */
+        int32_t quad = 0;
+        if (math_symbol_parameter(engine, (uint8_t)HSTEX_MATH_TEXT, 6U, &quad,
+                                  error, error_capacity) != 0) {
+            return -1;
+        }
+        int32_t room = (int32_t)((int64_t)width - e - quad);
+        if (equation.width > room &&
+            (size_t)equation.node_start + equation.node_count <=
+                engine->list_item_count) {
+            struct hstex_glue spare = list_total_glue(
+                engine, engine->list_items + equation.node_start,
+                equation.node_count);
+            equation.glue = packing_glue_set(equation.width, room, &spare);
+            equation.width = room;
+        }
+    }
     if (e == 0 && equation.width > width) {
-        /* A box HSTeX has packed records no shrink, so an equation too wide
-           for the display is squeezed to fit rather than centred. */
+        /* An equation too wide for the room it has is squeezed into it
+           rather than centred, and its glue takes up the difference; see
+           docs/DECISIONS.md, a-display-squeezed-to-fit. */
+        if ((size_t)equation.node_start + equation.node_count <=
+            engine->list_item_count) {
+            struct hstex_glue spare = list_total_glue(
+                engine, engine->list_items + equation.node_start,
+                equation.node_count);
+            equation.glue = packing_glue_set(equation.width, width, &spare);
+        }
         equation.width = width;
     }
     int32_t w = equation.width;

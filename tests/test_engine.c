@@ -2418,6 +2418,204 @@ static int test_prevdepth_inside_noalign(void)
         "selineskip) 11.0\n.\\hbox(0.0+0.0)x0.0\n\n! OK.\n"
 );}
 
+/* An equation shrinks to make room for its number when it can, and the
+   number goes below only when it cannot; see docs/DECISIONS.md,
+   a-number-beside-a-squeezed-equation. */
+static int test_a_number_beside_a_squeezed_equation(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\hsiz"
+        "e=100pt \\parindent=0pt \\baselineskip=0pt \\lines"
+        "kip=0pt \\lineskiplimit=0pt \\parfillskip=0pt \\le"
+        "ftskip=0pt \\rightskip=0pt \\abovedisplayskip=3pt "
+        "\\abovedisplayshortskip=1pt \\belowdisplayskip=4pt"
+        " \\belowdisplayshortskip=2pt \\predisplaypenalty=1"
+        "0000 \\postdisplaypenalty=0 \\tolerance=10000 \\pr"
+        "etolerance=-1 \\hbadness=10000 \\vbadness=10000 \\"
+        "hfuzz=1000pt \\vfuzz=1000pt \\showboxdepth=2 \\sho"
+        "wboxbreadth=100 \\message{[room]}\\setbox0=\\vbox{"
+        "\\noindent$$\\hbox to 60pt{}\\hskip20pt minus45pt"
+        "\\hbox to 40pt{}\\eqno\\hbox to 10pt{}$$}\\showbox"
+        "0 \\message{[tight]}\\setbox0=\\vbox{\\noindent$$"
+        "\\hbox to 60pt{}\\hskip20pt minus2pt\\hbox to 40pt"
+        "{}\\eqno\\hbox to 10pt{}$$}\\showbox0 \\message{[f"
+        "il]}\\setbox0=\\vbox{\\noindent$$\\hbox to 60pt{}"
+        "\\hskip20pt minus1fil\\hbox to 40pt{}\\eqno\\hbox "
+        "to 10pt{}$$}\\showbox0%"
+,
+        "[room]> \\box0=\n\\vbox(3.0+0.0)x100.0\n.\\penalty"
+        " 10000\n.\\glue(\\abovedisplayshortskip) 1.0\n.\\h"
+        "box(0.0+0.0)x94.99998, shifted 5.00002\n..\\hbox(0"
+        ".0+0.0)x79.99998, glue set - 0.88889, display []\n"
+        "..\\kern5.0\n..\\hbox(0.0+0.0)x10.0, display []\n."
+        "\\penalty 0\n.\\glue(\\belowdisplayshortskip) 2.0"
+        "\n\n! OK.\n[tight]> \\box0=\n\\vbox(1.0+0.0)x100.0"
+        "\n.\\penalty 10000\n.\\glue(\\abovedisplayshortski"
+        "p) 1.0\n.\\hbox(0.0+0.0)x100.0, glue set - 1.0, di"
+        "splay\n..\\hbox(0.0+0.0)x60.0\n..\\glue 20.0 minus"
+        " 2.0\n..\\hbox(0.0+0.0)x40.0\n.\\penalty 10000\n."
+        "\\glue(\\baselineskip) 0.0\n.\\hbox(0.0+0.0)x10.0,"
+        " shifted 90.0, display\n..\\hbox(0.0+0.0)x10.0\n."
+        "\\penalty 0\n\n! OK.\n[fil]> \\box0=\n\\vbox(3.0+0"
+        ".0)x100.0\n.\\penalty 10000\n.\\glue(\\abovedispla"
+        "yshortskip) 1.0\n.\\hbox(0.0+0.0)x94.99998, shifte"
+        "d 5.00002\n..\\hbox(0.0+0.0)x79.99998, glue set - "
+        "40.00002fil, display []\n..\\kern5.0\n..\\hbox(0.0"
+        "+0.0)x10.0, display []\n.\\penalty 0\n.\\glue(\\be"
+        "lowdisplayshortskip) 2.0\n\n! OK.\n"
+);
+}
+
+/* What stands between \left and \right is spliced into the line rather
+   than boxed, and the pieces of an extensible delimiter are stacked flush;
+   see docs/DECISIONS.md, what-stands-between-delimiters. */
+static int test_what_stands_between_delimiters(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\catcode`\\\"=12 \\showboxdepth=6 \\sho"
+        "wboxbreadth=100 \\nulldelimiterspace=1.2pt \\delim"
+        "itershortfall=5pt \\delimiterfactor=901 \\thinmusk"
+        "ip=3mu \\medmuskip=4mu \\thickmuskip=5mu \\mathcod"
+        "e`\\+=\"202B \\message{[many]}\\setbox0=\\hbox{$\\"
+        "left\\delimiter\"026A30C x+y\\right.$}\\showbox0 "
+        "\\message{[vb]}\\setbox0=\\hbox{$\\left\\delimiter"
+        "\"026A30C \\vbox to8.5pt{}\\right.$}\\showbox0 \\m"
+        "essage{[mid]}\\setbox0=\\hbox{$\\left\\delimiter\""
+        "026A30C x\\middle\\delimiter\"026A30C y\\right.$}"
+        "\\showbox0 \\message{[empty]}\\setbox0=\\hbox{$\\l"
+        "eft\\delimiter\"026A30C \\right.$}\\showbox0%"
+,
+        "[many]> \\box0=\n\\hbox(7.5+2.5)x27.17679\n.\\math"
+        "on\n.\\hbox(7.5+2.5)x27.17679\n..\\hbox(7.5+2.5)x2"
+        ".77779\n...\\tensy j\n..\\teni x\n..\\glue(\\medmu"
+        "skip) 2.22217\n..\\tenrm +\n..\\glue(\\medmuskip) "
+        "2.22217\n..\\teni y\n..\\kern0.35878\n..\\hbox(0.0"
+        "+0.0)x1.2, shifted -2.5\n.\\mathoff\n\n! OK.\n[vb]"
+        "> \\box0=\n\\hbox(8.50006+3.50006)x4.53333\n.\\mat"
+        "hon\n.\\hbox(8.50006+3.50006)x4.53333\n..\\vbox(0."
+        "0+12.00012)x3.33333, shifted -8.50006\n...\\hbox(0"
+        ".0+6.00006)x3.33333\n....\\tenex ^^L\n...\\hbox(0."
+        "0+6.00006)x3.33333\n....\\tenex ^^L\n..\\vbox(8.5+"
+        "0.0)x0.0\n..\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\"
+        "mathoff\n\n! OK.\n[mid]> \\box0=\n\\hbox(7.5+2.5)x"
+        "17.73244\n.\\mathon\n.\\hbox(7.5+2.5)x17.73244\n.."
+        "\\hbox(7.5+2.5)x2.77779\n...\\tensy j\n..\\teni x"
+        "\n..\\hbox(7.5+2.5)x2.77779\n...\\tensy j\n..\\ten"
+        "i y\n..\\kern0.35878\n..\\hbox(0.0+0.0)x1.2, shift"
+        "ed -2.5\n.\\mathoff\n\n! OK.\n[empty]> \\box0=\n\\"
+        "hbox(7.5+2.5)x3.97778\n.\\mathon\n.\\hbox(7.5+2.5)"
+        "x3.97778\n..\\hbox(7.5+2.5)x2.77779\n...\\tensy j"
+        "\n..\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\mathoff"
+        "\n\n! OK.\n"
+);
+}
+
+/* A display wider than the room it has is squeezed into it, glue and all;
+   see docs/DECISIONS.md, a-display-squeezed-to-fit. */
+static int test_a_display_squeezed_to_fit(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\hsiz"
+        "e=100pt \\parindent=0pt \\baselineskip=0pt \\lines"
+        "kip=0pt \\lineskiplimit=0pt \\parfillskip=0pt \\le"
+        "ftskip=0pt \\rightskip=0pt \\abovedisplayskip=3pt "
+        "\\abovedisplayshortskip=1pt \\belowdisplayskip=4pt"
+        " \\belowdisplayshortskip=2pt \\predisplaypenalty=1"
+        "0000 \\postdisplaypenalty=0 \\tolerance=10000 \\pr"
+        "etolerance=-1 \\hbadness=10000 \\vbadness=10000 \\"
+        "hfuzz=1000pt \\vfuzz=1000pt \\showboxdepth=2 \\sho"
+        "wboxbreadth=100 \\message{[over]}\\setbox0=\\vbox{"
+        "\\noindent$$\\hbox to 60pt{}\\mskip0mu plus0mu\\hs"
+        "kip20pt minus10pt\\hbox to 60pt{}$$}\\showbox0 \\m"
+        "essage{[fits]}\\setbox0=\\vbox{\\noindent$$\\hbox "
+        "to 60pt{}\\hskip20pt minus40pt\\hbox to 60pt{}$$}"
+        "\\showbox0 \\message{[num]}\\setbox0=\\vbox{\\noin"
+        "dent$$\\hbox to 60pt{}\\hskip20pt minus40pt\\hbox "
+        "to 60pt{}\\eqno\\hbox to 10pt{}$$}\\showbox0%"
+,
+        "[over]> \\box0=\n\\vbox(3.0+0.0)x100.0\n.\\penalty"
+        " 10000\n.\\glue(\\abovedisplayshortskip) 1.0\n.\\h"
+        "box(0.0+0.0)x100.0, glue set - 1.0, display\n..\\h"
+        "box(0.0+0.0)x60.0\n..\\glue 0.0\n..\\glue 20.0 min"
+        "us 10.0\n..\\hbox(0.0+0.0)x60.0\n.\\penalty 0\n.\\"
+        "glue(\\belowdisplayshortskip) 2.0\n\n! OK.\n[fits]"
+        "> \\box0=\n\\vbox(3.0+0.0)x100.0\n.\\penalty 10000"
+        "\n.\\glue(\\abovedisplayshortskip) 1.0\n.\\hbox(0."
+        "0+0.0)x100.0, glue set - 1.0, display\n..\\hbox(0."
+        "0+0.0)x60.0\n..\\glue 20.0 minus 40.0\n..\\hbox(0."
+        "0+0.0)x60.0\n.\\penalty 0\n.\\glue(\\belowdisplays"
+        "hortskip) 2.0\n\n! OK.\n[num]> \\box0=\n\\vbox(1.0"
+        "+0.0)x100.0\n.\\penalty 10000\n.\\glue(\\abovedisp"
+        "layshortskip) 1.0\n.\\hbox(0.0+0.0)x100.0, glue se"
+        "t - 1.0, display\n..\\hbox(0.0+0.0)x60.0\n..\\glue"
+        " 20.0 minus 40.0\n..\\hbox(0.0+0.0)x60.0\n.\\penal"
+        "ty 10000\n.\\glue(\\baselineskip) 0.0\n.\\hbox(0.0"
+        "+0.0)x10.0, shifted 90.0, display\n..\\hbox(0.0+0."
+        "0)x10.0\n.\\penalty 0\n\n! OK.\n"
+);
+}
+
 /* Whether a display takes the short skips is decided by the offset it is
    really given, equation number and all; see docs/DECISIONS.md,
    a-short-display-skip. */
@@ -6160,6 +6358,9 @@ int main(void)
         test_lines_carry_on_past_a_display() != 0 ||
         test_prevdepth_inside_noalign() != 0 ||
         test_a_short_display_skip() != 0 ||
+        test_a_display_squeezed_to_fit() != 0 ||
+        test_what_stands_between_delimiters() != 0 ||
+        test_a_number_beside_a_squeezed_equation() != 0 ||
         test_large_operators() != 0 ||
         test_operators_that_are_lists() != 0 ||
         test_the_space_factor_of_a_ligature() != 0 ||
