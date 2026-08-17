@@ -590,9 +590,23 @@ static int test_last_node_and_pdf_objects(void)
         "\\pdfobj reserveobjnum[\\the\\pdflastobj]"
         "\\immediate\\pdfobj useobjnum 3 {<< /C 3 >>}[\\the\\pdflastobj]"
         "\\pdfcatalog{/PageMode /UseOutlines}"
-        "\\pdfinfo{/Title (T)}\\pdfrefobj 1 [ok]%",
+        "\\pdfinfo{/Title (T)}\\pdfrefobj 1 [ok]"
+        /* Objects, links, forms and annotations share one counter, and a
+           form takes two numbers. */
+        "\\setbox4=\\hbox{\\pdfstartlink goto name{a}\\vrule width1pt"
+        "\\pdfendlink}[\\the\\pdflastlink]"
+        "\\setbox5=\\hbox{\\vrule width1pt}"
+        "\\immediate\\pdfxform5 [\\the\\pdflastxform]"
+        "\\immediate\\pdfobj{<< /D 4 >>}[\\the\\pdflastobj]"
+        /* Every destination type is accepted. */
+        "\\setbox6=\\hbox{\\pdfdest name{a}xyz \\pdfdest num 7 fit "
+        "\\pdfdest name{b}xyz zoom 1000 \\pdfdest name{c}fitbh "
+        "\\pdfdest name{d}fith \\pdfdest name{e}fitbv "
+        "\\pdfdest name{f}fitb \\pdfdest name{g}fitv "
+        "\\pdfdest name{h}fitr width 10pt height 5pt depth 1pt}"
+        "\\pdfoutline goto name{a} count -2 {Title}[ok]%",
         "[0|0.0pt|0.0pt|-1][3.0pt plus 1.0fil|11][4.0pt|0.0pt|12][77|13]"
-        "[1][-1][1][2][3][3][ok]");
+        "[1][-1][1][2][3][3][ok][4][5][7][ok]");
 }
 
 /* \iffontchar, \ifhbox, \ifvbox and \ifvoid. An unimplemented conditional is

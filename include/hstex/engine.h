@@ -178,6 +178,31 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_LITERAL,
     HSTEX_COMMAND_PDF_LAST_NUMBER,
     HSTEX_COMMAND_LAST_ITEM,
+    HSTEX_COMMAND_PDF_DEST,
+    HSTEX_COMMAND_PDF_START_LINK,
+    HSTEX_COMMAND_PDF_END_LINK,
+    HSTEX_COMMAND_PDF_OUTLINE,
+    HSTEX_COMMAND_PDF_XFORM,
+    HSTEX_COMMAND_PDF_ANNOT,
+};
+
+enum hstex_pdf_record_kind {
+    HSTEX_PDF_RECORD_DESTINATION = 0,
+    HSTEX_PDF_RECORD_LINK,
+    HSTEX_PDF_RECORD_OUTLINE,
+    HSTEX_PDF_RECORD_FORM,
+    HSTEX_PDF_RECORD_ANNOTATION,
+};
+
+/* One thing the document has asked the PDF backend to place. Like the
+   objects, these are recorded and not written; see docs/DECISIONS.md,
+   pdf-annotations. */
+struct hstex_pdf_record {
+    enum hstex_pdf_record_kind kind;
+    int32_t number;
+    int32_t value;
+    char *name;
+    char *content;
 };
 
 /* What \lastpenalty, \lastkern, \lastskip and \lastnodetype report about the
@@ -730,7 +755,13 @@ struct hstex_engine {
     struct hstex_pdf_literal *pdf_literals;
     size_t pdf_literal_count;
     size_t pdf_literal_capacity;
+    struct hstex_pdf_record *pdf_records;
+    size_t pdf_record_count;
+    size_t pdf_record_capacity;
     int32_t pdf_last[5];
+    /* Objects, links, forms and annotations are numbered from one shared
+       counter; see docs/DECISIONS.md, pdf-annotations. */
+    int32_t pdf_object_counter;
     struct hstex_glyph_unicode *glyph_unicode;
     size_t glyph_unicode_count;
     size_t glyph_unicode_capacity;

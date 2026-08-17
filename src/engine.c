@@ -1664,6 +1664,12 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"pdfobj", HSTEX_COMMAND_PDF_OBJECT},
         {"pdfrefobj", HSTEX_COMMAND_PDF_REF_OBJECT},
         {"pdfliteral", HSTEX_COMMAND_PDF_LITERAL},
+        {"pdfdest", HSTEX_COMMAND_PDF_DEST},
+        {"pdfstartlink", HSTEX_COMMAND_PDF_START_LINK},
+        {"pdfendlink", HSTEX_COMMAND_PDF_END_LINK},
+        {"pdfoutline", HSTEX_COMMAND_PDF_OUTLINE},
+        {"pdfxform", HSTEX_COMMAND_PDF_XFORM},
+        {"pdfannot", HSTEX_COMMAND_PDF_ANNOT},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
@@ -2275,6 +2281,11 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_literals[index].content);
     }
     free(engine->pdf_literals);
+    for (size_t index = 0U; index < engine->pdf_record_count; ++index) {
+        free(engine->pdf_records[index].name);
+        free(engine->pdf_records[index].content);
+    }
+    free(engine->pdf_records);
     free(engine->pdf_catalog);
     free(engine->pdf_info);
     for (size_t index = 0U; index < engine->glyph_unicode_count; ++index) {
@@ -7038,6 +7049,16 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         if (result != HSTEX_ENGINE_TOKEN) {
             vector_destroy(&parameter_text);
             vector_destroy(&replacement);
+            enum hstex_symbol_kind kind;
+            const uint8_t *name = NULL;
+            size_t length = 0U;
+            if (hstex_symbol_name(&engine->lexical_state.symbols,
+                                  hstex_token_control_sequence_id(target),
+                                  &kind, &name, &length) == 0) {
+                return set_error(error, error_capacity,
+                                 "end of input while defining \\%.*s",
+                                 (int)length, (const char *)name);
+            }
             return set_error(error, error_capacity,
                              "end of input in macro replacement text");
         }
@@ -11082,7 +11103,7 @@ static int execute_pdf_object(struct hstex_engine *engine, char *error,
         }
         target = &engine->pdf_objects[engine->pdf_object_count++];
         memset(target, 0, sizeof(*target));
-        target->number = ++engine->pdf_last[HSTEX_PDF_LAST_OBJECT];
+        target->number = ++engine->pdf_object_counter;
     }
     engine->pdf_last[HSTEX_PDF_LAST_OBJECT] = target->number;
     target->reserved = reserve;
@@ -11227,6 +11248,303 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 13;
     }
     return -1;
+}
+
+/* Record something the backend will place. Nothing is written; see
+   docs/DECISIONS.md, pdf-annotations. */
+static struct hstex_pdf_record *add_pdf_record(struct hstex_engine *engine,
+                                               enum hstex_pdf_record_kind kind,
+                                               char *error,
+                                               size_t error_capacity)
+{
+    if (engine->pdf_record_count == engine->pdf_record_capacity) {
+        size_t capacity = engine->pdf_record_capacity == 0U
+                              ? 16U
+                              : engine->pdf_record_capacity * 2U;
+        struct hstex_pdf_record *grown =
+            realloc(engine->pdf_records, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "pdf record table allocation failed");
+            return NULL;
+        }
+        engine->pdf_records = grown;
+        engine->pdf_record_capacity = capacity;
+    }
+    struct hstex_pdf_record *record =
+        &engine->pdf_records[engine->pdf_record_count++];
+    memset(record, 0, sizeof(*record));
+    record->kind = kind;
+    return record;
+}
+
+/* An optional `attr <general text>`, returned as an owned string. */
+static int scan_optional_pdf_text(struct hstex_engine *engine,
+                                  const char *keyword, char **text,
+                                  char *error, size_t error_capacity)
+{
+    *text = NULL;
+    bool matched = false;
+    if (try_keyword(engine, keyword, &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!matched) {
+        return 0;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    *text = own_general_text(bytes, count);
+    free(bytes);
+    return *text == NULL
+               ? set_error(error, error_capacity, "pdf text allocation failed")
+               : 0;
+}
+
+/* A destination type. The longer names are tried first, because `fitb` is a
+   prefix of `fitbh` and `fit` of the rest. */
+static int scan_pdf_destination_type(struct hstex_engine *engine, char **type,
+                                     char *error, size_t error_capacity)
+{
+    static const char *const types[] = {"fitbh", "fitbv", "fitbh", "fitb",
+                                        "fith",  "fitv",  "fitr",  "xyz",
+                                        "fit"};
+    for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
+        bool matched = false;
+        if (try_keyword(engine, types[index], &matched, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        if (!matched) {
+            continue;
+        }
+        *type = own_general_text((const uint8_t *)types[index],
+                                 strlen(types[index]));
+        if (*type == NULL) {
+            return set_error(error, error_capacity,
+                             "pdf destination allocation failed");
+        }
+        if (strcmp(types[index], "xyz") == 0) {
+            bool zoom = false;
+            if (try_keyword(engine, "zoom", &zoom, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            int32_t factor = 0;
+            if (zoom &&
+                scan_integer(engine, &factor, error, error_capacity) != 0) {
+                return -1;
+            }
+        } else if (strcmp(types[index], "fitr") == 0) {
+            struct hstex_node rule = {0};
+            if (scan_rule_dimensions(engine, &rule, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+    return set_error(error, error_capacity,
+                     "a destination type was expected here");
+}
+
+static int execute_pdf_dest(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    bool named = false;
+    int32_t number = 0;
+    char *name = NULL;
+    if (try_keyword(engine, "num", &named, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (named) {
+        if (scan_integer(engine, &number, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        bool by_name = false;
+        if (try_keyword(engine, "name", &by_name, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (!by_name) {
+            return set_error(error, error_capacity,
+                             "a destination identifier was expected here");
+        }
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                       error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+        name = own_general_text(bytes, count);
+        free(bytes);
+        if (name == NULL) {
+            return set_error(error, error_capacity,
+                             "pdf destination allocation failed");
+        }
+    }
+    char *type = NULL;
+    if (scan_pdf_destination_type(engine, &type, error, error_capacity) != 0) {
+        free(name);
+        return -1;
+    }
+    struct hstex_pdf_record *record =
+        add_pdf_record(engine, HSTEX_PDF_RECORD_DESTINATION, error,
+                       error_capacity);
+    if (record == NULL) {
+        free(name);
+        free(type);
+        return -1;
+    }
+    record->value = number;
+    record->name = name;
+    record->content = type;
+    return 0;
+}
+
+static int execute_pdf_start_link(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity)
+{
+    char *attributes = NULL;
+    if (scan_optional_pdf_text(engine, "attr", &attributes, error,
+                               error_capacity) != 0) {
+        return -1;
+    }
+    if (scan_pdf_action(engine, error, error_capacity) != 0) {
+        free(attributes);
+        return -1;
+    }
+    struct hstex_pdf_record *record =
+        add_pdf_record(engine, HSTEX_PDF_RECORD_LINK, error, error_capacity);
+    if (record == NULL) {
+        free(attributes);
+        return -1;
+    }
+    record->number = ++engine->pdf_object_counter;
+    engine->pdf_last[HSTEX_PDF_LAST_LINK] = record->number;
+    record->content = attributes;
+    return 0;
+}
+
+static int execute_pdf_outline(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
+{
+    char *attributes = NULL;
+    if (scan_optional_pdf_text(engine, "attr", &attributes, error,
+                               error_capacity) != 0) {
+        return -1;
+    }
+    if (scan_pdf_action(engine, error, error_capacity) != 0) {
+        free(attributes);
+        return -1;
+    }
+    bool counted = false;
+    int32_t count = 0;
+    if (try_keyword(engine, "count", &counted, error, error_capacity) != 0 ||
+        (counted && scan_integer(engine, &count, error, error_capacity) != 0)) {
+        free(attributes);
+        return -1;
+    }
+    uint8_t *title = NULL;
+    size_t title_count = 0U;
+    if (scan_expanded_general_text(engine, &title, &title_count, error,
+                                   error_capacity) != 0) {
+        free(attributes);
+        free(title);
+        return -1;
+    }
+    struct hstex_pdf_record *record =
+        add_pdf_record(engine, HSTEX_PDF_RECORD_OUTLINE, error, error_capacity);
+    if (record == NULL) {
+        free(attributes);
+        free(title);
+        return -1;
+    }
+    record->value = count;
+    record->name = attributes;
+    record->content = own_general_text(title, title_count);
+    free(title);
+    return 0;
+}
+
+static int execute_pdf_xform(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    char *attributes = NULL;
+    char *resources = NULL;
+    int32_t index = 0;
+    if (scan_optional_pdf_text(engine, "attr", &attributes, error,
+                               error_capacity) != 0) {
+        return -1;
+    }
+    if (scan_optional_pdf_text(engine, "resources", &resources, error,
+                               error_capacity) != 0) {
+        free(attributes);
+        return -1;
+    }
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        free(attributes);
+        free(resources);
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    struct hstex_pdf_record *record =
+        add_pdf_record(engine, HSTEX_PDF_RECORD_FORM, error, error_capacity);
+    if (record == NULL) {
+        free(attributes);
+        free(resources);
+        return -1;
+    }
+    /* A form takes two object numbers: the form itself and its resources. */
+    record->number = ++engine->pdf_object_counter;
+    ++engine->pdf_object_counter;
+    engine->pdf_last[HSTEX_PDF_LAST_FORM] = record->number;
+    record->value = index;
+    record->name = attributes;
+    record->content = resources;
+    return 0;
+}
+
+static int execute_pdf_annot(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    struct hstex_node rule = {0};
+    if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
+        return -1;
+    }
+    bool use_number = false;
+    int32_t number = 0;
+    if (try_keyword(engine, "useobjnum", &use_number, error, error_capacity) !=
+            0 ||
+        (use_number &&
+         scan_integer(engine, &number, error, error_capacity) != 0)) {
+        return -1;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    struct hstex_pdf_record *record =
+        add_pdf_record(engine, HSTEX_PDF_RECORD_ANNOTATION, error,
+                       error_capacity);
+    if (record == NULL) {
+        free(bytes);
+        return -1;
+    }
+    record->number = use_number ? number : ++engine->pdf_object_counter;
+    engine->pdf_last[HSTEX_PDF_LAST_ANNOTATION] = record->number;
+    record->content = own_general_text(bytes, count);
+    free(bytes);
+    return 0;
 }
 
 static int execute_write(struct hstex_engine *engine, char *error,
@@ -12835,6 +13153,34 @@ handle_token:
             continue;
         case HSTEX_COMMAND_PDF_LITERAL:
             if (execute_pdf_literal(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_DEST:
+            if (execute_pdf_dest(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_START_LINK:
+            if (execute_pdf_start_link(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_END_LINK:
+            /* The link's extent is the backend's concern; nothing to do. */
+            continue;
+        case HSTEX_COMMAND_PDF_OUTLINE:
+            if (execute_pdf_outline(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_XFORM:
+            if (execute_pdf_xform(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_ANNOT:
+            if (execute_pdf_annot(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
