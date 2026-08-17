@@ -171,6 +171,55 @@ enum hstex_command {
     HSTEX_COMMAND_FONT_CHAR_CODE,
     HSTEX_COMMAND_IF_FONT_CHAR,
     HSTEX_COMMAND_IF_BOX,
+    HSTEX_COMMAND_PDF_CATALOG,
+    HSTEX_COMMAND_PDF_INFO,
+    HSTEX_COMMAND_PDF_OBJECT,
+    HSTEX_COMMAND_PDF_REF_OBJECT,
+    HSTEX_COMMAND_PDF_LITERAL,
+    HSTEX_COMMAND_PDF_LAST_NUMBER,
+    HSTEX_COMMAND_LAST_ITEM,
+};
+
+/* What \lastpenalty, \lastkern, \lastskip and \lastnodetype report about the
+   node most recently contributed to the current list. */
+enum hstex_last_item {
+    HSTEX_LAST_PENALTY = 0,
+    HSTEX_LAST_KERN,
+    HSTEX_LAST_SKIP,
+    HSTEX_LAST_NODE_TYPE,
+};
+
+/* Which counter \pdflastobj and its siblings report. */
+enum hstex_pdf_last {
+    HSTEX_PDF_LAST_OBJECT = 0,
+    HSTEX_PDF_LAST_ANNOTATION,
+    HSTEX_PDF_LAST_LINK,
+    HSTEX_PDF_LAST_FORM,
+    HSTEX_PDF_LAST_IMAGE,
+};
+
+/* A PDF object the document has built. Nothing is written yet: the page
+   builder and the output backend do not exist, so these are recorded for
+   them; see docs/DECISIONS.md, pdf-objects. */
+struct hstex_pdf_object {
+    int32_t number;
+    bool reserved;
+    bool stream;
+    char *attributes;
+    char *content;
+};
+
+/* A \pdfliteral, kept in the order it was written. */
+struct hstex_pdf_literal {
+    int32_t mode;
+    char *content;
+};
+
+enum hstex_pdf_literal_mode {
+    HSTEX_PDF_LITERAL_SET = 0,
+    HSTEX_PDF_LITERAL_DIRECT,
+    HSTEX_PDF_LITERAL_PAGE,
+    HSTEX_PDF_LITERAL_SHIPOUT,
 };
 
 /* Which question \ifhbox, \ifvbox and \ifvoid ask about a box register. */
@@ -668,6 +717,20 @@ struct hstex_engine {
     int32_t page_dimens[HSTEX_PAGE_DIMEN_COUNT];
     struct hstex_match_group *match_groups;
     size_t match_group_count;
+    /* Everything the document has asked the PDF backend to record. */
+    uint8_t *pdf_catalog;
+    size_t pdf_catalog_length;
+    size_t pdf_catalog_capacity;
+    uint8_t *pdf_info;
+    size_t pdf_info_length;
+    size_t pdf_info_capacity;
+    struct hstex_pdf_object *pdf_objects;
+    size_t pdf_object_count;
+    size_t pdf_object_capacity;
+    struct hstex_pdf_literal *pdf_literals;
+    size_t pdf_literal_count;
+    size_t pdf_literal_capacity;
+    int32_t pdf_last[5];
     struct hstex_glyph_unicode *glyph_unicode;
     size_t glyph_unicode_count;
     size_t glyph_unicode_capacity;

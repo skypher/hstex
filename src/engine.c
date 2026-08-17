@@ -71,6 +71,11 @@ struct hstex_vbox_builder {
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
 static void clear_match_groups(struct hstex_engine *engine);
+static void describe_token(struct hstex_engine *engine, hstex_token token,
+                           char *buffer, size_t capacity);
+static const struct hstex_node *current_list_last_node(
+    const struct hstex_engine *engine);
+static int32_t last_node_type(const struct hstex_node *node);
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
                               char *error, size_t error_capacity);
@@ -1654,6 +1659,11 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"vrule", HSTEX_COMMAND_VRULE},
         {"hrule", HSTEX_COMMAND_HRULE},
         {"kern", HSTEX_COMMAND_KERN},
+        {"pdfcatalog", HSTEX_COMMAND_PDF_CATALOG},
+        {"pdfinfo", HSTEX_COMMAND_PDF_INFO},
+        {"pdfobj", HSTEX_COMMAND_PDF_OBJECT},
+        {"pdfrefobj", HSTEX_COMMAND_PDF_REF_OBJECT},
+        {"pdfliteral", HSTEX_COMMAND_PDF_LITERAL},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
@@ -1765,6 +1775,49 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
                 engine, shift_box_primitives[index].name,
                 HSTEX_COMMAND_SHIFT_BOX,
                 (int32_t)shift_box_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_last_item subtype;
+    } last_item_primitives[] = {
+        {"lastpenalty", HSTEX_LAST_PENALTY},
+        {"lastkern", HSTEX_LAST_KERN},
+        {"lastskip", HSTEX_LAST_SKIP},
+        {"lastnodetype", HSTEX_LAST_NODE_TYPE},
+    };
+    for (size_t index = 0U;
+         index < sizeof(last_item_primitives) / sizeof(last_item_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, last_item_primitives[index].name,
+                HSTEX_COMMAND_LAST_ITEM,
+                (int32_t)last_item_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_pdf_last subtype;
+    } pdf_last_primitives[] = {
+        {"pdflastobj", HSTEX_PDF_LAST_OBJECT},
+        {"pdflastannot", HSTEX_PDF_LAST_ANNOTATION},
+        {"pdflastlink", HSTEX_PDF_LAST_LINK},
+        {"pdflastxform", HSTEX_PDF_LAST_FORM},
+        {"pdflastximage", HSTEX_PDF_LAST_IMAGE},
+    };
+    for (size_t index = 0U;
+         index < sizeof(pdf_last_primitives) / sizeof(pdf_last_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, pdf_last_primitives[index].name,
+                HSTEX_COMMAND_PDF_LAST_NUMBER,
+                (int32_t)pdf_last_primitives[index].subtype, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2213,6 +2266,17 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->page_builder);
     clear_match_groups(engine);
+    for (size_t index = 0U; index < engine->pdf_object_count; ++index) {
+        free(engine->pdf_objects[index].attributes);
+        free(engine->pdf_objects[index].content);
+    }
+    free(engine->pdf_objects);
+    for (size_t index = 0U; index < engine->pdf_literal_count; ++index) {
+        free(engine->pdf_literals[index].content);
+    }
+    free(engine->pdf_literals);
+    free(engine->pdf_catalog);
+    free(engine->pdf_info);
     for (size_t index = 0U; index < engine->glyph_unicode_count; ++index) {
         free(engine->glyph_unicode[index].glyph);
         free(engine->glyph_unicode[index].unicode);
@@ -3020,6 +3084,41 @@ static int integer_from_control_sequence(
             return set_error(error, error_capacity,
                              "invalid engine-state integer subtype");
         }
+    case HSTEX_COMMAND_LAST_ITEM: {
+        const struct hstex_node *node = current_list_last_node(engine);
+        if (meaning->value.integer == (int32_t)HSTEX_LAST_NODE_TYPE) {
+            *value = last_node_type(node);
+            return 0;
+        }
+        if (meaning->value.integer == (int32_t)HSTEX_LAST_PENALTY) {
+            *value = node != NULL && node->kind == HSTEX_NODE_PENALTY
+                         ? node->value.penalty
+                         : 0;
+            return 0;
+        }
+        /* \lastkern and \lastskip are dimensions; reaching them here means
+           the caller wanted an integer, so the dimension is coerced. */
+        int coerced = dimen_from_meaning(engine, meaning, value, error,
+                                         error_capacity);
+        if (coerced < 0) {
+            return -1;
+        }
+        if (coerced == 0) {
+            return set_error(error, error_capacity,
+                             "last-item query did not provide a value");
+        }
+        return 0;
+    }
+    case HSTEX_COMMAND_PDF_LAST_NUMBER:
+        if (meaning->value.integer < 0 ||
+            meaning->value.integer >=
+                (int32_t)(sizeof(engine->pdf_last) /
+                          sizeof(engine->pdf_last[0]))) {
+            return set_error(error, error_capacity,
+                             "invalid pdf counter subtype");
+        }
+        *value = engine->pdf_last[meaning->value.integer];
+        return 0;
     case HSTEX_COMMAND_FONT_CHAR_CODE: {
         uint32_t identifier = 0U;
         int32_t code = 0;
@@ -3569,6 +3668,12 @@ static int dimen_from_meaning(struct hstex_engine *engine,
         *value = engine->dimen_parameters[(size_t)index];
         return 1;
     }
+    if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
+        meaning->value.integer == (int32_t)HSTEX_LAST_KERN) {
+        const struct hstex_node *node = current_list_last_node(engine);
+        *value = node != NULL && node->kind == HSTEX_NODE_KERN ? node->width : 0;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_FONT_CHAR_DIMEN) {
         uint32_t identifier = 0U;
         int32_t code = 0;
@@ -3692,6 +3797,8 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_PAGE_INTEGER:
     case HSTEX_COMMAND_FONT_CHAR_DIMEN:
     case HSTEX_COMMAND_FONT_CHAR_CODE:
+    case HSTEX_COMMAND_PDF_LAST_NUMBER:
+    case HSTEX_COMMAND_LAST_ITEM:
     case HSTEX_COMMAND_BOX_DIMEN:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
@@ -3804,8 +3911,11 @@ static int scan_decimal_factor(struct hstex_engine *engine,
         }
     }
     if (!saw_digit) {
+        char found[128];
+        describe_token(engine, token, found, sizeof(found));
         return set_error(error, error_capacity,
-                         "dimension requires a numeric factor");
+                         "dimension requires a numeric factor, found %s",
+                         found);
     }
     return 0;
 }
@@ -4384,6 +4494,19 @@ static int glue_from_meaning(struct hstex_engine *engine,
                              struct hstex_glue *value, char *error,
                              size_t error_capacity)
 {
+    if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
+        meaning->value.integer == (int32_t)HSTEX_LAST_SKIP) {
+        const struct hstex_node *node = current_list_last_node(engine);
+        memset(value, 0, sizeof(*value));
+        if (node != NULL && node->kind == HSTEX_NODE_GLUE) {
+            value->width = node->width;
+            value->stretch = node->value.glue.stretch;
+            value->shrink = node->value.glue.shrink;
+            value->stretch_order = node->value.glue.stretch_order;
+            value->shrink_order = node->value.glue.shrink_order;
+        }
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_SKIP_REGISTER) {
         int32_t index = meaning->value.integer;
         if (index < 0 || (size_t)index >= engine->count_capacity) {
@@ -10690,6 +10813,422 @@ static int expand_pdf_string_compare(
                                   error_capacity);
 }
 
+/* An action spec, as \pdfcatalog's openaction and the link and outline
+   primitives take it. Nothing acts on it yet; it is scanned so that the
+   tokens it covers are consumed exactly, and no more. */
+static int scan_pdf_action(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    bool matched = false;
+    if (try_keyword(engine, "user", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched) {
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        int status = scan_expanded_general_text(engine, &bytes, &count, error,
+                                                error_capacity);
+        free(bytes);
+        return status;
+    }
+    bool thread = false;
+    if (try_keyword(engine, "goto", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!matched) {
+        if (try_keyword(engine, "thread", &thread, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        if (!thread) {
+            return set_error(error, error_capacity,
+                             "an action specification was expected here");
+        }
+    }
+    bool file = false;
+    if (try_keyword(engine, "file", &file, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (file) {
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        int status = scan_expanded_general_text(engine, &bytes, &count, error,
+                                                error_capacity);
+        free(bytes);
+        if (status != 0) {
+            return -1;
+        }
+    }
+    bool named = false;
+    if (try_keyword(engine, "name", &named, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (named) {
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        int status = scan_expanded_general_text(engine, &bytes, &count, error,
+                                                error_capacity);
+        free(bytes);
+        if (status != 0) {
+            return -1;
+        }
+    } else {
+        bool numbered = false;
+        if (try_keyword(engine, "num", &numbered, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (numbered) {
+            int32_t number = 0;
+            if (scan_integer(engine, &number, error, error_capacity) != 0) {
+                return -1;
+            }
+        } else if (!thread) {
+            /* `page <number> <general text>` is the remaining goto form. */
+            bool page = false;
+            if (try_keyword(engine, "page", &page, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            if (!page) {
+                return set_error(error, error_capacity,
+                                 "a destination was expected here");
+            }
+            int32_t number = 0;
+            uint8_t *bytes = NULL;
+            size_t count = 0U;
+            if (scan_integer(engine, &number, error, error_capacity) != 0 ||
+                scan_expanded_general_text(engine, &bytes, &count, error,
+                                           error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            free(bytes);
+        }
+    }
+    bool window = false;
+    if (try_keyword(engine, "newwindow", &window, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!window &&
+        try_keyword(engine, "nonewwindow", &window, error, error_capacity) !=
+            0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Copy a scanned general text into an owned string. */
+static char *own_general_text(const uint8_t *bytes, size_t count)
+{
+    char *text = malloc(count + 1U);
+    if (text == NULL) {
+        return NULL;
+    }
+    memcpy(text, bytes, count);
+    text[count] = '\0';
+    return text;
+}
+
+/* \pdfcatalog and \pdfinfo each accumulate into one dictionary, so repeated
+   uses append rather than replace. */
+static int append_pdf_dictionary(uint8_t **buffer, size_t *length,
+                                 size_t *capacity, const uint8_t *bytes,
+                                 size_t count, char *error,
+                                 size_t error_capacity)
+{
+    if (*length != 0U &&
+        append_byte(buffer, length, capacity, (uint8_t)' ', error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        if (append_byte(buffer, length, capacity, bytes[index], error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int execute_pdf_dictionary(struct hstex_engine *engine, bool catalog,
+                                  char *error, size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    /* \pdfcatalog may name an action to take when the document opens; it is
+       scanned so that execution continues, and recorded with the rest. */
+    bool matched = false;
+    if (catalog &&
+        try_keyword(engine, "openaction", &matched, error, error_capacity) !=
+            0) {
+        free(bytes);
+        return -1;
+    }
+    if (matched && scan_pdf_action(engine, error, error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    int status = append_pdf_dictionary(
+        catalog ? &engine->pdf_catalog : &engine->pdf_info,
+        catalog ? &engine->pdf_catalog_length : &engine->pdf_info_length,
+        catalog ? &engine->pdf_catalog_capacity : &engine->pdf_info_capacity,
+        bytes, count, error, error_capacity);
+    free(bytes);
+    return status;
+}
+
+static int reserve_pdf_objects(struct hstex_engine *engine, size_t required,
+                               char *error, size_t error_capacity)
+{
+    if (required <= engine->pdf_object_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->pdf_object_capacity == 0U
+                          ? 16U
+                          : engine->pdf_object_capacity * 2U;
+    while (capacity < required) {
+        capacity *= 2U;
+    }
+    struct hstex_pdf_object *grown =
+        realloc(engine->pdf_objects, capacity * sizeof(*grown));
+    if (grown == NULL) {
+        return set_error(error, error_capacity, "pdf object table allocation failed");
+    }
+    engine->pdf_objects = grown;
+    engine->pdf_object_capacity = capacity;
+    return 0;
+}
+
+static struct hstex_pdf_object *pdf_object_by_number(struct hstex_engine *engine,
+                                                     int32_t number)
+{
+    for (size_t index = 0U; index < engine->pdf_object_count; ++index) {
+        if (engine->pdf_objects[index].number == number) {
+            return &engine->pdf_objects[index];
+        }
+    }
+    return NULL;
+}
+
+/* \pdfobj [reserveobjnum | useobjnum <n>] [stream [attr <text>]] <text> */
+static int execute_pdf_object(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    bool reserve = false;
+    bool use_number = false;
+    bool stream = false;
+    int32_t number = 0;
+    if (try_keyword(engine, "reserveobjnum", &reserve, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (!reserve) {
+        if (try_keyword(engine, "useobjnum", &use_number, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        if (use_number &&
+            scan_integer(engine, &number, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (try_keyword(engine, "stream", &stream, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+    }
+    uint8_t *attributes = NULL;
+    size_t attribute_count = 0U;
+    if (stream) {
+        bool matched = false;
+        if (try_keyword(engine, "attr", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched && scan_expanded_general_text(engine, &attributes,
+                                                  &attribute_count, error,
+                                                  error_capacity) != 0) {
+            free(attributes);
+            return -1;
+        }
+    }
+    uint8_t *content = NULL;
+    size_t content_count = 0U;
+    if (!reserve && scan_expanded_general_text(engine, &content, &content_count,
+                                               error, error_capacity) != 0) {
+        free(attributes);
+        free(content);
+        return -1;
+    }
+
+    struct hstex_pdf_object *target = NULL;
+    if (use_number) {
+        target = pdf_object_by_number(engine, number);
+        if (target == NULL) {
+            free(attributes);
+            free(content);
+            return set_error(error, error_capacity,
+                             "pdf object %d was never reserved", number);
+        }
+    } else {
+        if (reserve_pdf_objects(engine, engine->pdf_object_count + 1U, error,
+                                error_capacity) != 0) {
+            free(attributes);
+            free(content);
+            return -1;
+        }
+        target = &engine->pdf_objects[engine->pdf_object_count++];
+        memset(target, 0, sizeof(*target));
+        target->number = ++engine->pdf_last[HSTEX_PDF_LAST_OBJECT];
+    }
+    engine->pdf_last[HSTEX_PDF_LAST_OBJECT] = target->number;
+    target->reserved = reserve;
+    target->stream = stream;
+    free(target->attributes);
+    free(target->content);
+    target->attributes = attributes == NULL
+                             ? NULL
+                             : own_general_text(attributes, attribute_count);
+    target->content =
+        content == NULL ? NULL : own_general_text(content, content_count);
+    free(attributes);
+    free(content);
+    return 0;
+}
+
+/* \pdfrefobj marks an object as reachable; with no backend there is nothing
+   to prune, so the number is only checked. */
+static int execute_pdf_ref_object(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity)
+{
+    int32_t number = 0;
+    if (scan_integer(engine, &number, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (pdf_object_by_number(engine, number) == NULL) {
+        return set_error(error, error_capacity,
+                         "pdf object %d does not exist", number);
+    }
+    return 0;
+}
+
+static int execute_pdf_literal(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
+{
+    int32_t mode = (int32_t)HSTEX_PDF_LITERAL_SET;
+    bool matched = false;
+    if (try_keyword(engine, "direct", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (matched) {
+        mode = (int32_t)HSTEX_PDF_LITERAL_DIRECT;
+    } else {
+        if (try_keyword(engine, "page", &matched, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            mode = (int32_t)HSTEX_PDF_LITERAL_PAGE;
+        } else {
+            if (try_keyword(engine, "shipout", &matched, error,
+                            error_capacity) != 0) {
+                return -1;
+            }
+            if (matched) {
+                mode = (int32_t)HSTEX_PDF_LITERAL_SHIPOUT;
+            }
+        }
+    }
+    uint8_t *content = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &content, &count, error,
+                                   error_capacity) != 0) {
+        free(content);
+        return -1;
+    }
+    if (engine->pdf_literal_count == engine->pdf_literal_capacity) {
+        size_t capacity = engine->pdf_literal_capacity == 0U
+                              ? 16U
+                              : engine->pdf_literal_capacity * 2U;
+        struct hstex_pdf_literal *grown =
+            realloc(engine->pdf_literals, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            free(content);
+            return set_error(error, error_capacity,
+                             "pdf literal table allocation failed");
+        }
+        engine->pdf_literals = grown;
+        engine->pdf_literal_capacity = capacity;
+    }
+    struct hstex_pdf_literal *literal =
+        &engine->pdf_literals[engine->pdf_literal_count];
+    literal->mode = mode;
+    literal->content = own_general_text(content, count);
+    free(content);
+    if (literal->content == NULL) {
+        return set_error(error, error_capacity,
+                         "pdf literal allocation failed");
+    }
+    ++engine->pdf_literal_count;
+    return 0;
+}
+
+/* The node most recently contributed to the list being built, or NULL when
+   that list is empty; see docs/DECISIONS.md, last-node-queries. */
+static const struct hstex_node *current_list_last_node(
+    const struct hstex_engine *engine)
+{
+    const uint32_t *identifiers = NULL;
+    size_t count = 0U;
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        if (engine->active_hbox_builder == NULL) {
+            return NULL;
+        }
+        identifiers = engine->active_hbox_builder->node_identifiers;
+        count = engine->active_hbox_builder->count;
+    } else if (engine->mode == HSTEX_MODE_VERTICAL) {
+        if (engine->active_vbox_builder == NULL) {
+            return NULL;
+        }
+        identifiers = engine->active_vbox_builder->node_identifiers;
+        count = engine->active_vbox_builder->count;
+    }
+    if (count == 0U || identifiers == NULL) {
+        return NULL;
+    }
+    uint32_t identifier = identifiers[count - 1U];
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return NULL;
+    }
+    return &engine->nodes[identifier - 1U];
+}
+
+/* The node type numbers are the ones the reference reports, with -1 for an
+   empty list. */
+static int32_t last_node_type(const struct hstex_node *node)
+{
+    if (node == NULL) {
+        return -1;
+    }
+    switch (node->kind) {
+    case HSTEX_NODE_CHARACTER:
+        return 0;
+    case HSTEX_NODE_LIST:
+        return node->value.list.box_kind == HSTEX_BOX_VLIST ? 2 : 1;
+    case HSTEX_NODE_RULE:
+        return 3;
+    case HSTEX_NODE_GLUE:
+        return 11;
+    case HSTEX_NODE_KERN:
+        return 12;
+    case HSTEX_NODE_PENALTY:
+        return 13;
+    }
+    return -1;
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -12276,6 +12815,35 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_PDF_CATALOG:
+        case HSTEX_COMMAND_PDF_INFO:
+            if (execute_pdf_dictionary(
+                    engine, meaning->command == HSTEX_COMMAND_PDF_CATALOG,
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_OBJECT:
+            if (execute_pdf_object(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_REF_OBJECT:
+            if (execute_pdf_ref_object(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_LITERAL:
+            if (execute_pdf_literal(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_LAST_NUMBER:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "pdf counters cannot be assigned");
+        case HSTEX_COMMAND_LAST_ITEM:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity, "last-item queries cannot be assigned");
         case HSTEX_COMMAND_FONT_DIMEN:
             if (finish_assignment(
                     engine,

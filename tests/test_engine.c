@@ -562,6 +562,39 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* The last-node queries and the PDF objects the document builds; see
+   docs/DECISIONS.md, last-node-queries and pdf-objects. */
+static int test_last_node_and_pdf_objects(void)
+{
+    return run_snippet(
+        "\\setbox1=\\hbox{\\vrule height5pt depth2pt width1pt}"
+        "[\\the\\lastpenalty|\\the\\lastkern|\\the\\lastskip"
+        "|\\the\\lastnodetype]"
+        /* The values are captured inside each box, since a character there
+           would start a paragraph. */
+        "\\setbox0=\\vbox{\\vskip3pt plus1fil \\global\\skip1=\\lastskip "
+        "\\global\\count1=\\lastnodetype}"
+        "[\\the\\skip1|\\the\\count1]"
+        "\\setbox0=\\vbox{\\kern4pt \\global\\dimen1=\\lastkern "
+        "\\global\\skip2=\\lastskip \\global\\count2=\\lastnodetype}"
+        "[\\the\\dimen1|\\the\\skip2|\\the\\count2]"
+        "\\setbox0=\\vbox{\\penalty77 \\global\\count3=\\lastpenalty "
+        "\\global\\count4=\\lastnodetype}"
+        "[\\the\\count3|\\the\\count4]"
+        "\\setbox0=\\vbox{\\copy1 \\global\\count5=\\lastnodetype}"
+        "\\setbox0=\\vbox{\\global\\count6=\\lastnodetype}"
+        "[\\the\\count5][\\the\\count6]"
+        /* Objects are numbered in order, and a reserved number is reused. */
+        "\\immediate\\pdfobj{<< /A 1 >>}[\\the\\pdflastobj]"
+        "\\immediate\\pdfobj{<< /B 2 >>}[\\the\\pdflastobj]"
+        "\\pdfobj reserveobjnum[\\the\\pdflastobj]"
+        "\\immediate\\pdfobj useobjnum 3 {<< /C 3 >>}[\\the\\pdflastobj]"
+        "\\pdfcatalog{/PageMode /UseOutlines}"
+        "\\pdfinfo{/Title (T)}\\pdfrefobj 1 [ok]%",
+        "[0|0.0pt|0.0pt|-1][3.0pt plus 1.0fil|11][4.0pt|0.0pt|12][77|13]"
+        "[1][-1][1][2][3][3][ok]");
+}
+
 /* \iffontchar, \ifhbox, \ifvbox and \ifvoid. An unimplemented conditional is
    worse than a missing command: a skipped branch miscounts its \else. */
 static int test_box_and_font_conditionals(void)
@@ -1475,6 +1508,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
+        test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||
         test_box_shift_and_packaging() != 0 || test_kerns_and_rules() != 0 ||
