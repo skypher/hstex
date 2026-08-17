@@ -906,6 +906,10 @@ struct hstex_noad {
        correction is then dropped; see docs/DECISIONS.md,
        math-text-characters. */
     bool text_character;
+    /* \limits and \nolimits on a large operator: 0 for neither, which puts
+       the limits above and below in display style; 1 for \limits; 2 for
+       \nolimits. See docs/DECISIONS.md, large-operators. */
+    uint8_t limits;
 };
 
 /* Which slot the next atom fills, when a script mark is waiting. */

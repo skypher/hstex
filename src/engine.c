@@ -15044,7 +15044,6 @@ static int flush_pending_character(struct hstex_engine *engine, char *error,
     engine->pending_is_hyphen = false;
     int status = append_character_node(engine, code, ligature, error,
                                        error_capacity);
-    advance_space_factor(engine, code);
     /* An explicit hyphen is followed into the paragraph by an empty
        discretionary, so the line may break after it; see docs/DECISIONS.md,
        the-discretionary-after-an-explicit-hyphen. */
@@ -15068,6 +15067,10 @@ static int append_horizontal_character(struct hstex_engine *engine,
        the-discretionary-after-an-explicit-hyphen. */
     bool hyphen = !engine->inner_mode && current != NULL &&
                   current->hyphen_character == (int32_t)code;
+    /* The space factor follows the characters as they are read, so a
+       ligature leaves behind whatever the last of its parts said; see
+       docs/DECISIONS.md, the-space-factor-of-a-ligature. */
+    advance_space_factor(engine, code);
     if (engine->has_pending_character) {
         const struct hstex_font *font =
             font_by_identifier(engine, engine->current_font);
@@ -17436,6 +17439,7 @@ static bool math_noad_is_atom(uint8_t kind)
 {
     return kind == (uint8_t)HSTEX_NOAD_ATOM ||
            kind == (uint8_t)HSTEX_NOAD_RADICAL ||
+           kind == (uint8_t)HSTEX_NOAD_ACCENT ||
            kind == (uint8_t)HSTEX_NOAD_OVERLINE ||
            kind == (uint8_t)HSTEX_NOAD_UNDERLINE ||
            kind == (uint8_t)HSTEX_NOAD_MIDDLE;
@@ -17993,6 +17997,16 @@ static int build_math_radical(struct hstex_engine *engine,
 static int build_math_accent(struct hstex_engine *engine,
                              struct hstex_noad *noad, uint8_t style,
                              char *error, size_t error_capacity);
+
+static int build_operator_box(struct hstex_engine *engine,
+                              struct hstex_noad *noad, uint8_t style,
+                              int32_t *delta, struct hstex_node *boxed,
+                              char *error, size_t error_capacity);
+
+static int build_operator_limits(struct hstex_engine *engine,
+                                 struct hstex_noad *noad, uint8_t style,
+                                 int32_t delta, struct hstex_node *boxed,
+                                 char *error, size_t error_capacity);
 
 static int build_math_line(struct hstex_engine *engine,
                            struct hstex_noad *noad, uint8_t style, bool over,
@@ -18811,6 +18825,20 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                error_capacity) != 0) {
                 return -1;
             }
+            /* A large operator carries its limits above and below in display
+               style whatever its nucleus is; see docs/DECISIONS.md,
+               large-operators. */
+            if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
+                (noad->limits == 1U ||
+                 (noad->limits == 0U && style < (uint8_t)HSTEX_STYLE_TEXT))) {
+                if (build_operator_limits(engine, noad, style, 0, &contributed,
+                                          error, error_capacity) != 0 ||
+                    append_hbox_node(engine, &contributed, error,
+                                     error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
+            }
             nucleus_height = contributed.height - contributed.shift;
             nucleus_depth = contributed.depth + contributed.shift;
             if (append_hbox_node(engine, &contributed, error, error_capacity) !=
@@ -18847,30 +18875,37 @@ static int translate_math_list_with(struct hstex_engine *engine,
             };
             italic = metric->italic;
             if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP) {
-                /* A large operator is set in a box of its own -- without the
-                   italic correction, which the scripts get instead -- and
-                   that box is what sits on the axis. See docs/DECISIONS.md,
-                   only-a-character-is-centred. */
-                uint32_t placed = 0U;
-                uint32_t start = 0U;
-                if (store_node(engine, &node, &placed, error, error_capacity) !=
-                        0 ||
-                    store_list_run(engine, &placed, 1U, &start, error,
-                                   error_capacity) != 0) {
+                /* A large operator is set in a box of its own, which sits on
+                   the axis; in display style it takes a bigger shape, and
+                   unless it is told otherwise its scripts go above and below
+                   it there. See docs/DECISIONS.md, large-operators. */
+                struct hstex_node boxed = {0};
+                int32_t operator_delta = 0;
+                if (build_operator_box(engine, noad, style, &operator_delta,
+                                       &boxed, error, error_capacity) < 0) {
                     return -1;
                 }
-                struct hstex_node boxed = {
-                    .kind = HSTEX_NODE_LIST,
-                    .width = node.width,
-                    .height = node.height,
-                    .depth = node.depth,
-                    .value.list = {.node_start = start,
-                                   .node_count = 1U,
-                                   .box_kind = HSTEX_BOX_HLIST},
-                };
+                bool stacked = noad->limits == 1U ||
+                               (noad->limits == 0U &&
+                                style < (uint8_t)HSTEX_STYLE_TEXT);
+                bool has_below =
+                    noad->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+                if (has_below && !stacked) {
+                    boxed.width -= operator_delta;
+                }
                 if (centre_on_axis(engine, size, &boxed, error,
                                    error_capacity) != 0) {
                     return -1;
+                }
+                if (stacked) {
+                    if (build_operator_limits(engine, noad, style,
+                                              operator_delta, &boxed, error,
+                                              error_capacity) != 0 ||
+                        append_hbox_node(engine, &boxed, error,
+                                         error_capacity) != 0) {
+                        return -1;
+                    }
+                    continue;
                 }
                 nucleus_height = boxed.height - boxed.shift;
                 nucleus_depth = boxed.depth + boxed.shift;
@@ -18879,8 +18914,12 @@ static int translate_math_list_with(struct hstex_engine *engine,
                     0) {
                     return -1;
                 }
+                /* The italic correction is already in the operator's box,
+                   so it never becomes a kern of its own; it only displaces a
+                   superscript that shares the atom with a subscript. */
                 if (attach_math_scripts(engine, noad, style, nucleus_height,
-                                        nucleus_depth, false, italic, error,
+                                        nucleus_depth, false,
+                                        has_below ? operator_delta : 0, error,
                                         error_capacity) != 0) {
                     return -1;
                 }
@@ -19598,6 +19637,276 @@ static int accent_skew(struct hstex_engine *engine,
     return 0;
 }
 
+static int rebox_limit(struct hstex_engine *engine, struct hstex_box *box,
+                       int32_t width, char *error, size_t error_capacity);
+
+/* The limits of a large operator, set above and below it; see
+   docs/DECISIONS.md, large-operators. */
+static int build_operator_limits(struct hstex_engine *engine,
+                                 struct hstex_noad *noad, uint8_t style,
+                                 int32_t delta, struct hstex_node *boxed,
+                                 char *error, size_t error_capacity)
+{
+    uint8_t size = math_size_of_style(style);
+    const struct hstex_font *extension = math_family_font(engine, size, 3U);
+    if (extension == NULL || extension->dimen_count < 13U) {
+        return set_error(error, error_capacity,
+                         "a large operator's limits need \\textfont3 with "
+                         "thirteen parameters");
+    }
+    int32_t spacing[5];
+    for (size_t index = 0U; index < 5U; ++index) {
+        spacing[index] = extension->dimens[8U + index];
+    }
+    /* The operator's own box, packaged again when it carries a shift; an
+       unshifted one is already clean. */
+    struct hstex_box middle = {0};
+    if (boxed->shift == 0) {
+        middle.kind = boxed->value.list.box_kind;
+        middle.width = boxed->width;
+        middle.height = boxed->height;
+        middle.depth = boxed->depth;
+        middle.node_start = boxed->value.list.node_start;
+        middle.node_count = boxed->value.list.node_count;
+        middle.glue = boxed->value.list.glue;
+    } else {
+        struct hstex_hbox_builder builder = {0};
+        struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        enum hstex_mode previous_mode = engine->mode;
+        engine->active_hbox_builder = &builder;
+        engine->mode = HSTEX_MODE_HORIZONTAL;
+        int packed = append_hbox_node(engine, boxed, error, error_capacity);
+        if (packed == 0) {
+            packed = finalize_hbox(engine, &builder, false, false, 0, &middle,
+                                   error, error_capacity);
+        }
+        free(builder.node_identifiers);
+        engine->active_hbox_builder = previous;
+        engine->mode = previous_mode;
+        if (packed != 0) {
+            return -1;
+        }
+    }
+    struct hstex_box above = {0};
+    struct hstex_box below = {0};
+    bool has_above = noad->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+    bool has_below = noad->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+    if ((has_above &&
+         math_field_box(engine, &noad->superscript,
+                        math_superscript_style(style), &above, error,
+                        error_capacity) != 0) ||
+        (has_below &&
+         math_field_box(engine, &noad->subscript, math_subscript_style(style),
+                        &below, error, error_capacity) != 0)) {
+        return -1;
+    }
+    int32_t width = middle.width;
+    if (has_above && above.width > width) {
+        width = above.width;
+    }
+    if (has_below && below.width > width) {
+        width = below.width;
+    }
+    if ((has_above &&
+         rebox_limit(engine, &above, width, error, error_capacity) != 0) ||
+        (has_below &&
+         rebox_limit(engine, &below, width, error, error_capacity) != 0) ||
+        rebox_limit(engine, &middle, width, error, error_capacity) != 0) {
+        return -1;
+    }
+
+    struct hstex_vbox_builder body = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->active_vbox_builder = &body;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    int32_t height = middle.height;
+    int32_t depth = middle.depth;
+    int status = 0;
+    if (has_above) {
+        int32_t gap = spacing[2] - above.depth;
+        if (gap < spacing[0]) {
+            gap = spacing[0];
+        }
+        struct hstex_node top = {.kind = HSTEX_NODE_KERN, .width = spacing[4]};
+        struct hstex_node between = {.kind = HSTEX_NODE_KERN, .width = gap};
+        uint32_t placed = 0U;
+        status = append_vbox_node(engine, &top, error, error_capacity);
+        if (status == 0) {
+            status = store_box_node(engine, &above, half_of(delta), &placed,
+                                    error, error_capacity);
+        }
+        if (status == 0) {
+            status = append_vbox_item(engine, placed, error, error_capacity);
+        }
+        if (status == 0) {
+            status = append_vbox_node(engine, &between, error, error_capacity);
+        }
+        height = (int32_t)((int64_t)height + spacing[4] + above.height +
+                           above.depth + gap);
+    }
+    uint32_t placed = 0U;
+    if (status == 0) {
+        status = store_box_node(engine, &middle, 0, &placed, error,
+                                error_capacity);
+    }
+    if (status == 0) {
+        status = append_vbox_item(engine, placed, error, error_capacity);
+    }
+    if (status == 0 && has_below) {
+        int32_t gap = spacing[3] - below.height;
+        if (gap < spacing[1]) {
+            gap = spacing[1];
+        }
+        struct hstex_node between = {.kind = HSTEX_NODE_KERN, .width = gap};
+        struct hstex_node bottom = {.kind = HSTEX_NODE_KERN,
+                                    .width = spacing[4]};
+        status = append_vbox_node(engine, &between, error, error_capacity);
+        if (status == 0) {
+            status = store_box_node(engine, &below, -half_of(delta), &placed,
+                                    error, error_capacity);
+        }
+        if (status == 0) {
+            status = append_vbox_item(engine, placed, error, error_capacity);
+        }
+        if (status == 0) {
+            status = append_vbox_node(engine, &bottom, error, error_capacity);
+        }
+        depth = (int32_t)((int64_t)depth + spacing[4] + below.height +
+                          below.depth + gap);
+    }
+    struct hstex_box stacked = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &body, false, false, 0, &stacked, error,
+                               error_capacity);
+    }
+    free(body.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->prev_depth = enclosing_depth;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    /* The stack is as tall as the operator plus whatever the limits added,
+       not what packaging it would make of it. */
+    memset(boxed, 0, sizeof(*boxed));
+    boxed->kind = HSTEX_NODE_LIST;
+    boxed->width = width;
+    boxed->height = height;
+    boxed->depth = depth;
+    boxed->value.list.node_start = stacked.node_start;
+    boxed->value.list.node_count = stacked.node_count;
+    boxed->value.list.box_kind = HSTEX_BOX_VLIST;
+    return 0;
+}
+
+/* A large operator takes a bigger shape from the charlist in display style,
+   and its box carries the italic correction; see docs/DECISIONS.md,
+   large-operators. */
+static int build_operator_box(struct hstex_engine *engine,
+                              struct hstex_noad *noad, uint8_t style,
+                              int32_t *delta, struct hstex_node *boxed,
+                              char *error, size_t error_capacity)
+{
+    uint8_t size = math_size_of_style(style);
+    *delta = 0;
+    const struct hstex_font *font = NULL;
+    const struct hstex_char_metric *metric = NULL;
+    int present = math_character_metric(engine, &noad->nucleus, size, &font,
+                                        &metric, error, error_capacity);
+    if (present < 0) {
+        return -1;
+    }
+    if (present == 0) {
+        return 0;
+    }
+    uint32_t character = noad->nucleus.character;
+    if (style < (uint8_t)HSTEX_STYLE_TEXT && metric->tag == 2) {
+        uint32_t next = (uint32_t)(metric->remainder & 0xFF);
+        if (font->characters[next].tag >= 0) {
+            character = next;
+            metric = &font->characters[next];
+        }
+    }
+    *delta = metric->italic;
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = metric->width,
+        .height = metric->height,
+        .depth = metric->depth,
+        .value.character = {.font = engine->math_fonts[size]
+                                                      [noad->nucleus.family],
+                            .character = character},
+    };
+    uint32_t placed = 0U;
+    uint32_t start = 0U;
+    if (store_node(engine, &node, &placed, error, error_capacity) != 0 ||
+        store_list_run(engine, &placed, 1U, &start, error, error_capacity) !=
+            0) {
+        return -1;
+    }
+    memset(boxed, 0, sizeof(*boxed));
+    boxed->kind = HSTEX_NODE_LIST;
+    boxed->width = (int32_t)((int64_t)metric->width + metric->italic);
+    boxed->height = metric->height;
+    boxed->depth = metric->depth;
+    boxed->value.list.node_start = start;
+    boxed->value.list.node_count = 1U;
+    boxed->value.list.box_kind = HSTEX_BOX_HLIST;
+    return 1;
+}
+
+/* One of the three boxes of a large operator's limits, set to the width they
+   share; see docs/DECISIONS.md, large-operators. */
+static int rebox_limit(struct hstex_engine *engine, struct hstex_box *box,
+                       int32_t width, char *error, size_t error_capacity)
+{
+    if (box->width == width || box->node_count == 0U) {
+        box->width = width;
+        return 0;
+    }
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    struct hstex_glue fill = {.stretch = 65536, .stretch_order = 1U,
+                              .shrink = 65536, .shrink_order = 1U};
+    int status = emit_math_glue(engine, fill, error, error_capacity);
+    if (status == 0 && box->kind == HSTEX_BOX_VLIST) {
+        uint32_t identifier = 0U;
+        status = store_box_node(engine, box, 0, &identifier, error,
+                               error_capacity);
+        if (status == 0) {
+            status = append_hbox_item(engine, identifier, error,
+                                      error_capacity);
+        }
+    } else {
+        for (uint32_t item = 0U;
+             status == 0 && item < box->node_count &&
+             (size_t)box->node_start + box->node_count <=
+                 engine->list_item_count;
+             ++item) {
+            status = append_hbox_item(
+                engine, engine->list_items[box->node_start + item], error,
+                error_capacity);
+        }
+    }
+    if (status == 0) {
+        status = emit_math_glue(engine, fill, error, error_capacity);
+    }
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, true, false, width, box,
+                               error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
+    return status;
+}
+
 /* \mathaccent puts a character over what follows, sliding it right by the
    nucleus's skew and lowering it onto the letter. See docs/DECISIONS.md,
    math-accents. */
@@ -19634,13 +19943,62 @@ static int build_math_accent(struct hstex_engine *engine,
                        &under, error, error_capacity) != 0) {
         return -1;
     }
+    /* Where the accent goes is settled by the nucleus alone, but what it
+       goes over is that nucleus with its scripts; see docs/DECISIONS.md,
+       an-accent-over-a-script. */
+    int32_t nucleus_width = under.width;
+    int32_t nucleus_height = under.height;
+    bool carries_scripts =
+        (noad->nucleus.kind == (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+         noad->nucleus.single_character != 0U) &&
+        (noad->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+         noad->superscript.node != 0U ||
+         noad->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
+         noad->subscript.node != 0U);
+    if (carries_scripts) {
+        struct hstex_math_builder single = {0};
+        single.forced_class = -1;
+        single.style = style;
+        struct hstex_noad scripted = {
+            .kind = (uint8_t)HSTEX_NOAD_ATOM,
+            .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+            .nucleus = noad->nucleus,
+            .superscript = noad->superscript,
+            .subscript = noad->subscript,
+        };
+        if (reserve_noads(&single, 1U, error, error_capacity) != 0) {
+            return -1;
+        }
+        single.noads[0] = scripted;
+        single.count = 1U;
+        struct hstex_hbox_builder packed = {0};
+        struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        enum hstex_mode previous_mode = engine->mode;
+        engine->active_hbox_builder = &packed;
+        engine->mode = HSTEX_MODE_HORIZONTAL;
+        int status = translate_math_list(engine, &single, error,
+                                         error_capacity);
+        engine->active_hbox_builder = previous;
+        engine->mode = previous_mode;
+        if (status == 0) {
+            status = finalize_hbox(engine, &packed, false, false, 0, &under,
+                                   error, error_capacity);
+        }
+        free(packed.node_identifiers);
+        free(single.noads);
+        if (status != 0) {
+            return -1;
+        }
+        memset(&noad->superscript, 0, sizeof(noad->superscript));
+        memset(&noad->subscript, 0, sizeof(noad->subscript));
+    }
     /* A wider variant is taken while one exists that is no wider than what
        is being accented. */
     uint32_t character = accent.character;
     while (metric->tag == 2) {
         uint32_t next = (uint32_t)(metric->remainder & 0xFF);
         if (font->characters[next].tag < 0 ||
-            font->characters[next].width > under.width) {
+            font->characters[next].width > nucleus_width) {
             break;
         }
         character = next;
@@ -19650,7 +20008,7 @@ static int build_math_accent(struct hstex_engine *engine,
     if (font->dimen_count >= 5U) {
         x_height = font->dimens[4];
     }
-    int32_t delta = under.height < x_height ? under.height : x_height;
+    int32_t delta = nucleus_height < x_height ? nucleus_height : x_height;
     /* The accent is set in a box of its own, which is then given no width so
        that it hangs over the letter. */
     struct hstex_node character_node = {
@@ -19676,7 +20034,7 @@ static int build_math_accent(struct hstex_engine *engine,
         .height = metric->height,
         .depth = metric->depth,
         .shift = (int32_t)((int64_t)skew +
-                           half_of((int64_t)under.width - accent_width)),
+                           half_of((int64_t)nucleus_width - accent_width)),
         .value.list = {.node_start = start,
                        .node_count = 1U,
                        .box_kind = HSTEX_BOX_HLIST},
@@ -19689,11 +20047,14 @@ static int build_math_accent(struct hstex_engine *engine,
     engine->active_vbox_builder = &body;
     engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
-    struct hstex_node gap = {.kind = HSTEX_NODE_KERN, .width = -delta};
+    /* The accent keeps the place it would have over the nucleus alone, so
+       the gap grows by whatever the scripts added on top. */
+    int32_t drop = (int32_t)((int64_t)under.height - nucleus_height + delta);
+    struct hstex_node gap = {.kind = HSTEX_NODE_KERN, .width = -drop};
     uint32_t identifier = 0U;
     /* The stack is never shorter than what it accents; a kern at the top
        makes up the difference. */
-    int64_t raw = (int64_t)metric->height + metric->depth - delta +
+    int64_t raw = (int64_t)metric->height + metric->depth - drop +
                   under.height;
     int status = 0;
     if (raw < under.height) {
@@ -24399,16 +24760,28 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             return HSTEX_ENGINE_TOKEN;
-        case HSTEX_COMMAND_MATH_LIMITS:
-            /* Limit placement only shows in display style, which is not
-               implemented; in text style the reference measures the same
-               either way. */
-            if (engine->mode != HSTEX_MODE_MATH) {
+        case HSTEX_COMMAND_MATH_LIMITS: {
+            /* \limits and its two companions belong to the large operator
+               just read; see docs/DECISIONS.md, large-operators. */
+            struct hstex_math_builder *builder = current_math_list(engine);
+            if (engine->mode != HSTEX_MODE_MATH || builder == NULL ||
+                builder->count == 0U ||
+                builder->noads[builder->count - 1U].atom_class !=
+                    (uint8_t)HSTEX_ATOM_OP) {
                 (void)set_error(error, error_capacity,
-                                "limit placement is only allowed in a formula");
+                                "limit placement is only allowed after a "
+                                "large operator");
                 return HSTEX_ENGINE_ERROR;
             }
+            /* The primitives are numbered nolimits, limits, displaylimits;
+               the noad keeps 0 for the last of those, which is what an
+               operator does anyway. */
+            builder->noads[builder->count - 1U].limits =
+                meaning->value.integer == 1
+                    ? 1U
+                    : (meaning->value.integer == 0 ? 2U : 0U);
             continue;
+        }
         case HSTEX_COMMAND_MATH_SKIP:
         case HSTEX_COMMAND_MATH_KERN:
             if (execute_math_skip(engine,
