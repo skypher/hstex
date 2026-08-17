@@ -10862,8 +10862,17 @@ static const char *glue_parameter_name(uint8_t parameter)
         "lineskip",     "leftskip",         "rightskip",
         "tabskip",      "spaceskip",        "xspaceskip",
     };
-    if (parameter == 0U || parameter > HSTEX_GLUE_PARAMETER_COUNT) {
+    /* The three math ones follow the glue parameters in the same field. */
+    static const char *const math[HSTEX_MUGLUE_PARAMETER_COUNT] = {
+        "thinmuskip", "medmuskip", "thickmuskip",
+    };
+    if (parameter == 0U) {
         return NULL;
+    }
+    if (parameter > HSTEX_GLUE_PARAMETER_COUNT) {
+        size_t index = parameter - HSTEX_GLUE_PARAMETER_COUNT - 1U;
+        return index < (size_t)HSTEX_MUGLUE_PARAMETER_COUNT ? math[index]
+                                                            : NULL;
     }
     return names[parameter - 1U];
 }
@@ -11128,6 +11137,13 @@ static void show_node(struct hstex_engine *engine, FILE *out,
         return;
     case HSTEX_NODE_WHATSIT:
         show_whatsit(engine, out, node);
+        return;
+    case HSTEX_NODE_MATH:
+        (void)fputs(node->value.math.after ? "\\mathoff" : "\\mathon", out);
+        if (packed_dimen(node->width) != 0) {
+            (void)fputs(", surrounded ", out);
+            show_scaled(out, packed_dimen(node->width));
+        }
         return;
     case HSTEX_NODE_DISCRETIONARY: {
         (void)fputs("\\discretionary", out);
@@ -14004,6 +14020,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 9;
     case HSTEX_NODE_DISCRETIONARY:
         return 8;
+    case HSTEX_NODE_MATH:
+        return 10;
     }
     return -1;
 }
@@ -14757,10 +14775,19 @@ static int flush_pending_character(struct hstex_engine *engine, char *error,
     }
     uint8_t code = engine->pending_character;
     bool ligature = engine->pending_is_ligature;
+    bool hyphen = engine->pending_is_hyphen;
     engine->has_pending_character = false;
+    engine->pending_is_hyphen = false;
     int status = append_character_node(engine, code, ligature, error,
                                        error_capacity);
     advance_space_factor(engine, code);
+    /* An explicit hyphen is followed into the paragraph by an empty
+       discretionary, so the line may break after it; see docs/DECISIONS.md,
+       the-discretionary-after-an-explicit-hyphen. */
+    if (status == 0 && hyphen) {
+        struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
+        status = append_hbox_node(engine, &node, error, error_capacity);
+    }
     return status;
 }
 
@@ -14770,6 +14797,13 @@ static int append_horizontal_character(struct hstex_engine *engine,
                                        uint8_t code, char *error,
                                        size_t error_capacity)
 {
+    const struct hstex_font *current =
+        font_by_identifier(engine, engine->current_font);
+    /* Only a paragraph gets the discretionary; a character in a box is just
+       a character. See docs/DECISIONS.md,
+       the-discretionary-after-an-explicit-hyphen. */
+    bool hyphen = !engine->inner_mode && current != NULL &&
+                  current->hyphen_character == (int32_t)code;
     if (engine->has_pending_character) {
         const struct hstex_font *font =
             font_by_identifier(engine, engine->current_font);
@@ -14798,6 +14832,7 @@ static int append_horizontal_character(struct hstex_engine *engine,
             }
             engine->pending_character = ligature;
             engine->pending_is_ligature = true;
+            engine->pending_is_hyphen = engine->pending_is_hyphen || hyphen;
             return 0;
         }
         if (flush_pending_character(engine, error, error_capacity) != 0) {
@@ -14817,6 +14852,7 @@ static int append_horizontal_character(struct hstex_engine *engine,
     engine->pending_is_ligature = false;
     engine->pending_original_count = 0U;
     engine->pending_character = code;
+    engine->pending_is_hyphen = hyphen;
     return 0;
 }
 
@@ -14977,6 +15013,7 @@ static bool node_is_discardable(const struct hstex_node *node)
     switch (node->kind) {
     case HSTEX_NODE_GLUE:
     case HSTEX_NODE_PENALTY:
+    case HSTEX_NODE_MATH:
         return true;
     case HSTEX_NODE_KERN:
         return !node->explicit_kern;
@@ -15050,6 +15087,8 @@ static bool protrusion_passes_over(const struct hstex_node *node)
                packed_dimen(node->depth) == 0;
     case HSTEX_NODE_RULE:
         return false;
+    case HSTEX_NODE_MATH:
+        return packed_dimen(node->width) == 0;
     }
     return true;
 }
@@ -15462,6 +15501,9 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
     ++state->record_count;
 
     bool after_box = false;
+    /* Glue inside a formula is not a place to break; the nodes that fence
+       one turn that off and on again. See docs/DECISIONS.md, math-nodes. */
+    bool automatic = true;
     for (size_t index = 0U; index < count; ++index) {
         uint32_t identifier = items[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
@@ -15472,7 +15514,14 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         site.start = SIZE_MAX;
         bool legal = false;
         if (node->kind == HSTEX_NODE_GLUE) {
-            legal = after_box;
+            legal = after_box && automatic;
+        } else if (node->kind == HSTEX_NODE_MATH) {
+            automatic = node->value.math.after;
+            if (automatic && index + 1U < count) {
+                uint32_t next = items[index + 1U];
+                legal = next != 0U && (size_t)next <= engine->node_count &&
+                        engine->nodes[next - 1U].kind == HSTEX_NODE_GLUE;
+            }
         } else if (node->kind == HSTEX_NODE_KERN) {
             if (node->explicit_kern && index + 1U < count) {
                 uint32_t next = items[index + 1U];
@@ -17017,6 +17066,27 @@ static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
     return emit_parameter_glue(engine, glue, -1, error, error_capacity);
 }
 
+/* Spacing the math list asked one of the three muskip parameters for; it
+   keeps that name in \showbox. */
+static int emit_math_parameter_glue(struct hstex_engine *engine,
+                                    struct hstex_glue glue, size_t muskip,
+                                    char *error, size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+            .parameter =
+                (uint8_t)(HSTEX_GLUE_PARAMETER_COUNT + 1U + muskip),
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
 static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
                           char *error, size_t error_capacity)
 {
@@ -17029,9 +17099,20 @@ static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
 
 /* Translate one finished math list into the horizontal list the engine is
    building. The caller has already pointed active_hbox_builder at it. */
+static int translate_math_list_with(struct hstex_engine *engine,
+                                    struct hstex_math_builder *builder,
+                                    bool penalties, char *error,
+                                    size_t error_capacity);
+
+/* A sub-formula gets no penalties of its own; only the outer list of a
+   formula in a paragraph does. */
 static int translate_math_list(struct hstex_engine *engine,
                                struct hstex_math_builder *builder, char *error,
-                               size_t error_capacity);
+                               size_t error_capacity)
+{
+    return translate_math_list_with(engine, builder, false, error,
+                                    error_capacity);
+}
 
 static int translate_math_fraction(struct hstex_engine *engine,
                                    struct hstex_math_builder *builder,
@@ -17614,9 +17695,10 @@ static int expand_math_choices(struct hstex_engine *engine,
                      "\\mathchoice branches nest too deeply");
 }
 
-static int translate_math_list(struct hstex_engine *engine,
-                               struct hstex_math_builder *builder, char *error,
-                               size_t error_capacity)
+static int translate_math_list_with(struct hstex_engine *engine,
+                                    struct hstex_math_builder *builder,
+                                    bool penalties, char *error,
+                                    size_t error_capacity)
 {
     /* A fraction is split before anything else, because each of its sides
        is set in a style of its own -- which is what decides a \mathchoice
@@ -17636,8 +17718,27 @@ static int translate_math_list(struct hstex_engine *engine,
         return -1;
     }
     int previous_class = -1;
+    /* A binary operator or a relation is a place the line may break, so the
+       reference leaves a penalty behind it -- but not when what follows is
+       itself a relation. See docs/DECISIONS.md, math-penalties. */
+    int32_t pending_penalty = HSTEX_INFINITE_PENALTY;
     for (size_t index = 0U; index < builder->count; ++index) {
         struct hstex_noad *noad = &builder->noads[index];
+        if (pending_penalty < HSTEX_INFINITE_PENALTY) {
+            bool relation = noad->kind == (uint8_t)HSTEX_NOAD_ATOM &&
+                            noad->atom_class == (uint8_t)HSTEX_ATOM_REL;
+            if (!relation) {
+                struct hstex_node node = {
+                    .kind = HSTEX_NODE_PENALTY,
+                    .value.penalty = pending_penalty,
+                };
+                if (append_hbox_node(engine, &node, error, error_capacity) !=
+                    0) {
+                    return -1;
+                }
+            }
+            pending_penalty = HSTEX_INFINITE_PENALTY;
+        }
         if (noad->kind == (uint8_t)HSTEX_NOAD_STYLE) {
             style = noad->atom_class;
             size = math_size_of_style(style);
@@ -17751,14 +17852,25 @@ static int translate_math_list(struct hstex_engine *engine,
                 }
                 struct hstex_glue amount = math_glue_in_points(
                     engine->muglue_parameters[parameters[which]], unit);
-                if (emit_math_glue(engine, amount, error, error_capacity) !=
-                    0) {
+                if (emit_math_parameter_glue(engine, amount,
+                                             parameters[which], error,
+                                             error_capacity) != 0) {
                     return -1;
                 }
             }
         }
         previous_class = middle_atom ? (int)HSTEX_ATOM_OPEN
                                      : (int)noad->atom_class;
+        if (penalties && noad->kind == (uint8_t)HSTEX_NOAD_ATOM &&
+            !middle_atom) {
+            if (noad->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
+                pending_penalty =
+                    engine->integer_parameters[HSTEX_INTEGER_BIN_OP_PENALTY];
+            } else if (noad->atom_class == (uint8_t)HSTEX_ATOM_REL) {
+                pending_penalty =
+                    engine->integer_parameters[HSTEX_INTEGER_REL_PENALTY];
+            }
+        }
 
         int32_t nucleus_height = 0;
         int32_t nucleus_depth = 0;
@@ -19713,16 +19825,29 @@ static int end_math(struct hstex_engine *engine, char *error,
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = list->outer_inner_mode;
     engine->displayed_math = list->outer_displayed;
+    /* The formula is fenced with nodes of its own rather than kerns: they
+       carry \mathsurround, they tell the line breaker where a formula
+       begins and ends, and \showbox names them. See docs/DECISIONS.md,
+       math-nodes. */
     int32_t surround = engine->dimen_parameters[HSTEX_DIMEN_MATH_SURROUND];
-    int status = 0;
-    if (surround != 0) {
-        status = emit_math_kern(engine, surround, error, error_capacity);
+    struct hstex_node opening = {
+        .kind = HSTEX_NODE_MATH,
+        .width = surround,
+        .value.math = {.after = false},
+    };
+    struct hstex_node closing = {
+        .kind = HSTEX_NODE_MATH,
+        .width = surround,
+        .value.math = {.after = true},
+    };
+    int status = append_hbox_node(engine, &opening, error, error_capacity);
+    if (status == 0) {
+        /* Only a formula set in a paragraph gets the penalties. */
+        status = translate_math_list_with(engine, list, !engine->inner_mode,
+                                          error, error_capacity);
     }
     if (status == 0) {
-        status = translate_math_list(engine, list, error, error_capacity);
-    }
-    if (status == 0 && surround != 0) {
-        status = emit_math_kern(engine, surround, error, error_capacity);
+        status = append_hbox_node(engine, &closing, error, error_capacity);
     }
     pop_math_list(engine);
     if (status != 0) {

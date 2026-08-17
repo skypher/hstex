@@ -954,6 +954,7 @@ enum hstex_node_kind {
     HSTEX_NODE_LIGATURE,
     HSTEX_NODE_WHATSIT,
     HSTEX_NODE_DISCRETIONARY,
+    HSTEX_NODE_MATH,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
@@ -1020,6 +1021,12 @@ struct hstex_node {
             uint16_t post_count;
             uint8_t replace_count;
         } disc;
+        struct {
+            /* Whether this node closes a formula rather than opening one.
+               Its width is the \mathsurround it was made with; see
+               docs/DECISIONS.md, math-nodes. */
+            bool after;
+        } math;
         struct {
             /* Whether this kern is one the line breaker put at a margin so
                that a character may stick out past it: 0 for no, 1 for the
@@ -1208,6 +1215,10 @@ struct hstex_engine {
     uint8_t pending_original_count;
     bool pending_is_ligature;
     uint8_t pending_character;
+    /* The character held back was read as the font's \hyphenchar, so an
+       empty discretionary follows it into the paragraph; see
+       docs/DECISIONS.md, the-discretionary-after-an-explicit-hyphen. */
+    bool pending_is_hyphen;
     enum hstex_interaction_mode interaction_mode;
     bool inner_mode;
     hstex_token after_assignment_token;

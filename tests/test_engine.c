@@ -1177,6 +1177,165 @@ static int test_character_protrusion(void)
         "lus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
 }
 
+/* An explicit hyphen is followed into a paragraph by an empty
+   discretionary; see docs/DECISIONS.md,
+   the-discretionary-after-an-explicit-hyphen. */
+static int test_the_discretionary_after_an_explicit_hyphen(void)
+{
+    if (run_document(
+            "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=60"
+            " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+            "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=200pt \\parinde"
+            "nt=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskipli"
+            "mit=0pt \\parfillskip=0pt plus1fil \\leftskip=0pt \\ri"
+            "ghtskip=0pt \\spaceskip=4pt \\tolerance=10000 \\pretol"
+            "erance=10000 \\boxmaxdepth=16383.99998pt \\hyphenchar\\"
+            "f=`\\x \\message{[A]}\\setbox0=\\vbox{\\noindent axb\\"
+            "par}\\showbox0 \\message{[B]}\\setbox0=\\vbox{\\noinde"
+            "nt a-b\\par}\\showbox0 \\hyphenchar\\f=45 \\message{[C"
+            "]}\\setbox0=\\vbox{\\noindent \\hbox{a-b}\\par}\\showb"
+            "ox0 \\message{[D]}\\setbox0=\\vbox{\\noindent a-b\\par"
+            "}\\showbox0 \\message{[E]}\\setbox0=\\vbox{\\noindent "
+            "a\\char45 b\\par}\\showbox0 \\message{[F]}\\setbox0=\\"
+            "vbox{\\noindent a--b\\par}\\showbox0%",
+            "[A]> \\box0=\n\\vbox(6.94444+0.0)x200.0\n.\\hbox(6.944"
+            "44+0.0)x200.0, glue set 184.16661fil\n..\\f a\n..\\f x"
+            "\n..\\discretionary\n..\\f b\n..\\penalty 10000\n..\\g"
+            "lue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightsk"
+            "ip) 0.0\n\n! OK.\n[B]> \\box0=\n\\vbox(6.94444+0.0)x20"
+            "0.0\n.\\hbox(6.94444+0.0)x200.0, glue set 186.11108fil"
+            "\n..\\f a\n..\\f -\n..\\f b\n..\\penalty 10000\n..\\gl"
+            "ue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightski"
+            "p) 0.0\n\n! OK.\n[C]> \\box0=\n\\vbox(6.94444+0.0)x200"
+            ".0\n.\\hbox(6.94444+0.0)x200.0, glue set 186.11108fil\n"
+            "..\\hbox(6.94444+0.0)x13.88892\n...\\f a\n...\\f -\n.."
+            ".\\f b\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0"
+            " plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n[D]>"
+            " \\box0=\n\\vbox(6.94444+0.0)x200.0\n.\\hbox(6.94444+0"
+            ".0)x200.0, glue set 186.11108fil\n..\\f a\n..\\f -\n.."
+            "\\discretionary\n..\\f b\n..\\penalty 10000\n..\\glue("
+            "\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) "
+            "0.0\n\n! OK.\n[E]> \\box0=\n\\vbox(6.94444+0.0)x200.0\n"
+            ".\\hbox(6.94444+0.0)x200.0, glue set 186.11108fil\n..\\"
+            "f a\n..\\f -\n..\\discretionary\n..\\f b\n..\\penalty "
+            "10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\gl"
+            "ue(\\rightskip) 0.0\n\n! OK.\n[F]> \\box0=\n\\vbox(6.9"
+            "4444+0.0)x200.0\n.\\hbox(6.94444+0.0)x200.0, glue set "
+            "184.4444fil\n..\\f a\n..\\f { (ligature --)\n..\\discr"
+            "etionary\n..\\f b\n..\\penalty 10000\n..\\glue(\\parfi"
+            "llskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n"
+            "! OK.\n") != 0) {
+        return 1;
+    }
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=60"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=200pt \\hyphenc"
+        "har\\f=45 \\parindent=0pt \\baselineskip=12pt \\linesk"
+        "ip=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fil "
+        "\\leftskip=0pt \\rightskip=0pt \\spaceskip=4pt \\toler"
+        "ance=10000 \\pretolerance=10000 \\boxmaxdepth=16383.99"
+        "998pt \\message{[end]}\\setbox0=\\vbox{\\noindent ab-\\"
+        "par}\\showbox0 \\message{[space]}\\setbox0=\\vbox{\\no"
+        "indent ab- cd\\par}\\showbox0 \\message{[start]}\\setb"
+        "ox0=\\vbox{\\noindent -ab\\par}\\showbox0 \\message{[k"
+        "ern]}\\setbox0=\\vbox{\\noindent a-\\kern2pt b\\par}\\"
+        "showbox0%",
+        "[end]> \\box0=\n\\vbox(6.94444+0.0)x200.0\n.\\hbox(6.9"
+        "4444+0.0)x200.0, glue set 186.11108fil\n..\\f a\n..\\f"
+        " b\n..\\f -\n..\\discretionary\n..\\penalty 10000\n..\\"
+        "glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rights"
+        "kip) 0.0\n\n! OK.\n[space]> \\box0=\n\\vbox(6.94444+0."
+        "0)x200.0\n.\\hbox(6.94444+0.0)x200.0, glue set 172.111"
+        "07fil\n..\\f a\n..\\f b\n..\\f -\n..\\discretionary\n."
+        ".\\glue(\\spaceskip) 4.0\n..\\f c\n..\\f d\n..\\penalt"
+        "y 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\"
+        "glue(\\rightskip) 0.0\n\n! OK.\n[start]> \\box0=\n\\vb"
+        "ox(6.94444+0.0)x200.0\n.\\hbox(6.94444+0.0)x200.0, glu"
+        "e set 186.11108fil\n..\\f -\n..\\discretionary\n..\\f "
+        "a\n..\\f b\n..\\penalty 10000\n..\\glue(\\parfillskip)"
+        " 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n"
+        "[kern]> \\box0=\n\\vbox(6.94444+0.0)x200.0\n.\\hbox(6."
+        "94444+0.0)x200.0, glue set 184.11108fil\n..\\f a\n..\\"
+        "f -\n..\\discretionary\n..\\kern 2.0\n..\\f b\n..\\pen"
+        "alty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n."
+        ".\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
+/* A formula in a paragraph is fenced with math nodes, its spacing keeps the
+   name of the muskip it came from, and a binary operator or a relation
+   leaves a penalty behind it; see docs/DECISIONS.md, math-nodes and
+   math-penalties. */
+static int test_math_nodes(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\tracingonline=1 \\showboxdepth=3 \\s"
+        "howboxbreadth=60 \\hbadness=10000 \\vbadness=10000 \\h"
+        "fuzz=1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0"
+        "pt \\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\l"
+        "ineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus"
+        "1fil \\leftskip=0pt \\rightskip=0pt \\tolerance=10000 "
+        "\\pretolerance=-1 \\spaceskip=4pt \\font\\tenrm=cmr10 "
+        "\\font\\sevenrm=cmr7 \\font\\fiverm=cmr5 \\font\\teni="
+        "cmmi10 \\font\\seveni=cmmi7 \\font\\fivei=cmmi5 \\font"
+        "\\tensy=cmsy10 \\font\\sevensy=cmsy7 \\font\\fivesy=cm"
+        "sy5 \\font\\tenex=cmex10 \\textfont0=\\tenrm \\scriptf"
+        "ont0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfont"
+        "1=\\teni \\scriptfont1=\\seveni \\scriptscriptfont1=\\"
+        "fivei \\textfont2=\\tensy \\scriptfont2=\\sevensy \\sc"
+        "riptscriptfont2=\\fivesy \\textfont3=\\tenex \\scriptf"
+        "ont3=\\tenex \\scriptscriptfont3=\\tenex \\tenrm \\mat"
+        "hcode`\\+=\"202B \\mathcode`\\==\"303D \\thinmuskip=3m"
+        "u \\medmuskip=4mu plus 2mu minus 4mu \\thickmuskip=5mu"
+        " plus 5mu \\relpenalty=500 \\binoppenalty=700 \\mathsu"
+        "rround=3pt \\message{[A]}\\setbox0=\\vbox{\\noindent a"
+        " $x+y=z$ b\\par}\\showbox0 \\mathsurround=0pt \\messag"
+        "e{[B]}\\setbox0=\\vbox{\\noindent a $x+y=z$ b\\par}\\s"
+        "howbox0 \\message{[C]}\\setbox0=\\hbox{$x+y=z$}\\showb"
+        "ox0 \\message{[D]}\\setbox0=\\vbox{\\noindent a $x=+y$"
+        " b\\par}\\showbox0%",
+        "[A]> \\box0=\n\\vbox(6.94444+1.94444)x200.0\n.\\hbox(6"
+        ".94444+1.94444)x200.0, glue set 133.82188fil\n..\\tenr"
+        "m a\n..\\glue(\\spaceskip) 4.0\n..\\mathon, surrounded"
+        " 3.0\n..\\teni x\n..\\glue(\\medmuskip) 2.22217 plus 1"
+        ".11108 minus 2.22217\n..\\tenrm +\n..\\penalty 700\n.."
+        "\\glue(\\medmuskip) 2.22217 plus 1.11108 minus 2.22217"
+        "\n..\\teni y\n..\\kern0.35878\n..\\glue(\\thickmuskip)"
+        " 2.77771 plus 2.77771\n..\\tenrm =\n..\\penalty 500\n."
+        ".\\glue(\\thickmuskip) 2.77771 plus 2.77771\n..\\teni "
+        "z\n..\\kern0.4398\n..\\mathoff, surrounded 3.0\n..\\gl"
+        "ue(\\spaceskip) 4.0\n..\\tenrm b\n..\\penalty 10000\n."
+        ".\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rig"
+        "htskip) 0.0\n\n! OK.\n[B]> \\box0=\n\\vbox(6.94444+1.9"
+        "4444)x200.0\n.\\hbox(6.94444+1.94444)x200.0, glue set "
+        "139.82188fil\n..\\tenrm a\n..\\glue(\\spaceskip) 4.0\n"
+        "..\\mathon\n..\\teni x\n..\\glue(\\medmuskip) 2.22217 "
+        "plus 1.11108 minus 2.22217\n..\\tenrm +\n..\\penalty 7"
+        "00\n..\\glue(\\medmuskip) 2.22217 plus 1.11108 minus 2"
+        ".22217\n..\\teni y\n..\\kern0.35878\n..\\glue(\\thickm"
+        "uskip) 2.77771 plus 2.77771\n..\\tenrm =\n..\\penalty "
+        "500\n..\\glue(\\thickmuskip) 2.77771 plus 2.77771\n..\\"
+        "teni z\n..\\kern0.4398\n..\\mathoff\n..\\glue(\\spaces"
+        "kip) 4.0\n..\\tenrm b\n..\\penalty 10000\n..\\glue(\\p"
+        "arfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0"
+        "\n\n! OK.\n[C]> \\box0=\n\\hbox(5.83333+1.94444)x41.62"
+        "253\n.\\mathon\n.\\teni x\n.\\glue(\\medmuskip) 2.2221"
+        "7 plus 1.11108 minus 2.22217\n.\\tenrm +\n.\\glue(\\me"
+        "dmuskip) 2.22217 plus 1.11108 minus 2.22217\n.\\teni y"
+        "\n.\\kern0.35878\n.\\glue(\\thickmuskip) 2.77771 plus "
+        "2.77771\n.\\tenrm =\n.\\glue(\\thickmuskip) 2.77771 pl"
+        "us 2.77771\n.\\teni z\n.\\kern0.4398\n.\\mathoff\n\n! "
+        "OK.\n[D]> \\box0=\n\\vbox(6.94444+1.94444)x200.0\n.\\h"
+        "box(6.94444+1.94444)x200.0, glue set 149.35652fil\n..\\"
+        "tenrm a\n..\\glue(\\spaceskip) 4.0\n..\\mathon\n..\\te"
+        "ni x\n..\\glue(\\thickmuskip) 2.77771 plus 2.77771\n.."
+        "\\tenrm =\n..\\penalty 500\n..\\glue(\\thickmuskip) 2."
+        "77771 plus 2.77771\n..\\tenrm +\n..\\teni y\n..\\kern0"
+        ".35878\n..\\mathoff\n..\\glue(\\spaceskip) 4.0\n..\\te"
+        "nrm b\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 "
+        "plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4010,6 +4169,8 @@ int main(void)
         test_interword_glue() != 0 ||
         test_parskip_in_the_outermost_list() != 0 ||
         test_character_protrusion() != 0 ||
+        test_the_discretionary_after_an_explicit_hyphen() != 0 ||
+        test_math_nodes() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
