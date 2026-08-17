@@ -6012,14 +6012,10 @@ static int expand_expanded_text(struct hstex_engine *engine,
                 break;
             }
         }
-        if (engine->returned_unexpanded) {
-            if (hstex_token_is_control_sequence(token)) {
-                token = hstex_token_unexpanded_control_sequence(
-                    hstex_token_control_sequence_id(token));
-            } else {
-                token = hstex_token_unexpanded_non_control(token);
-            }
-        }
+        /* \expanded yields a plain token list. Whatever protected a token
+           from this expansion -- \unexpanded, \the, \noexpand -- does not
+           protect it from the next one, so the marking is not carried over;
+           see docs/DECISIONS.md, expanded-is-plain. */
         if (vector_push(&expansion, token, error, error_capacity) != 0) {
             vector_destroy(&expansion);
             return -1;

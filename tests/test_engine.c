@@ -562,6 +562,31 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \expanded yields a plain token list: nothing that protected a token from
+   this expansion protects it from the next; see docs/DECISIONS.md,
+   expanded-is-plain. */
+static int test_expanded_is_plain(void)
+{
+    return run_snippet(
+        "\\def\\foo{BAR}\\protected\\def\\pp{PROT}\\toks0={##}"
+        /* \unexpanded protects from the enclosing \edef only when it feeds
+           that \edef directly. */
+        "\\edef\\a{\\expanded{\\unexpanded{\\foo}}}[\\meaning\\a]"
+        "\\edef\\b{\\unexpanded{\\foo}}[\\meaning\\b]"
+        /* Nor does \noexpand survive the round trip. */
+        "\\edef\\c{\\expanded{\\noexpand\\foo}}[\\meaning\\c]"
+        /* A doubled parameter marker is halved by the rescan, which expl3's
+           hook machinery depends on. */
+        "\\edef\\d{\\expanded{\\unexpanded\\expandafter{\\the\\toks0}}}"
+        "[\\meaning\\d]"
+        "\\edef\\e{\\unexpanded\\expandafter{\\the\\toks0}}[\\meaning\\e]"
+        /* A protected macro is still protected, since the enclosing \edef
+           inhibits it too. */
+        "\\edef\\f{\\expanded{\\pp}}[\\meaning\\f]%",
+        "[macro:->BAR][macro:->\\foo ][macro:->BAR][macro:->##]"
+        "[macro:->####][macro:->\\pp ]");
+}
+
 /* \meaning names a macro's prefixes behind the escape character, in the
    order \protected, \long, \outer, with no separator; see
    docs/DECISIONS.md, meaning-prefixes. */
@@ -1541,7 +1566,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_meaning_prefixes() != 0 ||
+        test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||
