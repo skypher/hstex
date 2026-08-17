@@ -8693,11 +8693,6 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         status = set_error(error, error_capacity,
                            "input ended inside an hbox");
     }
-    if (status == 0 &&
-        engine->conditional_count != engine->output_conditional_floor) {
-        status = set_error(error, error_capacity,
-                           "hbox body ended inside a conditional");
-    }
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
 
@@ -8947,11 +8942,6 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     }
     if (status == 0 && !engine->group_stop_hit) {
         status = set_error(error, error_capacity, "input ended inside a vbox");
-    }
-    if (status == 0 &&
-        engine->conditional_count != engine->output_conditional_floor) {
-        status = set_error(error, error_capacity,
-                           "vbox body ended inside a conditional");
     }
     engine->active_hbox_builder = previous_hbox_builder;
     engine->active_vbox_builder = previous_vbox_builder;
@@ -19413,7 +19403,11 @@ enum hstex_engine_result hstex_engine_next_output(
                                 "end of input inside a group");
                 return HSTEX_ENGINE_ERROR;
             }
-            if (engine->conditional_count !=
+            /* A conditional opened before a box or an alignment entry may
+               be closed inside it -- amsmath's multline does exactly that --
+               so only one left open is an error. See docs/DECISIONS.md,
+               conditionals-across-boxes. */
+            if (engine->conditional_count >
                 engine->output_conditional_floor) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a conditional");

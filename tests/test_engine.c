@@ -1769,6 +1769,28 @@ static int test_formula_spacing(void)
         "1pt]");
 }
 
+/* A conditional may be opened outside a box or an alignment entry and
+   closed inside it; see docs/DECISIONS.md, conditionals-across-boxes. */
+static int test_conditionals_across_boxes(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 \\hbadness=10000 \\hfuzz=1000pt \\vbadness"
+        "=10000 \\vfuzz=1000pt \\parindent=0pt \\baselineskip=0pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\boxmaxdepth=16383.999"
+        "98pt \\tabskip=0pt \\def\\R#1{\\vrule width#1pt height1pt "
+        "depth0pt}\\iftrue\\setbox0=\\hbox{\\R{5}\\fi}[1|\\the\\wd0"
+        "]\\setbox0=\\hbox{\\iftrue\\R{6}}\\fi[2|\\the\\wd0]\\setbo"
+        "x0=\\vbox{\\iftrue\\hrule height3pt}\\fi[3|\\the\\ht0]\\if"
+        "true\\setbox0=\\vbox{\\hrule height4pt\\fi}[4|\\the\\ht0]"
+        "\\setbox0=\\vbox{\\halign{\\hbox to30pt{#\\hfil}\\cr\\iftr"
+        "ue\\R{5}\\fi\\cr}}[5|\\the\\wd0|\\the\\ht0]\\setbox0=\\vbo"
+        "x{\\halign{\\hbox to30pt{#\\hfil}\\cr\\iffalse\\R{9}\\else"
+        "\\R{7}\\fi\\cr}}[6|\\the\\wd0|\\the\\ht0]\\setbox0=\\hbox{"
+        "\\iftrue\\hbox{\\R{8}\\fi}}[7|\\the\\wd0]%",
+        "[1|5.0pt][2|6.0pt][3|3.0pt][4|4.0pt][5|30.0pt|1.0pt][6|30."
+        "0pt|1.0pt][7|8.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2859,7 +2881,8 @@ int main(void)
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
-        test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
+        test_conditionals_across_boxes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
