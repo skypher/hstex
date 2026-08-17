@@ -842,6 +842,10 @@ struct hstex_align_row {
     size_t cell_count;
     uint32_t *items;
     size_t item_count;
+    /* What \prevdepth stood at when a \noalign finished, which is what the
+       rows after it are spaced from; see docs/DECISIONS.md,
+       prevdepth-inside-noalign. */
+    int32_t prev_depth;
 };
 
 /* The styles, numbered so that the odd ones are the cramped variants and the
@@ -1361,6 +1365,14 @@ struct hstex_engine {
        display adds three to. The breaker numbers its lines from here.
        See docs/DECISIONS.md, lines-carry-on-past-a-display. */
     int32_t prev_graf;
+    /* What \prevdepth stood at when a displayed alignment's rows were
+       gathered, which is what follows them; see docs/DECISIONS.md,
+       prevdepth-inside-noalign. */
+    int32_t display_prev_depth;
+    /* Whether the diagnostic stream stands part-way through a line, so
+       that the next \message is separated from what is already there;
+       see docs/DECISIONS.md, a-message-keeps-its-distance. */
+    bool message_column;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;

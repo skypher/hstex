@@ -2358,6 +2358,121 @@ static int test_lines_carry_on_past_a_display(void)
 );
 }
 
+/* \prevdepth inside a \noalign is the depth of the row before it, and
+   what the \noalign leaves it at is what the row after it is spaced
+   from; see docs/DECISIONS.md, prevdepth-inside-noalign. */
+static int test_prevdepth_inside_noalign(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\#=6 \\catcode`\\&=4 \\baselineskip=12pt \\li"
+        "neskip=1pt \\lineskiplimit=0pt \\showboxdepth=2 \\"
+        "showboxbreadth=100 \\def\\R#1#2{\\vrule height#1 d"
+        "epth#2 width3pt}\\setbox0=\\vbox{\\halign{#\\cr\\R"
+        "{5pt}{6pt}\\cr\\noalign{\\message{[read pd=\\the\\"
+        "prevdepth]}}\\R{5pt}{1pt}\\cr}}\\showbox0 \\messag"
+        "e{[set]}\\setbox0=\\vbox{\\halign{#\\cr\\R{5pt}{1p"
+        "t}\\cr\\noalign{\\prevdepth=20pt}\\R{5pt}{1pt}\\cr"
+        "}}\\showbox0 \\message{[keep]}\\setbox0=\\vbox{\\h"
+        "align{#\\cr\\R{5pt}{6pt}\\cr\\noalign{\\dimen0=\\p"
+        "revdepth \\prevdepth=-1000pt \\hbox{}\\prevdepth="
+        "\\dimen0 }\\R{5pt}{1pt}\\cr}\\hbox{}}\\showbox0%"
+,
+        "[read pd=6.0pt]> \\box0=\n\\vbox(17.0+1.0)x3.0\n."
+        "\\hbox(5.0+6.0)x3.0\n..\\glue(\\tabskip) 0.0\n..\\"
+        "hbox(5.0+6.0)x3.0 []\n..\\glue(\\tabskip) 0.0\n.\\"
+        "glue(\\baselineskip) 1.0\n.\\hbox(5.0+1.0)x3.0\n.."
+        "\\glue(\\tabskip) 0.0\n..\\hbox(5.0+1.0)x3.0 []\n."
+        ".\\glue(\\tabskip) 0.0\n\n! OK.\n[set]> \\box0=\n"
+        "\\vbox(12.0+1.0)x3.0\n.\\hbox(5.0+1.0)x3.0\n..\\gl"
+        "ue(\\tabskip) 0.0\n..\\hbox(5.0+1.0)x3.0 []\n..\\g"
+        "lue(\\tabskip) 0.0\n.\\glue(\\lineskip) 1.0\n.\\hb"
+        "ox(5.0+1.0)x3.0\n..\\glue(\\tabskip) 0.0\n..\\hbox"
+        "(5.0+1.0)x3.0 []\n..\\glue(\\tabskip) 0.0\n\n! OK."
+        "\n[keep]> \\box0=\n\\vbox(29.0+0.0)x3.0\n.\\hbox(5"
+        ".0+6.0)x3.0\n..\\glue(\\tabskip) 0.0\n..\\hbox(5.0"
+        "+6.0)x3.0 []\n..\\glue(\\tabskip) 0.0\n.\\hbox(0.0"
+        "+0.0)x0.0\n.\\glue(\\baselineskip) 1.0\n.\\hbox(5."
+        "0+1.0)x3.0\n..\\glue(\\tabskip) 0.0\n..\\hbox(5.0+"
+        "1.0)x3.0 []\n..\\glue(\\tabskip) 0.0\n.\\glue(\\ba"
+        "selineskip) 11.0\n.\\hbox(0.0+0.0)x0.0\n\n! OK.\n"
+);}
+
+/* Whether a display takes the short skips is decided by the offset it is
+   really given, equation number and all; see docs/DECISIONS.md,
+   a-short-display-skip. */
+static int test_a_short_display_skip(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\hsiz"
+        "e=100pt \\parindent=0pt \\baselineskip=0pt \\lines"
+        "kip=0pt \\lineskiplimit=0pt \\parfillskip=0pt \\le"
+        "ftskip=0pt \\rightskip=0pt \\abovedisplayskip=3pt "
+        "\\abovedisplayshortskip=1pt \\belowdisplayskip=4pt"
+        " \\belowdisplayshortskip=2pt \\predisplaypenalty=1"
+        "0000 \\postdisplaypenalty=0 \\tolerance=10000 \\pr"
+        "etolerance=-1 \\hbadness=10000 \\vbadness=10000 \\"
+        "hfuzz=1000pt \\vfuzz=1000pt \\showboxdepth=1 \\sho"
+        "wboxbreadth=100 \\message{[num]}\\setbox0=\\vbox{"
+        "\\noindent\\hbox to 0pt{}$$\\hbox to 50pt{}\\eqno"
+        "\\hbox to 20pt{}$$}\\showbox0 \\message{[bare]}\\s"
+        "etbox0=\\vbox{\\noindent\\hbox to 0pt{}$$\\hbox to"
+        " 50pt{}$$}\\showbox0%"
+,
+        "[num]> \\box0=\n\\vbox(7.0+0.0)x100.0\n.\\hbox(0.0"
+        "+0.0)x100.0 []\n.\\penalty 10000\n.\\glue(\\aboved"
+        "isplayskip) 3.0\n.\\glue(\\baselineskip) 0.0\n.\\h"
+        "box(0.0+0.0)x85.0, shifted 15.0 []\n.\\penalty 0\n"
+        ".\\glue(\\belowdisplayskip) 4.0\n\n! OK.\n[bare]> "
+        "\\box0=\n\\vbox(3.0+0.0)x100.0\n.\\hbox(0.0+0.0)x1"
+        "00.0 []\n.\\penalty 10000\n.\\glue(\\abovedisplays"
+        "hortskip) 1.0\n.\\glue(\\baselineskip) 0.0\n.\\hbo"
+        "x(0.0+0.0)x50.0, shifted 25.0, display []\n.\\pena"
+        "lty 0\n.\\glue(\\belowdisplayshortskip) 2.0\n\n! O"
+        "K.\n"
+);
+}
+
 /* A large operator sits on the axis, takes a bigger shape in display style,
    and carries its limits above and below unless told otherwise; see
    docs/DECISIONS.md, large-operators. */
@@ -6043,6 +6158,8 @@ int main(void)
         test_the_last_line_is_measured_square() != 0 ||
         test_a_display_closes_its_group_last() != 0 ||
         test_lines_carry_on_past_a_display() != 0 ||
+        test_prevdepth_inside_noalign() != 0 ||
+        test_a_short_display_skip() != 0 ||
         test_large_operators() != 0 ||
         test_operators_that_are_lists() != 0 ||
         test_the_space_factor_of_a_ligature() != 0 ||

@@ -9309,9 +9309,14 @@ static int handle_vertical_list_token(struct hstex_engine *engine,
                      "%s is not supported in a vertical list", found);
 }
 
+/* `starting_depth` is what \prevdepth stands at as the list opens: a box's
+   own list starts afresh, but \noalign material carries on from the row
+   before it. See docs/DECISIONS.md, prevdepth-inside-noalign. */
 static int evaluate_vbox_contents(struct hstex_engine *engine,
                                   struct hstex_vbox_builder *builder,
-                                  char *error, size_t error_capacity)
+                                  int32_t starting_depth,
+                                  int32_t *ending_depth, char *error,
+                                  size_t error_capacity)
 {
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
@@ -9349,7 +9354,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
-    engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
+    engine->prev_depth = starting_depth;
 
     int status = normal_paragraph(engine, error, error_capacity);
     while (status == 0) {
@@ -9383,6 +9388,9 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->active_vbox_builder = previous_vbox_builder;
     engine->mode = previous_mode;
     engine->inner_mode = previous_inner_mode;
+    if (ending_depth != NULL) {
+        *ending_depth = engine->prev_depth;
+    }
     engine->prev_depth = previous_depth;
     engine->output_group_floor = previous_group_floor;
     engine->output_conditional_floor = previous_conditional_floor;
@@ -9508,7 +9516,8 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
                          found, origin, (unsigned int)line);
     }
     struct hstex_vbox_builder builder = {0};
-    int status = evaluate_vbox_contents(engine, &builder, error,
+    int status = evaluate_vbox_contents(engine, &builder,
+                                        HSTEX_IGNORE_DEPTH, NULL, error,
                                         error_capacity);
     if (status == 0) {
         status = finalize_vbox(engine, &builder, matched_to, matched_spread,
@@ -11367,6 +11376,7 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     if (box.kind == HSTEX_BOX_VOID) {
         (void)fputs("void\n\n! OK.\n", out);
         (void)fflush(out);
+        engine->message_column = false;
         return 0;
     }
     int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
@@ -11399,6 +11409,7 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
               (size_t)breadth);
     (void)fputs("\n\n! OK.\n", out);
     (void)fflush(out);
+    engine->message_column = false;
     return 0;
 }
 
@@ -17099,6 +17110,7 @@ static int break_paragraph(struct hstex_engine *engine,
         trace_newline(&state.trace);
         (void)fputc('\n', state.trace.out);
         (void)fflush(state.trace.out);
+        engine->message_column = false;
     }
     if (status == 0) {
         status = emit_paragraph_lines(engine, &state, items, count, best,
@@ -21088,8 +21100,18 @@ static int end_display_math(struct hstex_engine *engine, char *error,
     bool dropped = numbered && !fits;
 
     /* The line is measured first, because whether the number fits beside it
-       decides both the skips and where the number goes. */
-    int32_t trial = (int32_t)(((int64_t)width - equation.width + 1) / 2);
+       decides both the skips and where the number goes. The offset is the
+       one the display will really be given, number and all; see
+       docs/DECISIONS.md, a-short-display-skip. */
+    int32_t room = numbered && !dropped ? number.width : 0;
+    int32_t measured = equation.width;
+    if (room == 0 && measured > width) {
+        measured = width;
+    }
+    int32_t trial = (int32_t)(((int64_t)width - measured + 1) / 2);
+    if (room > 0 && trial < 2 * room) {
+        trial = (int32_t)(((int64_t)width - measured - room + 1) / 2);
+    }
     bool roomy = numbered && left
                      ? true
                      : (int64_t)trial + indent <= (int64_t)before;
@@ -21126,6 +21148,7 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                 .node_count = number.node_count,
                 .box_kind = number.kind,
                 .glue = number.glue,
+                .display = true,
             },
         };
         if (append_vbox_node(engine, &node, error, error_capacity) != 0 ||
@@ -21157,6 +21180,9 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                 .node_count = number.node_count,
                 .box_kind = number.kind,
                 .glue = number.glue,
+                /* A number set on a line of its own is still a display
+                   line; see docs/DECISIONS.md, display-math. */
+                .display = true,
             },
         };
         if (append_vbox_node(engine, &infinite, error, error_capacity) != 0 ||
@@ -21241,6 +21267,9 @@ static int end_display_alignment(struct hstex_engine *engine, char *error,
          ++index) {
         status = append_vbox_item(engine, rows->node_identifiers[index], error,
                                   error_capacity);
+    }
+    if (status == 0) {
+        engine->prev_depth = engine->display_prev_depth;
     }
     if (rows != NULL) {
         free(rows->node_identifiers);
@@ -22200,6 +22229,10 @@ static int finish_alignment(struct hstex_engine *engine,
                     return -1;
                 }
             }
+            /* \prevdepth is what the \noalign left it at, which may be an
+               assignment of its own; see docs/DECISIONS.md,
+               prevdepth-inside-noalign. */
+            engine->prev_depth = rows[index].prev_depth;
             continue;
         }
         struct hstex_hbox_builder line = {0};
@@ -22449,6 +22482,11 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     struct hstex_align_row *rows = NULL;
     size_t row_count = 0U;
     size_t row_capacity = 0U;
+    /* The depth of the row last read, which is what \prevdepth stands at
+       inside a \noalign; before the first row it is what the list the
+       alignment joins stood at. See docs/DECISIONS.md,
+       prevdepth-inside-noalign. */
+    int32_t row_depth = engine->prev_depth;
     int status = scan_align_preamble(engine, &columns, &column_count,
                                      &loop_start, error, error_capacity);
     column_capacity = column_count;
@@ -22497,8 +22535,15 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                     break;
                 }
                 struct hstex_vbox_builder between = {0};
-                status = evaluate_vbox_contents(engine, &between, error,
+                /* \noalign material sits in the alignment's own vertical
+                   list, so \prevdepth is the depth of the row before it;
+                   see docs/DECISIONS.md, prevdepth-inside-noalign. */
+                int32_t enclosing_depth = engine->prev_depth;
+                int32_t settled = row_depth;
+                status = evaluate_vbox_contents(engine, &between, row_depth,
+                                                &settled, error,
                                                 error_capacity);
+                engine->prev_depth = enclosing_depth;
                 if (status == 0) {
                     status = reserve_align_rows(&rows, &row_capacity,
                                                 row_count + 1U, error,
@@ -22513,6 +22558,8 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                 entry->noalign = true;
                 entry->items = between.node_identifiers;
                 entry->item_count = between.count;
+                entry->prev_depth = settled;
+                row_depth = settled;
                 continue;
             }
         }
@@ -22603,6 +22650,19 @@ static int execute_halign(struct hstex_engine *engine, char *error,
         if (status != 0) {
             break;
         }
+        /* The row's depth is the deepest of its entries, which is what a
+           \noalign after it measures from. */
+        row_depth = 0;
+        for (size_t cell = 0U; cell < row->cell_count; ++cell) {
+            uint32_t held = row->cells[cell].box;
+            if (held == 0U || (size_t)held > engine->node_count) {
+                continue;
+            }
+            int32_t depth = packed_dimen(engine->nodes[held - 1U].depth);
+            if (depth > row_depth) {
+                row_depth = depth;
+            }
+        }
         status = insert_every_cr(engine, error, error_capacity);
     }
     engine->building_alignment = previous_building;
@@ -22611,6 +22671,9 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                                   rows, row_count, matched_to, matched_spread,
                                   requested_width, shift, display, error,
                                   error_capacity);
+        /* What the rows left \prevdepth at, which is what follows the
+           display; see docs/DECISIONS.md, prevdepth-inside-noalign. */
+        engine->display_prev_depth = engine->prev_depth;
     }
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
@@ -23033,6 +23096,7 @@ static int execute_message(struct hstex_engine *engine, char *error,
         fflush(stream) != 0) {
         status = set_error(error, error_capacity, "message output failed");
     }
+    engine->message_column = true;
     free(bytes);
     return status;
 }
