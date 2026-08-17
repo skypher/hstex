@@ -1918,6 +1918,37 @@ static int test_missing_characters(void)
         "|0.0pt]");
 }
 
+/* \leaders and its relatives; see docs/DECISIONS.md, leaders. */
+static int test_leaders(void)
+{
+    return run_snippet(
+        "\\hbadness=10000 \\hfuzz=1000pt \\vbadness=10000 \\vfuzz=1"
+        "000pt \\parindent=0pt \\baselineskip=0pt \\lineskip=0pt \\"
+        "lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\def\\R#1#2"
+        "#3{\\vrule width#1pt height#2pt depth#3pt}\\setbox1=\\hbox"
+        "{\\R{3}{2}{1}}\\setbox0=\\hbox to50pt{\\leaders\\copy1\\hf"
+        "il}[1|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\setbox0=\\hbox{\\"
+        "leaders\\copy1\\hskip7pt}[2|\\the\\wd0|\\the\\ht0|\\the\\d"
+        "p0]\\setbox0=\\hbox{\\cleaders\\copy1\\hskip7pt}[3|\\the\\"
+        "wd0|\\the\\ht0|\\the\\dp0]\\setbox0=\\hbox{\\xleaders\\cop"
+        "y1\\hskip7pt}[4|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\setbox0"
+        "=\\hbox{\\leaders\\vrule height4pt depth2pt\\hskip7pt}[5|"
+        "\\the\\wd0|\\the\\ht0|\\the\\dp0]\\setbox0=\\vbox{\\leader"
+        "s\\hrule height4pt\\vskip7pt}[6|\\the\\wd0|\\the\\ht0|\\th"
+        "e\\dp0]\\setbox0=\\vbox{\\leaders\\hbox{\\R{3}{2}{1}}\\vsk"
+        "ip9pt}[7|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\setbox0=\\hbox"
+        "{\\leaders\\hbox{\\R{3}{2}{1}}\\hfil}[8|\\the\\wd0|\\the\\"
+        "ht0|\\the\\dp0]\\setbox0=\\hbox{\\R{1}{1}{0}\\leaders\\cop"
+        "y1\\hskip7pt\\R{1}{1}{0}}[9|\\the\\wd0|\\the\\ht0|\\the\\d"
+        "p0]\\setbox0=\\vbox{\\hrule height1pt\\leaders\\hbox{\\R{9"
+        "}{2}{1}}\\vskip5pt\\hrule height1pt}[10|\\the\\wd0|\\the\\"
+        "ht0|\\the\\dp0]%",
+        "[1|50.0pt|2.0pt|1.0pt][2|7.0pt|2.0pt|1.0pt][3|7.0pt|2.0pt|"
+        "1.0pt][4|7.0pt|2.0pt|1.0pt][5|7.0pt|4.0pt|2.0pt][6|0.0pt|7"
+        ".0pt|0.0pt][7|3.0pt|9.0pt|0.0pt][8|0.0pt|2.0pt|1.0pt][9|9."
+        "0pt|2.0pt|1.0pt][10|9.0pt|7.0pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -3011,7 +3042,7 @@ int main(void)
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
         test_over_and_underline() != 0 ||
-        test_missing_characters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_missing_characters() != 0 || test_leaders() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

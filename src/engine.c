@@ -1882,6 +1882,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"hfill", 2, HSTEX_COMMAND_HSKIP},
         {"hss", 3, HSTEX_COMMAND_HSKIP},
         {"hfilneg", 4, HSTEX_COMMAND_HSKIP},
+        {"leaders", 0, HSTEX_COMMAND_LEADERS},
+        {"cleaders", 1, HSTEX_COMMAND_LEADERS},
+        {"xleaders", 2, HSTEX_COMMAND_LEADERS},
         {"indent", 1, HSTEX_COMMAND_INDENT},
         {"noindent", 0, HSTEX_COMMAND_INDENT},
         {"spacefactor", 0, HSTEX_COMMAND_SPACE_FACTOR},
@@ -8222,6 +8225,18 @@ static int append_hbox_node(struct hstex_engine *engine,
     return append_hbox_item(engine, identifier, error, error_capacity);
 }
 
+/* Glue that \leaders filled reaches as far across as the box it repeats,
+   whichever way the list runs. See docs/DECISIONS.md, leaders. */
+static const struct hstex_node *leader_box_of(const struct hstex_engine *engine,
+                                              const struct hstex_node *node)
+{
+    if (node->kind != HSTEX_NODE_GLUE || node->value.glue.leader == 0U ||
+        (size_t)node->value.glue.leader > engine->node_count) {
+        return NULL;
+    }
+    return &engine->nodes[node->value.glue.leader - 1U];
+}
+
 /* Take a node already in the arena into the horizontal list being built.
    Unboxing splices identifiers this way rather than copying nodes. */
 static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
@@ -8248,6 +8263,11 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
     /* A box shifted down reaches lower and rises less. */
     int32_t raised = packed_dimen(node->height) - node->shift;
     int32_t dropped = packed_dimen(node->depth) + node->shift;
+    const struct hstex_node *leader = leader_box_of(engine, node);
+    if (leader != NULL) {
+        raised = packed_dimen(leader->height);
+        dropped = packed_dimen(leader->depth);
+    }
     if (raised > builder->height) {
         builder->height = raised;
     }
@@ -8360,6 +8380,10 @@ static int append_vbox_node(struct hstex_engine *engine,
         reach > builder->width) {
         builder->width = reach;
     }
+    const struct hstex_node *leader = leader_box_of(engine, node);
+    if (leader != NULL && packed_dimen(leader->width) > builder->width) {
+        builder->width = packed_dimen(leader->width);
+    }
     return 0;
 }
 
@@ -8407,6 +8431,10 @@ static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
     if ((node->kind == HSTEX_NODE_RULE || node->kind == HSTEX_NODE_LIST) &&
         reach > builder->width) {
         builder->width = reach;
+    }
+    const struct hstex_node *leader = leader_box_of(engine, node);
+    if (leader != NULL && packed_dimen(leader->width) > builder->width) {
+        builder->width = packed_dimen(leader->width);
     }
     return 0;
 }
@@ -8582,9 +8610,106 @@ static int execute_glue(struct hstex_engine *engine, int32_t subtype,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .leader = engine->pending_leader,
+            .leader_kind = engine->pending_leader_kind,
         },
     };
+    engine->pending_leader = 0U;
+    engine->pending_leader_kind = 0U;
     return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
+                            char *error, size_t error_capacity);
+
+static int store_box_node(struct hstex_engine *engine,
+                          const struct hstex_box *box, int32_t shift,
+                          uint32_t *identifier, char *error,
+                          size_t error_capacity);
+
+/* \leaders, \cleaders and \xleaders read a box or a rule and then the glue
+   it is to fill. See docs/DECISIONS.md, leaders. */
+static int execute_leaders(struct hstex_engine *engine, int32_t kind,
+                           char *error, size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "leaders do not accept prefixes");
+    }
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result =
+        expanded_next_non_space(engine, &token, &location, error,
+                                error_capacity);
+    if (result == HSTEX_ENGINE_ERROR) {
+        return -1;
+    }
+    const struct hstex_meaning *meaning =
+        result == HSTEX_ENGINE_TOKEN && hstex_token_is_control_sequence(token)
+            ? hstex_engine_meaning(engine,
+                                   hstex_token_control_sequence_id(token))
+            : NULL;
+    uint32_t identifier = 0U;
+    if (meaning != NULL && (meaning->command == HSTEX_COMMAND_VRULE ||
+                            meaning->command == HSTEX_COMMAND_HRULE)) {
+        bool vertical_rule = meaning->command == HSTEX_COMMAND_VRULE;
+        struct hstex_node rule = {
+            .kind = HSTEX_NODE_RULE,
+            .width = vertical_rule ? 26214 : HSTEX_RUNNING_DIMEN,
+            .height = vertical_rule ? HSTEX_RUNNING_DIMEN : 26214,
+            .depth = vertical_rule ? HSTEX_RUNNING_DIMEN : 0,
+        };
+        if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0 ||
+            store_node(engine, &rule, &identifier, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+    } else {
+        if (result == HSTEX_ENGINE_TOKEN &&
+            push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_box box = {0};
+        if (scan_box_operand(engine, &box, error, error_capacity) != 0 ||
+            store_box_node(engine, &box, 0, &identifier, error,
+                           error_capacity) != 0) {
+            return -1;
+        }
+    }
+    engine->pending_leader = identifier;
+    engine->pending_leader_kind = (uint8_t)kind;
+
+    /* The glue must come next: it is what the box is repeated across. */
+    hstex_token glue_token = 0U;
+    struct hstex_source_location where;
+    result = expanded_next_non_space(engine, &glue_token, &where, error,
+                                     error_capacity);
+    const struct hstex_meaning *glue_meaning =
+        result == HSTEX_ENGINE_TOKEN &&
+                hstex_token_is_control_sequence(glue_token)
+            ? hstex_engine_meaning(
+                  engine, hstex_token_control_sequence_id(glue_token))
+            : NULL;
+    if (glue_meaning == NULL ||
+        (glue_meaning->command != HSTEX_COMMAND_HSKIP &&
+         glue_meaning->command != HSTEX_COMMAND_VSKIP)) {
+        engine->pending_leader = 0U;
+        engine->pending_leader_kind = 0U;
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        char found[128];
+        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? glue_token : 0U,
+                       found, sizeof(found));
+        return set_error(error, error_capacity,
+                         "leaders must be followed by glue, found %s", found);
+    }
+    int status = execute_glue(
+        engine, glue_meaning->value.integer,
+        glue_meaning->command == HSTEX_COMMAND_VSKIP, error, error_capacity);
+    engine->pending_leader = 0U;
+    engine->pending_leader_kind = 0U;
+    return status;
 }
 
 static int execute_penalty(struct hstex_engine *engine, char *error,
@@ -20466,6 +20591,12 @@ handle_token:
             if (execute_glue(engine, meaning->value.integer,
                              meaning->command == HSTEX_COMMAND_VSKIP, error,
                              error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_LEADERS:
+            if (execute_leaders(engine, meaning->value.integer, error,
+                                error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

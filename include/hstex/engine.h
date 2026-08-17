@@ -220,6 +220,7 @@ enum hstex_command {
     HSTEX_COMMAND_FRACTION,
     HSTEX_COMMAND_PAR_SHAPE,
     HSTEX_COMMAND_OVER_UNDER_LINE,
+    HSTEX_COMMAND_LEADERS,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -943,6 +944,11 @@ struct hstex_node {
             int32_t shrink;
             uint8_t stretch_order;
             uint8_t shrink_order;
+            /* \leaders and its relatives: the box or rule this glue is
+               filled with, and which of the three commands asked for it.
+               Zero for ordinary glue. See docs/DECISIONS.md, leaders. */
+            uint32_t leader;
+            uint8_t leader_kind;
         } glue;
         struct {
             uint32_t node_start;
@@ -1160,6 +1166,9 @@ struct hstex_engine {
     bool reading_equation_number;
     bool equation_number_on_left;
     struct hstex_box displayed_equation;
+    /* The box \leaders read, waiting for the glue that will repeat it. */
+    uint32_t pending_leader;
+    uint8_t pending_leader_kind;
     /* An alignment standing in for a whole display: its rows are gathered
        here until the closing $$ says what glue surrounds them. */
     bool display_alignment;
