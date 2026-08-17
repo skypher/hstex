@@ -129,6 +129,30 @@ static int run_document(const char *source, const char *expected)
 }
 
 /* Page totals; see docs/DECISIONS.md, the-page-builder. */
+/* The output routine; see docs/DECISIONS.md, the-output-routine. */
+static int test_output_routine(void)
+{
+    return run_document(
+        "\\vsize=50pt \\maxdepth=2pt \\topskip=10pt \\baselineskip="
+        "12pt \\hsize=100pt \\lineskip=0pt \\lineskiplimit=0pt \\bo"
+        "xmaxdepth=16383.99998pt \\hbadness=10000 \\vbadness=10000 "
+        "\\vfuzz=1000pt \\hfuzz=1000pt \\output={\\message{[OUT|\\t"
+        "he\\outputpenalty|\\the\\deadcycles|\\the\\ht255|\\the\\dp"
+        "255|\\the\\wd255|\\the\\badness|\\the\\pagegoal|\\the\\pag"
+        "etotal]}\\shipout\\box255 }\\def\\B{\\hbox{\\vrule width4p"
+        "t height20pt depth1pt}}\\def\\P#1{\\message{[#1|\\the\\pag"
+        "etotal|\\the\\pagegoal|\\the\\deadcycles]}}\\B\\P{1}\\B\\P"
+        "{2}\\B\\P{3}\\B\\P{4}\\penalty-10000 \\P{5}\\B\\P{6}\\mess"
+        "age{[end|\\the\\pagegoal|\\the\\pagetotal|\\the\\deadcycle"
+        "s]}\\end",
+        "[1|20.0pt|50.0pt|0][2|41.0pt|50.0pt|0][3|62.0pt|50.0pt|0]["
+        "OUT|10000|1|50.0pt|1.0pt|4.0pt|10000|50.0pt|62.0pt][4|41.0"
+        "pt|50.0pt|0][OUT|-10000|1|50.0pt|1.0pt|4.0pt|10000|50.0pt|"
+        "41.0pt][5|0.0pt|16383.99998pt|0][6|20.0pt|50.0pt|0][end|50"
+        ".0pt|20.0pt|0][OUT|-1073741824|1|50.0pt|0.0pt|100.0pt|0|50"
+        ".0pt|21.0pt]");
+}
+
 static int test_page_totals(void)
 {
     return run_document(
@@ -3319,7 +3343,7 @@ int main(void)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

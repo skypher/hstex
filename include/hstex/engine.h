@@ -222,6 +222,7 @@ enum hstex_command {
     HSTEX_COMMAND_OVER_UNDER_LINE,
     HSTEX_COMMAND_LEADERS,
     HSTEX_COMMAND_NON_SCRIPT,
+    HSTEX_COMMAND_SHIP_OUT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -714,6 +715,9 @@ struct hstex_box {
 /* The reference's two sentinel badnesses: the worst a box can be and still
    be set, and what an overfull box reports. */
 #define HSTEX_INFINITE_BADNESS 10000
+/* What a breaker calls a hopeless break, and a merely dreadful one. */
+#define HSTEX_AWFUL_BADNESS INT64_C(0x3FFFFFFF)
+#define HSTEX_DEPLORABLE_COST 100000
 #define HSTEX_INFINITE_PENALTY 10000
 #define HSTEX_OVERFULL_BADNESS 1000000
 
@@ -1147,6 +1151,14 @@ struct hstex_engine {
        page builder moves it there; see docs/DECISIONS.md, the-page-builder. */
     struct hstex_vbox_builder *page_builder;
     struct hstex_vbox_builder *contribution_builder;
+    /* The best break found on the current page so far, and what it costs. */
+    bool output_active;
+    int32_t least_page_cost;
+    int32_t best_page_penalty;
+    int32_t best_page_size;
+    size_t best_page_break;
+    /* How many pages \shipout has taken. */
+    int32_t shipped_pages;
     /* The horizontal list of the paragraph being built, if any. */
     struct hstex_hbox_builder *paragraph_builder;
     bool building_paragraph;
