@@ -562,6 +562,38 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \vtop, \vsplit, \lastbox, and the control space and italic correction;
+   see docs/DECISIONS.md, vtop-and-lastbox and control-space-and-italic. */
+static int test_box_grammar_and_spacing(void)
+{
+    return run_snippet(
+        "\\font\\f=cmr10 \\f \\boxmaxdepth=16383.99998pt "
+        "\\baselineskip=0pt \\lineskip=0pt \\lineskiplimit=0pt "
+        "\\dimendef\\maxdimen=250 \\maxdimen=16383.99998pt "
+        "\\setbox1=\\hbox{\\vrule height5pt depth2pt width1pt}"
+        /* \vtop keeps the first item's height and calls the rest depth. */
+        "\\setbox0=\\vtop{\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vtop{\\copy1\\copy1}[\\the\\ht0|\\the\\dp0]"
+        /* A leading kern is not a box, so the height is zero. */
+        "\\setbox0=\\vtop{\\kern3pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vtop{}[\\the\\ht0|\\the\\dp0]"
+        /* Splitting a void register gives nothing; asking for at least the
+           whole list takes all of it and empties the register. */
+        "\\setbox9=\\box9 \\setbox0=\\vsplit9 to 5pt"
+        "[\\ifvoid0 V\\else N\\fi]"
+        "\\setbox2=\\vbox{\\hrule height2pt \\kern5pt \\hrule height3pt}"
+        "\\setbox0=\\vsplit2 to \\maxdimen"
+        "[\\the\\ht0|\\ifvoid2 V\\else N\\fi]"
+        /* A control space ignores the space factor, unlike a real space. */
+        "\\setbox0=\\hbox{A\\ \\global\\skip1=\\lastskip}[\\the\\skip1]"
+        "\\setbox0=\\hbox{A \\global\\skip2=\\lastskip}[\\the\\skip2]"
+        "\\setbox0=\\hbox{\\char65}[\\the\\wd0]%",
+        "[5.0pt|2.0pt][5.0pt|9.0pt][0.0pt|10.0pt][0.0pt|0.0pt]"
+        "[V][16383.99998pt|V]"
+        "[3.33333pt plus 1.66666pt minus 1.11111pt]"
+        "[3.33333pt plus 1.66498pt minus 1.11221pt][7.50002pt]");
+}
+
 /* A paragraph that fits on one line; see docs/DECISIONS.md, paragraphs. */
 static int test_paragraphs(void)
 {
@@ -1694,7 +1726,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_paragraphs() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

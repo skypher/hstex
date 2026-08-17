@@ -190,6 +190,12 @@ enum hstex_command {
     HSTEX_COMMAND_HSKIP,
     HSTEX_COMMAND_INDENT,
     HSTEX_COMMAND_SPACE_FACTOR,
+    HSTEX_COMMAND_VTOP,
+    HSTEX_COMMAND_VSPLIT,
+    HSTEX_COMMAND_LAST_BOX,
+    HSTEX_COMMAND_CONTROL_SPACE,
+    HSTEX_COMMAND_ITALIC_CORRECTION,
+    HSTEX_COMMAND_CHAR,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the

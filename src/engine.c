@@ -1710,6 +1710,12 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"setbox", HSTEX_COMMAND_SET_BOX},
         {"hbox", HSTEX_COMMAND_HBOX},
         {"vbox", HSTEX_COMMAND_VBOX},
+        {"vtop", HSTEX_COMMAND_VTOP},
+        {"vsplit", HSTEX_COMMAND_VSPLIT},
+        {"lastbox", HSTEX_COMMAND_LAST_BOX},
+        {"char", HSTEX_COMMAND_CHAR},
+        {" ", HSTEX_COMMAND_CONTROL_SPACE},
+        {"/", HSTEX_COMMAND_ITALIC_CORRECTION},
         {"penalty", HSTEX_COMMAND_PENALTY},
         {"vrule", HSTEX_COMMAND_VRULE},
         {"hrule", HSTEX_COMMAND_HRULE},
@@ -7682,6 +7688,10 @@ static int scan_rule_dimensions(struct hstex_engine *engine,
 
 static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
+static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
+                       char *error, size_t error_capacity);
+static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
+                         char *error, size_t error_capacity);
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
                                  bool ligature, char *error,
                                  size_t error_capacity);
@@ -8469,8 +8479,8 @@ static int finalize_vbox(struct hstex_engine *engine,
     return 0;
 }
 
-static int scan_vbox(struct hstex_engine *engine, struct hstex_box *box,
-                     char *error, size_t error_capacity)
+static int scan_vbox(struct hstex_engine *engine, bool top,
+                     struct hstex_box *box, char *error, size_t error_capacity)
 {
     bool matched_to = false;
     bool matched_spread = false;
@@ -8520,6 +8530,26 @@ static int scan_vbox(struct hstex_engine *engine, struct hstex_box *box,
     if (status == 0) {
         status = finalize_vbox(engine, &builder, matched_to, matched_spread,
                               requested_height, box, error, error_capacity);
+        /* \vtop keeps only the first item's height; everything else becomes
+           depth. See docs/DECISIONS.md, vtop-and-lastbox. */
+        if (status == 0 && top) {
+            int32_t total = box->height + box->depth;
+            int32_t first = 0;
+            if (box->node_count != 0U) {
+                uint32_t identifier = engine->list_items[box->node_start];
+                if (identifier != 0U &&
+                    (size_t)identifier <= engine->node_count) {
+                    const struct hstex_node *node =
+                        &engine->nodes[identifier - 1U];
+                    if (node->kind == HSTEX_NODE_LIST ||
+                        node->kind == HSTEX_NODE_RULE) {
+                        first = packed_dimen(node->height);
+                    }
+                }
+            }
+            box->height = first;
+            box->depth = total - first;
+        }
     }
     free(builder.node_identifiers);
     return status;
@@ -8541,6 +8571,107 @@ static int append_box_node(struct hstex_engine *engine,
         },
     };
     return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+/* \vsplit takes the top of a vertical list, leaving the rest behind. A void
+   register splits to nothing, which is the whole of what is implemented; see
+   docs/DECISIONS.md, vtop-and-lastbox. */
+static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
+                       char *error, size_t error_capacity)
+{
+    int32_t index = 0;
+    int32_t height = 0;
+    bool matched = false;
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    if (try_keyword(engine, "to", &matched, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!matched) {
+        return set_error(error, error_capacity, "vsplit requires a height");
+    }
+    if (scan_dimension(engine, &height, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box source = engine->boxes[(size_t)index];
+    if (source.kind == HSTEX_BOX_VOID) {
+        memset(box, 0, sizeof(*box));
+        box->kind = HSTEX_BOX_VOID;
+        return 0;
+    }
+    /* Asking for at least the whole list takes all of it: no break can leave
+       less material and come nearer the goal. The result is packaged to the
+       height asked for, however far off it is, and the register is emptied. */
+    if (source.kind != HSTEX_BOX_VLIST ||
+        (int64_t)source.height + source.depth > height) {
+        return set_error(error, error_capacity,
+                         "splitting box %d, a %s of height %d, is not "
+                         "implemented",
+                         index,
+                         source.kind == HSTEX_BOX_HLIST ? "horizontal list"
+                                                        : "vertical list",
+                         source.height);
+    }
+    *box = source;
+    box->height = height;
+    box->depth = 0;
+    struct hstex_box empty = {0};
+    empty.kind = HSTEX_BOX_VOID;
+    return assign_box(engine, (uint32_t)index, empty, true, error,
+                      error_capacity);
+}
+
+/* \lastbox takes the last box off the list being built. The builder's totals
+   are recomputed from what is left, since they were accumulated forwards. */
+static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
+                         char *error, size_t error_capacity)
+{
+    memset(box, 0, sizeof(*box));
+    box->kind = HSTEX_BOX_VOID;
+    const struct hstex_node *node = current_list_last_node(engine);
+    if (node == NULL || node->kind != HSTEX_NODE_LIST) {
+        return 0;
+    }
+    box->kind = node->value.list.box_kind;
+    box->width = node->width;
+    box->height = node->height;
+    box->depth = node->depth;
+    box->node_start = node->value.list.node_start;
+    box->node_count = node->value.list.node_count;
+
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        struct hstex_hbox_builder *builder = engine->active_hbox_builder;
+        uint32_t *identifiers = builder->node_identifiers;
+        size_t count = builder->count - 1U;
+        builder->count = 0U;
+        builder->width = 0;
+        builder->height = 0;
+        builder->depth = 0;
+        for (size_t index = 0U; index < count; ++index) {
+            if (append_hbox_item(engine, identifiers[index], error,
+                                 error_capacity) != 0) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+    struct hstex_vbox_builder *builder = engine->active_vbox_builder;
+    uint32_t *identifiers = builder->node_identifiers;
+    size_t count = builder->count - 1U;
+    builder->count = 0U;
+    builder->extent = 0;
+    builder->trailing_depth = 0;
+    builder->width = 0;
+    for (size_t index = 0U; index < count; ++index) {
+        if (append_vbox_item(engine, identifiers[index], error,
+                             error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* TeX's <box>: an explicit \hbox or \vbox, or a register fetched with \box,
@@ -8571,7 +8702,16 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
         return scan_hbox(engine, box, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_VBOX) {
-        return scan_vbox(engine, box, error, error_capacity);
+        return scan_vbox(engine, false, box, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_VTOP) {
+        return scan_vbox(engine, true, box, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_VSPLIT) {
+        return scan_vsplit(engine, box, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_LAST_BOX) {
+        return scan_last_box(engine, box, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_BOX ||
         meaning->command == HSTEX_COMMAND_COPY) {
@@ -8688,9 +8828,27 @@ static int execute_box_constructor(struct hstex_engine *engine,
                          "box construction does not accept prefixes");
     }
     struct hstex_box box;
-    int status = command == HSTEX_COMMAND_HBOX
-                     ? scan_hbox(engine, &box, error, error_capacity)
-                     : scan_vbox(engine, &box, error, error_capacity);
+    int status = 0;
+    switch (command) {
+    case HSTEX_COMMAND_HBOX:
+        status = scan_hbox(engine, &box, error, error_capacity);
+        break;
+    case HSTEX_COMMAND_VTOP:
+        status = scan_vbox(engine, true, &box, error, error_capacity);
+        break;
+    case HSTEX_COMMAND_VSPLIT:
+        status = scan_vsplit(engine, &box, error, error_capacity);
+        break;
+    case HSTEX_COMMAND_LAST_BOX:
+        status = scan_last_box(engine, &box, error, error_capacity);
+        break;
+    default:
+        status = scan_vbox(engine, false, &box, error, error_capacity);
+        break;
+    }
+    if (status == 0 && box.kind == HSTEX_BOX_VOID) {
+        return 0;
+    }
     return status == 0
                ? append_box_node(engine, &box, error, error_capacity)
                : -1;
@@ -12516,6 +12674,86 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
     return append_box_node(engine, &box, error, error_capacity);
 }
 
+/* A control space is the font's own interword glue, with no space-factor
+   adjustment; see docs/DECISIONS.md, control-space-and-italic. */
+static int execute_control_space(struct hstex_engine *engine, char *error,
+                                 size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         "a control space requires horizontal mode");
+    }
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    if (font == NULL || font->dimen_count < 4U) {
+        return set_error(error, error_capacity,
+                         "current font does not define interword spacing");
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = font->dimens[1],
+        .value.glue = {
+            .stretch = font->dimens[2],
+            .shrink = font->dimens[3],
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* \/ adds the italic correction of whatever character precedes it. */
+static int execute_italic_correction(struct hstex_engine *engine, char *error,
+                                     size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         "an italic correction requires horizontal mode");
+    }
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t correction = 0;
+    const struct hstex_node *node = current_list_last_node(engine);
+    if (node != NULL && (node->kind == HSTEX_NODE_CHARACTER ||
+                         node->kind == HSTEX_NODE_LIGATURE)) {
+        const struct hstex_font *font =
+            font_by_identifier(engine, node->value.character.font);
+        if (font != NULL && font->characters != NULL) {
+            correction =
+                font->characters[node->value.character.character & 0xFFU]
+                    .italic;
+        }
+    }
+    struct hstex_node kern = {
+        .kind = HSTEX_NODE_KERN,
+        .width = correction,
+    };
+    return append_hbox_node(engine, &kern, error, error_capacity);
+}
+
+/* \char names a character by code; it joins the list like any other. */
+static int execute_char(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 255) {
+        return set_error(error, error_capacity, "bad character code (%d)",
+                         code);
+    }
+    if (engine->mode == HSTEX_MODE_VERTICAL) {
+        if (start_paragraph(engine, true, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return append_horizontal_character(engine, (uint8_t)code, error,
+                                       error_capacity);
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -14042,6 +14280,9 @@ handle_token:
             continue;
         case HSTEX_COMMAND_HBOX:
         case HSTEX_COMMAND_VBOX:
+        case HSTEX_COMMAND_VTOP:
+        case HSTEX_COMMAND_VSPLIT:
+        case HSTEX_COMMAND_LAST_BOX:
             if (execute_box_constructor(engine, meaning->command, error,
                                         error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -14114,6 +14355,21 @@ handle_token:
             engine->space_factor = factor;
             continue;
         }
+        case HSTEX_COMMAND_CONTROL_SPACE:
+            if (execute_control_space(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_ITALIC_CORRECTION:
+            if (execute_italic_correction(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_CHAR:
+            if (execute_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_INDENT:
             if (execute_indent(engine, meaning->value.integer != 0, error,
                                error_capacity) != 0) {
