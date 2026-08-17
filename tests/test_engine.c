@@ -908,6 +908,80 @@ static int test_alignments(void)
         "[12.0pt|1.0pt|2.0pt]");
 }
 
+/* Display math: the skips and penalties around it, the centring, and
+   \predisplaysize; see docs/DECISIONS.md, display-math. */
+static int test_display_math(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\scriptfont0=\\tenrm "
+        "\\scriptscriptfont0=\\tenrm "
+        "\\textfont1=\\tenmi \\scriptfont1=\\tenmi "
+        "\\scriptscriptfont1=\\tenmi "
+        "\\textfont2=\\tensy \\scriptfont2=\\tensy "
+        "\\scriptscriptfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont3=\\tenex "
+        "\\scriptscriptfont3=\\tenex "
+        "\\hsize=100pt \\parindent=0pt \\baselineskip=0pt \\lineskip=0pt "
+        "\\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\tolerance=10000 "
+        "\\parfillskip=0pt plus1fil "
+        "\\abovedisplayskip=3pt \\belowdisplayskip=4pt "
+        "\\abovedisplayshortskip=1pt \\belowdisplayshortskip=2pt "
+        "\\predisplaypenalty=101 \\postdisplaypenalty=102 \\tenrm "
+        "\\def\\K#1{\\vrule width#1 height1pt depth0pt}"
+        "\\def\\H#1{\\vrule width#1 height5pt depth0pt}"
+        "\\long\\def\\m#1{\\setbox0=\\vbox{#1}"
+        "[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* A line, the display between its skips, and a line after. */
+        "\\m{\\noindent\\K{20pt}$$\\H{30pt}$$\\K{10pt}\\par}"
+        "\\m{\\noindent\\K{20pt}\\par}"
+        /* No line before the display at all: no line box, short skips, and
+           the vbox is only as wide as the centred equation reaches. */
+        "\\m{\\noindent$$\\H{30pt}$$\\par}"
+        /* A short line before takes the short skips, a long one does not. */
+        "\\m{\\noindent\\K{5pt}$$\\H{30pt}$$\\K{10pt}\\par}"
+        "\\m{\\noindent\\K{95pt}$$\\H{30pt}$$\\K{10pt}\\par}"
+        /* An equation wider than the display is squeezed to fit. */
+        "\\m{\\noindent\\K{20pt}$$\\H{130pt}$$\\par}"
+        "\\m{\\noindent\\K{20pt}$$\\H{30pt}$$$$\\H{30pt}$$\\par}"
+        "\\m{\\noindent\\K{20pt}$$\\H{30pt}$$}"
+        /* The parameters the display sets for itself. */
+        "\\setbox0=\\vbox{\\noindent\\K{20pt}$$\\global\\dimen5=\\displaywidth "
+        "\\global\\dimen6=\\displayindent \\global\\dimen7=\\predisplaysize "
+        "\\global\\count5=\\ifinner1\\else0\\fi \\H{30pt}$$\\par}"
+        "[\\the\\dimen5|\\the\\dimen6|\\the\\dimen7|\\the\\count5]"
+        /* \predisplaysize reaches to the last visible node, plus two quads;
+           trailing glue does not count, and infinite glue before a visible
+           node makes it unknowable. */
+        "\\setbox0=\\vbox{\\noindent\\K{20pt}\\hskip7pt$$"
+        "\\global\\dimen7=\\predisplaysize \\H{30pt}$$\\par}[\\the\\dimen7]"
+        "\\setbox0=\\vbox{\\noindent\\K{20pt}\\hskip7pt\\K{3pt}$$"
+        "\\global\\dimen7=\\predisplaysize \\H{30pt}$$\\par}[\\the\\dimen7]"
+        "\\setbox0=\\vbox{\\noindent$$\\global\\dimen7=\\predisplaysize "
+        "\\H{30pt}$$\\par}[\\the\\dimen7]"
+        "\\setbox0=\\vbox{\\noindent\\K{20pt}\\hskip7pt plus1pt\\K{3pt}$$"
+        "\\global\\dimen7=\\predisplaysize \\H{30pt}$$\\par}[\\the\\dimen7]"
+        /* \postdisplaypenalty sits between the equation and the skip below,
+           and the equation box is its own natural width. */
+        "\\setbox0=\\vbox{\\noindent\\K{20pt}$$\\H{30pt}$$\\par}"
+        "\\setbox1=\\vbox{\\unvbox0 \\unskip \\global\\count5=\\lastpenalty "
+        "\\unpenalty \\global\\setbox2=\\lastbox}"
+        "[\\the\\count5|\\the\\wd2|\\the\\ht2]"
+        /* A formula between single shifts is inner; a display is not. */
+        "\\setbox0=\\hbox{$\\global\\count6=\\ifinner1\\else0\\fi x$}"
+        "\\setbox0=\\vbox{\\noindent$\\global\\count7=\\ifinner1\\else0\\fi "
+        "x$\\par}"
+        "[\\the\\count6|\\the\\count7]%",
+        "[100.0pt|14.0pt|0.0pt][100.0pt|1.0pt|0.0pt]"
+        "[65.0pt|8.0pt|0.0pt][100.0pt|10.0pt|0.0pt]"
+        "[100.0pt|14.0pt|0.0pt][100.0pt|13.0pt|0.0pt]"
+        "[100.0pt|21.0pt|0.0pt][100.0pt|13.0pt|0.0pt]"
+        "[100.0pt|0.0pt|40.00003pt|0][40.00003pt][50.00003pt]"
+        "[-16383.99998pt][50.00003pt][102|30.0pt|5.0pt][1|1]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1992,7 +2066,8 @@ int main(void)
         test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
-        test_math_scripts() != 0 || test_alignments() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_math_scripts() != 0 || test_alignments() != 0 ||
+        test_display_math() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

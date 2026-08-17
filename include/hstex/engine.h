@@ -745,6 +745,8 @@ struct hstex_align_row {
 /* The styles, numbered so that the odd ones are the cramped variants and the
    pair for one size is adjacent. Display style is not implemented. */
 enum hstex_math_style {
+    HSTEX_STYLE_DISPLAY = 0,
+    HSTEX_STYLE_DISPLAY_CRAMPED = 1,
     HSTEX_STYLE_TEXT = 2,
     HSTEX_STYLE_TEXT_CRAMPED = 3,
     HSTEX_STYLE_SCRIPT = 4,
@@ -794,6 +796,9 @@ struct hstex_math_builder {
     uint8_t style;
     uint8_t slot;
     size_t slot_target;
+    /* Saved across the formula: inline math is an inner mode, so \ifinner is
+       true there and false in a display. */
+    bool outer_inner_mode;
 };
 
 enum hstex_node_kind {
@@ -1031,6 +1036,8 @@ struct hstex_engine {
     /* True while an alignment is reading its body, so that \cr and its
        relatives are recognised instead of being errors. */
     bool building_alignment;
+    /* True while the formula being read is a display. */
+    bool displayed_math;
     /* The math lists being built, innermost last; empty outside math. */
     struct hstex_math_builder *math_stack;
     size_t math_depth;

@@ -5092,8 +5092,26 @@ static int scan_math_glue(struct hstex_engine *engine,
     engine->inhibit_protected_expansion = false;
     hstex_token token = 0U;
     struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space(
-        engine, &token, &location, error, error_capacity);
+    /* The signs come first, and may stand in front of a muskip register just
+       as they may in front of a literal: LaTeX's \, is \mskip+\thinmuskip. */
+    int sign = 1;
+    enum hstex_engine_result result;
+    for (;;) {
+        result = expanded_next_non_space(engine, &token, &location, error,
+                                         error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN ||
+            !token_is_category(token, HSTEX_CAT_OTHER)) {
+            break;
+        }
+        uint8_t code = hstex_token_character_code(token);
+        if (code == (uint8_t)'-') {
+            sign = -sign;
+            continue;
+        }
+        if (code != (uint8_t)'+') {
+            break;
+        }
+    }
     int status = 0;
     if (result != HSTEX_ENGINE_TOKEN) {
         status = set_error(error, error_capacity,
@@ -5118,6 +5136,11 @@ static int scan_math_glue(struct hstex_engine *engine,
         status = -1;
     } else {
         status = scan_math_glue_literal(engine, glue, error, error_capacity);
+    }
+    if (status == 0 && sign < 0) {
+        glue->width = -glue->width;
+        glue->stretch = -glue->stretch;
+        glue->shrink = -glue->shrink;
     }
     engine->inhibit_protected_expansion = previous_inhibition;
     return status;
@@ -8177,7 +8200,7 @@ static int execute_vrule(struct hstex_engine *engine, char *error,
     if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
         return -1;
     }
-    return append_hbox_node(engine, &rule, error, error_capacity);
+    return append_current_list_node(engine, &rule, error, error_capacity);
 }
 
 /* \hrule spans the width of the box that encloses it, and ends a paragraph
@@ -12845,11 +12868,24 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
 
 /* End a paragraph: the list is finished off and broken into lines, which join
    the vertical list. Only a paragraph that fits on one line is handled. */
-static int finish_paragraph(struct hstex_engine *engine, char *error,
-                            size_t error_capacity)
+/* Package the paragraph so far as one line. A paragraph with nothing in it
+   contributes no line at all, which is what the reference does and what
+   \noindent$$ depends on. */
+static int finish_paragraph_line(struct hstex_engine *engine,
+                                 struct hstex_box *out_line, char *error,
+                                 size_t error_capacity)
 {
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
+    }
+    if (engine->paragraph_builder == NULL ||
+        engine->paragraph_builder->count == 0U) {
+        engine->active_hbox_builder = NULL;
+        engine->mode = HSTEX_MODE_VERTICAL;
+        engine->inner_mode = false;
+        engine->building_paragraph = false;
+        engine->has_pending_character = false;
+        return 0;
     }
     struct hstex_node penalty = {
         .kind = HSTEX_NODE_PENALTY,
@@ -12934,7 +12970,16 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
     if (status != 0) {
         return -1;
     }
+    if (out_line != NULL) {
+        *out_line = box;
+    }
     return append_box_node(engine, &box, error, error_capacity);
+}
+
+static int finish_paragraph(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    return finish_paragraph_line(engine, NULL, error, error_capacity);
 }
 
 /* A horizontal command met in vertical mode starts an indented paragraph and
@@ -14038,6 +14083,230 @@ static int translate_math_list(struct hstex_engine *engine,
     return 0;
 }
 
+static int append_display_glue(struct hstex_engine *engine,
+                               struct hstex_glue glue, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+        },
+    };
+    return append_vbox_node(engine, &node, error, error_capacity);
+}
+
+/* The width the last line before a display reaches to, which decides whether
+   the display gets the short skips. Glue that can stretch or shrink before
+   the last visible node makes the width indeterminate. See
+   docs/DECISIONS.md, display-math. */
+static int32_t pre_display_size(struct hstex_engine *engine,
+                                const struct hstex_box *line, bool had_line)
+{
+    if (!had_line) {
+        return -HSTEX_MAX_DIMEN;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    int64_t reach = 0;
+    if (font != NULL && font->dimen_count >= 6U) {
+        reach += (int64_t)2 * font->dimens[5];
+    }
+    int64_t width = -(int64_t)HSTEX_MAX_DIMEN;
+    bool indeterminate = false;
+    for (uint32_t offset = 0U; offset < line->node_count; ++offset) {
+        size_t slot = (size_t)line->node_start + offset;
+        if (slot >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[slot];
+        if (identifier == 0U || identifier > engine->node_count) {
+            break;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        int32_t amount = packed_dimen(node->width);
+        switch (node->kind) {
+        case HSTEX_NODE_CHARACTER:
+        case HSTEX_NODE_LIGATURE:
+        case HSTEX_NODE_RULE:
+        case HSTEX_NODE_LIST:
+            if (indeterminate) {
+                return HSTEX_MAX_DIMEN;
+            }
+            reach += amount;
+            width = reach;
+            break;
+        case HSTEX_NODE_GLUE:
+            /* Only glue that can stretch or shrink without limit makes the
+               reach unknowable; finite glue just counts. */
+            if (node->value.glue.stretch_order != 0U ||
+                node->value.glue.shrink_order != 0U) {
+                indeterminate = true;
+            }
+            reach += amount;
+            break;
+        default:
+            reach += amount;
+            break;
+        }
+    }
+    if (width < -(int64_t)HSTEX_MAX_DIMEN) {
+        width = -(int64_t)HSTEX_MAX_DIMEN;
+    }
+    return (int32_t)width;
+}
+
+/* $$ in a paragraph ends the lines built so far, then sets the formula in
+   display style. */
+static int begin_display_math(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    struct hstex_box line = {0};
+    bool had_line = engine->paragraph_builder != NULL &&
+                    engine->paragraph_builder->count != 0U;
+    if (finish_paragraph_line(engine, &line, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t size = pre_display_size(engine, &line, had_line);
+    int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
+    if (assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_PRE_DISPLAY_SIZE,
+                               size, false, error, error_capacity) != 0 ||
+        assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_WIDTH,
+                               hsize, false, error, error_capacity) != 0 ||
+        assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_DISPLAY_INDENT, 0,
+                               false, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (begin_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
+                                 false, error, error_capacity) != 0 ||
+        push_math_list(engine, (uint8_t)HSTEX_STYLE_DISPLAY, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    engine->mode = HSTEX_MODE_MATH;
+    engine->inner_mode = false;
+    engine->displayed_math = true;
+    uint32_t every = engine->token_parameters[HSTEX_TOKEN_EVERY_DISPLAY];
+    if (every == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list = token_list_by_identifier(engine, every);
+    struct hstex_source_location location = {0};
+    if (list == NULL ||
+        hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "could not install everydisplay tokens");
+    }
+    return 0;
+}
+
+/* The closing $$ centres the formula in \displaywidth, surrounds it with the
+   display penalties and skips, and lets the paragraph carry on. */
+static int end_display_math(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_math_builder *list = current_math_list(engine);
+    if (list == NULL || engine->math_depth != 1U) {
+        return set_error(error, error_capacity,
+                         "a display closed inside a math group");
+    }
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &builder;
+    int status = translate_math_list(engine, list, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    struct hstex_box equation = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, false, false, 0, &equation,
+                               error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    pop_math_list(engine);
+    if (status != 0) {
+        return -1;
+    }
+    if (end_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->displayed_math = false;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = false;
+
+    int32_t width = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_WIDTH];
+    int32_t indent = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_INDENT];
+    /* An equation too wide for the display is squeezed to fit rather than
+       centred. */
+    if (equation.width > width) {
+        equation.width = width;
+    }
+    int32_t shift = (int32_t)(((int64_t)width - equation.width + 1) / 2);
+    int32_t before = engine->dimen_parameters[HSTEX_DIMEN_PRE_DISPLAY_SIZE];
+    bool roomy = (int64_t)shift + indent <= (int64_t)before;
+    struct hstex_glue above =
+        engine->glue_parameters[roomy ? HSTEX_GLUE_ABOVE_DISPLAY_SKIP
+                                      : HSTEX_GLUE_ABOVE_DISPLAY_SHORT_SKIP];
+    struct hstex_glue below =
+        engine->glue_parameters[roomy ? HSTEX_GLUE_BELOW_DISPLAY_SKIP
+                                      : HSTEX_GLUE_BELOW_DISPLAY_SHORT_SKIP];
+    struct hstex_node penalty = {
+        .kind = HSTEX_NODE_PENALTY,
+        .value.penalty =
+            engine->integer_parameters[HSTEX_INTEGER_PRE_DISPLAY_PENALTY],
+    };
+    if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
+        append_display_glue(engine, above, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = equation.width,
+        .height = equation.height,
+        .depth = equation.depth,
+        .shift = indent + shift,
+        .value.list = {
+            .node_start = equation.node_start,
+            .node_count = equation.node_count,
+            .box_kind = equation.kind,
+        },
+    };
+    penalty.value.penalty =
+        engine->integer_parameters[HSTEX_INTEGER_POST_DISPLAY_PENALTY];
+    if (append_vbox_node(engine, &node, error, error_capacity) != 0 ||
+        append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
+        append_display_glue(engine, below, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* The paragraph carries on, with no indentation and no \everypar, and a
+       space right after the display is ignored. */
+    if (engine->paragraph_builder == NULL) {
+        engine->paragraph_builder =
+            calloc(1U, sizeof(*engine->paragraph_builder));
+        if (engine->paragraph_builder == NULL) {
+            return set_error(error, error_capacity,
+                             "paragraph list allocation failed");
+        }
+    }
+    engine->paragraph_builder->count = 0U;
+    engine->paragraph_builder->width = 0;
+    engine->paragraph_builder->height = 0;
+    engine->paragraph_builder->depth = 0;
+    engine->active_hbox_builder = engine->paragraph_builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    engine->inner_mode = false;
+    engine->building_paragraph = true;
+    engine->space_factor = 1000;
+    engine->has_pending_character = false;
+    return skip_optional_space(engine, error, error_capacity);
+}
+
 /* Entering a formula opens a group, sets \fam to none, and inserts
    \everymath. The reference sets \fam before \everymath runs, so a token
    list may select a family for the whole formula. */
@@ -14058,6 +14327,9 @@ static int begin_math(struct hstex_engine *engine, char *error,
                        error_capacity) != 0) {
         return -1;
     }
+    /* A formula between single shifts is an inner mode. */
+    current_math_list(engine)->outer_inner_mode = engine->inner_mode;
+    engine->inner_mode = true;
     engine->mode = HSTEX_MODE_MATH;
     uint32_t every_math = engine->token_parameters[HSTEX_TOKEN_EVERY_MATH];
     if (every_math == 0U) {
@@ -14165,6 +14437,7 @@ static int end_math(struct hstex_engine *engine, char *error,
                          "a formula closed inside a math group");
     }
     engine->mode = HSTEX_MODE_HORIZONTAL;
+    engine->inner_mode = list->outer_inner_mode;
     int32_t surround = engine->dimen_parameters[HSTEX_DIMEN_MATH_SURROUND];
     int status = 0;
     if (surround != 0) {
@@ -16374,9 +16647,58 @@ handle_token:
                     }
                     continue;
                 }
-                if ((engine->mode == HSTEX_MODE_MATH
-                         ? end_math(engine, error, error_capacity)
-                         : begin_math(engine, error, error_capacity)) != 0) {
+                if (engine->mode == HSTEX_MODE_MATH) {
+                    /* A display closes on the second of two shifts. */
+                    if (engine->displayed_math) {
+                        hstex_token second = 0U;
+                        struct hstex_source_location where;
+                        if (raw_next(engine, &second, &where, error,
+                                     error_capacity) != HSTEX_ENGINE_TOKEN ||
+                            !token_is_effective_category(
+                                engine, second,
+                                (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
+                            (void)set_error(error, error_capacity,
+                                            "a display must be closed by $$");
+                            return HSTEX_ENGINE_ERROR;
+                        }
+                        if (end_display_math(engine, error, error_capacity) !=
+                            0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
+                        continue;
+                    }
+                    if (end_math(engine, error, error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
+                /* Two shifts in an outer paragraph open a display. */
+                if (!engine->inner_mode) {
+                    hstex_token second = 0U;
+                    struct hstex_source_location where;
+                    enum hstex_engine_result twice =
+                        raw_next(engine, &second, &where, error,
+                                 error_capacity);
+                    if (twice == HSTEX_ENGINE_ERROR) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    if (twice == HSTEX_ENGINE_TOKEN) {
+                        if (token_is_effective_category(
+                                engine, second,
+                                (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
+                            if (begin_display_math(engine, error,
+                                                   error_capacity) != 0) {
+                                return HSTEX_ENGINE_ERROR;
+                            }
+                            continue;
+                        }
+                        if (push_one(engine, second, where, error,
+                                     error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
+                    }
+                }
+                if (begin_math(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
@@ -17291,6 +17613,15 @@ handle_token:
                 (uint8_t)HSTEX_CAT_OTHER, (uint8_t)meaning->value.integer);
             goto handle_token;
         case HSTEX_COMMAND_MATH_CHAR_GIVEN:
+            /* A \mathchardef is an atom wherever a \mathchar would be. */
+            if (engine->mode == HSTEX_MODE_MATH) {
+                if (math_append_code(engine, meaning->value.integer, error,
+                                     error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+            return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_RADICAL:
         case HSTEX_COMMAND_MARKS:
         case HSTEX_COMMAND_MATH_PRIMITIVE:

@@ -75,8 +75,12 @@ every boundary, `\omit`, `\span`, `\noalign`, and the `&&` repeat. That is
 what `\begin{tabular}` needs, so the corpus now runs through `\maketitle`,
 the abstract and the table of contents and into its first chapter.
 
-Line breaking, display math, the page builder, the output routine, and PDF
-emission remain under construction. A paragraph wider than `\hsize` reports
+Display math is set too: `$$...$$` breaks the paragraph so far, centres the
+equation in `\displaywidth`, and chooses the short or long display skips
+from how far the line above reaches.
+
+Line breaking, the page builder, the output routine, and PDF emission remain
+under construction. A paragraph wider than `\hsize` reports
 an error rather than being set as one overfull line.
 
 ## Build
