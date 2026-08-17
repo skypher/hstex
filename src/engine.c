@@ -10997,6 +10997,33 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
                          const struct hstex_node *node)
 {
     uint8_t kind = node->value.whatsit.kind;
+    if (kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
+        static const char *const actions[4] = {"push", "pop", "set",
+                                               "current"};
+        uint8_t action = node->value.whatsit.action;
+        (void)fprintf(out, "\\pdfcolorstack %u %s",
+                      (unsigned int)node->value.whatsit.stream,
+                      actions[action > 3U ? 0U : action]);
+        if (action == 1U || action == 3U) {
+            return;
+        }
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        char ignored[256];
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) != 0) {
+            free(text);
+            return;
+        }
+        (void)fputs(" {", out);
+        if (text_count != 0U) {
+            (void)fwrite(text, 1U, text_count, out);
+        }
+        (void)fputc('}', out);
+        free(text);
+        return;
+    }
     static const char *const names[4] = {"write", "openout", "closeout",
                                          "special"};
     (void)fputc('\\', out);
@@ -11164,7 +11191,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
     }
     case HSTEX_NODE_KERN:
         (void)fputs("\\kern", out);
-        if (node->explicit_kern) {
+        if (node->explicit_kern || node->value.kern.margin == 3U) {
             (void)fputc(' ', out);
         }
         show_scaled(out, packed_dimen(node->width));
@@ -11172,6 +11199,8 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             (void)fputs(" (left margin)", out);
         } else if (node->value.kern.margin == 2U) {
             (void)fputs(" (right margin)", out);
+        } else if (node->value.kern.margin == 3U) {
+            (void)fputs(" (for accent)", out);
         }
         return;
     case HSTEX_NODE_PENALTY:
@@ -14503,14 +14532,19 @@ static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "a colour stack action was expected here");
     }
-    if (action == 1U) { /* pop */
-        if (stack->count != 0U) {
+    /* Whichever it is, the list gets a node saying so; see
+       docs/DECISIONS.md, colour-stack-nodes. */
+    if (action == 1U || action == 3U) {
+        if (action == 1U && stack->count != 0U) { /* pop */
             free(stack->values[--stack->count]);
         }
-        return 0;
-    }
-    if (action == 3U) { /* current: re-states the value, changing nothing */
-        return 0;
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_WHATSIT,
+            .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_COLOR_STACK,
+                              .stream = (uint8_t)number,
+                              .action = (uint8_t)action},
+        };
+        return append_current_list_node(engine, &node, error, error_capacity);
     }
     uint8_t *bytes = NULL;
     size_t count = 0U;
@@ -14519,18 +14553,46 @@ static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
         free(bytes);
         return -1;
     }
+    /* The text is expanded where it stands and kept as it was read, the way
+       a \special's is. */
+    struct token_vector tokens = {0};
+    for (size_t index = 0U; index < count; ++index) {
+        uint8_t category = bytes[index] == (uint8_t)' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
+        if (vector_push(&tokens,
+                        hstex_token_character(category, bytes[index]), error,
+                        error_capacity) != 0) {
+            vector_destroy(&tokens);
+            free(bytes);
+            return -1;
+        }
+    }
+    uint32_t stored = 0U;
+    if (store_token_list(engine, &tokens, &stored, error, error_capacity) !=
+        0) {
+        vector_destroy(&tokens);
+        free(bytes);
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_COLOR_STACK,
+                          .stream = (uint8_t)number,
+                          .action = (uint8_t)action,
+                          .tokens = stored},
+    };
     char *value = own_general_text(bytes, count);
     free(bytes);
     if (value == NULL) {
         return set_error(error, error_capacity,
                          "colour stack allocation failed");
     }
-    if (action == 2U) { /* set: replaces the top rather than growing */
-        if (stack->count != 0U) {
-            free(stack->values[stack->count - 1U]);
-            stack->values[stack->count - 1U] = value;
-            return 0;
-        }
+    if (action == 2U && stack->count != 0U) {
+        /* set: replaces the top rather than growing */
+        free(stack->values[stack->count - 1U]);
+        stack->values[stack->count - 1U] = value;
+        return append_current_list_node(engine, &node, error, error_capacity);
     }
     if (stack->count == stack->capacity) {
         size_t capacity = stack->capacity == 0U ? 8U : stack->capacity * 2U;
@@ -14544,7 +14606,7 @@ static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
         stack->capacity = capacity;
     }
     stack->values[stack->count++] = value;
-    return 0;
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 /* Unboxing appends a box's own list to the one being built and discards the
@@ -15122,10 +15184,13 @@ static int32_t protrusion_kern(struct hstex_engine *engine,
     if (factor == 0) {
         return 0;
     }
-    /* The reference rounds this product rather than truncating it. */
+    /* The reference rounds this product when the code is positive and
+       truncates it when the code is negative -- the routine it divides with
+       was never meant for a negative multiplier. See docs/DECISIONS.md,
+       character-protrusion. */
     int64_t product = (int64_t)font->dimens[5] * factor;
-    int64_t scaled = product >= 0 ? (product + 500) / 1000
-                                  : -((-product + 500) / 1000);
+    int64_t scaled = factor >= 0 ? (product + 500) / 1000
+                                 : -((-product) / 1000);
     return -(int32_t)scaled;
 }
 
@@ -21516,16 +21581,26 @@ static int execute_accent(struct hstex_engine *engine, char *error,
 
     struct hstex_char_metric under = font->characters[accented];
     int32_t lift = x_height - under.height;
-    int64_t delta = ((int64_t)under.width - accent.width) / 2 +
-                    ((int64_t)under.height - x_height) *
-                        (int64_t)slant / INT64_C(65536);
+    /* The reference works this out in one figure and rounds it once, so the
+       halving and the slant cannot each lose their own scaled point; see
+       docs/DECISIONS.md, accent-kerns. */
+    int64_t numerator =
+        INT64_C(65536) * ((int64_t)under.width - accent.width) +
+        2 * ((int64_t)under.height - x_height) * (int64_t)slant;
+    int64_t delta = numerator >= 0
+                        ? (numerator + INT64_C(65536)) / INT64_C(131072)
+                        : -((-numerator + INT64_C(65536)) / INT64_C(131072));
+    /* The two kerns an accent rides between are of a kind of their own, which
+       \showbox says so of; see docs/DECISIONS.md, accent-kerns. */
     struct hstex_node before = {
         .kind = HSTEX_NODE_KERN,
         .width = (int32_t)delta,
+        .value.kern = {.margin = 3U},
     };
     struct hstex_node after = {
         .kind = HSTEX_NODE_KERN,
         .width = (int32_t)(-(int64_t)accent.width - delta),
+        .value.kern = {.margin = 3U},
     };
     if (append_hbox_node(engine, &before, error, error_capacity) != 0) {
         return -1;
@@ -21743,9 +21818,10 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     if (kind == (uint8_t)HSTEX_WHATSIT_CLOSE_OUT) {
         return close_write_stream(engine, stream, error, error_capacity);
     }
-    if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL) {
-        /* Nothing carries a \special yet: there is no page description to
-           put it in. See docs/DECISIONS.md, whatsits. */
+    if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL ||
+        kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
+        /* Nothing carries a \special or a colour yet: there is no page
+           description to put it in. See docs/DECISIONS.md, whatsits. */
         return 0;
     }
     uint8_t *bytes = NULL;

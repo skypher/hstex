@@ -1909,6 +1909,100 @@ static int test_breaking_inside_a_ligature(void)
         "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
 }
 
+/* An accent rides between two kerns of a kind of their own, worked out in
+   one figure and rounded once; see docs/DECISIONS.md, accent-kerns. */
+static int test_accent_kerns(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=3 \\showboxbreadth=30"
+        " \\hbadness=10000 \\hfuzz=1000pt \\font\\f=cmr10 \\f \\"
+        "message{[a]}\\setbox0=\\hbox{\\accent19 e}\\showbox0 \\"
+        "message{[b]}\\setbox0=\\hbox{\\accent23 o}\\showbox0 \\"
+        "message{[c]}\\setbox0=\\hbox{x\\accent19 ey}\\showbox0"
+        " \\font\\i=cmti10 \\font\\s=cmsl10 \\i \\message{[a]}\\"
+        "setbox0=\\hbox{\\accent19 e}\\showbox0 \\message{[b]}\\"
+        "setbox0=\\hbox{\\accent23 o}\\showbox0 \\message{[c]}\\"
+        "setbox0=\\hbox{\\accent19 A}\\showbox0 \\s \\message{["
+        "d]}\\setbox0=\\hbox{\\accent19 e}\\showbox0 \\message{"
+        "[e]}\\setbox0=\\hbox{\\accent127 A}\\showbox0 \\messag"
+        "e{[f \\the\\fontdimen1\\i|\\the\\fontdimen5\\i]}%",
+        "[a]> \\box0=\n\\hbox(6.94444+0.0)x4.44444\n.\\kern -0."
+        "27779 (for accent)\n.\\f ^^S\n.\\kern -4.72223 (for ac"
+        "cent)\n.\\f e\n\n! OK.\n[b]> \\box0=\n\\hbox(6.94444+0"
+        ".0)x5.00002\n.\\kern -1.25 (for accent)\n.\\f ^^W\n.\\"
+        "kern -6.25002 (for accent)\n.\\f o\n\n! OK.\n[c]> \\bo"
+        "x0=\n\\hbox(6.94444+1.94444)x15.00005\n.\\f x\n.\\kern"
+        " -0.27779 (for accent)\n.\\f ^^S\n.\\kern -4.72223 (fo"
+        "r accent)\n.\\f e\n.\\f y\n\n! OK.\n[a]> \\box0=\n\\hb"
+        "ox(6.94444+0.0)x4.59996\n.\\kern -0.25557 (for accent)"
+        "\n.\\i ^^S\n.\\kern -4.85551 (for accent)\n.\\i e\n\n!"
+        " OK.\n[b]> \\box0=\n\\hbox(6.94444+0.0)x5.11108\n.\\ke"
+        "rn -1.60092 (for accent)\n.\\i ^^W\n.\\kern -6.71199 ("
+        "for accent)\n.\\i o\n\n! OK.\n[c]> \\box0=\n\\hbox(9.4"
+        "7221+0.0)x7.43329\n.\\kern 1.79305 (for accent)\n.\\hb"
+        "ox(6.94444+0.0)x5.11108, shifted -2.52777\n..\\i ^^S\n"
+        ".\\kern -6.90413 (for accent)\n.\\i A\n\n! OK.\n[d]> \\"
+        "box0=\n\\hbox(6.94444+0.0)x4.44444\n.\\kern -0.27779 ("
+        "for accent)\n.\\s ^^S\n.\\kern -4.72223 (for accent)\n"
+        ".\\s e\n\n! OK.\n[e]> \\box0=\n\\hbox(9.20636+0.0)x7.5"
+        "0002\n.\\kern 1.67131 (for accent)\n.\\hbox(6.67859+0."
+        "0)x5.00002, shifted -2.52777\n..\\s ^^?\n.\\kern -6.67"
+        "133 (for accent)\n.\\s A\n\n! OK.\n[f 0.25pt|4.30554pt"
+        "]");
+}
+
+/* A negative protrusion code is truncated where a positive one is rounded;
+   see docs/DECISIONS.md, character-protrusion. */
+static int test_protrusion_of_a_negative_code(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=40"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=40pt \\parinden"
+        "t=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplim"
+        "it=0pt \\parfillskip=0pt plus1fil \\leftskip=0pt \\rig"
+        "htskip=0pt \\tolerance=10000 \\pretolerance=-1 \\boxma"
+        "xdepth=16383.99998pt \\spaceskip=4pt \\pdfprotrudechar"
+        "s=1 \\lpcode\\f`\\A=-2 \\rpcode\\f`\\B=-2 \\lpcode\\f`"
+        "\\C=2 \\rpcode\\f`\\D=2 \\message{[neg]}\\setbox1=\\vb"
+        "ox{\\noindent AB\\par}\\showbox1 \\message{[pos]}\\set"
+        "box1=\\vbox{\\noindent CD\\par}\\showbox1%",
+        "[neg]> \\box1=\n\\vbox(6.83331+0.0)x40.0\n.\\hbox(6.83"
+        "331+0.0)x40.0, glue set 25.37665fil\n..\\kern0.01999 ("
+        "left margin)\n..\\f A\n..\\f B\n..\\penalty 10000\n..\\"
+        "kern0.01999 (right margin)\n..\\glue(\\parfillskip) 0."
+        "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n[po"
+        "s]> \\box1=\n\\vbox(6.83331+0.0)x40.0\n.\\hbox(6.83331"
+        "+0.0)x40.0, glue set 25.17888fil\n..\\kern-0.02 (left "
+        "margin)\n..\\f C\n..\\f D\n..\\penalty 10000\n..\\kern"
+        "-0.02 (right margin)\n..\\glue(\\parfillskip) 0.0 plus"
+        " 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
+/* \\pdfcolorstack leaves a node behind saying what it did; see
+   docs/DECISIONS.md, colour-stack-nodes. */
+static int test_colour_stack_nodes(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=3 \\showboxbreadth=30"
+        " \\hbadness=10000 \\hfuzz=1000pt \\font\\f=cmr10 \\f \\"
+        "pdfoutput=1 \\pdfcolorstackinit page direct {0 g 0 G} "
+        "\\message{[a]}\\setbox0=\\hbox{a\\pdfcolorstack0 push "
+        "{1 0 0 rg}b\\pdfcolorstack0 pop c}\\showbox0 \\message"
+        "{[b]}\\setbox0=\\hbox{a\\pdfcolorstack0 set {0 g}b}\\s"
+        "howbox0 \\message{[c]}\\setbox0=\\hbox{a\\pdfcolorstac"
+        "k0 current b}\\showbox0 \\message{[t \\the\\lastnodety"
+        "pe]}%",
+        "[a]> \\box0=\n\\hbox(6.94444+0.0)x18.33336\n.\\f a\n.\\"
+        "pdfcolorstack 0 push {1 0 0 rg}\n.\\f b\n.\\pdfcolorst"
+        "ack 0 pop\n.\\glue 3.33333 plus 1.66666 minus 1.11111\n"
+        ".\\f c\n\n! OK.\n[b]> \\box0=\n\\hbox(6.94444+0.0)x10."
+        "55559\n.\\f a\n.\\pdfcolorstack 0 set {0 g}\n.\\f b\n\n"
+        "! OK.\n[c]> \\box0=\n\\hbox(6.94444+0.0)x13.88892\n.\\"
+        "f a\n.\\pdfcolorstack 0 current\n.\\glue 3.33333 plus "
+        "1.66666 minus 1.11111\n.\\f b\n\n! OK.\n[t 11]");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4757,6 +4851,8 @@ int main(void)
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||
         test_breaking_inside_a_ligature() != 0 ||
+        test_accent_kerns() != 0 || test_protrusion_of_a_negative_code() != 0 ||
+        test_colour_stack_nodes() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

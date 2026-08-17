@@ -969,6 +969,7 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_OPEN_OUT,
     HSTEX_WHATSIT_CLOSE_OUT,
     HSTEX_WHATSIT_SPECIAL,
+    HSTEX_WHATSIT_COLOR_STACK,
 };
 
 struct hstex_node {
@@ -1036,18 +1037,21 @@ struct hstex_node {
             bool after;
         } math;
         struct {
-            /* Whether this kern is one the line breaker put at a margin so
-               that a character may stick out past it: 0 for no, 1 for the
-               left margin, 2 for the right. See docs/DECISIONS.md,
-               character-protrusion. */
+            /* What this kern is for, when it is for anything in
+               particular: 1 and 2 for the two margins a character may stick
+               out past, 3 for the pair an accent rides between. See
+               docs/DECISIONS.md, character-protrusion and accent-kerns. */
             uint8_t margin;
         } kern;
         struct {
             /* An enum hstex_whatsit_kind. */
             uint8_t kind;
             /* The stream the reference stores: 0..15 as given, 16 for any
-               larger number, 17 for a negative one. */
+               larger number, 17 for a negative one. For a colour stack this
+               is the stack's number instead, and `action` says which of the
+               four things is being done to it. */
             uint8_t stream;
+            uint8_t action;
             /* The unexpanded text of a \write, the already expanded text of
                a \special, or the file name of an \openout. */
             uint32_t tokens;
