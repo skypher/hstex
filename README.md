@@ -111,14 +111,16 @@ the way the reference sets them, `\output` runs in a group of its own, and
 corpus.
 
 What `\shipout` does not do yet is write anything: there is no page
-description, so no PDF. Insertions, marks and hyphenation are still to
-come.
+description, so no PDF. Insertions, marks and hyphenation are still to come.
+The corpus none the less comes to 2,303 pages against `pdflatex`'s 2,335,
+which is as close as it can be while paragraphs are set without
+hyphenation.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
-23 seconds, and the whole corpus about 107, against `pdflatex`'s 41 seconds
+23 seconds, and the whole corpus about 109, against `pdflatex`'s 41 seconds
 for the same source with a prebuilt format and an 11 MB PDF at the end. A
 large part of that is allocation: a definition is a fresh record every time,
-so the bootstrap alone leaves 417,000 of them and the corpus 7.7 million.
+so the bootstrap alone leaves 417,000 of them and the corpus 7.9 million.
 Nothing has been tuned yet; correctness came first.
 
 ## Build

@@ -272,10 +272,10 @@ static int run_ini(const char *path)
         status = 1;
     }
     if (status == 0) {
-        (void)printf("path=%s output_tokens=%zu symbols=%zu macros=%zu\n", path,
-                     output_tokens,
-                     engine.lexical_state.symbols.entry_count,
-                     engine.macro_count);
+        (void)printf(
+            "path=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu\n",
+            path, engine.shipped_pages, output_tokens,
+            engine.lexical_state.symbols.entry_count, engine.macro_count);
     }
     hstex_engine_destroy(&engine);
     return status;
@@ -345,10 +345,10 @@ static int run_latex(const char *format_path, const char *document_path)
     int status =
         drain_engine(&engine, document_path, &document_output_tokens);
     if (status == 0) {
-        (void)printf("document=%s output_tokens=%zu symbols=%zu macros=%zu\n",
-                     document_path, document_output_tokens,
-                     engine.lexical_state.symbols.entry_count,
-                     engine.macro_count);
+        (void)printf(
+            "document=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu\n",
+            document_path, engine.shipped_pages, document_output_tokens,
+            engine.lexical_state.symbols.entry_count, engine.macro_count);
     }
     hstex_engine_destroy(&engine);
     return status;
