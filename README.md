@@ -51,11 +51,21 @@ The benchmark corpus loads its full package stack — `geometry`, `amsmath`,
 ```
 
 That needed pdfTeX's regular-expression and string-escape primitives and the
-font identifier reported by `\the\font`. Execution currently stops in the
-corpus preamble, before any typesetting.
+font identifier reported by `\the\font`.
 
-Paragraph breaking, the page builder, the output routine, and PDF emission
-remain under construction.
+Typesetting has started. Characters carry the font's ligature and kerning
+program, interword glue follows the space factor, and a horizontal command
+met in vertical mode begins an indented paragraph the way the reference does:
+the token is put back so that `\everypar` runs before the command scans its
+own operands. Box bodies are executed on the live input and end when the group
+they opened ends, so a box may be opened by one macro and closed by an
+`\egroup` another produces — the shape LaTeX's colour, minipage and parbox
+commands are built on. The corpus now runs through `\maketitle` and into the
+abstract, and stops at `\halign`.
+
+Line breaking, math mode, alignments, the page builder, the output routine,
+and PDF emission remain under construction. A paragraph wider than `\hsize`
+reports an error rather than being set as one overfull line.
 
 ## Build
 
