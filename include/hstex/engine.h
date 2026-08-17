@@ -598,6 +598,7 @@ enum hstex_save_kind {
     HSTEX_SAVE_AFTER_GROUP,
     HSTEX_SAVE_MATH_FONT,
     HSTEX_SAVE_PAR_SHAPE,
+    HSTEX_SAVE_FONT,
 };
 
 struct hstex_glue {
@@ -1109,6 +1110,9 @@ struct hstex_engine {
     size_t font_count;
     size_t font_capacity;
     uint32_t current_font;
+    /* The group that last chose the current font, so that leaving it puts
+       the font back; see docs/DECISIONS.md, the-current-font-is-grouped. */
+    uint32_t current_font_level;
     uint32_t *hyphen_roots;
     struct hstex_hyphen_trie_node *hyphen_nodes;
     size_t hyphen_node_count;

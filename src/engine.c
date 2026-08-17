@@ -18865,6 +18865,27 @@ static int execute_math_font(struct hstex_engine *engine, int32_t size,
     return 0;
 }
 
+/* Choosing a font is an assignment like any other: the group that made it
+   puts the old font back on the way out. See docs/DECISIONS.md,
+   the-current-font-is-grouped. */
+static int select_font(struct hstex_engine *engine, uint32_t identifier,
+                       char *error, size_t error_capacity)
+{
+    bool global = assignment_is_global(engine, engine->pending_global);
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_FONT, 0U, engine->current_font_level,
+                       (int32_t)engine->current_font, 0U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+        engine->current_font_level = engine->group_level;
+    } else {
+        engine->current_font_level = 0U;
+    }
+    engine->current_font = identifier;
+    return 0;
+}
+
 static int execute_math_char(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
@@ -21319,6 +21340,12 @@ static int end_group(struct hstex_engine *engine, char *error,
     if (engine->group_level == 0U) {
         return set_error(error, error_capacity, "extra end-group token");
     }
+    /* A character held back for the ligature program is taken into the list
+       before anything is restored, so that it is set in the font it was read
+       in. This is also why f{}i is not a ligature. */
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     uint32_t leaving_level = engine->group_level;
     while (engine->save_count != 0U &&
            engine->saves[engine->save_count - 1U].level == leaving_level) {
@@ -21347,6 +21374,12 @@ static int end_group(struct hstex_engine *engine, char *error,
             if (engine->parshape_level == leaving_level) {
                 engine->parshape = (uint32_t)save.previous.integer;
                 engine->parshape_level = save.previous_level;
+            }
+            break;
+        case HSTEX_SAVE_FONT:
+            if (engine->current_font_level == leaving_level) {
+                engine->current_font = (uint32_t)save.previous.integer;
+                engine->current_font_level = save.previous_level;
             }
             break;
         case HSTEX_SAVE_MATH_FONT: {
@@ -22820,7 +22853,10 @@ handle_token:
                 return (enum hstex_engine_result)set_error(
                     error, error_capacity, "invalid font meaning");
             }
-            engine->current_font = (uint32_t)meaning->value.integer;
+            if (select_font(engine, (uint32_t)meaning->value.integer, error,
+                            error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
             if (finish_assignment(engine, 0, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }

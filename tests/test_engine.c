@@ -1054,6 +1054,47 @@ static int test_whatsits(void)
     return status;
 }
 
+/* The current font is restored on the way out of a group, and the character
+   held back for the ligature program is taken in before that happens. See
+   docs/DECISIONS.md, the-current-font-is-grouped. */
+static int test_the_current_font_is_grouped(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=3 \\showboxbreadth=20 "
+        "\\hbadness=10000 \\font\\f=cmr10 \\font\\g=cmr10 at 20pt \\f "
+        "\\setbox0=\\hbox{fi}\\showbox0 "
+        "\\setbox0=\\hbox{f{}i}\\showbox0 "
+        "\\setbox0=\\hbox{A{\\g A}A}\\showbox0 "
+        "\\setbox0=\\hbox{{\\g A}}\\showbox0 "
+        "\\dimen0=1em \\message{[em \\the\\dimen0]}"
+        "{\\g }\\dimen0=1em \\message{[em \\the\\dimen0]}"
+        "{\\global\\g}\\dimen0=1em \\message{[em \\the\\dimen0]}%",
+        "> \\box0=\n"
+        "\\hbox(6.94444+0.0)x5.55557\n"
+        ".\\f ^^L (ligature fi)\n"
+        "\n"
+        "! OK.\n"
+        "> \\box0=\n"
+        "\\hbox(6.94444+0.0)x5.83336\n"
+        ".\\f f\n"
+        ".\\f i\n"
+        "\n"
+        "! OK.\n"
+        "> \\box0=\n"
+        "\\hbox(13.66664+0.0)x30.00006\n"
+        ".\\f A\n"
+        ".\\g A\n"
+        ".\\f A\n"
+        "\n"
+        "! OK.\n"
+        "> \\box0=\n"
+        "\\hbox(13.66664+0.0)x15.00003\n"
+        ".\\g A\n"
+        "\n"
+        "! OK.\n"
+        "[em 10.00002pt][em 10.00002pt][em 20.00005pt]");
+}
+
 /* Glue, kerns and penalties in front of the first box of a page are thrown
    away, and a whatsit is not: it joins the page and leaves it empty. See
    docs/DECISIONS.md, whatsits-on-an-empty-page. */
@@ -3752,6 +3793,7 @@ int main(void)
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
         test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
+        test_the_current_font_is_grouped() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
