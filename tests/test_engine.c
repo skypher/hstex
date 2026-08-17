@@ -1786,9 +1786,12 @@ static int test_conditionals_across_boxes(void)
         "ue\\R{5}\\fi\\cr}}[5|\\the\\wd0|\\the\\ht0]\\setbox0=\\vbo"
         "x{\\halign{\\hbox to30pt{#\\hfil}\\cr\\iffalse\\R{9}\\else"
         "\\R{7}\\fi\\cr}}[6|\\the\\wd0|\\the\\ht0]\\setbox0=\\hbox{"
-        "\\iftrue\\hbox{\\R{8}\\fi}}[7|\\the\\wd0]%",
+        "\\iftrue\\hbox{\\R{8}\\fi}}[7|\\the\\wd0]\\setbox0=\\vbox{"
+        "\\halign{\\hbox to30pt{#\\hfil}\\cr\\R{5}\\ifdim1pt>0pt\\R"
+        "{2}\\cr\\else\\R{9}\\cr\\fi\\R{4}\\cr}}[8|\\the\\wd0|\\the"
+        "\\ht0]%",
         "[1|5.0pt][2|6.0pt][3|3.0pt][4|4.0pt][5|30.0pt|1.0pt][6|30."
-        "0pt|1.0pt][7|8.0pt]");
+        "0pt|1.0pt][7|8.0pt][8|30.0pt|2.0pt]");
 }
 
 /* \radical, and the math codes a letter and a digit start with; see

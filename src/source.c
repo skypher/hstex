@@ -231,6 +231,12 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
     return 0;
 }
 
+bool hstex_source_at_boundary(const struct hstex_source_stack *stack)
+{
+    return stack != NULL && stack->count != 0U &&
+           stack->frames[stack->count - 1U].kind == HSTEX_SOURCE_BOUNDARY;
+}
+
 int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
                               size_t error_capacity)
 {

@@ -19974,15 +19974,20 @@ enum hstex_engine_result hstex_engine_next_output(
             if (engine->group_stop_hit) {
                 return result;
             }
+            /* A group or a conditional may be opened on one side of a
+               box or an alignment entry and closed on the other -- LaTeX's
+               \\[2mm] in a table ends the row from inside an \\ifdim -- so
+               neither is checked where the reading stops at a boundary
+               rather than at the end of everything. See
+               docs/DECISIONS.md, conditionals-across-boxes. */
+            if (hstex_source_at_boundary(&engine->sources)) {
+                return result;
+            }
             if (engine->group_level != engine->output_group_floor) {
                 (void)set_error(error, error_capacity,
                                 "end of input inside a group");
                 return HSTEX_ENGINE_ERROR;
             }
-            /* A conditional opened before a box or an alignment entry may
-               be closed inside it -- amsmath's multline does exactly that --
-               so only one left open is an error. See docs/DECISIONS.md,
-               conditionals-across-boxes. */
             if (engine->conditional_count >
                 engine->output_conditional_floor) {
                 (void)set_error(error, error_capacity,

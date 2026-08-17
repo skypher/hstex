@@ -66,6 +66,10 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
                                    char *error, size_t error_capacity);
 int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
                                size_t error_capacity);
+/* True when the input has run down to a boundary rather than to nothing at
+   all: the reading is over, but the document is not. */
+bool hstex_source_at_boundary(const struct hstex_source_stack *stack);
+
 int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
                               size_t error_capacity);
 int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
