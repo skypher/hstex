@@ -1336,6 +1336,80 @@ static int test_math_nodes(void)
         "plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
 }
 
+/* A word set with a ligature in it is still hyphenated, and a word followed
+   by a discretionary is not hyphenated at all; see docs/DECISIONS.md,
+   hyphenation. */
+static int test_hyphenating_ligatures(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=20"
+        "0 \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\v"
+        "fuzz=1000pt \\font\\f=cmr10 \\f \\hyphenchar\\f=45 \\h"
+        "size=200pt \\parindent=0pt \\leftskip=0pt \\rightskip="
+        "0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplimit"
+        "=0pt \\parfillskip=0pt plus1fil \\tolerance=10000 \\pr"
+        "etolerance=-1 \\boxmaxdepth=16383.99998pt \\linepenalt"
+        "y=10 \\adjdemerits=10000 \\doublehyphendemerits=10000 "
+        "\\finalhyphendemerits=5000 \\clubpenalty=0 \\widowpena"
+        "lty=0 \\interlinepenalty=0 \\brokenpenalty=0 \\hyphenp"
+        "enalty=50 \\exhyphenpenalty=50 \\uchyph=0 \\lefthyphen"
+        "min=1 \\righthyphenmin=1 \\spaceskip=4pt \\sfcode`\\.="
+        "1000 \\lccode`\\a=`\\a \\lccode`\\c=`\\c \\lccode`\\e="
+        "`\\e \\lccode`\\f=`\\f \\lccode`\\i=`\\i \\lccode`\\l="
+        "`\\l \\lccode`\\n=`\\n \\lccode`\\o=`\\o \\lccode`\\x="
+        "`\\x \\patterns{co1fi1nal 1x1} \\message{[lig]}\\setbo"
+        "x0=\\vbox{\\noindent xx cofinal\\par}\\showbox0 \\mess"
+        "age{[hyphen]}\\setbox0=\\vbox{\\noindent xx cofinal-x\\"
+        "par}\\showbox0%",
+        "[lig]> \\box0=\n\\vbox(6.94444+0.0)x200.0\n.\\hbox(6.9"
+        "4444+0.0)x200.0, glue set 157.111fil\n..\\f x\n..\\f x"
+        "\n..\\glue(\\spaceskip) 4.0\n..\\f c\n..\\f o\n..\\dis"
+        "cretionary\n...\\f -\n..\\f ^^L (ligature fi)\n..\\dis"
+        "cretionary\n...\\f -\n..\\f n\n..\\f a\n..\\f l\n..\\p"
+        "enalty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n"
+        "..\\glue(\\rightskip) 0.0\n\n! OK.\n[hyphen]> \\box0=\n"
+        "\\vbox(6.94444+0.0)x200.0\n.\\hbox(6.94444+0.0)x200.0,"
+        " glue set 148.49986fil\n..\\f x\n..\\f x\n..\\glue(\\s"
+        "paceskip) 4.0\n..\\f c\n..\\f o\n..\\f ^^L (ligature f"
+        "i)\n..\\f n\n..\\f a\n..\\f l\n..\\f -\n..\\discretion"
+        "ary\n..\\f x\n..\\penalty 10000\n..\\glue(\\parfillski"
+        "p) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n");
+}
+
+/* A line that breaks at a kern keeps it with no width left, and glue after
+   an explicit kern is not a place to break at all; see docs/DECISIONS.md,
+   what-a-line-keeps-of-its-break. */
+static int test_what_a_line_keeps_of_its_break(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=60"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=40pt \\parinden"
+        "t=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplim"
+        "it=0pt \\parfillskip=0pt plus1fil \\leftskip=0pt \\rig"
+        "htskip=0pt \\tolerance=10000 \\pretolerance=-1 \\boxma"
+        "xdepth=16383.99998pt \\spaceskip=4pt \\pdfprotrudechar"
+        "s=0 \\message{[kern]}\\setbox0=\\vbox{\\noindent aaaa\\"
+        "kern20pt\\hskip0pt aaaa\\par}\\showbox0 \\message{[glu"
+        "e]}\\setbox0=\\vbox{\\noindent aaaa\\hskip20pt aaaa\\p"
+        "ar}\\showbox0%",
+        "[kern]> \\box0=\n\\vbox(16.30554+0.0)x40.0\n.\\hbox(4."
+        "30554+0.0)x40.0\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n."
+        ".\\kern 0.0\n..\\glue(\\rightskip) 0.0\n.\\glue(\\base"
+        "lineskip) 7.69446\n.\\hbox(4.30554+0.0)x40.0, glue set"
+        " 19.99994fil\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\"
+        "penalty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil"
+        "\n..\\glue(\\rightskip) 0.0\n\n! OK.\n[glue]> \\box0=\n"
+        "\\vbox(16.30554+0.0)x40.0\n.\\hbox(4.30554+0.0)x40.0\n"
+        "..\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\glue(\\rightsk"
+        "ip) 0.0\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4.30"
+        "554+0.0)x40.0, glue set 19.99994fil\n..\\f a\n..\\f a\n"
+        "..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\parfil"
+        "lskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n!"
+        " OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4170,7 +4244,8 @@ int main(void)
         test_parskip_in_the_outermost_list() != 0 ||
         test_character_protrusion() != 0 ||
         test_the_discretionary_after_an_explicit_hyphen() != 0 ||
-        test_math_nodes() != 0 ||
+        test_math_nodes() != 0 || test_hyphenating_ligatures() != 0 ||
+        test_what_a_line_keeps_of_its_break() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

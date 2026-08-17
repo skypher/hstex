@@ -15016,7 +15016,10 @@ static bool node_is_discardable(const struct hstex_node *node)
     case HSTEX_NODE_MATH:
         return true;
     case HSTEX_NODE_KERN:
-        return !node->explicit_kern;
+        /* A kern the document asked for is thrown away at the start of a
+           line; one the font asked for belongs to the text and stays. See
+           docs/DECISIONS.md, what-a-line-keeps-of-its-break. */
+        return node->explicit_kern;
     default:
         return false;
     }
@@ -15133,6 +15136,30 @@ static int32_t list_run_width(const struct hstex_engine *engine, uint32_t start,
         width += packed_dimen(engine->nodes[identifier - 1U].width);
     }
     return (int32_t)(uint32_t)(uint64_t)width;
+}
+
+/* Whether glue right after this node is a place the line may break. Glue,
+   a penalty, a formula's fence and a kern the document asked for are not
+   things a line may end just after; a kern the font asked for is. See
+   docs/DECISIONS.md, what-a-line-keeps-of-its-break. */
+static bool precedes_glue_break(const struct hstex_node *node)
+{
+    switch (node->kind) {
+    case HSTEX_NODE_GLUE:
+    case HSTEX_NODE_PENALTY:
+    case HSTEX_NODE_MATH:
+        return false;
+    case HSTEX_NODE_KERN:
+        return !node->explicit_kern;
+    case HSTEX_NODE_CHARACTER:
+    case HSTEX_NODE_LIGATURE:
+    case HSTEX_NODE_LIST:
+    case HSTEX_NODE_RULE:
+    case HSTEX_NODE_DISCRETIONARY:
+    case HSTEX_NODE_WHATSIT:
+        return true;
+    }
+    return true;
 }
 
 static size_t line_start_after(const struct hstex_engine *engine,
@@ -15568,7 +15595,7 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                 return -1;
             }
         }
-        after_box = !node_is_discardable(node);
+        after_box = precedes_glue_break(node);
     }
     if (state->active_count == 0U) {
         *best = SIZE_MAX;
@@ -15684,7 +15711,9 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                                       error_capacity);
         }
         /* A line that ends at a discretionary keeps the node, emptied, and
-           the text that goes before the break follows it. */
+           the text that goes before the break follows it; one that ends at a
+           kern or at a formula's fence keeps that node with no width left.
+           See docs/DECISIONS.md, what-a-line-keeps-of-its-break. */
         bool broken = false;
         if (status == 0 && to < count) {
             uint32_t identifier = items[to];
@@ -15743,6 +15772,21 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                                 sizeof(*builder.node_identifiers));
                     builder.node_identifiers[trailing] = placed;
                 }
+            }
+        }
+        /* A line that ends at a kern or at a formula's fence keeps that node
+           with no width left, behind the protrusion kern. */
+        if (status == 0 && to < count) {
+            uint32_t identifier = items[to];
+            const struct hstex_node *at =
+                identifier != 0U && (size_t)identifier <= engine->node_count
+                    ? &engine->nodes[identifier - 1U]
+                    : NULL;
+            if (at != NULL && (at->kind == HSTEX_NODE_KERN ||
+                               at->kind == HSTEX_NODE_MATH)) {
+                struct hstex_node kept = *at;
+                kept.width = 0;
+                status = append_hbox_node(engine, &kept, error, error_capacity);
             }
         }
         if (status == 0) {
@@ -15844,7 +15888,8 @@ enum { HSTEX_MAX_HYPHENATED_WORD = 63 };
 
 struct hstex_word {
     uint8_t letters[HSTEX_MAX_HYPHENATED_WORD];
-    /* Where each letter's node sits in the paragraph. */
+    /* Where each letter's node sits in the paragraph. A ligature stands for
+       several letters, so several of these may name the same node. */
     size_t positions[HSTEX_MAX_HYPHENATED_WORD];
     size_t count;
     uint32_t font;
@@ -15852,12 +15897,52 @@ struct hstex_word {
     size_t end;
 };
 
+/* Takes the letters a node stands for: one for a character, and whatever a
+   ligature was made of. Returns false when the node is not part of a word.
+   See docs/DECISIONS.md, hyphenation. */
+static bool take_word_letters(struct hstex_engine *engine,
+                              const struct hstex_node *node, uint32_t font,
+                              struct hstex_word *word, size_t index)
+{
+    if (node->value.character.font != font) {
+        return false;
+    }
+    if (node->kind == HSTEX_NODE_CHARACTER) {
+        uint32_t code = node->value.character.character;
+        if (code >= 256U || engine->code_tables[1][code] == 0 ||
+            word->count >= (size_t)HSTEX_MAX_HYPHENATED_WORD) {
+            return false;
+        }
+        word->letters[word->count] = (uint8_t)code;
+        word->positions[word->count] = index;
+        ++word->count;
+        return true;
+    }
+    uint8_t originals = node->value.character.original_count;
+    if (originals == 0U ||
+        word->count + originals > (size_t)HSTEX_MAX_HYPHENATED_WORD) {
+        return false;
+    }
+    for (uint8_t item = 0U; item < originals; ++item) {
+        uint8_t code = node->value.character.originals[item];
+        if (engine->code_tables[1][code] == 0) {
+            return false;
+        }
+    }
+    for (uint8_t item = 0U; item < originals; ++item) {
+        word->letters[word->count] = node->value.character.originals[item];
+        word->positions[word->count] = index;
+        ++word->count;
+    }
+    return true;
+}
+
 /* Reads the word that begins somewhere at or after `from`, the way the
    reference looks for one: leading characters that are not letters are
    passed over, and the word itself is characters of one font whose \lccode
-   is not zero, with the font's own kerns allowed between them. Returns false
-   when there is no word to hyphenate here. See docs/DECISIONS.md,
-   hyphenation. */
+   is not zero, with the font's own kerns allowed between them and ligatures
+   standing for the letters they were made of. Returns false when there is no
+   word to hyphenate here. See docs/DECISIONS.md, hyphenation. */
 static bool read_hyphenatable_word(struct hstex_engine *engine,
                                    const uint32_t *items, size_t count,
                                    size_t from, struct hstex_word *word)
@@ -15874,8 +15959,13 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
             return false;
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        if (node->kind == HSTEX_NODE_CHARACTER) {
-            uint32_t code = node->value.character.character;
+        if (node->kind == HSTEX_NODE_CHARACTER ||
+            node->kind == HSTEX_NODE_LIGATURE) {
+            uint32_t code = node->kind == HSTEX_NODE_CHARACTER
+                                ? node->value.character.character
+                                : (node->value.character.original_count != 0U
+                                       ? node->value.character.originals[0]
+                                       : 256U);
             int32_t lower = code < 256U ? engine->code_tables[1][code] : 0;
             if (lower != 0) {
                 /* A word that starts with a capital is only hyphenated when
@@ -15902,21 +15992,17 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
         return false;
     }
     word->font = font;
-    while (index < count && word->count < (size_t)HSTEX_MAX_HYPHENATED_WORD) {
+    while (index < count) {
         uint32_t identifier = items[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             break;
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        if (node->kind == HSTEX_NODE_CHARACTER) {
-            uint32_t code = node->value.character.character;
-            if (node->value.character.font != font || code >= 256U ||
-                engine->code_tables[1][code] == 0) {
+        if (node->kind == HSTEX_NODE_CHARACTER ||
+            node->kind == HSTEX_NODE_LIGATURE) {
+            if (!take_word_letters(engine, node, font, word, index)) {
                 break;
             }
-            word->letters[word->count] = (uint8_t)code;
-            word->positions[word->count] = index;
-            ++word->count;
             word->end = index + 1U;
         } else if (node->kind == HSTEX_NODE_KERN && !node->explicit_kern) {
             /* A kern the font asked for stays inside the word. */
@@ -15929,8 +16015,8 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
         return false;
     }
     /* Nothing but ligatures, the font's own kerns and other characters may
-       follow a word that is going to be hyphenated; a box or a rule means
-       this is not really the end of one. */
+       follow a word that is going to be hyphenated; a box, a rule, a formula
+       or a discretionary means this is not a word to hyphenate at all. */
     for (size_t after = word->end; after < count; ++after) {
         uint32_t identifier = items[after];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
@@ -15949,10 +16035,12 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
         }
         if (node->kind == HSTEX_NODE_GLUE ||
             node->kind == HSTEX_NODE_PENALTY ||
-            node->kind == HSTEX_NODE_WHATSIT ||
-            node->kind == HSTEX_NODE_DISCRETIONARY) {
+            node->kind == HSTEX_NODE_WHATSIT) {
             break;
         }
+        /* A discretionary after the word -- the one an explicit hyphen
+           leaves behind, for instance -- means this is not a word to
+           hyphenate at all. */
         return false;
     }
     return true;
@@ -16057,9 +16145,14 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         }
         size_t letter = 0U;
         while (status == 0 && index < word.end) {
-            bool is_letter =
-                letter < word.count && word.positions[letter] == index;
-            bool wanted = is_letter && letter >= 1U && breaks[letter] != 0U;
+            /* How many of the word's letters this one node stands for; a
+               break inside a ligature is not one HSTeX can take. */
+            size_t here = 0U;
+            while (letter + here < word.count &&
+                   word.positions[letter + here] == index) {
+                ++here;
+            }
+            bool wanted = here != 0U && letter >= 1U && breaks[letter] != 0U;
             size_t previous = wanted ? word.positions[letter - 1U] : 0U;
             bool adjacent = wanted && previous + 1U == index;
             /* A kern the font put between the two letters is not there when
@@ -16122,9 +16215,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 break;
             }
             result[written++] = items[index];
-            if (is_letter) {
-                ++letter;
-            }
+            letter += here;
             ++index;
         }
     }
