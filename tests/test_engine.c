@@ -982,6 +982,62 @@ static int test_display_math(void)
         "[-16383.99998pt][50.00003pt][102|30.0pt|5.0pt][1|1]");
 }
 
+/* Math styles and \mathchoice; see docs/DECISIONS.md, math-choices. */
+static int test_math_choices(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 \\font\\sevenrm=cmr7 \\font\\sevenmi=cmmi7 "
+        "\\font\\sevensy=cmsy7 \\font\\fiverm=cmr5 \\font\\fivemi=cmmi5 "
+        "\\font\\fivesy=cmsy5 "
+        "\\textfont0=\\tenrm \\scriptfont0=\\sevenrm "
+        "\\scriptscriptfont0=\\fiverm "
+        "\\textfont1=\\tenmi \\scriptfont1=\\sevenmi "
+        "\\scriptscriptfont1=\\fivemi "
+        "\\textfont2=\\tensy \\scriptfont2=\\sevensy "
+        "\\scriptscriptfont2=\\fivesy "
+        "\\textfont3=\\tenex \\scriptfont3=\\tenex "
+        "\\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu "
+        "\\scriptspace=.5pt \\nullfont "
+        "\\def\\O{\\mathchar\"0030 }"
+        "\\def\\m#1{\\setbox0=\\hbox{$#1$}[\\the\\wd0|\\the\\ht0]}"
+        /* A style command moves the style of everything after it. */
+        "\\m{\\O}\\m{\\scriptstyle\\O}\\m{\\scriptscriptstyle\\O}"
+        "\\m{\\O\\scriptstyle\\O}\\m{\\displaystyle\\O}\\m{\\textstyle\\O}"
+        /* \mathchoice keeps the branch the style in force asks for, and the
+           branch is set at that style. */
+        "\\m{\\mathchoice{\\O\\O\\O}{\\O\\O}{\\O}{}}"
+        "\\m{\\scriptstyle\\mathchoice{\\O\\O\\O}{\\O\\O}{\\O}{}}"
+        "\\m{\\O^{\\mathchoice{\\O\\O\\O}{\\O\\O}{\\O}{}}}"
+        "\\m{\\displaystyle\\mathchoice{\\O\\O\\O}{\\O\\O}{\\O}{}}"
+        "\\m{\\scriptscriptstyle"
+        "\\mathchoice{\\O\\O\\O}{\\O\\O}{\\O}{\\O\\O\\O\\O}}"
+        /* The branch is spliced, not boxed: a relation in it spaces as a
+           relation, exactly as \mathrel does. */
+        "\\m{\\O\\mathchoice{\\mathchar\"3030 }{\\mathchar\"3030 }"
+        "{\\mathchar\"3030 }{\\mathchar\"3030 }\\O}"
+        "\\m{\\O\\mathrel{\\O}\\O}"
+        /* A script mark after a style command uses the moved style. */
+        "\\m{\\scriptstyle\\O^\\O}\\m{\\O^{\\scriptstyle\\O}}"
+        /* Every branch is read, so every branch's side effects happen. */
+        "\\count0=0 "
+        "\\m{\\mathchoice{\\global\\advance\\count0 by1 \\O}"
+        "{\\global\\advance\\count0 by10 \\O}"
+        "{\\global\\advance\\count0 by100 \\O}"
+        "{\\global\\advance\\count0 by1000 \\O}}"
+        "[\\the\\count0]%",
+        "[5.00002pt|6.44444pt][3.98613pt|4.51111pt]"
+        "[3.40283pt|3.22221pt][8.98615pt|6.44444pt]"
+        "[5.00002pt|6.44444pt][5.00002pt|6.44444pt]"
+        "[10.00003pt|6.44444pt][3.98613pt|4.51111pt]"
+        "[9.48615pt|8.14003pt][15.00005pt|6.44444pt]"
+        "[13.61133pt|3.22221pt][20.55547pt|6.44444pt]"
+        "[20.55547pt|6.44444pt][7.88896pt|6.24pt]"
+        "[9.48615pt|8.14003pt][5.00002pt|6.44444pt][1111]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2067,7 +2123,7 @@ int main(void)
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
         test_math_scripts() != 0 || test_alignments() != 0 ||
-        test_display_math() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_display_math() != 0 || test_math_choices() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

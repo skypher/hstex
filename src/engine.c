@@ -1858,6 +1858,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"mathclose", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_CLOSE},
         {"mathpunct", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_PUNCT},
         {"mathinner", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_INNER},
+        {"displaystyle", HSTEX_COMMAND_MATH_STYLE,
+         (int32_t)HSTEX_STYLE_DISPLAY},
+        {"textstyle", HSTEX_COMMAND_MATH_STYLE, (int32_t)HSTEX_STYLE_TEXT},
+        {"scriptstyle", HSTEX_COMMAND_MATH_STYLE, (int32_t)HSTEX_STYLE_SCRIPT},
+        {"scriptscriptstyle", HSTEX_COMMAND_MATH_STYLE,
+         (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
+        {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
         {"cr", HSTEX_COMMAND_CR, 0},
         {"crcr", HSTEX_COMMAND_CR, 1},
@@ -13136,6 +13143,7 @@ static int push_math_list(struct hstex_engine *engine, uint8_t style,
     memset(builder, 0, sizeof(*builder));
     builder->forced_class = -1;
     builder->style = style;
+    builder->current_style = style;
     return 0;
 }
 
@@ -13535,12 +13543,16 @@ static int math_character_metric(struct hstex_engine *engine,
    font's ligature and kerning program, exactly as they would in text. */
 static int apply_math_ligatures(struct hstex_engine *engine,
                                 struct hstex_math_builder *builder,
-                                uint8_t size, char *error,
+                                uint8_t style, char *error,
                                 size_t error_capacity)
 {
+    uint8_t size = math_size_of_style(style);
     for (size_t index = 0U; index + 1U < builder->count;) {
         struct hstex_noad *left = &builder->noads[index];
         struct hstex_noad *right = &builder->noads[index + 1U];
+        if (left->kind == (uint8_t)HSTEX_NOAD_STYLE) {
+            size = math_size_of_style(left->atom_class);
+        }
         if (left->kind != (uint8_t)HSTEX_NOAD_ATOM ||
             right->kind != (uint8_t)HSTEX_NOAD_ATOM ||
             left->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
@@ -13962,13 +13974,19 @@ static int translate_math_list(struct hstex_engine *engine,
     uint8_t size = math_size_of_style(style);
     bool all_spacing = style < (uint8_t)HSTEX_STYLE_SCRIPT;
     resolve_binary_atoms(builder);
-    if (apply_math_ligatures(engine, builder, size, error, error_capacity) !=
+    if (apply_math_ligatures(engine, builder, style, error, error_capacity) !=
         0) {
         return -1;
     }
     int previous_class = -1;
     for (size_t index = 0U; index < builder->count; ++index) {
         struct hstex_noad *noad = &builder->noads[index];
+        if (noad->kind == (uint8_t)HSTEX_NOAD_STYLE) {
+            style = noad->atom_class;
+            size = math_size_of_style(style);
+            all_spacing = style < (uint8_t)HSTEX_STYLE_SCRIPT;
+            continue;
+        }
         if (noad->kind == (uint8_t)HSTEX_NOAD_NODE) {
             if (append_hbox_item(engine, noad->node, error, error_capacity) !=
                 0) {
@@ -14355,12 +14373,12 @@ static int begin_math_group(struct hstex_engine *engine, char *error,
 {
     struct hstex_math_builder *outer = current_math_list(engine);
     uint8_t style =
-        outer == NULL ? (uint8_t)HSTEX_STYLE_TEXT : outer->style;
-    if (outer != NULL) {
+        outer == NULL ? (uint8_t)HSTEX_STYLE_TEXT : outer->current_style;
+    if (outer != NULL && outer->choice_remaining == 0U) {
         if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_SUPERSCRIPT) {
-            style = math_superscript_style(outer->style);
+            style = math_superscript_style(outer->current_style);
         } else if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_SUBSCRIPT) {
-            style = math_subscript_style(outer->style);
+            style = math_subscript_style(outer->current_style);
         }
     }
     return push_math_list(engine, style, error, error_capacity);
@@ -14373,6 +14391,27 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
     if (inner == NULL || engine->math_depth < 2U) {
         return set_error(error, error_capacity,
                          "a math group closed outside a formula");
+    }
+    struct hstex_math_builder *outer = &engine->math_stack[engine->math_depth - 2U];
+    if (outer->choice_remaining != 0U) {
+        /* One branch of a \mathchoice. Every branch is read, so its side
+           effects happen; only the branch the style asks for is kept, and it
+           is spliced rather than boxed so that its atoms keep their classes. */
+        bool wanted = outer->choice_index == outer->current_style / 2U;
+        int status = 0;
+        if (wanted && inner->count != 0U) {
+            status = reserve_noads(outer, outer->count + inner->count, error,
+                                   error_capacity);
+            if (status == 0) {
+                memcpy(&outer->noads[outer->count], inner->noads,
+                       inner->count * sizeof(*inner->noads));
+                outer->count += inner->count;
+            }
+        }
+        ++outer->choice_index;
+        --outer->choice_remaining;
+        pop_math_list(engine);
+        return status;
     }
     /* One ordinary atom in braces is that atom: {x} carries scripts exactly
        as x does, however deeply the braces nest. */
@@ -14513,6 +14552,43 @@ static int execute_math_char(struct hstex_engine *engine, char *error,
                          "a math character is only allowed in a formula");
     }
     return math_append_code(engine, code, error, error_capacity);
+}
+
+/* A style command changes the style of everything after it in its list. */
+static int execute_math_style(struct hstex_engine *engine, int32_t style,
+                              char *error, size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_MATH) {
+        return set_error(error, error_capacity,
+                         "a math style is only allowed in a formula");
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_STYLE,
+        .atom_class = (uint8_t)style,
+    };
+    current_math_list(engine)->current_style = (uint8_t)style;
+    return math_append(engine, &noad, error, error_capacity);
+}
+
+/* \mathchoice reads four sub-formulas -- so all four are executed -- and
+   keeps the one the current style calls for, spliced into the list so that
+   its atoms space against their neighbours; see docs/DECISIONS.md,
+   math-choices. */
+static int execute_math_choice(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || builder == NULL) {
+        return set_error(error, error_capacity,
+                         "\\mathchoice is only allowed in a formula");
+    }
+    if (builder->choice_remaining != 0U) {
+        return set_error(error, error_capacity,
+                         "one \\mathchoice followed another");
+    }
+    builder->choice_remaining = 4U;
+    builder->choice_index = 0U;
+    return 0;
 }
 
 static int execute_math_class(struct hstex_engine *engine, int32_t class_code,
@@ -16957,6 +17033,17 @@ handle_token:
         case HSTEX_COMMAND_MATH_CLASS:
             if (execute_math_class(engine, meaning->value.integer, error,
                                    error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_STYLE:
+            if (execute_math_style(engine, meaning->value.integer, error,
+                                   error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_CHOICE:
+            if (execute_math_choice(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

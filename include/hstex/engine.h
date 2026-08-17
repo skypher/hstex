@@ -208,6 +208,8 @@ enum hstex_command {
     HSTEX_COMMAND_NO_ALIGN,
     HSTEX_COMMAND_OMIT,
     HSTEX_COMMAND_SPAN,
+    HSTEX_COMMAND_MATH_STYLE,
+    HSTEX_COMMAND_MATH_CHOICE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -701,6 +703,8 @@ enum hstex_atom_class {
 enum hstex_noad_kind {
     /* An atom: a class and a nucleus. */
     HSTEX_NOAD_ATOM = 0,
+    /* A change of style for everything after it. */
+    HSTEX_NOAD_STYLE,
     /* A list node that was built already and passes through untouched. */
     HSTEX_NOAD_NODE,
     /* Glue and kerns measured in mu, converted when the list is translated. */
@@ -794,11 +798,17 @@ struct hstex_math_builder {
     /* The class \mathord and its relatives forced on the next atom, or -1. */
     int32_t forced_class;
     uint8_t style;
+    /* The style in force at the point the list has been read to, which a
+       style command moves and which \mathchoice and a script mark consult. */
+    uint8_t current_style;
     uint8_t slot;
     size_t slot_target;
     /* Saved across the formula: inline math is an inner mode, so \ifinner is
        true there and false in a display. */
     bool outer_inner_mode;
+    /* Branches of a \mathchoice still to be read, and which one is next. */
+    uint8_t choice_remaining;
+    uint8_t choice_index;
 };
 
 enum hstex_node_kind {
