@@ -973,6 +973,7 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_CLOSE_OUT,
     HSTEX_WHATSIT_SPECIAL,
     HSTEX_WHATSIT_COLOR_STACK,
+    HSTEX_WHATSIT_PDF_DEST,
 };
 
 struct hstex_node {
@@ -1056,8 +1057,13 @@ struct hstex_node {
             uint8_t stream;
             uint8_t action;
             /* The unexpanded text of a \write, the already expanded text of
-               a \special, or the file name of an \openout. */
+               a \special, or the file name of an \openout. For a pdf
+               destination this is its name, and `stream` says whether it has
+               one at all; `number` is the number it has instead, and `detail`
+               holds the destination type as it is written out. */
             uint32_t tokens;
+            uint32_t detail;
+            int32_t number;
         } whatsit;
         int32_t penalty;
     } value;

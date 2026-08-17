@@ -11028,6 +11028,48 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
         free(text);
         return;
     }
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
+        (void)fputs("\\pdfdest ", out);
+        if (node->value.whatsit.stream != 0U) {
+            uint8_t *text = NULL;
+            size_t text_count = 0U;
+            bool cut = false;
+            char ignored[256];
+            if (stored_token_list_text(engine, node->value.whatsit.tokens,
+                                       &text, &text_count,
+                                       (size_t)HSTEX_PRINT_LINE - 10U, &cut,
+                                       ignored, sizeof(ignored)) != 0) {
+                free(text);
+                return;
+            }
+            (void)fputs("name{", out);
+            if (text_count != 0U) {
+                (void)fwrite(text, 1U, text_count, out);
+            }
+            if (cut) {
+                (void)fputs("\\ETC.", out);
+            }
+            (void)fputc('}', out);
+            free(text);
+        } else {
+            (void)fprintf(out, "num%d", node->value.whatsit.number);
+        }
+        uint8_t *type = NULL;
+        size_t type_count = 0U;
+        char ignored[256];
+        if (stored_token_list_text(engine, node->value.whatsit.detail, &type,
+                                   &type_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) != 0) {
+            free(type);
+            return;
+        }
+        (void)fputc(' ', out);
+        if (type_count != 0U) {
+            (void)fwrite(type, 1U, type_count, out);
+        }
+        free(type);
+        return;
+    }
     static const char *const names[4] = {"write", "openout", "closeout",
                                          "special"};
     (void)fputc('\\', out);
@@ -14204,12 +14246,30 @@ static int scan_optional_pdf_text(struct hstex_engine *engine,
 
 /* A destination type. The longer names are tried first, because `fitb` is a
    prefix of `fitbh` and `fit` of the rest. */
+/* A destination's dimension is written as a star where it is left to the
+   document, exactly as a rule's is. */
+static size_t append_destination_dimen(char *buffer, size_t used, size_t size,
+                                       int32_t value)
+{
+    char digits[64];
+    int length = value == HSTEX_RUNNING_DIMEN
+                     ? snprintf(digits, sizeof(digits), "*")
+                     : format_scaled_value(value, "", digits, sizeof(digits));
+    if (length <= 0 || used + (size_t)length >= size) {
+        return used;
+    }
+    memcpy(buffer + used, digits, (size_t)length);
+    return used + (size_t)length;
+}
+
+/* The type reads back the way the reference writes it out: `xyz zoom2000`,
+   `fitr(3.0+1.0)x10.0` and the bare names. See docs/DECISIONS.md,
+   pdf-destinations. */
 static int scan_pdf_destination_type(struct hstex_engine *engine, char **type,
                                      char *error, size_t error_capacity)
 {
-    static const char *const types[] = {"fitbh", "fitbv", "fitbh", "fitb",
-                                        "fith",  "fitv",  "fitr",  "xyz",
-                                        "fit"};
+    static const char *const types[] = {"fitbh", "fitbv", "fitb", "fith",
+                                        "fitv",  "fitr",  "xyz",  "fit"};
     for (size_t index = 0U; index < sizeof(types) / sizeof(types[0]); ++index) {
         bool matched = false;
         if (try_keyword(engine, types[index], &matched, error,
@@ -14219,12 +14279,9 @@ static int scan_pdf_destination_type(struct hstex_engine *engine, char **type,
         if (!matched) {
             continue;
         }
-        *type = own_general_text((const uint8_t *)types[index],
-                                 strlen(types[index]));
-        if (*type == NULL) {
-            return set_error(error, error_capacity,
-                             "pdf destination allocation failed");
-        }
+        char text[128];
+        size_t used = strlen(types[index]);
+        memcpy(text, types[index], used);
         if (strcmp(types[index], "xyz") == 0) {
             bool zoom = false;
             if (try_keyword(engine, "zoom", &zoom, error, error_capacity) !=
@@ -14232,16 +14289,43 @@ static int scan_pdf_destination_type(struct hstex_engine *engine, char **type,
                 return -1;
             }
             int32_t factor = 0;
-            if (zoom &&
-                scan_integer(engine, &factor, error, error_capacity) != 0) {
-                return -1;
+            if (zoom) {
+                if (scan_integer(engine, &factor, error, error_capacity) != 0) {
+                    return -1;
+                }
+                int written = snprintf(text + used, sizeof(text) - used,
+                                       " zoom%d", factor);
+                if (written > 0) {
+                    used += (size_t)written;
+                }
             }
         } else if (strcmp(types[index], "fitr") == 0) {
-            struct hstex_node rule = {0};
+            struct hstex_node rule = {
+                .kind = HSTEX_NODE_RULE,
+                .width = HSTEX_RUNNING_DIMEN,
+                .height = HSTEX_RUNNING_DIMEN,
+                .depth = HSTEX_RUNNING_DIMEN,
+            };
             if (scan_rule_dimensions(engine, &rule, error, error_capacity) !=
                 0) {
                 return -1;
             }
+            text[used++] = '(';
+            used = append_destination_dimen(text, used, sizeof(text),
+                                            rule.height);
+            text[used++] = '+';
+            used = append_destination_dimen(text, used, sizeof(text),
+                                            rule.depth);
+            text[used++] = ')';
+            text[used++] = 'x';
+            used = append_destination_dimen(text, used, sizeof(text),
+                                            rule.width);
+        }
+        text[used] = '\0';
+        *type = own_general_text((const uint8_t *)text, used);
+        if (*type == NULL) {
+            return set_error(error, error_capacity,
+                             "pdf destination allocation failed");
         }
         return 0;
     }
@@ -14288,6 +14372,32 @@ static int execute_pdf_dest(struct hstex_engine *engine, char *error,
     char *type = NULL;
     if (scan_pdf_destination_type(engine, &type, error, error_capacity) != 0) {
         free(name);
+        return -1;
+    }
+    /* The destination is a whatsit in the list as well as a record for the
+       backend: it is what \lastnodetype sees and where the page may break.
+       See docs/DECISIONS.md, pdf-destinations. */
+    uint32_t name_tokens = 0U;
+    uint32_t type_tokens = 0U;
+    if ((name != NULL && store_text_as_token_list(engine, name, &name_tokens,
+                                                  error, error_capacity) != 0) ||
+        store_text_as_token_list(engine, type, &type_tokens, error,
+                                 error_capacity) != 0) {
+        free(name);
+        free(type);
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_PDF_DEST,
+                          .stream = name != NULL ? 1U : 0U,
+                          .tokens = name_tokens,
+                          .detail = type_tokens,
+                          .number = number},
+    };
+    if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
+        free(name);
+        free(type);
         return -1;
     }
     struct hstex_pdf_record *record =
@@ -22186,7 +22296,8 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
         return close_write_stream(engine, stream, error, error_capacity);
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL ||
-        kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
+        kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK ||
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
         /* Nothing carries a \special or a colour yet: there is no page
            description to put it in. See docs/DECISIONS.md, whatsits. */
         return 0;

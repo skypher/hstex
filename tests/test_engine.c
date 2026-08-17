@@ -1760,6 +1760,58 @@ static int test_a_hyphen_that_ligatures(void)
 );
 }
 
+/* A pdf destination is a whatsit in the list, written out the way the
+   reference writes it; see docs/DECISIONS.md, pdf-destinations. */
+static int test_pdf_destinations(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\pdfoutput=1 \\messag"
+        "e{[a]}\\setbox0=\\hbox{a\\pdfdest name{x} xyz b}\\"
+        "showbox0 \\message{[b]}\\setbox0=\\hbox{\\pdfdest "
+        "num7 xyz zoom 2000 }\\showbox0 \\message{[c]}\\set"
+        "box0=\\hbox{\\pdfdest name{y} fitbv}\\showbox0 \\m"
+        "essage{[d]}\\setbox0=\\hbox{\\pdfdest name{z} fitr"
+        " width 10pt height 3pt depth 1pt}\\showbox0 \\mess"
+        "age{[e]}\\setbox0=\\hbox{\\pdfdest name{w} fitr he"
+        "ight 3pt}\\showbox0 \\message{[f]}\\setbox0=\\hbox"
+        "{\\pdfdest name{aaaaaaaaaabbbbbbbbbbccccccccccdddd"
+        "ddddddeeeeeeeeeeffffffffffgggggggggghhhhhhhhhh} fi"
+        "t}\\showbox0%"
+,
+        "[a]> \\box0=\n\\hbox(6.94444+0.0)x10.55559\n.\\ten"
+        "rm a\n.\\pdfdest name{x} xyz\n.\\tenrm b\n\n! OK."
+        "\n[b]> \\box0=\n\\hbox(0.0+0.0)x0.0\n.\\pdfdest nu"
+        "m7 xyz zoom2000\n\n! OK.\n[c]> \\box0=\n\\hbox(0.0"
+        "+0.0)x0.0\n.\\pdfdest name{y} fitbv\n\n! OK.\n[d]>"
+        " \\box0=\n\\hbox(0.0+0.0)x0.0\n.\\pdfdest name{z} "
+        "fitr(3.0+1.0)x10.0\n\n! OK.\n[e]> \\box0=\n\\hbox("
+        "0.0+0.0)x0.0\n.\\pdfdest name{w} fitr(3.0+*)x*\n\n"
+        "! OK.\n[f]> \\box0=\n\\hbox(0.0+0.0)x0.0\n.\\pdfde"
+        "st name{aaaaaaaaaabbbbbbbbbbccccccccccddddddddddee"
+        "eeeeeeeeffffffffffggggggggg\\ETC.} fit\n\n! OK.\n"
+);
+}
+
 /* Once the page builder has emptied the contribution list, \lastnodetype
    and its relatives report the last node it took; see docs/DECISIONS.md,
    the-last-node-of-a-page. */
@@ -5165,6 +5217,7 @@ int main(void)
         test_a_line_that_breaks_at_a_penalty() != 0 ||
         test_a_hyphen_that_ligatures() != 0 ||
         test_the_last_node_of_a_page() != 0 ||
+        test_pdf_destinations() != 0 ||
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||
