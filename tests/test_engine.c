@@ -562,6 +562,75 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \else, \or and \fi met while a conditional is still scanning its own test
+   stand for \relax; see docs/DECISIONS.md, unevaluated-conditionals. */
+static int test_unevaluated_conditionals(void)
+{
+    return run_snippet(
+        "\\count0=5 "
+        "[\\ifnum1<20\\else X\\fi][\\ifnum20<2\\else X\\fi]"
+        "[\\ifnum1<2\\fi][\\ifnum\\count0=5\\else X\\fi]"
+        "[\\ifcase1\\or A\\else B\\fi][\\ifdim1pt<2pt\\else X\\fi]"
+        "[\\ifnum1<2 Y\\else X\\fi][\\ifodd3\\else X\\fi]"
+        /* The inserted \relax survives into an \edef's replacement text. */
+        "\\edef\\xa{\\ifnum1<20\\else X\\fi}[\\meaning\\xa]"
+        "\\edef\\xb{\\ifnum1<2 Y\\else X\\fi}[\\meaning\\xb]%",
+        "[][X][][][A][][Y][][macro:->\\relax ][macro:->Y]");
+}
+
+/* A \countdef'd control sequence reports the primitive it stands for. */
+static int test_defined_register_meanings(void)
+{
+    return run_snippet(
+        "\\countdef\\ca=298 \\dimendef\\da=140 \\skipdef\\sa=48 "
+        "\\muskipdef\\ma=7 \\toksdef\\ta=30 "
+        "\\chardef\\ha=65 \\mathchardef\\mb=\"2201 "
+        "[\\meaning\\ca][\\meaning\\da][\\meaning\\sa][\\meaning\\ma]"
+        "[\\meaning\\ta][\\meaning\\ha][\\meaning\\mb][\\meaning\\count]%",
+        "[\\count298][\\dimen140][\\skip48][\\muskip7][\\toks30]"
+        "[\\char\"41][\\mathchar\"2201][\\count]");
+}
+
+/* Kerns are rigid, and rules take a running dimension from the box that
+   encloses them; see docs/DECISIONS.md, rules-and-kerns. */
+static int test_kerns_and_rules(void)
+{
+    return run_snippet(
+        "\\boxmaxdepth=16383.99998pt "
+        "\\baselineskip=12pt \\lineskip=1pt \\lineskiplimit=0pt "
+        "\\setbox1=\\hbox{\\vrule height5pt depth2pt width1pt}"
+        "\\setbox0=\\hbox{\\copy1\\kern3pt\\copy1}"
+        "[\\the\\ht0|\\the\\dp0|\\the\\wd0]"
+        /* A kern leaves \\prevdepth alone, so interline glue still follows. */
+        "\\setbox0=\\vbox{\\copy1\\kern3pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\vbox{\\kern3pt\\copy1}[\\the\\ht0|\\the\\dp0]"
+        "\\setbox0=\\hbox{\\kern-2pt}[\\the\\wd0]"
+        /* A running dimension measures nothing while the box is packaged. */
+        "\\setbox0=\\vbox{\\hrule}[\\the\\ht0|\\the\\dp0|\\the\\wd0]"
+        "\\setbox0=\\vbox{\\copy1\\hrule}[\\the\\ht0|\\the\\wd0]"
+        "\\setbox0=\\vbox{\\hrule width5pt}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\vrule}[\\the\\ht0|\\the\\wd0]"
+        "\\setbox0=\\hbox{\\copy1\\vrule}[\\the\\ht0|\\the\\dp0|\\the\\wd0]%",
+        "[5.0pt|2.0pt|5.0pt][20.0pt|2.0pt][8.0pt|2.0pt][-2.0pt]"
+        "[0.4pt|0.0pt|0.0pt][7.4pt|1.0pt][5.0pt][0.0pt|0.4pt]"
+        "[5.0pt|2.0pt|1.4pt]");
+}
+
+/* A scaled dimension prints as the shortest decimal that reads back as
+   itself; see docs/DECISIONS.md, scaled-printing. */
+static int test_scaled_printing(void)
+{
+    return run_snippet(
+        "\\dimen0=26214sp [\\the\\dimen0]\\dimen0=26215sp [\\the\\dimen0]"
+        "\\dimen0=1sp [\\the\\dimen0]\\dimen0=10sp [\\the\\dimen0]"
+        "\\dimen0=7sp [\\the\\dimen0]\\dimen0=65536sp [\\the\\dimen0]"
+        "\\dimen0=65535sp [\\the\\dimen0]"
+        "\\dimen0=1073741823sp [\\the\\dimen0]"
+        "\\dimen0=891290sp [\\the\\dimen0]\\dimen0=3277sp [\\the\\dimen0]%",
+        "[0.4pt][0.40001pt][0.00002pt][0.00015pt][0.0001pt][1.0pt]"
+        "[0.99998pt][16383.99998pt][13.6pt][0.05pt]");
+}
+
 /* Page state is global rather than grouped, and an empty page reports a
    \maxdimen goal with zero totals; see docs/DECISIONS.md, page-state. */
 static int test_page_state(void)
@@ -1328,7 +1397,10 @@ int main(void)
         run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
                     "\\o{A}\\x{P}{Q}%",
                     "[P|Q|A]") != 0 ||
-        test_box_shift_and_packaging() != 0 ||
+        test_unevaluated_conditionals() != 0 ||
+        test_defined_register_meanings() != 0 ||
+        test_box_shift_and_packaging() != 0 || test_kerns_and_rules() != 0 ||
+        test_scaled_printing() != 0 ||
         test_page_state() != 0 || test_dimension_units() != 0 ||
         test_pdftex_identification() != 0 ||
         /* \typeout writes to an allocated but unopened stream, and \write

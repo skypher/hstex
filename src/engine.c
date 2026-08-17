@@ -71,6 +71,10 @@ struct hstex_vbox_builder {
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
 static void clear_match_groups(struct hstex_engine *engine);
+static bool conditional_test_pending(const struct hstex_engine *engine);
+static int push_relax_before(struct hstex_engine *engine, hstex_token token,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity);
 enum pdf_escape_kind {
     PDF_ESCAPE_STRING = 0,
     PDF_ESCAPE_NAME,
@@ -1536,6 +1540,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"vbox", HSTEX_COMMAND_VBOX},
         {"penalty", HSTEX_COMMAND_PENALTY},
         {"vrule", HSTEX_COMMAND_VRULE},
+        {"hrule", HSTEX_COMMAND_HRULE},
+        {"kern", HSTEX_COMMAND_KERN},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
@@ -4718,13 +4724,27 @@ static int format_scaled_value(int32_t value, const char *unit, char *digits,
         value < 0 ? (uint64_t)(-(int64_t)value) : (uint64_t)value;
     uint64_t whole = magnitude / UINT64_C(65536);
     uint64_t remainder = magnitude % UINT64_C(65536);
-    uint64_t fraction =
-        (remainder * UINT64_C(100000) + UINT64_C(32768)) /
-        UINT64_C(65536);
-    unsigned int fraction_digits = 5U;
-    while (fraction_digits > 1U && fraction % 10U == 0U) {
-        fraction /= 10U;
-        --fraction_digits;
+    /* Print the shortest decimal that reads back as this scaled value, and at
+       that length the one nearest to it. Five digits always suffice, because
+       consecutive scaled points are more than 10^-5 apart; see
+       docs/DECISIONS.md, scaled-printing. */
+    uint64_t fraction = 0U;
+    unsigned int fraction_digits = 1U;
+    uint64_t power = 1U;
+    for (unsigned int width = 1U; width <= 5U; ++width) {
+        power *= UINT64_C(10);
+        uint64_t candidate =
+            (remainder * power + UINT64_C(32768)) / UINT64_C(65536);
+        if (candidate >= power) {
+            continue;
+        }
+        uint64_t restored =
+            (candidate * UINT64_C(65536) + power / UINT64_C(2)) / power;
+        if (restored == remainder) {
+            fraction = candidate;
+            fraction_digits = width;
+            break;
+        }
     }
     int length = snprintf(digits, digits_capacity, "%s%llu.%0*llu%s",
                           value < 0 ? "-" : "", (unsigned long long)whole,
@@ -6184,13 +6204,19 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
                                  meaning->command == HSTEX_COMMAND_IF_TRUE,
                                  error, error_capacity);
     }
-    if (meaning->command == HSTEX_COMMAND_ELSE) {
-        return execute_else(engine, error, error_capacity);
-    }
-    if (meaning->command == HSTEX_COMMAND_OR) {
-        return execute_or(engine, error, error_capacity);
-    }
-    if (meaning->command == HSTEX_COMMAND_FI) {
+    if (meaning->command == HSTEX_COMMAND_ELSE ||
+        meaning->command == HSTEX_COMMAND_OR ||
+        meaning->command == HSTEX_COMMAND_FI) {
+        if (conditional_test_pending(engine)) {
+            return push_relax_before(engine, token, location, error,
+                                     error_capacity);
+        }
+        if (meaning->command == HSTEX_COMMAND_ELSE) {
+            return execute_else(engine, error, error_capacity);
+        }
+        if (meaning->command == HSTEX_COMMAND_OR) {
+            return execute_or(engine, error, error_capacity);
+        }
         return execute_fi(engine, error, error_capacity);
     }
     return push_one(engine, token, location, error, error_capacity);
@@ -6495,20 +6521,22 @@ enum hstex_engine_result hstex_engine_next_expanded(
             }
             continue;
         }
-        if (meaning->command == HSTEX_COMMAND_ELSE) {
-            if (execute_else(engine, error, error_capacity) != 0) {
-                return HSTEX_ENGINE_ERROR;
+        if (meaning->command == HSTEX_COMMAND_ELSE ||
+            meaning->command == HSTEX_COMMAND_OR ||
+            meaning->command == HSTEX_COMMAND_FI) {
+            if (conditional_test_pending(engine)) {
+                if (push_relax_before(engine, *token, *location, error,
+                                      error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
             }
-            continue;
-        }
-        if (meaning->command == HSTEX_COMMAND_OR) {
-            if (execute_or(engine, error, error_capacity) != 0) {
-                return HSTEX_ENGINE_ERROR;
-            }
-            continue;
-        }
-        if (meaning->command == HSTEX_COMMAND_FI) {
-            if (execute_fi(engine, error, error_capacity) != 0) {
+            int status = meaning->command == HSTEX_COMMAND_ELSE
+                             ? execute_else(engine, error, error_capacity)
+                             : meaning->command == HSTEX_COMMAND_OR
+                                   ? execute_or(engine, error, error_capacity)
+                                   : execute_fi(engine, error, error_capacity);
+            if (status != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -7031,6 +7059,20 @@ static int store_node(struct hstex_engine *engine,
     return 0;
 }
 
+/* A running dimension contributes nothing while a box is measured; the
+   enclosing box supplies its value when the page is shipped. */
+static int append_current_list_node(struct hstex_engine *engine,
+                                    const struct hstex_node *node,
+                                    char *error, size_t error_capacity);
+static int scan_rule_dimensions(struct hstex_engine *engine,
+                                struct hstex_node *rule, char *error,
+                                size_t error_capacity);
+
+static int32_t packed_dimen(int32_t value)
+{
+    return value == HSTEX_RUNNING_DIMEN ? 0 : value;
+}
+
 static int append_hbox_node(struct hstex_engine *engine,
                             const struct hstex_node *node, char *error,
                             size_t error_capacity)
@@ -7040,7 +7082,7 @@ static int append_hbox_node(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "horizontal node used outside an hbox");
     }
-    int64_t width = builder->width + (int64_t)node->width;
+    int64_t width = builder->width + packed_dimen(node->width);
     if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
         return set_error(error, error_capacity,
                          "hbox width exceeds TeX's dimension range");
@@ -7054,8 +7096,8 @@ static int append_hbox_node(struct hstex_engine *engine,
     builder->node_identifiers[builder->count++] = identifier;
     builder->width = width;
     /* A box shifted down reaches lower and rises less. */
-    int32_t raised = node->height - node->shift;
-    int32_t dropped = node->depth + node->shift;
+    int32_t raised = packed_dimen(node->height) - node->shift;
+    int32_t dropped = packed_dimen(node->depth) + node->shift;
     if (raised > builder->height) {
         builder->height = raised;
     }
@@ -7126,21 +7168,21 @@ static int append_vbox_node(struct hstex_engine *engine,
                          "vertical node used outside a vbox or page");
     }
     if (node->kind == HSTEX_NODE_LIST &&
-        append_interline_glue(engine, node->height, error, error_capacity) !=
-            0) {
+        append_interline_glue(engine, packed_dimen(node->height), error,
+                              error_capacity) != 0) {
         return -1;
     }
     builder = engine->active_vbox_builder;
     int64_t extent = builder->extent;
     int32_t trailing_depth = builder->trailing_depth;
-    if (node->kind == HSTEX_NODE_GLUE) {
-        extent += (int64_t)trailing_depth + node->width;
+    if (node->kind == HSTEX_NODE_GLUE || node->kind == HSTEX_NODE_KERN) {
+        extent += (int64_t)trailing_depth + packed_dimen(node->width);
         trailing_depth = 0;
     } else if (node->kind == HSTEX_NODE_RULE ||
                node->kind == HSTEX_NODE_CHARACTER ||
                node->kind == HSTEX_NODE_LIST) {
-        extent += (int64_t)trailing_depth + node->height;
-        trailing_depth = node->depth;
+        extent += (int64_t)trailing_depth + packed_dimen(node->height);
+        trailing_depth = packed_dimen(node->depth);
     }
     if (extent < INT64_MIN / 2 || extent > INT64_MAX / 2) {
         return set_error(error, error_capacity, "vertical extent overflow");
@@ -7156,12 +7198,12 @@ static int append_vbox_node(struct hstex_engine *engine,
     builder->trailing_depth = trailing_depth;
     /* A box sets the reference for the next one; a rule suppresses it. */
     if (node->kind == HSTEX_NODE_LIST) {
-        engine->prev_depth = node->depth;
+        engine->prev_depth = packed_dimen(node->depth);
     } else if (node->kind == HSTEX_NODE_RULE) {
         engine->prev_depth = HSTEX_IGNORE_DEPTH;
     }
     /* A box shifted right widens the list by the displacement. */
-    int32_t reach = node->width + node->shift;
+    int32_t reach = packed_dimen(node->width) + node->shift;
     if ((node->kind == HSTEX_NODE_RULE || node->kind == HSTEX_NODE_LIST) &&
         reach > builder->width) {
         builder->width = reach;
@@ -7169,23 +7211,19 @@ static int append_vbox_node(struct hstex_engine *engine,
     return 0;
 }
 
-static int execute_vrule(struct hstex_engine *engine, char *error,
-                         size_t error_capacity)
+/* A rule keeps repeating width, height, and depth specifications, the last
+   of each winning; whatever is not given stays as the rule's default. */
+static int scan_rule_dimensions(struct hstex_engine *engine,
+                                struct hstex_node *rule, char *error,
+                                size_t error_capacity)
 {
-    struct hstex_node rule = {
-        .kind = HSTEX_NODE_RULE,
-        .width = 26214,
-        .height = 0,
-        .depth = 0,
-        .value.penalty = 0,
-    };
     for (;;) {
         bool matched = false;
         if (try_keyword(engine, "width", &matched, error, error_capacity) != 0) {
             return -1;
         }
         if (matched) {
-            if (scan_dimension(engine, &rule.width, error, error_capacity) !=
+            if (scan_dimension(engine, &rule->width, error, error_capacity) !=
                 0) {
                 return -1;
             }
@@ -7196,7 +7234,7 @@ static int execute_vrule(struct hstex_engine *engine, char *error,
             return -1;
         }
         if (matched) {
-            if (scan_dimension(engine, &rule.height, error, error_capacity) !=
+            if (scan_dimension(engine, &rule->height, error, error_capacity) !=
                 0) {
                 return -1;
             }
@@ -7206,15 +7244,77 @@ static int execute_vrule(struct hstex_engine *engine, char *error,
             return -1;
         }
         if (matched) {
-            if (scan_dimension(engine, &rule.depth, error, error_capacity) !=
+            if (scan_dimension(engine, &rule->depth, error, error_capacity) !=
                 0) {
                 return -1;
             }
             continue;
         }
-        break;
+        return 0;
+    }
+}
+
+static int execute_vrule(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = 26214,
+        .height = HSTEX_RUNNING_DIMEN,
+        .depth = HSTEX_RUNNING_DIMEN,
+        .value.penalty = 0,
+    };
+    if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
+        return -1;
     }
     return append_hbox_node(engine, &rule, error, error_capacity);
+}
+
+/* \hrule spans the width of the box that encloses it, and ends a paragraph
+   in the same way \par does not concern us yet. Its depth is an ordinary
+   zero, only the width is running. */
+static int execute_hrule(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_VERTICAL || engine->pending_global ||
+        engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "hrule requires unprefixed vertical mode");
+    }
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = HSTEX_RUNNING_DIMEN,
+        .height = 26214,
+        .depth = 0,
+        .value.penalty = 0,
+    };
+    if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
+        return -1;
+    }
+    return append_vbox_node(engine, &rule, error, error_capacity);
+}
+
+/* \kern is rigid: it measures like glue but cannot stretch or shrink, and it
+   leaves \prevdepth alone, so a box after a kern still gets interline glue. */
+static int execute_kern(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "kern does not accept prefixes");
+    }
+    int32_t amount = 0;
+    if (scan_dimension(engine, &amount, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node kern = {
+        .kind = HSTEX_NODE_KERN,
+        .width = amount,
+        .height = 0,
+        .depth = 0,
+        .value.penalty = 0,
+    };
+    return append_current_list_node(engine, &kern, error, error_capacity);
 }
 
 static int append_current_list_node(struct hstex_engine *engine,
@@ -9529,6 +9629,61 @@ static int expand_string(struct hstex_engine *engine,
     return 0;
 }
 
+/* A control sequence defined by \countdef and friends reports itself as the
+   primitive it stands for, so \meaning\scratchcounter is \count298 rather
+   than the name; see docs/DECISIONS.md, defined-register-meanings. */
+static const char *defined_register_primitive(enum hstex_command command)
+{
+    switch (command) {
+    case HSTEX_COMMAND_COUNT_REGISTER:
+        return "count";
+    case HSTEX_COMMAND_DIMEN_REGISTER:
+        return "dimen";
+    case HSTEX_COMMAND_SKIP_REGISTER:
+        return "skip";
+    case HSTEX_COMMAND_MUSKIP_REGISTER:
+        return "muskip";
+    case HSTEX_COMMAND_TOKS_REGISTER:
+        return "toks";
+    case HSTEX_COMMAND_CHAR_GIVEN:
+        return "char";
+    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
+        return "mathchar";
+    default:
+        return NULL;
+    }
+}
+
+static int append_defined_register_meaning(struct hstex_engine *engine,
+                                           const struct hstex_meaning *meaning,
+                                           uint8_t **bytes, size_t *count,
+                                           size_t *capacity, char *error,
+                                           size_t error_capacity)
+{
+    const char *primitive = defined_register_primitive(meaning->command);
+    char rendered[64];
+    /* Character codes are shown in hexadecimal, register numbers in decimal. */
+    bool hexadecimal = meaning->command == HSTEX_COMMAND_CHAR_GIVEN ||
+                       meaning->command == HSTEX_COMMAND_MATH_CHAR_GIVEN;
+    int length = hexadecimal
+                     ? snprintf(rendered, sizeof(rendered), "%s\"%" PRIX32,
+                                primitive, meaning->value.integer)
+                     : snprintf(rendered, sizeof(rendered), "%s%" PRId32,
+                                primitive, meaning->value.integer);
+    if (length <= 0 || (size_t)length >= sizeof(rendered)) {
+        return set_error(error, error_capacity,
+                         "could not format a defined register meaning");
+    }
+    int32_t escape = engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+    if (escape >= 0 && escape <= 255 &&
+        append_byte(bytes, count, capacity, (uint8_t)escape, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    return append_text_bytes(bytes, count, capacity, rendered, error,
+                             error_capacity);
+}
+
 static int expand_meaning(struct hstex_engine *engine,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity)
@@ -9646,6 +9801,13 @@ static int expand_meaning(struct hstex_engine *engine,
         } else if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
             if (append_text_bytes(&bytes, &count, &capacity, "undefined", error,
                                   error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+        } else if (defined_register_primitive(meaning->command) != NULL) {
+            if (append_defined_register_meaning(engine, meaning, &bytes, &count,
+                                                &capacity, error,
+                                                error_capacity) != 0) {
                 free(bytes);
                 return -1;
             }
@@ -10770,8 +10932,40 @@ static int push_conditional(struct hstex_engine *engine, size_t *index,
     entry->else_seen = false;
     entry->case_conditional = false;
     entry->negate = engine->negate_next_conditional;
+    entry->evaluated = false;
     engine->negate_next_conditional = false;
     return 0;
+}
+
+/* Put the token back and stand a \relax in front of it. */
+static int push_relax_before(struct hstex_engine *engine, hstex_token token,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity)
+{
+    hstex_cs_id relax = 0U;
+    if (hstex_symbol_find(&engine->lexical_state.symbols, HSTEX_SYMBOL_REGULAR,
+                          (const uint8_t *)"relax", 5U, &relax) != 1) {
+        return set_error(error, error_capacity, "relax is not defined");
+    }
+    hstex_token *pair = malloc(2U * sizeof(*pair));
+    if (pair == NULL) {
+        return set_error(error, error_capacity,
+                         "conditional relax allocation failed");
+    }
+    pair[0] = hstex_token_control_sequence(relax);
+    pair[1] = token;
+    return hstex_source_push_owned_tokens(&engine->sources, pair, 2U, location,
+                                          error, error_capacity);
+}
+
+/* \else, \or, and \fi met while the innermost conditional is still scanning
+   its own test stand for \relax: they terminate whatever is being scanned and
+   stay in the input for the conditional to find afterwards. `\ifnum ...>20\else`
+   with no space between the number and \else depends on this. */
+static bool conditional_test_pending(const struct hstex_engine *engine)
+{
+    return engine->conditional_count != 0U &&
+           !engine->conditionals[engine->conditional_count - 1U].evaluated;
 }
 
 static int finish_conditional(struct hstex_engine *engine, size_t index,
@@ -10785,6 +10979,7 @@ static int finish_conditional(struct hstex_engine *engine, size_t index,
     if (engine->conditionals[index].negate) {
         condition = !condition;
     }
+    engine->conditionals[index].evaluated = true;
     engine->conditionals[index].branch_true = condition;
     if (!condition) {
         return skip_conditional(engine, index, true, error, error_capacity);
@@ -10945,6 +11140,7 @@ static int scan_if_case(struct hstex_engine *engine, char *error,
         /* Keep the scanner's own diagnosis rather than masking it. */
         return -1;
     }
+    engine->conditionals[conditional].evaluated = true;
     if (selection == 0) {
         engine->conditionals[conditional].branch_true = true;
         return 0;
@@ -11586,6 +11782,16 @@ handle_token:
             continue;
         case HSTEX_COMMAND_VRULE:
             if (execute_vrule(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_HRULE:
+            if (execute_hrule(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_KERN:
+            if (execute_kern(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

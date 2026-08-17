@@ -164,6 +164,8 @@ enum hstex_command {
     HSTEX_COMMAND_COPY,
     HSTEX_COMMAND_SHIFT_BOX,
     HSTEX_COMMAND_BOX_DIMEN,
+    HSTEX_COMMAND_KERN,
+    HSTEX_COMMAND_HRULE,
 };
 
 enum hstex_box_dimen {
@@ -453,12 +455,18 @@ struct hstex_box {
     uint32_t node_count;
 };
 
+/* A rule dimension the enclosing box supplies. It survives packaging and is
+   resolved when the page is shipped, so it is a value outside the legal
+   dimension range rather than a flag; see docs/DECISIONS.md, rules-and-kerns. */
+#define HSTEX_RUNNING_DIMEN (-INT32_C(1073741824))
+
 enum hstex_node_kind {
     HSTEX_NODE_RULE = 0,
     HSTEX_NODE_CHARACTER,
     HSTEX_NODE_GLUE,
     HSTEX_NODE_PENALTY,
     HSTEX_NODE_LIST,
+    HSTEX_NODE_KERN,
 };
 
 struct hstex_node {
@@ -517,6 +525,10 @@ struct hstex_conditional {
     bool else_seen;
     bool case_conditional;
     bool negate;
+    /* False until the test has been evaluated. An \else or \fi met before
+       that belongs to no branch yet, and yields \relax instead; see
+       docs/DECISIONS.md, unevaluated-conditionals. */
+    bool evaluated;
 };
 
 enum hstex_mode {
