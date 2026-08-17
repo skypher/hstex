@@ -79,9 +79,12 @@ Display math is set too: `$$...$$` breaks the paragraph so far, centres the
 equation in `\displaywidth`, and chooses the short or long display skips
 from how far the line above reaches.
 
-Line breaking, the page builder, the output routine, and PDF emission remain
-under construction. A paragraph wider than `\hsize` reports
-an error rather than being set as one overfull line.
+Paragraphs are broken into lines by the reference's optimal-fit method:
+badness and fitness per line, demerits over the whole paragraph, and the
+three passes `\pretolerance` and `\tolerance` select between.
+
+The page builder, the output routine, and PDF emission remain under
+construction, and there is no hyphenation yet.
 
 ## Build
 
