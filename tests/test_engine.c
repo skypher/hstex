@@ -1466,6 +1466,36 @@ static int test_infinite_page_penalty(void)
         "0.0\n.\\hbox(0.0+0.0)x0.0\n\n! OK.\n[done]");
 }
 
+/* \emergencystretch buys the paragraph one more pass with that much stretch
+   behind every line; see docs/DECISIONS.md, emergency-stretch. */
+static int test_emergency_stretch(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=1 \\showboxbreadth=30"
+        " \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\vf"
+        "uzz=1000pt \\font\\f=cmr10 \\f \\hsize=60pt \\parinden"
+        "t=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplim"
+        "it=0pt \\parfillskip=0pt plus1fil \\leftskip=0pt \\rig"
+        "htskip=0pt \\tolerance=200 \\pretolerance=-1 \\boxmaxd"
+        "epth=16383.99998pt \\spaceskip=4pt plus2pt minus1pt \\"
+        "linepenalty=10 \\adjdemerits=10000 \\clubpenalty=0 \\w"
+        "idowpenalty=0 \\interlinepenalty=0 \\brokenpenalty=0 \\"
+        "pdfprotrudechars=0 \\emergencystretch=0pt \\message{[n"
+        "one]}\\setbox0=\\vbox{\\noindent aaaa aaaa aaaa aaaa a"
+        "aaa aaaa\\par}\\showbox0 \\emergencystretch=20pt \\mes"
+        "sage{[some]}\\setbox0=\\vbox{\\noindent aaaa aaaa aaaa"
+        " aaaa aaaa aaaa\\par}\\showbox0%",
+        "[none]> \\box0=\n\\vbox(16.30554+0.0)x60.0\n.\\hbox(4."
+        "30554+0.0)x60.0, glue set - 1.0 []\n.\\glue(\\baseline"
+        "skip) 7.69446\n.\\hbox(4.30554+0.0)x60.0, glue set - 1"
+        ".0 []\n\n! OK.\n[some]> \\box0=\n\\vbox(28.30554+0.0)x"
+        "60.0\n.\\hbox(4.30554+0.0)x60.0, glue set 7.99994 []\n"
+        ".\\glue(\\baselineskip) 7.69446\n.\\hbox(4.30554+0.0)x"
+        "60.0, glue set 7.99994 []\n.\\glue(\\baselineskip) 7.6"
+        "9446\n.\\hbox(4.30554+0.0)x60.0, glue set 15.99988fil "
+        "[]\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4304,6 +4334,7 @@ int main(void)
         test_what_a_line_keeps_of_its_break() != 0 ||
         test_math_text_characters() != 0 ||
         test_infinite_page_penalty() != 0 ||
+        test_emergency_stretch() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

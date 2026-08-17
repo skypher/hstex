@@ -15717,28 +15717,36 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
            kern or at a formula's fence keeps that node with no width left.
            See docs/DECISIONS.md, what-a-line-keeps-of-its-break. */
         bool broken = false;
+        /* A discretionary with something to put before the break brings that
+           text into the line, so it stands in front of the protrusion kern;
+           one with nothing goes behind it. */
+        bool disc_after_kern = false;
         if (status == 0 && to < count) {
             uint32_t identifier = items[to];
             if (identifier != 0U && (size_t)identifier <= engine->node_count &&
                 engine->nodes[identifier - 1U].kind ==
                     HSTEX_NODE_DISCRETIONARY) {
                 broken = true;
-                struct hstex_node emptied = {
-                    .kind = HSTEX_NODE_DISCRETIONARY,
-                };
                 uint32_t pre_start =
                     engine->nodes[identifier - 1U].value.disc.pre_start;
                 uint16_t pre_count =
                     engine->nodes[identifier - 1U].value.disc.pre_count;
-                status = append_hbox_node(engine, &emptied, error,
-                                          error_capacity);
-                for (uint16_t item = 0U;
-                     status == 0 && item < pre_count &&
-                     (size_t)pre_start + pre_count <= engine->list_item_count;
-                     ++item) {
-                    status = append_hbox_item(
-                        engine, engine->list_items[pre_start + item], error,
-                        error_capacity);
+                disc_after_kern = pre_count == 0U;
+                if (!disc_after_kern) {
+                    struct hstex_node emptied = {
+                        .kind = HSTEX_NODE_DISCRETIONARY,
+                    };
+                    status = append_hbox_node(engine, &emptied, error,
+                                              error_capacity);
+                    for (uint16_t item = 0U;
+                         status == 0 && item < pre_count &&
+                         (size_t)pre_start + pre_count <=
+                             engine->list_item_count;
+                         ++item) {
+                        status = append_hbox_item(
+                            engine, engine->list_items[pre_start + item],
+                            error, error_capacity);
+                    }
                 }
             }
         }
@@ -15776,8 +15784,13 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                 }
             }
         }
-        /* A line that ends at a kern or at a formula's fence keeps that node
+        /* A line that ends at a kern, at a formula's fence, or at a
+           discretionary with nothing to put before the break keeps that node
            with no width left, behind the protrusion kern. */
+        if (status == 0 && disc_after_kern) {
+            struct hstex_node emptied = {.kind = HSTEX_NODE_DISCRETIONARY};
+            status = append_hbox_node(engine, &emptied, error, error_capacity);
+        }
         if (status == 0 && to < count) {
             uint32_t identifier = items[to];
             const struct hstex_node *at =
@@ -16262,6 +16275,8 @@ static int break_paragraph(struct hstex_engine *engine,
 
     size_t best = SIZE_MAX;
     int found = 0;
+    int32_t emergency =
+        engine->dimen_parameters[HSTEX_DIMEN_EMERGENCY_STRETCH];
     int32_t pretolerance = engine->integer_parameters[HSTEX_INTEGER_PRETOLERANCE];
     if (pretolerance >= 0) {
         found = find_paragraph_breaks(engine, &state, items, count, &background,
@@ -16289,12 +16304,17 @@ static int break_paragraph(struct hstex_engine *engine,
                 return -1;
             }
         }
+        /* The pass that hyphenates is the last one only when there is no
+           \emergencystretch to fall back on. See docs/DECISIONS.md,
+           emergency-stretch. */
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
-            engine->integer_parameters[HSTEX_INTEGER_TOLERANCE], false, &best,
-            error, error_capacity);
+            engine->integer_parameters[HSTEX_INTEGER_TOLERANCE],
+            emergency <= 0, &best, error, error_capacity);
     }
-    if (found == 0) {
+    if (found == 0 && emergency > 0) {
+        /* One more pass, with that much more stretch behind every line. */
+        background.stretch[0] += emergency;
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
             engine->integer_parameters[HSTEX_INTEGER_TOLERANCE], true, &best,
