@@ -133,8 +133,15 @@ with math nodes carrying `\mathsurround`, and a binary operator or a relation
 leaves `\binoppenalty` or `\relpenalty` behind it.
 
 Together these are enough for the corpus's first chapter to match `pdflatex`
-page for page: its first two pages agree with the reference node for node,
-down to every kern, discretionary and glue set.
+almost exactly: 46,139 lines of `\showbox` output for the whole chapter,
+differing in eighteen. What is left there is one hyphenation placement and
+one penalty.
+
+Everything a line is made of is now pinned the same way: protrusion kerns
+that look inside boxes, accent kerns rounded once rather than twice,
+`\pdfcolorstack` nodes, the `\finalhyphendemerits` charged at the end of a
+paragraph, and the operator centring, superscript floors and display marks a
+formula needs.
 
 What `\shipout` does not do yet is write anything: there is no page
 description, so no PDF. Insertions and marks are still to come. The corpus
