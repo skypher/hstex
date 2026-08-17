@@ -71,6 +71,11 @@ struct hstex_vbox_builder {
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
 static void clear_match_groups(struct hstex_engine *engine);
+static const struct hstex_token_list *token_list_by_identifier(
+    const struct hstex_engine *engine, uint32_t identifier);
+static int push_one(struct hstex_engine *engine, hstex_token token,
+                    struct hstex_source_location location, char *error,
+                    size_t error_capacity);
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity);
 static const char *current_source_line(const struct hstex_engine *engine,
@@ -1504,6 +1509,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR] = 45;
     engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR] = -1;
     engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION] = 1000;
+    /* The non-zero defaults the reference starts an INITEX run with. */
+    engine->integer_parameters[HSTEX_INTEGER_TOLERANCE] = 10000;
+    engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER] = 1;
     /* pdfTeX defaults that are not zero: one big point of pixel size and a
        72 dpi image resolution. */
     engine->integer_parameters[HSTEX_INTEGER_PDF_IMAGE_RESOLUTION] = 72;
@@ -2021,6 +2029,30 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"language", HSTEX_INTEGER_LANGUAGE},
         {"mathgroup", HSTEX_INTEGER_MATH_GROUP},
         {"mag", HSTEX_INTEGER_MAGNIFICATION},
+        {"tracingonline", HSTEX_INTEGER_TRACING_ONLINE},
+        {"tracingcommands", HSTEX_INTEGER_TRACING_COMMANDS},
+        {"tracingmacros", HSTEX_INTEGER_TRACING_MACROS},
+        {"tracingparagraphs", HSTEX_INTEGER_TRACING_PARAGRAPHS},
+        {"tracingpages", HSTEX_INTEGER_TRACING_PAGES},
+        {"tracingoutput", HSTEX_INTEGER_TRACING_OUTPUT},
+        {"tracingrestores", HSTEX_INTEGER_TRACING_RESTORES},
+        {"tracingassigns", HSTEX_INTEGER_TRACING_ASSIGNS},
+        {"tracinggroups", HSTEX_INTEGER_TRACING_GROUPS},
+        {"tracingifs", HSTEX_INTEGER_TRACING_IFS},
+        {"tracingscantokens", HSTEX_INTEGER_TRACING_SCAN_TOKENS},
+        {"tracingnesting", HSTEX_INTEGER_TRACING_NESTING},
+        {"pausing", HSTEX_INTEGER_PAUSING},
+        {"holdinginserts", HSTEX_INTEGER_HOLDING_INSERTS},
+        {"outputpenalty", HSTEX_INTEGER_OUTPUT_PENALTY},
+        {"hangafter", HSTEX_INTEGER_HANG_AFTER},
+        {"floatingpenalty", HSTEX_INTEGER_FLOATING_PENALTY},
+        {"looseness", HSTEX_INTEGER_LOOSENESS},
+        {"fam", HSTEX_INTEGER_FAMILY},
+        {"predisplaydirection", HSTEX_INTEGER_PRE_DISPLAY_DIRECTION},
+        {"lastlinefit", HSTEX_INTEGER_LAST_LINE_FIT},
+        {"savingvdiscards", HSTEX_INTEGER_SAVING_VDISCARDS},
+        {"savinghyphcodes", HSTEX_INTEGER_SAVING_HYPH_CODES},
+        {"TeXXeTstate", HSTEX_INTEGER_TEXXET_STATE},
         {"pdfoutput", HSTEX_INTEGER_PDF_OUTPUT},
         {"pdfmajorversion", HSTEX_INTEGER_PDF_MAJOR_VERSION},
         {"pdfminorversion", HSTEX_INTEGER_PDF_MINOR_VERSION},
@@ -2157,6 +2189,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"everyjob", HSTEX_TOKEN_EVERY_JOB},
         {"everycr", HSTEX_TOKEN_EVERY_CR},
         {"errhelp", HSTEX_TOKEN_ERROR_HELP},
+        {"everyeof", HSTEX_TOKEN_EVERY_EOF},
     };
     for (size_t index = 0U;
          index < sizeof(token_primitives) / sizeof(token_primitives[0]);
@@ -2430,19 +2463,41 @@ int hstex_engine_set_output_directory(struct hstex_engine *engine,
     return 0;
 }
 
+/* A file that runs out inserts \everyeof, once, before whatever follows it;
+   see docs/DECISIONS.md, everyeof. */
 static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
 {
-    enum hstex_mouth_result result = hstex_source_next(
-        &engine->sources, token, location, error, error_capacity);
-    if (result == HSTEX_MOUTH_ERROR) {
-        return HSTEX_ENGINE_ERROR;
+    for (;;) {
+        size_t ended_before = engine->sources.file_end_count;
+        enum hstex_mouth_result result = hstex_source_next(
+            &engine->sources, token, location, error, error_capacity);
+        if (result == HSTEX_MOUTH_ERROR) {
+            return HSTEX_ENGINE_ERROR;
+        }
+        if (engine->sources.file_end_count == ended_before ||
+            engine->token_parameters[HSTEX_TOKEN_EVERY_EOF] == 0U) {
+            return result == HSTEX_MOUTH_EOF ? HSTEX_ENGINE_EOF
+                                             : HSTEX_ENGINE_TOKEN;
+        }
+        /* The token just read belongs after the inserted list, so it goes
+           back first. */
+        if (result != HSTEX_MOUTH_EOF &&
+            push_one(engine, *token, *location, error, error_capacity) != 0) {
+            return HSTEX_ENGINE_ERROR;
+        }
+        const struct hstex_token_list *list = token_list_by_identifier(
+            engine, engine->token_parameters[HSTEX_TOKEN_EVERY_EOF]);
+        if (list == NULL ||
+            hstex_source_push_tokens(&engine->sources, list->tokens,
+                                     list->count, *location, error,
+                                     error_capacity) != 0) {
+            (void)set_error(error, error_capacity,
+                            "could not install everyeof tokens");
+            return HSTEX_ENGINE_ERROR;
+        }
     }
-    if (result == HSTEX_MOUTH_EOF) {
-        return HSTEX_ENGINE_EOF;
-    }
-    return HSTEX_ENGINE_TOKEN;
 }
 
 static enum hstex_engine_result raw_next_non_space(

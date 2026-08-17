@@ -300,6 +300,7 @@ enum hstex_mouth_result hstex_source_next(
             &frame->value.file.mouth, token, location, error, error_capacity);
         if (result == HSTEX_MOUTH_EOF) {
             pop_frame(stack);
+            ++stack->file_end_count;
             continue;
         }
         return result;

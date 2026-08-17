@@ -562,6 +562,21 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \everyeof is inserted when a file, real or from \scantokens, runs out;
+   see docs/DECISIONS.md, everyeof. */
+static int test_every_eof(void)
+{
+    return run_snippet(
+        "\\everyeof{Q}\\edef\\a{\\scantokens{abc}}"
+        "[\\detokenize\\expandafter{\\a}]"
+        "\\everyeof{}\\edef\\b{\\scantokens{abc}}"
+        "[\\detokenize\\expandafter{\\b}]"
+        /* The non-zero defaults an INITEX run starts with. */
+        "[\\the\\tolerance|\\the\\hangafter|\\the\\maxdeadcycles]"
+        "[\\the\\tracingnesting|\\the\\outputpenalty|\\the\\looseness]%",
+        "[abc Q][abc ][10000|1|25][0|0|0]");
+}
+
 /* \expanded yields a plain token list: nothing that protected a token from
    this expansion protects it from the next; see docs/DECISIONS.md,
    expanded-is-plain. */
@@ -1566,7 +1581,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
+        test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||

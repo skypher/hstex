@@ -42,6 +42,9 @@ struct hstex_source_stack {
     size_t count;
     size_t capacity;
     struct hstex_lexical_state *lexical_state;
+    /* Counts files that have run out, so that the engine can insert
+       \everyeof once for each; see docs/DECISIONS.md, everyeof. */
+    size_t file_end_count;
 };
 
 void hstex_source_stack_init(struct hstex_source_stack *stack,
