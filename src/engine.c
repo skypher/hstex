@@ -17045,20 +17045,23 @@ static int apply_math_ligatures(struct hstex_engine *engine,
         if (left->kind == (uint8_t)HSTEX_NOAD_STYLE) {
             size = math_size_of_style(left->atom_class);
         }
+        /* The reference asks only that the atom on the left be a plain
+           character with nothing attached and that another character of the
+           same family follow it, whatever that one carries. See
+           docs/DECISIONS.md, math-text-characters. */
         if (left->kind != (uint8_t)HSTEX_NOAD_ATOM ||
             right->kind != (uint8_t)HSTEX_NOAD_ATOM ||
             left->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
-            right->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
+            right->atom_class > (uint8_t)HSTEX_ATOM_PUNCT ||
             left->nucleus.kind != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
             right->nucleus.kind != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
             left->nucleus.family != right->nucleus.family ||
             left->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
-            left->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
-            right->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY ||
-            right->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
+            left->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
             ++index;
             continue;
         }
+        left->text_character = true;
         const struct hstex_font *font = NULL;
         const struct hstex_char_metric *metric = NULL;
         int present = math_character_metric(engine, &left->nucleus, size, &font,
@@ -18030,6 +18033,13 @@ static int translate_math_list_with(struct hstex_engine *engine,
             nucleus_height = node.height - node.shift;
             nucleus_depth = node.depth + node.shift;
             italic = metric->italic;
+            /* A character read as part of a word in a text font carries no
+               italic correction; a font with no interword space of its own
+               is a math font and does. */
+            if (noad->text_character && font != NULL &&
+                font->dimen_count >= 2U && font->dimens[1] != 0) {
+                italic = 0;
+            }
             if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
                 return -1;
             }

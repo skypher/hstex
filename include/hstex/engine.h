@@ -898,6 +898,11 @@ struct hstex_noad {
     uint32_t choices[4];
     /* The delimiter of a \radical. */
     int32_t delimiter;
+    /* This atom's nucleus was read as a character of a text font, because
+       another character of the same family follows it. Its italic
+       correction is then dropped; see docs/DECISIONS.md,
+       math-text-characters. */
+    bool text_character;
 };
 
 /* Which slot the next atom fills, when a script mark is waiting. */

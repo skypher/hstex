@@ -1410,6 +1410,44 @@ static int test_what_a_line_keeps_of_its_break(void)
         " OK.\n");
 }
 
+/* A character in a math list that another character of the same family
+   follows is read as part of a word in a text font, and its italic
+   correction goes away; see docs/DECISIONS.md, math-text-characters. */
+static int test_math_text_characters(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\^=7 \\catcode`\\_=8 \\trac"
+        "ingonline=1 \\showboxdepth=6 \\showboxbreadth=60 \\hba"
+        "dness=10000 \\hfuzz=1000pt \\font\\tenrm=cmr10 \\font\\"
+        "sevenrm=cmr7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\"
+        "font\\seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=c"
+        "msy10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\fon"
+        "t\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont0=\\se"
+        "venrm \\scriptscriptfont0=\\fiverm \\textfont1=\\teni "
+        "\\scriptfont1=\\seveni \\scriptscriptfont1=\\fivei \\t"
+        "extfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscrip"
+        "tfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3=\\te"
+        "nex \\scriptscriptfont3=\\tenex \\tenrm \\mathcode`\\Y"
+        "=\"7059 \\mathcode`\\M=\"704D \\mathcode`\\A=\"7041 \\"
+        "message{[m]}\\setbox0=\\hbox{$YM$}\\showbox0 \\mathcod"
+        "e`\\Y=\"059 \\mathcode`\\M=\"04D \\mathcode`\\A=\"041 "
+        "\\message{[r]}\\setbox0=\\hbox{$YM$}\\showbox0 \\messa"
+        "ge{[ra]}\\setbox0=\\hbox{$YA$}\\showbox0 \\message{[rs"
+        "]}\\setbox0=\\hbox{$Y_1M$}\\showbox0 \\message{[t]}\\s"
+        "etbox0=\\hbox{YM}\\showbox0%",
+        "[m]> \\box0=\n\\hbox(6.83331+0.0)x16.6667\n.\\mathon\n"
+        ".\\tenrm Y\n.\\tenrm M\n.\\mathoff\n\n! OK.\n[r]> \\bo"
+        "x0=\n\\hbox(6.83331+0.0)x16.6667\n.\\mathon\n.\\tenrm "
+        "Y\n.\\tenrm M\n.\\mathoff\n\n! OK.\n[ra]> \\box0=\n\\h"
+        "box(6.83331+0.0)x14.16669\n.\\mathon\n.\\tenrm Y\n.\\k"
+        "ern-0.83334\n.\\tenrm A\n.\\mathoff\n\n! OK.\n[rs]> \\"
+        "box0=\n\\hbox(6.83331+1.49998)x20.65283\n.\\mathon\n.\\"
+        "tenrm Y\n.\\hbox(4.51111+0.0)x3.98613, shifted 1.49998"
+        "\n..\\sevenrm 1\n.\\tenrm M\n.\\mathoff\n\n! OK.\n[t]>"
+        " \\box0=\n\\hbox(6.83331+0.0)x16.6667\n.\\tenrm Y\n.\\"
+        "tenrm M\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4246,6 +4284,7 @@ int main(void)
         test_the_discretionary_after_an_explicit_hyphen() != 0 ||
         test_math_nodes() != 0 || test_hyphenating_ligatures() != 0 ||
         test_what_a_line_keeps_of_its_break() != 0 ||
+        test_math_text_characters() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
