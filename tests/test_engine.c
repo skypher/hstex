@@ -1760,6 +1760,107 @@ static int test_a_hyphen_that_ligatures(void)
 );
 }
 
+/* The paragraph's own first line lets its first character stick out past the
+   margin, and that is what the breaker measures; see docs/DECISIONS.md,
+   the-first-line-protrudes-too. */
+static int test_the_first_line_protrudes_too(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\pdfprotrudechars=2 "
+        "\\lpcode\\tenrm`\\O=1000 \\hsize=140pt \\parindent"
+        "=0pt \\baselineskip=12pt \\lineskip=0pt \\lineskip"
+        "limit=0pt \\parfillskip=0pt plus1fil \\leftskip=0p"
+        "t \\rightskip=0pt \\pretolerance=1000 \\tolerance="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\spaceskip=4pt plus 2pt minus "
+        "1pt \\uchyph=0 \\tracingonline=1 \\tracingparagrap"
+        "hs=1 \\setbox0=\\vbox{\\noindent Onetwo three four"
+        " five six seven eight nine ten\\par}%"
+,
+        "@firstpass\n\\tenrm Onetwo three four five six sev"
+        "en \n@ via @@0 b=27 p=0 d=729\n@@1: line 1.1 t=729"
+        " -> @@0\neight nine ten \n@\\par via @@1 b=0 p=-10"
+        "000 d=0\n@@2: line 2.2- t=729 -> @@1\n\n"
+);}
+
+/* \tracingparagraphs writes the passes out as the reference does; see
+   docs/DECISIONS.md, tracing-paragraphs. */
+static int test_tracing_paragraphs(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\lccode`\\a=`\\a \\lc"
+        "code`\\b=`\\b \\lccode`\\c=`\\c \\lccode`\\d=`\\d "
+        "\\lccode`\\e=`\\e \\lccode`\\f=`\\f \\lccode`\\g=`"
+        "\\g \\lccode`\\h=`\\h \\lccode`\\i=`\\i \\lccode`"
+        "\\j=`\\j \\lccode`\\k=`\\k \\lccode`\\l=`\\l \\lcc"
+        "ode`\\m=`\\m \\lccode`\\n=`\\n \\lccode`\\o=`\\o "
+        "\\lccode`\\p=`\\p \\lccode`\\q=`\\q \\lccode`\\r=`"
+        "\\r \\lccode`\\s=`\\s \\lccode`\\t=`\\t \\lccode`"
+        "\\u=`\\u \\lccode`\\v=`\\v \\lccode`\\w=`\\w \\lcc"
+        "ode`\\x=`\\x \\lccode`\\y=`\\y \\lccode`\\z=`\\z "
+        "\\patterns{a1bra ca1da b1ra} \\hyphenchar\\tenrm=4"
+        "5 \\hsize=100pt \\parindent=0pt \\baselineskip=12p"
+        "t \\lineskip=0pt \\lineskiplimit=0pt \\parfillskip"
+        "=0pt plus1fil \\leftskip=0pt \\rightskip=0pt \\pre"
+        "tolerance=100 \\tolerance=200 \\hbadness=10000 \\v"
+        "badness=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\line"
+        "penalty=10 \\adjdemerits=10000 \\doublehyphendemer"
+        "its=10000 \\finalhyphendemerits=5000 \\hyphenpenal"
+        "ty=50 \\exhyphenpenalty=50 \\uchyph=0 \\lefthyphen"
+        "min=2 \\righthyphenmin=3 \\spaceskip=4pt plus 2pt "
+        "minus 1pt \\tracingonline=1 \\tracingparagraphs=1 "
+        "\\setbox0=\\vbox{\\noindent one two three four abr"
+        "acadabra five six seven eight\\par}%"
+,
+        "@firstpass\n@secondpass\n\\tenrm one two three fou"
+        "r ab-\n@\\discretionary via @@0 b=0 p=50 d=2600\n@"
+        "@1: line 1.2- t=2600 -> @@0\nraca-da-bra five six "
+        "seven \n@ via @@1 b=* p=0 d=*\n@@2: line 2.3 t=260"
+        "0 -> @@1\neight \n@\\par via @@2 b=0 p=-10000 d=*"
+        "\n@@3: line 3.2- t=2600 -> @@2\n\n"
+);
+}
+
 /* A pdf destination is a whatsit in the list, written out the way the
    reference writes it; see docs/DECISIONS.md, pdf-destinations. */
 static int test_pdf_destinations(void)
@@ -5218,6 +5319,8 @@ int main(void)
         test_a_hyphen_that_ligatures() != 0 ||
         test_the_last_node_of_a_page() != 0 ||
         test_pdf_destinations() != 0 ||
+        test_tracing_paragraphs() != 0 ||
+        test_the_first_line_protrudes_too() != 0 ||
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||

@@ -15255,7 +15255,21 @@ struct hstex_break_site {
     bool hyphenated;
 };
 
+/* What \tracingparagraphs is in the middle of writing; see
+   docs/DECISIONS.md, tracing-paragraphs. */
+struct hstex_break_trace {
+    FILE *out;
+    /* The first node of the paragraph that has not been shown yet. */
+    size_t printed;
+    /* The font the short display is in, so that a change is announced. */
+    uint32_t font;
+    bool font_known;
+    /* False when the output stands at the start of a line. */
+    bool column;
+};
+
 struct hstex_break_state {
+    struct hstex_break_trace trace;
     struct hstex_break_totals *totals;
     size_t node_count;
     struct hstex_break_record *records;
@@ -15587,6 +15601,143 @@ static int32_t line_right_kern(struct hstex_engine *engine,
     return protrusion_kern(engine, character, false);
 }
 
+/* print_nl: a newline first unless the output already stands at one. */
+static void trace_newline(struct hstex_break_trace *trace)
+{
+    if (trace->column) {
+        (void)fputc('\n', trace->out);
+        trace->column = false;
+    }
+}
+
+static void trace_font(struct hstex_engine *engine,
+                       struct hstex_break_trace *trace, uint32_t font)
+{
+    if (trace->font_known && trace->font == font) {
+        return;
+    }
+    trace->font = font;
+    trace->font_known = true;
+    const struct hstex_font *metrics = font_by_identifier(engine, font);
+    (void)fputc('\\', trace->out);
+    size_t length = 0U;
+    const uint8_t *name = NULL;
+    enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
+    if (metrics != NULL && metrics->identifier_cs != 0U &&
+        hstex_symbol_name(&engine->lexical_state.symbols,
+                          metrics->identifier_cs, &kind, &name, &length) == 0 &&
+        name != NULL) {
+        (void)fwrite(name, 1U, length, trace->out);
+    } else if (metrics != NULL && metrics->name != NULL) {
+        (void)fputs(metrics->name, trace->out);
+    }
+    (void)fputc(' ', trace->out);
+    trace->column = true;
+}
+
+/* short_display: the text of a run of nodes, with everything that is not a
+   character standing for itself. See docs/DECISIONS.md, tracing-paragraphs. */
+static void trace_short_display(struct hstex_engine *engine,
+                                struct hstex_break_trace *trace,
+                                const uint32_t *items, size_t from, size_t to)
+{
+    for (size_t index = from; index < to; ++index) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        switch (node->kind) {
+        case HSTEX_NODE_CHARACTER:
+            trace_font(engine, trace, node->value.character.font);
+            show_ascii(trace->out, (uint8_t)node->value.character.character);
+            trace->column = true;
+            break;
+        case HSTEX_NODE_LIGATURE: {
+            trace_font(engine, trace, node->value.character.font);
+            uint8_t count = node->value.character.original_count;
+            if (count == 0U) {
+                show_ascii(trace->out,
+                           (uint8_t)node->value.character.character);
+            }
+            for (uint8_t item = 0U; item < count; ++item) {
+                show_ascii(trace->out, node->value.character.originals[item]);
+            }
+            trace->column = true;
+            break;
+        }
+        case HSTEX_NODE_LIST:
+        case HSTEX_NODE_WHATSIT:
+            (void)fputs("[]", trace->out);
+            trace->column = true;
+            break;
+        case HSTEX_NODE_RULE:
+            (void)fputc('|', trace->out);
+            trace->column = true;
+            break;
+        case HSTEX_NODE_GLUE:
+            if (node->width != 0 || node->value.glue.stretch != 0 ||
+                node->value.glue.shrink != 0) {
+                (void)fputc(' ', trace->out);
+                trace->column = true;
+            }
+            break;
+        case HSTEX_NODE_MATH:
+            (void)fputc('$', trace->out);
+            trace->column = true;
+            break;
+        case HSTEX_NODE_DISCRETIONARY: {
+            const struct hstex_node saved = *node;
+            if ((size_t)saved.value.disc.pre_start + saved.value.disc.pre_count <=
+                engine->list_item_count) {
+                trace_short_display(engine, trace,
+                                    engine->list_items +
+                                        saved.value.disc.pre_start,
+                                    0U, saved.value.disc.pre_count);
+            }
+            if ((size_t)saved.value.disc.post_start +
+                    saved.value.disc.post_count <=
+                engine->list_item_count) {
+                trace_short_display(engine, trace,
+                                    engine->list_items +
+                                        saved.value.disc.post_start,
+                                    0U, saved.value.disc.post_count);
+            }
+            index += saved.value.disc.replace_count;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+/* The command that stands at a breakpoint, as the trace names it. */
+static const char *trace_break_name(const struct hstex_engine *engine,
+                                    const uint32_t *items, size_t count,
+                                    size_t breakpoint)
+{
+    if (breakpoint >= count) {
+        return "\\par";
+    }
+    uint32_t identifier = items[breakpoint];
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return "";
+    }
+    switch (engine->nodes[identifier - 1U].kind) {
+    case HSTEX_NODE_GLUE:
+        return "";
+    case HSTEX_NODE_PENALTY:
+        return "\\penalty";
+    case HSTEX_NODE_DISCRETIONARY:
+        return "\\discretionary";
+    case HSTEX_NODE_KERN:
+        return "\\kern";
+    default:
+        return "\\math";
+    }
+}
+
 static int try_break_at(struct hstex_engine *engine,
                         struct hstex_break_state *state,
                         const uint32_t *items, size_t count,
@@ -15681,6 +15832,34 @@ static int try_break_at(struct hstex_engine *engine,
                                       [HSTEX_INTEGER_DOUBLE_HYPHEN_DEMERITS];
             }
         }
+        if (state->trace.out != NULL) {
+            trace_newline(&state->trace);
+            /* The text runs to the breakpoint and takes it in, so that the
+               glue a line breaks at shows as the space it is. */
+            if (state->trace.printed <= breakpoint) {
+                size_t end = breakpoint < count ? breakpoint + 1U : count;
+                trace_short_display(engine, &state->trace, items,
+                                    state->trace.printed, end);
+                state->trace.printed = end;
+                trace_newline(&state->trace);
+            }
+            (void)fprintf(state->trace.out, "@%s via @@%zu b=",
+                          trace_break_name(engine, items, count, breakpoint),
+                          index);
+            if (badness > HSTEX_INFINITE_BADNESS) {
+                (void)fputc('*', state->trace.out);
+            } else {
+                (void)fprintf(state->trace.out, "%d", badness);
+            }
+            (void)fprintf(state->trace.out, " p=%d d=", penalty);
+            if (artificial) {
+                (void)fputc('*', state->trace.out);
+            } else {
+                (void)fprintf(state->trace.out, "%lld", (long long)demerits);
+            }
+            (void)fputc('\n', state->trace.out);
+            state->trace.column = false;
+        }
         demerits += record->demerits;
         if (demerits <= minimal[fitness]) {
             minimal[fitness] = demerits;
@@ -15725,6 +15904,15 @@ static int try_break_at(struct hstex_engine *engine,
         record->hyphenated = site->hyphenated;
         record->left_kern =
             protruding ? line_left_kern(engine, items, count, start, site) : 0;
+        if (state->trace.out != NULL) {
+            trace_newline(&state->trace);
+            (void)fprintf(state->trace.out, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
+                          state->record_count, record->line, fit,
+                          site->hyphenated ? "-" : "",
+                          (long long)record->demerits,
+                          best[fit] == SIZE_MAX ? (size_t)0U : best[fit]);
+            state->trace.column = false;
+        }
         state->active[state->active_count++] = state->record_count;
         ++state->record_count;
     }
@@ -15809,6 +15997,13 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
     first->fitness = (uint8_t)HSTEX_FIT_DECENT;
     first->demerits = 0;
     first->previous = SIZE_MAX;
+    /* The paragraph's own first line lets its first character stick out just
+       as any other line does; see docs/DECISIONS.md, character-protrusion. */
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_PROTRUDE_CHARS] >= 2) {
+        struct hstex_break_site opening = {0};
+        opening.start = SIZE_MAX;
+        first->left_kern = line_left_kern(engine, items, count, 0U, &opening);
+    }
     state->active[state->active_count++] = state->record_count;
     ++state->record_count;
 
@@ -16801,10 +16996,21 @@ static int break_paragraph(struct hstex_engine *engine,
 
     size_t best = SIZE_MAX;
     int found = 0;
+    /* \tracingparagraphs writes the passes out as the reference does; see
+       docs/DECISIONS.md, tracing-paragraphs. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0 &&
+        engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] > 0) {
+        state.trace.out = engine->message_stream == NULL
+                              ? stdout
+                              : engine->message_stream;
+    }
     int32_t emergency =
         engine->dimen_parameters[HSTEX_DIMEN_EMERGENCY_STRETCH];
     int32_t pretolerance = engine->integer_parameters[HSTEX_INTEGER_PRETOLERANCE];
     if (pretolerance >= 0) {
+        if (state.trace.out != NULL) {
+            (void)fputs("@firstpass\n", state.trace.out);
+        }
         found = find_paragraph_breaks(engine, &state, items, count, &background,
                                       pretolerance, false, &best, error,
                                       error_capacity);
@@ -16833,6 +17039,11 @@ static int break_paragraph(struct hstex_engine *engine,
         /* The pass that hyphenates is the last one only when there is no
            \emergencystretch to fall back on. See docs/DECISIONS.md,
            emergency-stretch. */
+        if (state.trace.out != NULL) {
+            trace_newline(&state.trace);
+            (void)fputs("@secondpass\n", state.trace.out);
+            state.trace.printed = 0U;
+        }
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
             engine->integer_parameters[HSTEX_INTEGER_TOLERANCE],
@@ -16840,6 +17051,11 @@ static int break_paragraph(struct hstex_engine *engine,
     }
     if (found == 0 && emergency > 0) {
         /* One more pass, with that much more stretch behind every line. */
+        if (state.trace.out != NULL) {
+            trace_newline(&state.trace);
+            (void)fputs("@emergencypass\n", state.trace.out);
+            state.trace.printed = 0U;
+        }
         background.stretch[0] += emergency;
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
@@ -16850,6 +17066,11 @@ static int break_paragraph(struct hstex_engine *engine,
     if (status == 0 && found == 0) {
         status = set_error(error, error_capacity,
                            "no way to break this paragraph into lines");
+    }
+    if (state.trace.out != NULL) {
+        trace_newline(&state.trace);
+        (void)fputc('\n', state.trace.out);
+        (void)fflush(state.trace.out);
     }
     if (status == 0) {
         status = emit_paragraph_lines(engine, &state, items, count, best,
