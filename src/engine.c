@@ -759,7 +759,10 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
     for (size_t index = 4U; index < 12U; ++index) {
         expected_words += fields[index];
     }
-    if ((uint64_t)lf != expected_words || (size_t)lf * 4U != input.length ||
+    /* A metric file may be longer than its own table lengths say -- some in
+       the distribution are padded -- and the reference simply reads the
+       words it was told about. See docs/DECISIONS.md, padded-tfm-files. */
+    if ((uint64_t)lf != expected_words || (size_t)lf * 4U > input.length ||
         bc > 255U || ec > 255U ||
         (bc > ec && !(bc == 1U && ec == 0U))) {
         hstex_input_close(&input);
@@ -13127,9 +13130,10 @@ static int append_character_node(struct hstex_engine *engine, uint8_t code,
         font_by_identifier(engine, engine->current_font);
     if (font == NULL || font->characters == NULL ||
         font->characters[code].tag < 0) {
-        return set_error(error, error_capacity,
-                         "the current font has no character %u",
-                         (unsigned int)code);
+        /* A character the font does not define contributes nothing at all,
+           though it has already moved the space factor; see
+           docs/DECISIONS.md, missing-characters. */
+        return 0;
     }
     const struct hstex_char_metric *metric = &font->characters[code];
     struct hstex_node node = {

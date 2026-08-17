@@ -1897,6 +1897,27 @@ static int test_over_and_underline(void)
         "17|11.44434pt|3.0pt|2.9999pt]");
 }
 
+/* A metric file longer than its tables say, and characters a font does
+   not define; see docs/DECISIONS.md, padded-tfm-files and
+   missing-characters. */
+static int test_missing_characters(void)
+{
+    return run_snippet(
+        "\\hbadness=10000 \\hfuzz=1000pt \\tracinglostchars=0 \\sfc"
+        "ode`\\.=3000 \\font\\x=tcrm1095 \\font\\f=cmr10 \\font\\n="
+        "cmr10 at 5pt \\setbox0=\\hbox{\\x A}[1|\\the\\wd0|\\the\\h"
+        "t0]\\setbox0=\\hbox{\\f A\\x A\\f A}[2|\\the\\wd0|\\the\\h"
+        "t0]\\setbox0=\\hbox{\\f AA}[3|\\the\\wd0|\\the\\ht0]\\setb"
+        "ox0=\\hbox{\\x A\\global\\count1=\\spacefactor}[4|\\the\\c"
+        "ount1]\\setbox0=\\hbox{\\x .\\global\\count1=\\spacefactor"
+        "}[5|\\the\\count1][6|\\the\\fontdimen1\\x|\\the\\fontdimen"
+        "2\\x|\\the\\fontdimen6\\x]\\setbox0=\\hbox{\\nullfont A}[7"
+        "|\\the\\wd0|\\the\\ht0]%",
+        "[1|0.0pt|0.0pt][2|15.00003pt|6.83331pt][3|15.00003pt|6.833"
+        "31pt][4|999][5|3000][6|0.0pt|3.63054pt|10.88788pt][7|0.0pt"
+        "|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2989,7 +3010,8 @@ int main(void)
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
-        test_over_and_underline() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_over_and_underline() != 0 ||
+        test_missing_characters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
