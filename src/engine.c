@@ -86,6 +86,9 @@ static int32_t last_node_type(const struct hstex_node *node);
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
                               char *error, size_t error_capacity);
+static int expand_pdf_color_stack_init(struct hstex_engine *engine,
+                                       struct hstex_source_location location,
+                                       char *error, size_t error_capacity);
 static bool conditional_test_pending(const struct hstex_engine *engine);
 static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
@@ -1680,6 +1683,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"pdfoutline", HSTEX_COMMAND_PDF_OUTLINE},
         {"pdfxform", HSTEX_COMMAND_PDF_XFORM},
         {"pdfannot", HSTEX_COMMAND_PDF_ANNOT},
+        {"pdfcolorstack", HSTEX_COMMAND_PDF_COLOR_STACK},
+        {"pdfcolorstackinit", HSTEX_COMMAND_PDF_COLOR_STACK_INIT},
         {"font", HSTEX_COMMAND_FONT},
         {"fontdimen", HSTEX_COMMAND_FONT_DIMEN},
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
@@ -1770,6 +1775,26 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         if (register_integer_primitive(
                 engine, engine_state_integer_primitives[index],
                 HSTEX_COMMAND_ENGINE_STATE_INTEGER, (int32_t)index, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_unbox subtype;
+    } unbox_primitives[] = {
+        {"unhbox", HSTEX_UNBOX_HORIZONTAL},
+        {"unhcopy", HSTEX_UNBOX_HORIZONTAL_COPY},
+        {"unvbox", HSTEX_UNBOX_VERTICAL},
+        {"unvcopy", HSTEX_UNBOX_VERTICAL_COPY},
+    };
+    for (size_t index = 0U;
+         index < sizeof(unbox_primitives) / sizeof(unbox_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, unbox_primitives[index].name, HSTEX_COMMAND_UNBOX,
+                (int32_t)unbox_primitives[index].subtype, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2321,6 +2346,15 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_records[index].content);
     }
     free(engine->pdf_records);
+    for (size_t index = 0U; index < engine->color_stack_count; ++index) {
+        struct hstex_color_stack *stack = &engine->color_stacks[index];
+        for (size_t depth = 0U; depth < stack->count; ++depth) {
+            free(stack->values[depth]);
+        }
+        free(stack->values);
+        free(stack->initial);
+    }
+    free(engine->color_stacks);
     free(engine->pdf_catalog);
     free(engine->pdf_info);
     for (size_t index = 0U; index < engine->glyph_unicode_count; ++index) {
@@ -6555,6 +6589,10 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_SCAN_TOKENS) {
         return expand_scan_tokens(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_PDF_COLOR_STACK_INIT) {
+        return expand_pdf_color_stack_init(engine, location, error,
+                                           error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_PDF_MATCH) {
         return expand_pdf_match(engine, location, error, error_capacity);
     }
@@ -6807,6 +6845,13 @@ enum hstex_engine_result hstex_engine_next_expanded(
         if (meaning->command == HSTEX_COMMAND_SCAN_TOKENS) {
             if (expand_scan_tokens(engine, *location, error, error_capacity) !=
                 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_COLOR_STACK_INIT) {
+            if (expand_pdf_color_stack_init(engine, *location, error,
+                                            error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -7572,6 +7617,11 @@ static int scan_rule_dimensions(struct hstex_engine *engine,
                                 struct hstex_node *rule, char *error,
                                 size_t error_capacity);
 
+static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
+                            char *error, size_t error_capacity);
+static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
+                            char *error, size_t error_capacity);
+
 static int32_t packed_dimen(int32_t value)
 {
     return value == HSTEX_RUNNING_DIMEN ? 0 : value;
@@ -7595,6 +7645,30 @@ static int append_hbox_node(struct hstex_engine *engine,
     if (reserve_hbox_items(builder, builder->count + 1U, error,
                            error_capacity) != 0 ||
         store_node(engine, node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    return append_hbox_item(engine, identifier, error, error_capacity);
+}
+
+/* Take a node already in the arena into the horizontal list being built.
+   Unboxing splices identifiers this way rather than copying nodes. */
+static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
+                            char *error, size_t error_capacity)
+{
+    struct hstex_hbox_builder *builder = engine->active_hbox_builder;
+    if (builder == NULL || identifier == 0U ||
+        (size_t)identifier > engine->node_count) {
+        return set_error(error, error_capacity,
+                         "horizontal node used outside an hbox");
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    int64_t width = builder->width + packed_dimen(node->width);
+    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
+        return set_error(error, error_capacity,
+                         "hbox width exceeds TeX's dimension range");
+    }
+    if (reserve_hbox_items(builder, builder->count + 1U, error,
+                           error_capacity) != 0) {
         return -1;
     }
     builder->node_identifiers[builder->count++] = identifier;
@@ -7695,6 +7769,53 @@ static int append_vbox_node(struct hstex_engine *engine,
     if (reserve_vbox_items(builder, builder->count + 1U, error,
                            error_capacity) != 0 ||
         store_node(engine, node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->node_identifiers[builder->count++] = identifier;
+    builder->extent = extent;
+    builder->trailing_depth = trailing_depth;
+    /* A box sets the reference for the next one; a rule suppresses it. */
+    if (node->kind == HSTEX_NODE_LIST) {
+        engine->prev_depth = packed_dimen(node->depth);
+    } else if (node->kind == HSTEX_NODE_RULE) {
+        engine->prev_depth = HSTEX_IGNORE_DEPTH;
+    }
+    int32_t reach = packed_dimen(node->width) + node->shift;
+    if ((node->kind == HSTEX_NODE_RULE || node->kind == HSTEX_NODE_LIST) &&
+        reach > builder->width) {
+        builder->width = reach;
+    }
+    return 0;
+}
+
+/* Take a node already in the arena into the vertical list being built. No
+   interline glue is inserted: an unboxed list carries its own. */
+static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
+                            char *error, size_t error_capacity)
+{
+    struct hstex_vbox_builder *builder = engine->active_vbox_builder;
+    if (builder == NULL || identifier == 0U ||
+        (size_t)identifier > engine->node_count) {
+        return set_error(error, error_capacity,
+                         "vertical node used outside a vbox or page");
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    int64_t extent = builder->extent;
+    int32_t trailing_depth = builder->trailing_depth;
+    if (node->kind == HSTEX_NODE_GLUE || node->kind == HSTEX_NODE_KERN) {
+        extent += (int64_t)trailing_depth + packed_dimen(node->width);
+        trailing_depth = 0;
+    } else if (node->kind == HSTEX_NODE_RULE ||
+               node->kind == HSTEX_NODE_CHARACTER ||
+               node->kind == HSTEX_NODE_LIST) {
+        extent += (int64_t)trailing_depth + packed_dimen(node->height);
+        trailing_depth = packed_dimen(node->depth);
+    }
+    if (extent < INT64_MIN / 2 || extent > INT64_MAX / 2) {
+        return set_error(error, error_capacity, "vertical extent overflow");
+    }
+    if (reserve_vbox_items(builder, builder->count + 1U, error,
+                           error_capacity) != 0) {
         return -1;
     }
     builder->node_identifiers[builder->count++] = identifier;
@@ -8326,8 +8447,9 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
         *box = engine->boxes[(size_t)index];
         if (meaning->command == HSTEX_COMMAND_BOX) {
             struct hstex_box empty = {0};
+            /* Emptying a register outlives the group it happened in. */
             empty.kind = HSTEX_BOX_VOID;
-            if (assign_box(engine, (uint32_t)index, empty, false, error,
+            if (assign_box(engine, (uint32_t)index, empty, true, error,
                            error_capacity) != 0) {
                 return -1;
             }
@@ -8404,8 +8526,9 @@ static int execute_box_reference(struct hstex_engine *engine,
     struct hstex_box box = engine->boxes[(size_t)index];
     if (command == HSTEX_COMMAND_BOX) {
         struct hstex_box empty = {0};
+        /* Emptying a register outlives the group it happened in. */
         empty.kind = HSTEX_BOX_VOID;
-        if (assign_box(engine, (uint32_t)index, empty, false, error,
+        if (assign_box(engine, (uint32_t)index, empty, true, error,
                        error_capacity) != 0) {
             return -1;
         }
@@ -11637,6 +11760,224 @@ static int execute_pdf_annot(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+static int reserve_color_stacks(struct hstex_engine *engine, size_t required,
+                                char *error, size_t error_capacity)
+{
+    if (required <= engine->color_stack_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->color_stack_capacity == 0U
+                          ? 8U
+                          : engine->color_stack_capacity * 2U;
+    while (capacity < required) {
+        capacity *= 2U;
+    }
+    struct hstex_color_stack *grown =
+        realloc(engine->color_stacks, capacity * sizeof(*grown));
+    if (grown == NULL) {
+        return set_error(error, error_capacity,
+                         "colour stack table allocation failed");
+    }
+    memset(grown + engine->color_stack_capacity, 0,
+           (capacity - engine->color_stack_capacity) * sizeof(*grown));
+    engine->color_stacks = grown;
+    engine->color_stack_capacity = capacity;
+    return 0;
+}
+
+/* \pdfcolorstackinit expands to the number of the stack it makes. Stack zero
+   is the page's own, so the first one made is stack one. */
+static int expand_pdf_color_stack_init(struct hstex_engine *engine,
+                                       struct hstex_source_location location,
+                                       char *error, size_t error_capacity)
+{
+    bool page = false;
+    bool direct = false;
+    if (try_keyword(engine, "page", &page, error, error_capacity) != 0 ||
+        try_keyword(engine, "direct", &direct, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    /* The built-in page stack occupies slot zero. */
+    if (engine->color_stack_count == 0U) {
+        if (reserve_color_stacks(engine, 1U, error, error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+        engine->color_stack_count = 1U;
+    }
+    if (reserve_color_stacks(engine, engine->color_stack_count + 1U, error,
+                             error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    struct hstex_color_stack *stack =
+        &engine->color_stacks[engine->color_stack_count];
+    memset(stack, 0, sizeof(*stack));
+    stack->page = page;
+    stack->direct = direct;
+    stack->initial = own_general_text(bytes, count);
+    free(bytes);
+    if (stack->initial == NULL) {
+        return set_error(error, error_capacity,
+                         "colour stack allocation failed");
+    }
+    int32_t number = (int32_t)engine->color_stack_count++;
+    return push_integer_expansion(engine, number, location, error,
+                                  error_capacity);
+}
+
+/* \pdfcolorstack <number> (push <text> | pop | set <text> | current) */
+static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    int32_t number = 0;
+    if (scan_integer(engine, &number, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (number < 0) {
+        return set_error(error, error_capacity, "invalid colour stack %d",
+                         number);
+    }
+    if ((size_t)number >= engine->color_stack_count) {
+        /* Stack zero exists without being made. */
+        if (number != 0 ||
+            reserve_color_stacks(engine, 1U, error, error_capacity) != 0) {
+            return set_error(error, error_capacity,
+                             "colour stack %d does not exist", number);
+        }
+        engine->color_stack_count = 1U;
+    }
+    struct hstex_color_stack *stack = &engine->color_stacks[(size_t)number];
+    static const char *const actions[] = {"push", "pop", "set", "current"};
+    size_t action = 0U;
+    bool matched = false;
+    for (; action < sizeof(actions) / sizeof(actions[0]); ++action) {
+        if (try_keyword(engine, actions[action], &matched, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        if (matched) {
+            break;
+        }
+    }
+    if (!matched) {
+        return set_error(error, error_capacity,
+                         "a colour stack action was expected here");
+    }
+    if (action == 1U) { /* pop */
+        if (stack->count != 0U) {
+            free(stack->values[--stack->count]);
+        }
+        return 0;
+    }
+    if (action == 3U) { /* current: re-states the value, changing nothing */
+        return 0;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    char *value = own_general_text(bytes, count);
+    free(bytes);
+    if (value == NULL) {
+        return set_error(error, error_capacity,
+                         "colour stack allocation failed");
+    }
+    if (action == 2U) { /* set: replaces the top rather than growing */
+        if (stack->count != 0U) {
+            free(stack->values[stack->count - 1U]);
+            stack->values[stack->count - 1U] = value;
+            return 0;
+        }
+    }
+    if (stack->count == stack->capacity) {
+        size_t capacity = stack->capacity == 0U ? 8U : stack->capacity * 2U;
+        char **grown = realloc(stack->values, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            free(value);
+            return set_error(error, error_capacity,
+                             "colour stack allocation failed");
+        }
+        stack->values = grown;
+        stack->capacity = capacity;
+    }
+    stack->values[stack->count++] = value;
+    return 0;
+}
+
+/* Unboxing appends a box's own list to the one being built and discards the
+   box itself; the copying forms leave the register alone. No interline glue
+   is inserted, since the list already carries its own; see
+   docs/DECISIONS.md, unboxing. */
+static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
+                         char *error, size_t error_capacity)
+{
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
+        return set_error(error, error_capacity,
+                         "unboxing does not accept prefixes");
+    }
+    bool vertical = subtype == (int32_t)HSTEX_UNBOX_VERTICAL ||
+                    subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
+    bool keep = subtype == (int32_t)HSTEX_UNBOX_HORIZONTAL_COPY ||
+                subtype == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
+    if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
+                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+        return set_error(error, error_capacity,
+                         vertical ? "unvbox requires vertical mode"
+                                  : "unhbox requires horizontal mode");
+    }
+    int32_t index = 0;
+    if (scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
+        (size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register outside supported range");
+    }
+    struct hstex_box box = engine->boxes[(size_t)index];
+    if (box.kind == HSTEX_BOX_VOID) {
+        return 0;
+    }
+    enum hstex_box_kind wanted =
+        vertical ? HSTEX_BOX_VLIST : HSTEX_BOX_HLIST;
+    if (box.kind != wanted) {
+        return set_error(error, error_capacity,
+                         "box %d cannot be unboxed into this list", index);
+    }
+    for (uint32_t offset = 0U; offset < box.node_count; ++offset) {
+        size_t slot = (size_t)box.node_start + offset;
+        if (slot >= engine->list_item_count) {
+            return set_error(error, error_capacity,
+                             "box %d refers outside the list arena", index);
+        }
+        uint32_t identifier = engine->list_items[slot];
+        int status = vertical
+                         ? append_vbox_item(engine, identifier, error,
+                                            error_capacity)
+                         : append_hbox_item(engine, identifier, error,
+                                            error_capacity);
+        if (status != 0) {
+            return -1;
+        }
+    }
+    if (keep) {
+        return 0;
+    }
+    struct hstex_box empty = {0};
+    /* Emptying a register outlives the group it happened in. */
+    empty.kind = HSTEX_BOX_VOID;
+    return assign_box(engine, (uint32_t)index, empty, true, error,
+                      error_capacity);
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -13190,6 +13531,12 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_UNBOX:
+            if (execute_unbox(engine, meaning->value.integer, error,
+                              error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_BOX:
         case HSTEX_COMMAND_COPY:
             if (execute_box_reference(engine, meaning->command, error,
@@ -13271,6 +13618,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_PDF_ANNOT:
             if (execute_pdf_annot(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_COLOR_STACK:
+            if (execute_pdf_color_stack(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -13658,6 +14010,7 @@ handle_token:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:
         case HSTEX_COMMAND_SCAN_TOKENS:
+        case HSTEX_COMMAND_PDF_COLOR_STACK_INIT:
         case HSTEX_COMMAND_PDF_MATCH:
         case HSTEX_COMMAND_PDF_LAST_MATCH:
         case HSTEX_COMMAND_PDF_ESCAPE_STRING:

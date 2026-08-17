@@ -562,6 +562,38 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* Unboxing and the colour stacks; see docs/DECISIONS.md, unboxing and
+   colour-stacks. */
+static int test_unboxing_and_colour_stacks(void)
+{
+    return run_snippet(
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=0pt \\lineskip=0pt "
+        "\\lineskiplimit=0pt "
+        "\\setbox1=\\hbox{\\vrule width1pt height5pt depth2pt \\kern3pt}"
+        "\\setbox2=\\vbox{\\hrule height2pt \\kern4pt}"
+        "\\setbox3=\\hbox{\\vrule width1pt}"
+        /* A copy leaves the register; the box itself empties it. */
+        "\\setbox0=\\hbox{\\unhcopy1}"
+        "[\\the\\wd0|\\the\\ht0|\\the\\dp0|\\the\\wd1]"
+        "\\setbox0=\\hbox{\\unhbox1}"
+        "[\\the\\wd0|\\ifvoid1 V\\else N\\fi]"
+        "\\setbox0=\\vbox{\\unvcopy2}[\\the\\ht0|\\the\\wd0]"
+        "\\setbox0=\\vbox{\\unvbox2}[\\ifvoid2 V\\else N\\fi]"
+        /* Unboxing a void register does nothing. */
+        "\\setbox0=\\hbox{\\unhbox9}[\\the\\wd0]"
+        "\\setbox0=\\hbox{\\unhcopy3\\unhcopy3}[\\the\\wd0]"
+        /* Emptying a register outlives the group it happened in. */
+        "\\setbox4=\\hbox{\\vrule width1pt}"
+        "{\\setbox0=\\hbox{\\unhbox4}}[\\ifvoid4 V\\else N\\fi]"
+        /* Colour stacks are numbered from one; stack zero is the page's. */
+        "[\\pdfcolorstackinit{0 g}][\\pdfcolorstackinit page direct{1 g}]"
+        "\\setbox0=\\hbox{\\pdfcolorstack0 push{1 0 0 rg}"
+        "\\pdfcolorstack0 pop \\pdfcolorstack0 set{0 g}"
+        "\\pdfcolorstack0 current}[ok]%",
+        "[4.0pt|5.0pt|2.0pt|4.0pt][4.0pt|V][6.0pt|0.0pt][V][0.0pt][2.0pt][V]"
+        "[1][2][ok]");
+}
+
 /* \everyeof is inserted when a file, real or from \scantokens, runs out;
    see docs/DECISIONS.md, everyeof. */
 static int test_every_eof(void)
@@ -1581,7 +1613,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
-        test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
+        test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||

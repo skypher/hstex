@@ -184,6 +184,31 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_OUTLINE,
     HSTEX_COMMAND_PDF_XFORM,
     HSTEX_COMMAND_PDF_ANNOT,
+    HSTEX_COMMAND_PDF_COLOR_STACK,
+    HSTEX_COMMAND_PDF_COLOR_STACK_INIT,
+    HSTEX_COMMAND_UNBOX,
+};
+
+/* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
+   register is emptied. */
+enum hstex_unbox {
+    HSTEX_UNBOX_HORIZONTAL = 0,
+    HSTEX_UNBOX_HORIZONTAL_COPY,
+    HSTEX_UNBOX_VERTICAL,
+    HSTEX_UNBOX_VERTICAL_COPY,
+};
+
+/* One colour stack. Stack zero is built in and belongs to the page; the rest
+   come from \pdfcolorstackinit. Nothing is written yet, so the stack is kept
+   only so that push, pop and current agree with one another; see
+   docs/DECISIONS.md, colour-stacks. */
+struct hstex_color_stack {
+    char *initial;
+    bool page;
+    bool direct;
+    char **values;
+    size_t count;
+    size_t capacity;
 };
 
 enum hstex_pdf_record_kind {
@@ -785,6 +810,9 @@ struct hstex_engine {
     struct hstex_pdf_record *pdf_records;
     size_t pdf_record_count;
     size_t pdf_record_capacity;
+    struct hstex_color_stack *color_stacks;
+    size_t color_stack_count;
+    size_t color_stack_capacity;
     int32_t pdf_last[5];
     /* Objects, links, forms and annotations are numbered from one shared
        counter; see docs/DECISIONS.md, pdf-annotations. */
