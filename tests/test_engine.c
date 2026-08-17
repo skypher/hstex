@@ -1687,6 +1687,262 @@ static int test_whatsit_text_is_cut(void)
         "vwxyzabcdefghijklmnop\\thepage }\n\n! OK.\n");
 }
 
+/* The hyphen a break inserts joins the letter in front of it, and what it
+   swallows becomes the discretionary's replacement; see docs/DECISIONS.md,
+   a-hyphen-that-ligatures. */
+static int test_a_hyphen_that_ligatures(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\lccode`\\a=`\\a \\lc"
+        "code`\\b=`\\b \\lccode`\\c=`\\c \\lccode`\\d=`\\d "
+        "\\lccode`\\e=`\\e \\lccode`\\f=`\\f \\lccode`\\g=`"
+        "\\g \\lccode`\\h=`\\h \\lccode`\\i=`\\i \\lccode`"
+        "\\j=`\\j \\lccode`\\k=`\\k \\lccode`\\l=`\\l \\lcc"
+        "ode`\\m=`\\m \\lccode`\\n=`\\n \\lccode`\\o=`\\o "
+        "\\lccode`\\p=`\\p \\lccode`\\q=`\\q \\lccode`\\r=`"
+        "\\r \\lccode`\\s=`\\s \\lccode`\\t=`\\t \\lccode`"
+        "\\u=`\\u \\lccode`\\v=`\\v \\lccode`\\w=`\\w \\lcc"
+        "ode`\\x=`\\x \\lccode`\\y=`\\y \\lccode`\\z=`\\z "
+        "\\lccode`\\-=`\\- \\uchyph=1 \\lefthyphenmin=1 \\r"
+        "ighthyphenmin=1 \\patterns{-1g} \\hyphenchar\\tenr"
+        "m=45 \\pretolerance=-1 \\tolerance=10000 \\hsize=3"
+        "0pt \\parindent=0pt \\baselineskip=12pt \\lineskip"
+        "=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fi"
+        "l \\leftskip=0pt \\rightskip=0pt \\showboxdepth=10"
+        " \\message{[wag]}\\setbox1=\\hbox{and-gap}\\setbox"
+        "0=\\vbox{\\noindent aa \\unhbox1 \\ bb\\par}\\show"
+        "box0 \\message{[wide]}\\hsize=200pt \\setbox1=\\hb"
+        "ox{and-gap}\\setbox0=\\vbox{\\noindent aa \\unhbox"
+        "1 \\ bb\\par}\\showbox0%"
+,
+        "[wag]> \\box0=\n\\vbox(40.30554+0.0)x30.0\n.\\hbox"
+        "(4.30554+0.0)x30.0\n..\\tenrm a\n..\\tenrm a\n..\\"
+        "glue(\\rightskip) 0.0\n.\\glue(\\baselineskip) 5.0"
+        "5556\n.\\hbox(6.94444+0.0)x30.0\n..\\tenrm a\n..\\"
+        "tenrm n\n..\\tenrm d\n..\\discretionary\n..\\tenrm"
+        " { (ligature --)\n..\\glue(\\rightskip) 0.0\n.\\gl"
+        "ue(\\baselineskip) 7.69446\n.\\hbox(4.30554+1.9444"
+        "4)x30.0\n..\\tenrm g\n..\\tenrm a\n..\\tenrm p\n.."
+        "\\glue(\\rightskip) 0.0\n.\\glue(\\baselineskip) 3"
+        ".11111\n.\\hbox(6.94444+0.0)x30.0, glue set 18.888"
+        "85fil\n..\\tenrm b\n..\\tenrm b\n..\\penalty 10000"
+        "\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glu"
+        "e(\\rightskip) 0.0\n\n! OK.\n[wide]> \\box0=\n\\vb"
+        "ox(6.94444+1.94444)x200.0\n.\\hbox(6.94444+1.94444"
+        ")x200.0, glue set 135.88873fil\n..\\tenrm a\n..\\t"
+        "enrm a\n..\\glue(\\spaceskip) 4.0\n..\\tenrm a\n.."
+        "\\tenrm n\n..\\tenrm d\n..\\discretionary replacin"
+        "g 1\n...\\tenrm { (ligature --)\n..\\tenrm -\n..\\"
+        "tenrm g\n..\\tenrm a\n..\\tenrm p\n..\\glue(\\spac"
+        "eskip) 4.0\n..\\tenrm b\n..\\tenrm b\n..\\penalty "
+        "10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n.."
+        "\\glue(\\rightskip) 0.0\n\n! OK.\n"
+);
+}
+
+/* A line that breaks at a penalty keeps the penalty; see docs/DECISIONS.md,
+   a-line-that-breaks-at-a-penalty. */
+static int test_a_line_that_breaks_at_a_penalty(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\message{[forced]}\\s"
+        "etbox0=\\vbox{\\noindent aa\\penalty-10000 bb\\par"
+        "}\\showbox0 \\message{[chosen]}\\setbox0=\\vbox{\\"
+        "hsize=30pt \\noindent aaaa\\penalty0 bbbb\\par}\\s"
+        "howbox0 \\message{[after]}\\setbox0=\\vbox{\\hsize"
+        "=30pt \\noindent aaaa\\penalty0 \\hskip4pt bbbb\\p"
+        "ar}\\showbox0%"
+,
+        "[forced]> \\box0=\n\\vbox(16.30554+0.0)x200.0\n.\\"
+        "hbox(4.30554+0.0)x200.0\n..\\tenrm a\n..\\tenrm a"
+        "\n..\\penalty -10000\n..\\glue(\\rightskip) 0.0\n."
+        "\\glue(\\baselineskip) 5.05556\n.\\hbox(6.94444+0."
+        "0)x200.0, glue set 188.88885fil\n..\\tenrm b\n..\\"
+        "tenrm b\n..\\penalty 10000\n..\\glue(\\parfillskip"
+        ") 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! "
+        "OK.\n[chosen]> \\box0=\n\\vbox(16.30554+0.0)x30.0"
+        "\n.\\hbox(4.30554+0.0)x30.0\n..\\tenrm a\n..\\tenr"
+        "m a\n..\\tenrm a\n..\\tenrm a\n..\\penalty 0\n..\\"
+        "glue(\\rightskip) 0.0\n.\\glue(\\baselineskip) 5.0"
+        "5556\n.\\hbox(6.94444+0.0)x30.0, glue set 7.77771f"
+        "il\n..\\tenrm b\n..\\tenrm b\n..\\tenrm b\n..\\ten"
+        "rm b\n..\\penalty 10000\n..\\glue(\\parfillskip) 0"
+        ".0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n[after]> \\box0=\n\\vbox(16.30554+0.0)x30.0\n.\\"
+        "hbox(4.30554+0.0)x30.0\n..\\tenrm a\n..\\tenrm a\n"
+        "..\\tenrm a\n..\\tenrm a\n..\\penalty 0\n..\\glue("
+        "\\rightskip) 0.0\n.\\glue(\\baselineskip) 5.05556"
+        "\n.\\hbox(6.94444+0.0)x30.0, glue set 7.77771fil\n"
+        "..\\tenrm b\n..\\tenrm b\n..\\tenrm b\n..\\tenrm b"
+        "\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 p"
+        "lus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n"
+);
+}
+
+/* A sub-formula that comes to one unshifted box is that box; anything else is
+   packaged; see docs/DECISIONS.md, a-list-that-is-one-box. */
+static int test_a_list_that_is_one_box(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\message{[one]}\\setb"
+        "ox0=\\hbox{$U{\\hbox{a}}U$}\\showbox0 \\message{[s"
+        "hift]}\\setbox0=\\hbox{$U{\\mathop{x}}U$}\\showbox"
+        "0 \\message{[pair]}\\setbox0=\\hbox{$U{\\hbox{a}\\"
+        "hbox{b}}U$}\\showbox0 \\message{[char]}\\setbox0="
+        "\\hbox{$U{a}U$}\\showbox0 \\message{[sup]}\\setbox"
+        "0=\\hbox{$U^{\\hbox{a}}$}\\showbox0%"
+,
+        "[one]> \\box0=\n\\hbox(6.83331+0.0)x20.83607\n.\\m"
+        "athon\n.\\teni U\n.\\kern1.09026\n.\\hbox(4.30554+"
+        "0.0)x5.00002\n..\\tenrm a\n.\\teni U\n.\\kern1.090"
+        "26\n.\\mathoff\n\n! OK.\n[shift]> \\box0=\n\\hbox("
+        "6.83331+0.0)x21.55133\n.\\mathon\n.\\teni U\n.\\ke"
+        "rn1.09026\n.\\hbox(4.65277+0.0)x5.71527\n..\\hbox("
+        "4.30554+0.0)x5.71527, shifted -0.34723\n...\\teni "
+        "x\n.\\teni U\n.\\kern1.09026\n.\\mathoff\n\n! OK."
+        "\n[pair]> \\box0=\n\\hbox(6.94444+0.0)x26.39165\n."
+        "\\mathon\n.\\teni U\n.\\kern1.09026\n.\\hbox(6.944"
+        "44+0.0)x10.55559\n..\\hbox(4.30554+0.0)x5.00002\n."
+        "..\\tenrm a\n..\\hbox(6.94444+0.0)x5.55557\n...\\t"
+        "enrm b\n.\\teni U\n.\\kern1.09026\n.\\mathoff\n\n!"
+        " OK.\n[char]> \\box0=\n\\hbox(6.83331+0.0)x21.1219"
+        "5\n.\\mathon\n.\\teni U\n.\\kern1.09026\n.\\teni a"
+        "\n.\\teni U\n.\\kern1.09026\n.\\mathoff\n\n! OK.\n"
+        "[sup]> \\box0=\n\\hbox(7.93446+0.0)x12.91805\n.\\m"
+        "athon\n.\\teni U\n.\\kern1.09026\n.\\hbox(4.30554+"
+        "0.0)x5.00002, shifted -3.62892\n..\\tenrm a\n.\\ma"
+        "thoff\n\n! OK.\n"
+);
+}
+
+/* \mathaccent centres a character over its nucleus, sliding it right by the
+   nucleus's skew and dropping it onto the letter; see docs/DECISIONS.md,
+   math-accents. */
+static int test_math_accents(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\tracingonline=1 \\showboxdepth=10 \\showboxbread"
+        "th=1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz="
+        "1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0p"
+        "t \\boxmaxdepth=16383.99998pt \\baselineskip=12pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0"
+        "pt plus1fil \\leftskip=0pt \\rightskip=0pt \\toler"
+        "ance=10000 \\pretolerance=-1 \\spaceskip=4pt \\fon"
+        "t\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm"
+        "=cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\f"
+        "ont\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seve"
+        "nsy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex1"
+        "0 \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\sc"
+        "riptscriptfont0=\\fiverm \\textfont1=\\teni \\scri"
+        "ptfont1=\\seveni \\scriptscriptfont1=\\fivei \\tex"
+        "tfont2=\\tensy \\scriptfont2=\\sevensy \\scriptscr"
+        "iptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\"
+        "teni=127 \\skewchar\\seveni=127 \\skewchar\\fivei="
+        "127 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\"
+        "skewchar\\fivesy=48 \\tenrm \\message{[bar]}\\setb"
+        "ox0=\\hbox{$\\mathaccent\"7016 U$}\\showbox0 \\mes"
+        "sage{[hat]}\\setbox0=\\hbox{$\\mathaccent\"705E A$"
+        "}\\showbox0 \\message{[wide]}\\setbox0=\\hbox{$\\m"
+        "athaccent\"7016 {UU}$}\\showbox0 \\message{[low]}"
+        "\\setbox0=\\hbox{$\\mathaccent\"7016 x$}\\showbox0"
+        " \\message{[script]}\\setbox0=\\hbox{$U^{\\mathacc"
+        "ent\"7016 y}$}\\showbox0 \\message{[over]}\\setbox"
+        "0=\\hbox{$\\overline{U}$}\\showbox0%"
+,
+        "[bar]> \\box0=\n\\hbox(8.20554+0.0)x7.91803\n.\\ma"
+        "thon\n.\\vbox(8.20554+0.0)x7.91803\n..\\hbox(5.677"
+        "76+0.0)x0.0, shifted 1.7368\n...\\tenrm ^^V\n..\\k"
+        "ern-4.30554\n..\\hbox(6.83331+0.0)x7.91803\n...\\t"
+        "eni U\n.\\mathoff\n\n! OK.\n[hat]> \\box0=\n\\hbox"
+        "(9.47221+0.0)x7.50002\n.\\mathon\n.\\vbox(9.47221+"
+        "0.0)x7.50002\n..\\hbox(6.94444+0.0)x0.0, shifted 2"
+        ".63893\n...\\tenrm ^\n..\\kern-4.30554\n..\\hbox(6"
+        ".83331+0.0)x7.50002\n...\\teni A\n.\\mathoff\n\n! "
+        "OK.\n[wide]> \\box0=\n\\hbox(8.20554+0.0)x15.83606"
+        "\n.\\mathon\n.\\vbox(8.20554+0.0)x15.83606\n..\\hb"
+        "ox(5.67776+0.0)x0.0, shifted 5.41803\n...\\tenrm ^"
+        "^V\n..\\kern-4.30554\n..\\hbox(6.83331+0.0)x15.836"
+        "06\n...\\teni U\n...\\kern1.09026\n...\\teni U\n.."
+        ".\\kern1.09026\n.\\mathoff\n\n! OK.\n[low]> \\box0"
+        "=\n\\hbox(5.67776+0.0)x5.71527\n.\\mathon\n.\\vbox"
+        "(5.67776+0.0)x5.71527\n..\\hbox(5.67776+0.0)x0.0, "
+        "shifted 0.63542\n...\\tenrm ^^V\n..\\kern-4.30554"
+        "\n..\\hbox(4.30554+0.0)x5.71527\n...\\teni x\n.\\m"
+        "athoff\n\n! OK.\n[script]> \\box0=\n\\hbox(7.64835"
+        "+0.0)x12.22478\n.\\mathon\n.\\teni U\n.\\kern1.090"
+        "26\n.\\vbox(4.01942+1.3611)x4.30675, shifted -3.62"
+        "892\n..\\hbox(4.01942+0.0)x0.0, shifted 0.59087\n."
+        "..\\sevenrm ^^V\n..\\kern-3.01389\n..\\hbox(3.0138"
+        "9+1.3611)x4.30675\n...\\seveni y\n.\\mathoff\n\n! "
+        "OK.\n[over]> \\box0=\n\\hbox(8.8332+0.0)x7.91803\n"
+        ".\\mathon\n.\\vbox(8.8332+0.0)x7.91803\n..\\kern0."
+        "39998\n..\\rule(0.39998+0.0)x*\n..\\kern1.19994\n."
+        ".\\hbox(6.83331+0.0)x7.91803\n...\\teni U\n.\\math"
+        "off\n\n! OK.\n"
+);}
+
 /* A large operator is centred on the axis only when it is one character of
    its own; \\log and its like stand on the baseline. An equation and its
    number are each marked as a display. See docs/DECISIONS.md,
@@ -4883,6 +5139,10 @@ int main(void)
         test_margin_kerns_of_a_line() != 0 ||
         test_whatsit_text_is_cut() != 0 ||
         test_only_a_character_is_centred() != 0 ||
+        test_math_accents() != 0 ||
+        test_a_list_that_is_one_box() != 0 ||
+        test_a_line_that_breaks_at_a_penalty() != 0 ||
+        test_a_hyphen_that_ligatures() != 0 ||
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||

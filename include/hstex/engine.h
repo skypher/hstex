@@ -97,6 +97,7 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_CHAR_DEF,
     HSTEX_COMMAND_MATH_CHAR_GIVEN,
     HSTEX_COMMAND_RADICAL,
+    HSTEX_COMMAND_MATH_ACCENT,
     HSTEX_COMMAND_MARKS,
     HSTEX_COMMAND_PATTERNS,
     HSTEX_COMMAND_HYPHENATION,
@@ -781,6 +782,8 @@ enum hstex_noad_kind {
     HSTEX_NOAD_CHOICE,
     /* \radical: a delimiter over a nucleus, built when the list is set. */
     HSTEX_NOAD_RADICAL,
+    /* \mathaccent: the accent's mathchar is in `delimiter`. */
+    HSTEX_NOAD_ACCENT,
     /* \overline and \underline: a rule over or under a nucleus. */
     HSTEX_NOAD_OVERLINE,
     HSTEX_NOAD_UNDERLINE,

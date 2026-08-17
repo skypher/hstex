@@ -1815,6 +1815,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"message", HSTEX_COMMAND_MESSAGE},
         {"mathchardef", HSTEX_COMMAND_MATH_CHAR_DEF},
         {"radical", HSTEX_COMMAND_RADICAL},
+        {"mathaccent", HSTEX_COMMAND_MATH_ACCENT},
         {"marks", HSTEX_COMMAND_MARKS},
         {"patterns", HSTEX_COMMAND_PATTERNS},
         {"hyphenation", HSTEX_COMMAND_HYPHENATION},
@@ -15953,7 +15954,8 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                     ? &engine->nodes[identifier - 1U]
                     : NULL;
             if (at != NULL && (at->kind == HSTEX_NODE_KERN ||
-                               at->kind == HSTEX_NODE_MATH)) {
+                               at->kind == HSTEX_NODE_MATH ||
+                               at->kind == HSTEX_NODE_PENALTY)) {
                 struct hstex_node kept = *at;
                 kept.width = 0;
                 status = append_hbox_node(engine, &kept, error, error_capacity);
@@ -16438,7 +16440,77 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     break;
                 }
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
+                /* A hyphen that joins the letter in front of it is set with
+                   it, and the discretionary then replaces that letter; see
+                   docs/DECISIONS.md, a-hyphen-that-ligatures. */
+                bool joined = false;
                 if (hyphen != 0U && adjacent) {
+                    const struct hstex_font *metrics =
+                        font_by_identifier(engine, word.font);
+                    const struct hstex_node *before =
+                        &engine->nodes[items[previous] - 1U];
+                    uint8_t hyphen_code =
+                        (uint8_t)engine->nodes[hyphen - 1U]
+                            .value.character.character;
+                    bool joins = false;
+                    int32_t unused_kern = 0;
+                    uint8_t made = 0U;
+                    bool also_kerned = false;
+                    if (metrics != NULL &&
+                        (before->kind == HSTEX_NODE_CHARACTER ||
+                         before->kind == HSTEX_NODE_LIGATURE) &&
+                        font_lig_kern(metrics,
+                                      (uint8_t)before->value.character.character,
+                                      hyphen_code, &also_kerned, &unused_kern,
+                                      &joins, &made, error,
+                                      error_capacity) != 0) {
+                        status = -1;
+                    }
+                    if (status == 0 && joins && written != 0U &&
+                        result[written - 1U] == items[previous]) {
+                        uint8_t letters[8];
+                        size_t letter_count = 0U;
+                        if (before->kind == HSTEX_NODE_LIGATURE &&
+                            before->value.character.original_count != 0U) {
+                            uint8_t originals =
+                                before->value.character.original_count;
+                            if (originals > 7U) {
+                                originals = 7U;
+                            }
+                            for (uint8_t item = 0U; item < originals; ++item) {
+                                letters[letter_count++] =
+                                    before->value.character.originals[item];
+                            }
+                        } else {
+                            letters[letter_count++] =
+                                (uint8_t)before->value.character.character;
+                        }
+                        letters[letter_count++] = hyphen_code;
+                        uint32_t pre[8];
+                        size_t pre_count = 0U;
+                        uint32_t start = 0U;
+                        if (reconstitute_characters(engine, word.font, letters,
+                                                    letter_count, pre, 8U,
+                                                    &pre_count, error,
+                                                    error_capacity) != 0 ||
+                            store_list_run(engine, pre, pre_count, &start,
+                                           error, error_capacity) != 0) {
+                            status = -1;
+                        } else {
+                            disc.value.disc.pre_start = start;
+                            disc.value.disc.pre_count = (uint16_t)pre_count;
+                            disc.value.disc.replace_count = 1U;
+                            joined = true;
+                        }
+                    }
+                }
+                if (status != 0) {
+                    break;
+                }
+                if (joined) {
+                    /* The letter it replaces has been written out already. */
+                    --written;
+                } else if (hyphen != 0U && adjacent) {
                     status = store_list_run(engine, &hyphen, 1U,
                                             &disc.value.disc.pre_start, error,
                                             error_capacity);
@@ -16473,6 +16545,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 if (kerned) {
                     result[written++] = items[previous];
                     result[written++] = items[previous + 1U];
+                } else if (joined) {
+                    result[written++] = items[previous];
                 }
             }
             /* A break that falls inside a ligature replaces it: the two
@@ -16835,7 +16909,8 @@ static int execute_control_space(struct hstex_engine *engine, char *error,
         return -1;
     }
     struct hstex_glue glue = engine->glue_parameters[HSTEX_GLUE_SPACE_SKIP];
-    if (glue.width == 0 && glue.stretch == 0 && glue.shrink == 0) {
+    bool from_font = glue.width == 0 && glue.stretch == 0 && glue.shrink == 0;
+    if (from_font) {
         const struct hstex_font *font =
             font_by_identifier(engine, engine->current_font);
         if (font == NULL || font->dimen_count < 4U) {
@@ -16856,6 +16931,8 @@ static int execute_control_space(struct hstex_engine *engine, char *error,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .parameter =
+                from_font ? 0U : 1U + (uint8_t)HSTEX_GLUE_SPACE_SKIP,
         },
     };
     return append_current_list_node(engine, &node, error, error_capacity);
@@ -17559,6 +17636,10 @@ static int build_math_radical(struct hstex_engine *engine,
                               struct hstex_noad *noad, uint8_t style,
                               char *error, size_t error_capacity);
 
+static int build_math_accent(struct hstex_engine *engine,
+                             struct hstex_noad *noad, uint8_t style,
+                             char *error, size_t error_capacity);
+
 static int build_math_line(struct hstex_engine *engine,
                            struct hstex_noad *noad, uint8_t style, bool over,
                            char *error, size_t error_capacity);
@@ -17731,6 +17812,14 @@ static int math_field_restyle(struct hstex_engine *engine,
             single = (node->kind == HSTEX_NODE_CHARACTER ||
                       node->kind == HSTEX_NODE_LIGATURE) &&
                      node->shift == 0;
+            /* A list that is already one unshifted box needs no box of its
+               own; see docs/DECISIONS.md, a-list-that-is-one-box. */
+            if (node->kind == HSTEX_NODE_LIST && node->shift == 0) {
+                field->node = item;
+                field->single_character = 0U;
+                field->list_style = style;
+                return 0;
+            }
         }
     }
     uint32_t identifier = 0U;
@@ -17799,7 +17888,27 @@ static int math_field_box(struct hstex_engine *engine,
     }
     free(packed.node_identifiers);
     free(single.noads);
-    return status;
+    if (status != 0) {
+        return status;
+    }
+    /* A lone character keeps the width its italic correction gave the box but
+       loses the kern itself, so that an accent over it sees only the letter;
+       see docs/DECISIONS.md, a-clean-box-of-one-character. */
+    if (box->node_count == 2U &&
+        (size_t)box->node_start + 2U <= engine->list_item_count) {
+        const uint32_t *items = engine->list_items + box->node_start;
+        if (items[0] != 0U && (size_t)items[0] <= engine->node_count &&
+            items[1] != 0U && (size_t)items[1] <= engine->node_count) {
+            const struct hstex_node *first = &engine->nodes[items[0] - 1U];
+            const struct hstex_node *second = &engine->nodes[items[1] - 1U];
+            if ((first->kind == HSTEX_NODE_CHARACTER ||
+                 first->kind == HSTEX_NODE_LIGATURE) &&
+                second->kind == HSTEX_NODE_KERN) {
+                box->node_count = 1U;
+            }
+        }
+    }
+    return 0;
 }
 
 static int store_box_node(struct hstex_engine *engine,
@@ -18188,6 +18297,11 @@ static int translate_math_list_with(struct hstex_engine *engine,
         }
         if (noad->kind == (uint8_t)HSTEX_NOAD_RADICAL &&
             build_math_radical(engine, noad, style, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+        if (noad->kind == (uint8_t)HSTEX_NOAD_ACCENT &&
+            build_math_accent(engine, noad, style, error, error_capacity) !=
                 0) {
             return -1;
         }
@@ -19095,6 +19209,183 @@ static int build_math_radical(struct hstex_engine *engine,
     return 0;
 }
 
+/* The kern the nucleus's font gives against its skew character, which is how
+   far the accent slides to the right. */
+static int accent_skew(struct hstex_engine *engine,
+                       const struct hstex_math_field *nucleus, uint8_t size,
+                       int32_t *skew, char *error, size_t error_capacity)
+{
+    *skew = 0;
+    if (nucleus->kind != (uint8_t)HSTEX_MATH_FIELD_CHARACTER) {
+        return 0;
+    }
+    const struct hstex_font *font = NULL;
+    const struct hstex_char_metric *metric = NULL;
+    int present = math_character_metric(engine, nucleus, size, &font, &metric,
+                                        error, error_capacity);
+    if (present <= 0) {
+        return present;
+    }
+    if (font->skew_character < 0 || font->skew_character > 255) {
+        return 0;
+    }
+    bool kerned = false;
+    bool ligatured = false;
+    int32_t kern = 0;
+    uint8_t ligature = 0U;
+    if (font_lig_kern(font, (uint8_t)nucleus->character,
+                      (uint8_t)font->skew_character, &kerned, &kern,
+                      &ligatured, &ligature, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (kerned) {
+        *skew = kern;
+    }
+    return 0;
+}
+
+/* \mathaccent puts a character over what follows, sliding it right by the
+   nucleus's skew and lowering it onto the letter. See docs/DECISIONS.md,
+   math-accents. */
+static int build_math_accent(struct hstex_engine *engine,
+                             struct hstex_noad *noad, uint8_t style,
+                             char *error, size_t error_capacity)
+{
+    uint8_t size = math_size_of_style(style);
+    struct hstex_math_field accent = {
+        .kind = (uint8_t)HSTEX_MATH_FIELD_CHARACTER,
+        .family = (uint8_t)((noad->delimiter >> 8) & 0x0F),
+        .character = (uint32_t)(noad->delimiter & 0xFF),
+    };
+    const struct hstex_font *font = NULL;
+    const struct hstex_char_metric *metric = NULL;
+    int present = math_character_metric(engine, &accent, size, &font, &metric,
+                                        error, error_capacity);
+    if (present < 0) {
+        return -1;
+    }
+    if (present == 0) {
+        /* No such character: the accent is dropped and the nucleus stands. */
+        noad->kind = (uint8_t)HSTEX_NOAD_ATOM;
+        noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+        return 0;
+    }
+    int32_t skew = 0;
+    if (accent_skew(engine, &noad->nucleus, size, &skew, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_box under = {0};
+    if (math_field_box(engine, &noad->nucleus, math_cramped_style(style),
+                       &under, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* A wider variant is taken while one exists that is no wider than what
+       is being accented. */
+    uint32_t character = accent.character;
+    while (metric->tag == 2) {
+        uint32_t next = (uint32_t)(metric->remainder & 0xFF);
+        if (font->characters[next].tag < 0 ||
+            font->characters[next].width > under.width) {
+            break;
+        }
+        character = next;
+        metric = &font->characters[next];
+    }
+    int32_t x_height = 0;
+    if (font->dimen_count >= 5U) {
+        x_height = font->dimens[4];
+    }
+    int32_t delta = under.height < x_height ? under.height : x_height;
+    /* The accent is set in a box of its own, which is then given no width so
+       that it hangs over the letter. */
+    struct hstex_node character_node = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = metric->width,
+        .height = metric->height,
+        .depth = metric->depth,
+        .value.character = {.font = engine->math_fonts[size][accent.family],
+                            .character = character},
+    };
+    uint32_t placed = 0U;
+    uint32_t start = 0U;
+    if (store_node(engine, &character_node, &placed, error, error_capacity) !=
+            0 ||
+        store_list_run(engine, &placed, 1U, &start, error, error_capacity) !=
+            0) {
+        return -1;
+    }
+    int32_t accent_width = (int32_t)((int64_t)metric->width + metric->italic);
+    struct hstex_node accent_box = {
+        .kind = HSTEX_NODE_LIST,
+        .width = 0,
+        .height = metric->height,
+        .depth = metric->depth,
+        .shift = (int32_t)((int64_t)skew +
+                           half_of((int64_t)under.width - accent_width)),
+        .value.list = {.node_start = start,
+                       .node_count = 1U,
+                       .box_kind = HSTEX_BOX_HLIST},
+    };
+
+    struct hstex_vbox_builder body = {0};
+    struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    int32_t enclosing_depth = engine->prev_depth;
+    engine->active_vbox_builder = &body;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    struct hstex_node gap = {.kind = HSTEX_NODE_KERN, .width = -delta};
+    uint32_t identifier = 0U;
+    /* The stack is never shorter than what it accents; a kern at the top
+       makes up the difference. */
+    int64_t raw = (int64_t)metric->height + metric->depth - delta +
+                  under.height;
+    int status = 0;
+    if (raw < under.height) {
+        struct hstex_node lift = {
+            .kind = HSTEX_NODE_KERN,
+            .width = (int32_t)((int64_t)under.height - raw),
+        };
+        status = append_vbox_node(engine, &lift, error, error_capacity);
+    }
+    if (status == 0) {
+        status = append_vbox_node(engine, &accent_box, error, error_capacity);
+    }
+    if (status == 0) {
+        status = append_vbox_node(engine, &gap, error, error_capacity);
+    }
+    if (status == 0 &&
+        (store_box_node(engine, &under, 0, &identifier, error,
+                        error_capacity) != 0 ||
+         append_vbox_item(engine, identifier, error, error_capacity) != 0)) {
+        status = -1;
+    }
+    struct hstex_box stacked = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &body, false, false, 0, &stacked, error,
+                               error_capacity);
+    }
+    free(body.node_identifiers);
+    engine->active_vbox_builder = previous_vbox;
+    engine->prev_depth = enclosing_depth;
+    engine->mode = previous_mode;
+    if (status != 0) {
+        return -1;
+    }
+    stacked.width = under.width;
+    if (store_box_node(engine, &stacked, 0, &identifier, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    noad->kind = (uint8_t)HSTEX_NOAD_ATOM;
+    noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+    memset(&noad->nucleus, 0, sizeof(noad->nucleus));
+    noad->nucleus.kind = (uint8_t)HSTEX_MATH_FIELD_BOX;
+    noad->nucleus.node = identifier;
+    return 0;
+}
+
 /* \overline and \underline put a rule of the default thickness over or under
    what follows, three thicknesses clear of it. See docs/DECISIONS.md,
    over-and-underline. */
@@ -19771,6 +20062,41 @@ static int execute_radical(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* \mathaccent reads a mathchar and then one field, exactly as \radical
+   reads a delimiter and one; see docs/DECISIONS.md, math-accents. */
+static int execute_math_accent(struct hstex_engine *engine, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || builder == NULL) {
+        return set_error(error, error_capacity,
+                         "\\mathaccent is only allowed in a formula");
+    }
+    if (builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        return set_error(error, error_capacity,
+                         "\\mathaccent met where a field was expected");
+    }
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 0x7FFF) {
+        return set_error(error, error_capacity,
+                         "math accent %d is outside 0..32767", code);
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_ACCENT,
+        .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+        .delimiter = code,
+    };
+    if (math_append(engine, &noad, error, error_capacity) != 0) {
+        return -1;
+    }
+    builder->slot = (uint8_t)HSTEX_MATH_SLOT_RADICAND;
+    builder->slot_target = builder->count - 1U;
+    return 0;
+}
+
 /* \overline and \underline read one field, exactly as \radical does. */
 static int execute_over_under_line(struct hstex_engine *engine, bool over,
                                    char *error, size_t error_capacity)
@@ -20328,6 +20654,17 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
             single = (node->kind == HSTEX_NODE_CHARACTER ||
                       node->kind == HSTEX_NODE_LIGATURE) &&
                      node->shift == 0;
+            /* A list that came to one unshifted box is that box, not a box
+               around it; see docs/DECISIONS.md, a-list-that-is-one-box. */
+            if (node->kind == HSTEX_NODE_LIST && node->shift == 0) {
+                box.kind = node->value.list.box_kind;
+                box.width = node->width;
+                box.height = node->height;
+                box.depth = node->depth;
+                box.node_start = node->value.list.node_start;
+                box.node_count = node->value.list.node_count;
+                box.glue = node->value.list.glue;
+            }
         }
     }
     return math_append_box_field(engine, &box, single, record, item_style,
@@ -24416,6 +24753,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_RADICAL:
             if (execute_radical(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_ACCENT:
+            if (execute_math_accent(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
