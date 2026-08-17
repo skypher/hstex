@@ -1059,40 +1059,132 @@ static int test_whatsits(void)
 static int test_discretionaries(void)
 {
     return run_document(
-        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=30 \\"
-        "hbadness=10000 \\vbadness=10000 \\font\\f=cmr10 \\f \\hs"
-        "ize=30pt \\parindent=0pt \\leftskip=0pt \\rightskip=0pt "
-        "\\baselineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt \\"
-        "parfillskip=0pt plus1fil \\tolerance=10000 \\pretoleranc"
-        "e=-1 \\boxmaxdepth=16383.99998pt \\linepenalty=10 \\adjd"
-        "emerits=10000 \\doublehyphendemerits=10000 \\finalhyphen"
-        "demerits=5000 \\clubpenalty=0 \\widowpenalty=0 \\interli"
-        "nepenalty=0 \\brokenpenalty=77 \\hyphenpenalty=50 \\exhy"
-        "phenpenalty=50 \\hfuzz=1000pt \\vfuzz=1000pt \\setbox0=\\"
-        "hbox{a\\discretionary{b}{c}{d}e}\\showbox0 \\setbox0=\\h"
-        "box{a\\-e}\\showbox0 \\setbox0=\\vbox{\\noindent aaaa\\d"
-        "iscretionary{b}{c}{d}aaaa\\par}\\showbox0 \\setbox0=\\vb"
-        "ox{\\noindent aaaa\\discretionary{}{}{}aaaa\\par}\\showb"
-        "ox0 \\message{[\\the\\lastnodetype]}%",
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=30"
+        " \\hbadness=10000 \\vbadness=10000 \\font\\f=cmr10 \\f"
+        " \\hyphenchar\\f=45 \\hsize=30pt \\parindent=0pt \\lef"
+        "tskip=0pt \\rightskip=0pt \\baselineskip=12pt \\linesk"
+        "ip=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus1fil "
+        "\\tolerance=10000 \\pretolerance=-1 \\boxmaxdepth=1638"
+        "3.99998pt \\linepenalty=10 \\adjdemerits=10000 \\doubl"
+        "ehyphendemerits=10000 \\finalhyphendemerits=5000 \\clu"
+        "bpenalty=0 \\widowpenalty=0 \\interlinepenalty=0 \\bro"
+        "kenpenalty=77 \\hyphenpenalty=50 \\exhyphenpenalty=50 "
+        "\\hfuzz=1000pt \\vfuzz=1000pt \\setbox0=\\hbox{a\\disc"
+        "retionary{b}{c}{d}e}\\showbox0 \\setbox0=\\hbox{a\\-e}"
+        "\\showbox0 \\hyphenchar\\f=-1 \\setbox0=\\hbox{a\\-e}\\"
+        "showbox0 \\hyphenchar\\f=45 \\setbox0=\\vbox{\\noinden"
+        "t aaaa\\discretionary{b}{c}{d}aaaa\\par}\\showbox0 \\s"
+        "etbox0=\\vbox{\\noindent aaaa\\discretionary{}{}{}aaaa"
+        "\\par}\\showbox0%",
         "> \\box0=\n\\hbox(6.94444+0.0)x15.00003\n.\\f a\n.\\di"
         "scretionary replacing 1\n..\\f b\n.|\\f c\n.\\f d\n.\\"
         "f e\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x9.44446\n"
         ".\\f a\n.\\discretionary\n..\\f -\n.\\f e\n\n! OK.\n> "
-        "\\box0=\n\\vbox(18.94444+0.0)x30.0\n.\\hbox(6.94444+0."
-        "0)x30.0\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\discr"
-        "etionary\n..\\f b\n..\\glue(\\rightskip) 0.0\n.\\penal"
-        "ty 77\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4.3055"
-        "4+0.0)x30.0, glue set 5.5555fil\n..\\f c\n..\\f a\n..\\"
-        "f a\n..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\p"
-        "arfillskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0"
-        "\n\n! OK.\n> \\box0=\n\\vbox(16.30554+0.0)x30.0\n.\\hb"
-        "ox(4.30554+0.0)x30.0\n..\\f a\n..\\f a\n..\\f a\n..\\f"
-        " a\n..\\discretionary\n..\\glue(\\rightskip) 0.0\n.\\p"
-        "enalty 77\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4."
-        "30554+0.0)x30.0, glue set 9.99994fil\n..\\f a\n..\\f a"
-        "\n..\\f a\n..\\f a\n..\\penalty 10000\n..\\glue(\\parf"
-        "illskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n"
-        "! OK.\n[-1]");
+        "\\box0=\n\\hbox(4.30554+0.0)x9.44446\n.\\f a\n.\\discr"
+        "etionary\n.\\f e\n\n! OK.\n> \\box0=\n\\vbox(18.94444+"
+        "0.0)x30.0\n.\\hbox(6.94444+0.0)x30.0\n..\\f a\n..\\f a"
+        "\n..\\f a\n..\\f a\n..\\discretionary\n..\\f b\n..\\gl"
+        "ue(\\rightskip) 0.0\n.\\penalty 77\n.\\glue(\\baseline"
+        "skip) 7.69446\n.\\hbox(4.30554+0.0)x30.0, glue set 5.5"
+        "555fil\n..\\f c\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n."
+        ".\\penalty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0"
+        "fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n> \\box0=\n\\"
+        "vbox(16.30554+0.0)x30.0\n.\\hbox(4.30554+0.0)x30.0\n.."
+        "\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\discretionary\n."
+        ".\\glue(\\rightskip) 0.0\n.\\penalty 77\n.\\glue(\\bas"
+        "elineskip) 7.69446\n.\\hbox(4.30554+0.0)x30.0, glue se"
+        "t 9.99994fil\n..\\f a\n..\\f a\n..\\f a\n..\\f a\n..\\"
+        "penalty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil"
+        "\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
+/* \patterns put discretionaries in words the second pass reads out of the
+   paragraph; see docs/DECISIONS.md, hyphenation. */
+static int test_hyphenation(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=20"
+        "0 \\hbadness=10000 \\vbadness=10000 \\hfuzz=1000pt \\v"
+        "fuzz=1000pt \\font\\f=cmr10 \\f \\hyphenchar\\f=45 \\h"
+        "size=200pt \\parindent=0pt \\leftskip=0pt \\rightskip="
+        "0pt \\baselineskip=12pt \\lineskip=0pt \\lineskiplimit"
+        "=0pt \\parfillskip=0pt plus1fil \\tolerance=10000 \\pr"
+        "etolerance=-1 \\boxmaxdepth=16383.99998pt \\linepenalt"
+        "y=10 \\adjdemerits=10000 \\doublehyphendemerits=10000 "
+        "\\finalhyphendemerits=5000 \\clubpenalty=0 \\widowpena"
+        "lty=0 \\interlinepenalty=0 \\brokenpenalty=0 \\hyphenp"
+        "enalty=50 \\exhyphenpenalty=50 \\uchyph=0 \\lefthyphen"
+        "min=2 \\righthyphenmin=3 \\spaceskip=4pt \\sfcode`\\.="
+        "1000 \\lccode`\\a=`\\a \\lccode`\\b=`\\b \\lccode`\\c="
+        "`\\c \\lccode`\\d=`\\d \\lccode`\\e=`\\e \\lccode`\\f="
+        "`\\f \\lccode`\\g=`\\g \\lccode`\\h=`\\h \\lccode`\\i="
+        "`\\i \\lccode`\\j=`\\j \\lccode`\\k=`\\k \\lccode`\\l="
+        "`\\l \\lccode`\\m=`\\m \\lccode`\\n=`\\n \\lccode`\\o="
+        "`\\o \\lccode`\\p=`\\p \\lccode`\\q=`\\q \\lccode`\\r="
+        "`\\r \\lccode`\\s=`\\s \\lccode`\\t=`\\t \\lccode`\\u="
+        "`\\u \\lccode`\\v=`\\v \\lccode`\\w=`\\w \\lccode`\\x="
+        "`\\x \\lccode`\\y=`\\y \\lccode`\\z=`\\z \\lccode`\\A="
+        "`\\a \\lccode`\\H=`\\h \\patterns{2n3t 1hy 3phe a1t io"
+        "1n an1t} \\setbox0=\\vbox{\\noindent xx sentant hyphen"
+        "ation Antant\\par}\\showbox0 \\uchyph=1 \\setbox0=\\vb"
+        "ox{\\noindent xx Antant\\par}\\showbox0 \\lefthyphenmi"
+        "n=4 \\setbox0=\\vbox{\\noindent xx sentant\\par}\\show"
+        "box0%",
+        "> \\box0=\n\\vbox(6.94444+1.94444)x200.0\n.\\hbox(6.94"
+        "444+1.94444)x200.0, glue set 60.99968fil\n..\\f x\n..\\"
+        "f x\n..\\glue(\\spaceskip) 4.0\n..\\f s\n..\\f e\n..\\"
+        "discretionary replacing 2\n...\\f n\n...\\f -\n..\\f n"
+        "\n..\\kern-0.27779\n..\\f t\n..\\f a\n..\\f n\n..\\ker"
+        "n-0.27779\n..\\f t\n..\\glue(\\spaceskip) 4.0\n..\\f h"
+        "\n..\\kern-0.27779\n..\\f y\n..\\discretionary\n...\\f"
+        " -\n..\\f p\n..\\f h\n..\\f e\n..\\f n\n..\\f a\n..\\d"
+        "iscretionary\n...\\f -\n..\\f t\n..\\f i\n..\\f o\n..\\"
+        "f n\n..\\glue(\\spaceskip) 4.0\n..\\f A\n..\\f n\n..\\"
+        "kern-0.27779\n..\\f t\n..\\f a\n..\\f n\n..\\kern-0.27"
+        "779\n..\\f t\n..\\penalty 10000\n..\\glue(\\parfillski"
+        "p) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n> \\box0=\n\\vbox(6.83331+0.0)x200.0\n.\\hbox(6.8333"
+        "1+0.0)x200.0, glue set 154.611fil\n..\\f x\n..\\f x\n."
+        ".\\glue(\\spaceskip) 4.0\n..\\f A\n..\\discretionary r"
+        "eplacing 2\n...\\f n\n...\\f -\n..\\f n\n..\\kern-0.27"
+        "779\n..\\f t\n..\\f a\n..\\f n\n..\\kern-0.27779\n..\\"
+        "f t\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 pl"
+        "us 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n> \\box"
+        "0=\n\\vbox(6.15079+0.0)x200.0\n.\\hbox(6.15079+0.0)x20"
+        "0.0, glue set 153.72212fil\n..\\f x\n..\\f x\n..\\glue"
+        "(\\spaceskip) 4.0\n..\\f s\n..\\f e\n..\\f n\n..\\kern"
+        "-0.27779\n..\\f t\n..\\f a\n..\\f n\n..\\kern-0.27779\n"
+        "..\\f t\n..\\penalty 10000\n..\\glue(\\parfillskip) 0."
+        "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
+/* \spaceskip and \xspaceskip take the place of the font's own space, and
+   only a space the space factor has not touched keeps the name of the
+   parameter it came from; see docs/DECISIONS.md, interword-glue. */
+static int test_interword_glue(void)
+{
+    return run_document(
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth=30"
+        " \\hbadness=10000 \\hfuzz=1000pt \\font\\f=cmr10 \\f \\"
+        "sfcode`\\.=3000 \\sfcode`\\,=1250 \\spaceskip=4pt plus"
+        "1pt minus2pt \\xspaceskip=9pt plus3pt \\setbox0=\\hbox"
+        "{a a}\\showbox0 \\setbox0=\\hbox{a. a}\\showbox0 \\set"
+        "box0=\\hbox{a, a}\\showbox0 \\xspaceskip=0pt \\setbox0"
+        "=\\hbox{a. a}\\showbox0 \\spaceskip=0pt \\setbox0=\\hb"
+        "ox{a a}\\showbox0 \\setbox0=\\hbox{a. a}\\showbox0%",
+        "> \\box0=\n\\hbox(4.30554+0.0)x14.00003\n.\\f a\n.\\gl"
+        "ue(\\spaceskip) 4.0 plus 1.0 minus 2.0\n.\\f a\n\n! OK"
+        ".\n> \\box0=\n\\hbox(4.30554+0.0)x21.77782\n.\\f a\n.\\"
+        "f .\n.\\glue(\\xspaceskip) 9.0 plus 3.0\n.\\f a\n\n! O"
+        "K.\n> \\box0=\n\\hbox(4.30554+1.94444)x16.77782\n.\\f "
+        "a\n.\\f ,\n.\\glue 4.0 plus 1.25 minus 1.59999\n.\\f a"
+        "\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x17.88893\n.\\"
+        "f a\n.\\f .\n.\\glue 5.11111 plus 3.0 minus 0.66666\n."
+        "\\f a\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x13.3333"
+        "6\n.\\f a\n.\\glue 3.33333 plus 1.66666 minus 1.11111\n"
+        ".\\f a\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x17.222"
+        "26\n.\\f a\n.\\f .\n.\\glue 4.44444 plus 4.99997 minus"
+        " 0.37036\n.\\f a\n\n! OK.\n");
 }
 
 /* The current font is restored on the way out of a group, and the character
@@ -3835,7 +3927,8 @@ int main(void)
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
         test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
         test_the_current_font_is_grouped() != 0 ||
-        test_discretionaries() != 0 ||
+        test_discretionaries() != 0 || test_hyphenation() != 0 ||
+        test_interword_glue() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",

@@ -1657,10 +1657,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         return -1;
     }
     engine->integer_parameters[HSTEX_INTEGER_END_LINE_CHARACTER] = 13;
-    engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER] = -1;
     engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER] = 92;
-    engine->integer_parameters[HSTEX_INTEGER_DEFAULT_HYPHEN_CHAR] = 45;
-    engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR] = -1;
     engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION] = 1000;
     /* The non-zero defaults the reference starts an INITEX run with. */
     engine->integer_parameters[HSTEX_INTEGER_TOLERANCE] = 10000;
@@ -2521,6 +2518,11 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         return -1;
     }
     null_font_entry->identifier_cs = null_font_cs;
+    /* \nullfont's own hyphen and skew characters are fixed, and are not the
+       \defaulthyphenchar and \defaultskewchar a loaded font takes; see
+       docs/DECISIONS.md, hyphenation. */
+    null_font_entry->hyphen_character = 45;
+    null_font_entry->skew_character = -1;
     engine->current_font = null_font;
     /* Every math family starts as \nullfont, so \the\textfont7 names a font
        even before any family has been set up. */
@@ -14651,20 +14653,44 @@ static int append_interword_glue(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "current font does not define interword spacing");
     }
-    struct hstex_glue glue = engine->glue_parameters[HSTEX_GLUE_SPACE_SKIP];
-    if (glue.width == 0 && glue.stretch == 0 && glue.shrink == 0) {
-        int32_t factor = engine->space_factor;
-        glue.width = font->dimens[1];
-        glue.stretch = font->dimens[2];
-        glue.shrink = font->dimens[3];
-        if (factor >= 2000 && font->dimen_count >= 7U) {
-            glue.width += font->dimens[6];
+    /* A space is \xspaceskip where the space factor has reached two
+       thousand and that glue is not zero, otherwise \spaceskip, otherwise
+       what the font says. Only a space of the ordinary width keeps the name
+       of the parameter it came from; anything the space factor has touched
+       is a spec of its own. See docs/DECISIONS.md, interword-glue. */
+    int32_t factor = engine->space_factor;
+    struct hstex_glue extra = engine->glue_parameters[HSTEX_GLUE_XSPACE_SKIP];
+    uint8_t parameter = 0U;
+    struct hstex_glue glue = {0};
+    if (factor >= 2000 &&
+        !(extra.width == 0 && extra.stretch == 0 && extra.shrink == 0)) {
+        glue = extra;
+        parameter = 1U + (uint8_t)HSTEX_GLUE_XSPACE_SKIP;
+    } else {
+        struct hstex_glue named =
+            engine->glue_parameters[HSTEX_GLUE_SPACE_SKIP];
+        bool from_font =
+            named.width == 0 && named.stretch == 0 && named.shrink == 0;
+        if (from_font) {
+            glue.width = font->dimens[1];
+            glue.stretch = font->dimens[2];
+            glue.shrink = font->dimens[3];
+        } else {
+            glue = named;
         }
-        if (factor != 1000 && factor > 0) {
-            glue.stretch =
-                (int32_t)(((int64_t)glue.stretch * factor) / 1000);
-            glue.shrink =
-                (int32_t)(((int64_t)glue.shrink * 1000) / factor);
+        if (factor == 1000) {
+            parameter =
+                from_font ? 0U : 1U + (uint8_t)HSTEX_GLUE_SPACE_SKIP;
+        } else {
+            if (factor >= 2000 && font->dimen_count >= 7U) {
+                glue.width += font->dimens[6];
+            }
+            if (factor > 0) {
+                glue.stretch =
+                    (int32_t)(((int64_t)glue.stretch * factor) / 1000);
+                glue.shrink =
+                    (int32_t)(((int64_t)glue.shrink * 1000) / factor);
+            }
         }
     }
     struct hstex_node node = {
@@ -14675,6 +14701,7 @@ static int append_interword_glue(struct hstex_engine *engine, char *error,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .parameter = parameter,
         },
     };
     return append_hbox_node(engine, &node, error, error_capacity);
@@ -15513,6 +15540,340 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
     return status;
 }
 
+/* The running width, stretch and shrink of the paragraph up to each node,
+   which is what the breaker measures a line from. */
+static int measure_break_totals(struct hstex_engine *engine,
+                                struct hstex_break_state *state,
+                                const uint32_t *items, size_t count,
+                                char *error, size_t error_capacity)
+{
+    state->node_count = count;
+    state->totals = calloc(count + 1U, sizeof(*state->totals));
+    if (state->totals == NULL) {
+        return set_error(error, error_capacity,
+                         "break totals allocation failed");
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        state->totals[index + 1U] = state->totals[index];
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        state->totals[index + 1U].width += packed_dimen(node->width);
+        if (node->kind == HSTEX_NODE_GLUE) {
+            uint8_t up = node->value.glue.stretch_order;
+            if (up < 4U) {
+                state->totals[index + 1U].stretch[up] +=
+                    node->value.glue.stretch;
+            }
+            if (node->value.glue.shrink_order == 0U) {
+                state->totals[index + 1U].shrink += node->value.glue.shrink;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The letters of one word, as the hyphenation pass reads them off the
+   paragraph's nodes. */
+enum { HSTEX_MAX_HYPHENATED_WORD = 63 };
+
+struct hstex_word {
+    uint8_t letters[HSTEX_MAX_HYPHENATED_WORD];
+    /* Where each letter's node sits in the paragraph. */
+    size_t positions[HSTEX_MAX_HYPHENATED_WORD];
+    size_t count;
+    uint32_t font;
+    /* One past the last letter's node. */
+    size_t end;
+};
+
+/* Reads the word that begins somewhere at or after `from`, the way the
+   reference looks for one: leading characters that are not letters are
+   passed over, and the word itself is characters of one font whose \lccode
+   is not zero, with the font's own kerns allowed between them. Returns false
+   when there is no word to hyphenate here. See docs/DECISIONS.md,
+   hyphenation. */
+static bool read_hyphenatable_word(struct hstex_engine *engine,
+                                   const uint32_t *items, size_t count,
+                                   size_t from, struct hstex_word *word)
+{
+    memset(word, 0, sizeof(*word));
+    size_t index = from;
+    uint32_t font = 0U;
+    for (;;) {
+        if (index >= count) {
+            return false;
+        }
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            return false;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_CHARACTER) {
+            uint32_t code = node->value.character.character;
+            int32_t lower = code < 256U ? engine->code_tables[1][code] : 0;
+            if (lower != 0) {
+                /* A word that starts with a capital is only hyphenated when
+                   \uchyph says so. */
+                if (lower != (int32_t)code &&
+                    engine->integer_parameters[HSTEX_INTEGER_UC_HYPH] <= 0) {
+                    return false;
+                }
+                font = node->value.character.font;
+                break;
+            }
+        } else if (node->kind == HSTEX_NODE_KERN) {
+            if (node->explicit_kern) {
+                return false;
+            }
+        } else if (node->kind != HSTEX_NODE_WHATSIT) {
+            return false;
+        }
+        ++index;
+    }
+    const struct hstex_font *metrics = font_by_identifier(engine, font);
+    if (metrics == NULL || metrics->hyphen_character < 0 ||
+        metrics->hyphen_character > 255) {
+        return false;
+    }
+    word->font = font;
+    while (index < count && word->count < (size_t)HSTEX_MAX_HYPHENATED_WORD) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            break;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_CHARACTER) {
+            uint32_t code = node->value.character.character;
+            if (node->value.character.font != font || code >= 256U ||
+                engine->code_tables[1][code] == 0) {
+                break;
+            }
+            word->letters[word->count] = (uint8_t)code;
+            word->positions[word->count] = index;
+            ++word->count;
+            word->end = index + 1U;
+        } else if (node->kind == HSTEX_NODE_KERN && !node->explicit_kern) {
+            /* A kern the font asked for stays inside the word. */
+        } else {
+            break;
+        }
+        ++index;
+    }
+    if (word->count < 2U) {
+        return false;
+    }
+    /* Nothing but ligatures, the font's own kerns and other characters may
+       follow a word that is going to be hyphenated; a box or a rule means
+       this is not really the end of one. */
+    for (size_t after = word->end; after < count; ++after) {
+        uint32_t identifier = items[after];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            break;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_CHARACTER ||
+            node->kind == HSTEX_NODE_LIGATURE) {
+            continue;
+        }
+        if (node->kind == HSTEX_NODE_KERN) {
+            if (node->explicit_kern) {
+                break;
+            }
+            continue;
+        }
+        if (node->kind == HSTEX_NODE_GLUE ||
+            node->kind == HSTEX_NODE_PENALTY ||
+            node->kind == HSTEX_NODE_WHATSIT ||
+            node->kind == HSTEX_NODE_DISCRETIONARY) {
+            break;
+        }
+        return false;
+    }
+    return true;
+}
+
+/* The node a hyphen makes in the font the word is set in. */
+static int make_hyphen_node(struct hstex_engine *engine, uint32_t font,
+                            uint32_t *identifier, char *error,
+                            size_t error_capacity)
+{
+    *identifier = 0U;
+    const struct hstex_font *metrics = font_by_identifier(engine, font);
+    if (metrics == NULL || metrics->characters == NULL ||
+        metrics->hyphen_character < 0 || metrics->hyphen_character > 255 ||
+        metrics->characters[metrics->hyphen_character].tag < 0) {
+        return 0;
+    }
+    const struct hstex_char_metric *metric =
+        &metrics->characters[metrics->hyphen_character];
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = metric->width,
+        .height = metric->height,
+        .depth = metric->depth,
+        .value.character = {.font = font,
+                            .character =
+                                (uint32_t)metrics->hyphen_character},
+    };
+    return store_node(engine, &node, identifier, error, error_capacity);
+}
+
+static int reserve_hyphenated_items(uint32_t **items, size_t *capacity,
+                                    size_t required, char *error,
+                                    size_t error_capacity)
+{
+    if (required <= *capacity) {
+        return 0;
+    }
+    size_t next = *capacity == 0U ? 32U : *capacity;
+    while (next < required) {
+        next *= 2U;
+    }
+    uint32_t *grown = realloc(*items, next * sizeof(**items));
+    if (grown == NULL) {
+        return set_error(error, error_capacity,
+                         "hyphenation list allocation failed");
+    }
+    *items = grown;
+    *capacity = next;
+    return 0;
+}
+
+/* Puts a discretionary wherever the patterns allow a break in a word, and
+   returns the paragraph's nodes again with those discretionaries in them.
+   See docs/DECISIONS.md, hyphenation. */
+static int hyphenate_paragraph(struct hstex_engine *engine,
+                               const uint32_t *items, size_t count,
+                               uint32_t **out_items, size_t *out_count,
+                               char *error, size_t error_capacity)
+{
+    *out_items = NULL;
+    *out_count = 0U;
+    int32_t language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
+    if (language < 0 || (size_t)language >= engine->count_capacity) {
+        language = 0;
+    }
+    size_t capacity = count + 16U;
+    uint32_t *result = calloc(capacity, sizeof(*result));
+    if (result == NULL) {
+        return set_error(error, error_capacity,
+                         "hyphenation list allocation failed");
+    }
+    size_t written = 0U;
+    size_t index = 0U;
+    int status = 0;
+    while (status == 0 && index < count) {
+        if (reserve_hyphenated_items(&result, &capacity, written + 1U, error,
+                                     error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        uint32_t identifier = items[index];
+        result[written++] = identifier;
+        if (identifier == 0U || (size_t)identifier > engine->node_count ||
+            engine->nodes[identifier - 1U].kind != HSTEX_NODE_GLUE) {
+            ++index;
+            continue;
+        }
+        /* The reference looks for a word only after glue, which is why the
+           first word of a paragraph is never hyphenated. */
+        struct hstex_word word;
+        ++index;
+        if (!read_hyphenatable_word(engine, items, count, index, &word)) {
+            continue;
+        }
+        uint8_t breaks[HSTEX_MAX_HYPHENATED_WORD + 1U] = {0};
+        if (hstex_engine_hyphenate_word(engine, language, word.letters,
+                                        word.count, breaks, sizeof(breaks),
+                                        error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        size_t letter = 0U;
+        while (status == 0 && index < word.end) {
+            bool is_letter =
+                letter < word.count && word.positions[letter] == index;
+            bool wanted = is_letter && letter >= 1U && breaks[letter] != 0U;
+            size_t previous = wanted ? word.positions[letter - 1U] : 0U;
+            bool adjacent = wanted && previous + 1U == index;
+            /* A kern the font put between the two letters is not there when
+               the line breaks between them, so the letter in front of the
+               break is set again as part of what goes before it. */
+            bool kerned = wanted && previous + 2U == index &&
+                          items[previous + 1U] != 0U &&
+                          (size_t)items[previous + 1U] <= engine->node_count &&
+                          engine->nodes[items[previous + 1U] - 1U].kind ==
+                              HSTEX_NODE_KERN;
+            if (wanted && (adjacent || kerned)) {
+                uint32_t hyphen = 0U;
+                if (make_hyphen_node(engine, word.font, &hyphen, error,
+                                     error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
+                if (hyphen != 0U && adjacent) {
+                    status = store_list_run(engine, &hyphen, 1U,
+                                            &disc.value.disc.pre_start, error,
+                                            error_capacity);
+                    disc.value.disc.pre_count = 1U;
+                } else if (hyphen != 0U) {
+                    uint32_t pre[2] = {items[previous], hyphen};
+                    status = store_list_run(engine, pre, 2U,
+                                            &disc.value.disc.pre_start, error,
+                                            error_capacity);
+                    disc.value.disc.pre_count = 2U;
+                    disc.value.disc.replace_count = 2U;
+                }
+                uint32_t placed = 0U;
+                if (status == 0) {
+                    status = store_node(engine, &disc, &placed, error,
+                                        error_capacity);
+                }
+                if (status != 0) {
+                    break;
+                }
+                if (kerned) {
+                    /* The two nodes the discretionary replaces have already
+                       been written out; it belongs in front of them. */
+                    written -= 2U;
+                }
+                if (reserve_hyphenated_items(&result, &capacity, written + 4U,
+                                             error, error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                result[written++] = placed;
+                if (kerned) {
+                    result[written++] = items[previous];
+                    result[written++] = items[previous + 1U];
+                }
+            }
+            if (status == 0 &&
+                reserve_hyphenated_items(&result, &capacity, written + 1U,
+                                         error, error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            result[written++] = items[index];
+            if (is_letter) {
+                ++letter;
+            }
+            ++index;
+        }
+    }
+    if (status != 0) {
+        free(result);
+        return -1;
+    }
+    *out_items = result;
+    *out_count = written;
+    return 0;
+}
+
 /* Break the paragraph the engine has been filling into lines. */
 static int break_paragraph(struct hstex_engine *engine,
                            struct hstex_box *out_last, char *error,
@@ -15522,28 +15883,9 @@ static int break_paragraph(struct hstex_engine *engine,
     size_t count = paragraph->count;
     const uint32_t *items = paragraph->node_identifiers;
     struct hstex_break_state state = {0};
-    state.node_count = count;
-    state.totals = calloc(count + 1U, sizeof(*state.totals));
-    if (state.totals == NULL) {
-        return set_error(error, error_capacity, "break totals allocation failed");
-    }
-    for (size_t index = 0U; index < count; ++index) {
-        state.totals[index + 1U] = state.totals[index];
-        uint32_t identifier = items[index];
-        if (identifier == 0U || (size_t)identifier > engine->node_count) {
-            continue;
-        }
-        const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        state.totals[index + 1U].width += packed_dimen(node->width);
-        if (node->kind == HSTEX_NODE_GLUE) {
-            uint8_t up = node->value.glue.stretch_order;
-            if (up < 4U) {
-                state.totals[index + 1U].stretch[up] += node->value.glue.stretch;
-            }
-            if (node->value.glue.shrink_order == 0U) {
-                state.totals[index + 1U].shrink += node->value.glue.shrink;
-            }
-        }
+    if (measure_break_totals(engine, &state, items, count, error,
+                             error_capacity) != 0) {
+        return -1;
     }
     struct hstex_break_totals background = {0};
     struct hstex_glue left = engine->glue_parameters[HSTEX_GLUE_LEFT_SKIP];
@@ -15570,7 +15912,27 @@ static int break_paragraph(struct hstex_engine *engine,
                                       pretolerance, false, &best, error,
                                       error_capacity);
     }
+    /* The first pass never hyphenates; the second one does, over the whole
+       paragraph at once. See docs/DECISIONS.md, hyphenation. */
+    uint32_t *hyphenated = NULL;
     if (found == 0) {
+        size_t hyphenated_count = 0U;
+        if (hyphenate_paragraph(engine, items, count, &hyphenated,
+                                &hyphenated_count, error, error_capacity) != 0) {
+            free(state.totals);
+            return -1;
+        }
+        if (hyphenated_count != count) {
+            items = hyphenated;
+            count = hyphenated_count;
+            free(state.totals);
+            state.totals = NULL;
+            if (measure_break_totals(engine, &state, items, count, error,
+                                     error_capacity) != 0) {
+                free(hyphenated);
+                return -1;
+            }
+        }
         found = find_paragraph_breaks(
             engine, &state, items, count, &background,
             engine->integer_parameters[HSTEX_INTEGER_TOLERANCE], false, &best,
@@ -15591,6 +15953,7 @@ static int break_paragraph(struct hstex_engine *engine,
         status = emit_paragraph_lines(engine, &state, items, count, best,
                                       out_last, error, error_capacity);
     }
+    free(hyphenated);
     free(state.totals);
     free(state.records);
     free(state.active);
