@@ -1760,6 +1760,181 @@ static int test_a_hyphen_that_ligatures(void)
 );
 }
 
+/* A column is as wide as its widest entry, even when that is a negative
+   width; see docs/DECISIONS.md, a-column-of-negative-width. */
+static int test_a_column_of_negative_width(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\#=6 \\catcode`\\&=4 \\showboxdepth=3 \\tabsk"
+        "ip=2pt \\baselineskip=0pt \\lineskip=0pt \\lineski"
+        "plimit=0pt \\message{[neg]}\\setbox0=\\vbox{\\hali"
+        "gn{#&#\\cr\\kern5pt&\\kern-10pt\\cr}}\\showbox0 \\"
+        "message{[two]}\\setbox0=\\vbox{\\halign{#&#\\cr\\k"
+        "ern5pt&\\kern-10pt\\cr\\kern1pt&\\kern-3pt\\cr}}\\"
+        "showbox0%"
+,
+        "[neg]> \\box0=\n\\vbox(0.0+0.0)x1.0\n.\\hbox(0.0+0"
+        ".0)x1.0\n..\\glue(\\tabskip) 2.0\n..\\hbox(0.0+0.0"
+        ")x5.0\n...\\kern 5.0\n..\\glue(\\tabskip) 2.0\n.."
+        "\\hbox(0.0+0.0)x-10.0\n...\\kern -10.0\n..\\glue("
+        "\\tabskip) 2.0\n\n! OK.\n[two]> \\box0=\n\\vbox(0."
+        "0+0.0)x8.0\n.\\hbox(0.0+0.0)x8.0\n..\\glue(\\tabsk"
+        "ip) 2.0\n..\\hbox(0.0+0.0)x5.0\n...\\kern 5.0\n.."
+        "\\glue(\\tabskip) 2.0\n..\\hbox(0.0+0.0)x-3.0\n..."
+        "\\kern -10.0\n..\\glue(\\tabskip) 2.0\n.\\glue(\\b"
+        "aselineskip) 0.0\n.\\hbox(0.0+0.0)x8.0\n..\\glue("
+        "\\tabskip) 2.0\n..\\hbox(0.0+0.0)x5.0\n...\\kern 1"
+        ".0\n..\\glue(\\tabskip) 2.0\n..\\hbox(0.0+0.0)x-3."
+        "0\n...\\kern -3.0\n..\\glue(\\tabskip) 2.0\n\n! OK"
+        ".\n"
+);
+}
+
+/* A preamble's repeating part serves every column after the ones written
+   out; see docs/DECISIONS.md, a-repeating-preamble. */
+static int test_a_repeating_preamble(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\#=6 \\catcode`\\&=4 \\tabskip=3pt \\showboxd"
+        "epth=3 \\message{[loop]}\\setbox0=\\vbox{\\halign{"
+        "A#\\hfil&&B#\\hfil\\cr x&y&z&w\\cr}}\\showbox0 \\m"
+        "essage{[plain]}\\setbox0=\\vbox{\\halign{A#\\hfil&"
+        "B#\\hfil\\cr x&y\\cr}}\\showbox0 \\message{[two]}"
+        "\\tabskip=1pt \\setbox0=\\vbox{\\halign{A#\\hfil\\"
+        "tabskip=2pt&&B#\\hfil\\tabskip=3pt&C#\\hfil\\tabsk"
+        "ip=4pt\\cr p&q&r&s&t&u\\cr}}\\showbox0%"
+,
+        "[loop]> \\box0=\n\\vbox(6.83331+1.94444)x65.97237"
+        "\n.\\hbox(6.83331+1.94444)x65.97237\n..\\glue(\\ta"
+        "bskip) 3.0\n..\\hbox(6.83331+1.94444)x12.77782\n.."
+        ".\\tenrm A\n...\\tenrm x\n...\\glue 0.0 plus 1.0fi"
+        "l\n..\\glue(\\tabskip) 3.0\n..\\hbox(6.83331+1.944"
+        "44)x12.36116\n...\\tenrm B\n...\\tenrm y\n...\\glu"
+        "e 0.0 plus 1.0fil\n..\\glue(\\tabskip) 3.0\n..\\hb"
+        "ox(6.83331+1.94444)x11.5278\n...\\tenrm B\n...\\te"
+        "nrm z\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\tabsk"
+        "ip) 3.0\n..\\hbox(6.83331+1.94444)x14.30559\n...\\"
+        "tenrm B\n...\\tenrm w\n...\\glue 0.0 plus 1.0fil\n"
+        "..\\glue(\\tabskip) 3.0\n\n! OK.\n[plain]> \\box0="
+        "\n\\vbox(6.83331+1.94444)x34.13898\n.\\hbox(6.8333"
+        "1+1.94444)x34.13898\n..\\glue(\\tabskip) 3.0\n..\\"
+        "hbox(6.83331+1.94444)x12.77782\n...\\tenrm A\n..."
+        "\\tenrm x\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\t"
+        "abskip) 3.0\n..\\hbox(6.83331+1.94444)x12.36116\n."
+        "..\\tenrm B\n...\\tenrm y\n...\\glue 0.0 plus 1.0f"
+        "il\n..\\glue(\\tabskip) 3.0\n\n! OK.\n[two]> \\box"
+        "0=\n\\vbox(6.83331+1.94444)x91.3335\n.\\hbox(6.833"
+        "31+1.94444)x91.3335\n..\\glue(\\tabskip) 1.0\n..\\"
+        "hbox(6.83331+1.94444)x13.05559\n...\\tenrm A\n..."
+        "\\tenrm p\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\t"
+        "abskip) 2.0\n..\\hbox(6.83331+1.94444)x12.36115\n."
+        "..\\tenrm B\n...\\tenrm q\n...\\glue 0.0 plus 1.0f"
+        "il\n..\\glue(\\tabskip) 3.0\n..\\hbox(6.83331+1.94"
+        "444)x11.1389\n...\\tenrm C\n...\\tenrm r\n...\\glu"
+        "e 0.0 plus 1.0fil\n..\\glue(\\tabskip) 4.0\n..\\hb"
+        "ox(6.83331+1.94444)x11.0278\n...\\tenrm B\n...\\te"
+        "nrm s\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\tabsk"
+        "ip) 3.0\n..\\hbox(6.83331+1.94444)x11.11113\n...\\"
+        "tenrm C\n...\\tenrm t\n...\\glue 0.0 plus 1.0fil\n"
+        "..\\glue(\\tabskip) 4.0\n..\\hbox(6.83331+1.94444)"
+        "x12.63893\n...\\tenrm B\n...\\tenrm u\n...\\glue 0"
+        ".0 plus 1.0fil\n..\\glue(\\tabskip) 3.0\n\n! OK.\n"
+);}
+
+/* An empty sub-formula is an ordinary atom, which is what makes a relation
+   next to it take its spacing; see docs/DECISIONS.md, an-empty-atom. */
+static int test_an_empty_atom(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\thin"
+        "muskip=3mu \\medmuskip=4mu plus 2mu minus 4mu \\th"
+        "ickmuskip=5mu plus 5mu \\mathcode`\\==\"303D \\mes"
+        "sage{[e1]}\\setbox0=\\hbox{$=x$}\\showbox0 \\messa"
+        "ge{[e2]}\\setbox0=\\hbox{${}=x$}\\showbox0 \\messa"
+        "ge{[e3]}\\setbox0=\\hbox{$x={}$}\\showbox0 \\messa"
+        "ge{[e4]}\\setbox0=\\hbox{$x=y$}\\showbox0%"
+,
+        "[e1]> \\box0=\n\\hbox(4.30554+0.0)x16.27078\n.\\ma"
+        "thon\n.\\tenrm =\n.\\glue(\\thickmuskip) 2.77771 p"
+        "lus 2.77771\n.\\teni x\n.\\mathoff\n\n! OK.\n[e2]>"
+        " \\box0=\n\\hbox(4.30554+0.0)x19.0485\n.\\mathon\n"
+        ".\\hbox(0.0+0.0)x0.0\n.\\glue(\\thickmuskip) 2.777"
+        "71 plus 2.77771\n.\\tenrm =\n.\\glue(\\thickmuskip"
+        ") 2.77771 plus 2.77771\n.\\teni x\n.\\mathoff\n\n!"
+        " OK.\n[e3]> \\box0=\n\\hbox(4.30554+0.0)x19.0485\n"
+        ".\\mathon\n.\\teni x\n.\\glue(\\thickmuskip) 2.777"
+        "71 plus 2.77771\n.\\tenrm =\n.\\glue(\\thickmuskip"
+        ") 2.77771 plus 2.77771\n.\\hbox(0.0+0.0)x0.0\n.\\m"
+        "athoff\n\n! OK.\n[e4]> \\box0=\n\\hbox(4.30554+1.9"
+        "4444)x24.31009\n.\\mathon\n.\\teni x\n.\\glue(\\th"
+        "ickmuskip) 2.77771 plus 2.77771\n.\\tenrm =\n.\\gl"
+        "ue(\\thickmuskip) 2.77771 plus 2.77771\n.\\teni y"
+        "\n.\\kern0.35878\n.\\mathoff\n\n! OK.\n"
+);
+}
+
 /* An accent goes over its nucleus's scripts as well, but it stands where the
    nucleus alone would put it; see docs/DECISIONS.md,
    an-accent-over-a-script. */
@@ -1850,6 +2025,66 @@ static int test_an_accent_over_a_script(void)
         "shifted -7.90356\n..\\seveni a\n.\\mathoff\n\n! OK"
         ".\n"
 );}
+
+/* A box, a rule and a formula set the space factor back to a thousand; a
+   kern and a discretionary leave it alone; see docs/DECISIONS.md,
+   what-resets-the-space-factor. */
+static int test_what_resets_the_space_factor(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\spac"
+        "eskip=0pt \\sfcode`\\,=1250 \\sfcode`\\]=0 \\messa"
+        "ge{[rule]}\\setbox0=\\hbox{a,\\vrule width2pt\\rel"
+        "ax] b}\\showbox0 \\message{[kern]}\\setbox0=\\hbox"
+        "{a,\\kern2pt\\relax] b}\\showbox0 \\message{[box]}"
+        "\\setbox0=\\hbox{a,\\hbox{x}] b}\\showbox0 \\messa"
+        "ge{[math]}\\setbox0=\\hbox{a,$x$] b}\\showbox0 \\m"
+        "essage{[disc]}\\setbox0=\\hbox{a,\\discretionary{}"
+        "{}{}] b}\\showbox0 \\message{[none]}\\setbox0=\\hb"
+        "ox{a,] b}\\showbox0%"
+,
+        "[rule]> \\box0=\n\\hbox(7.5+2.5)x21.44449\n.\\tenr"
+        "m a\n.\\tenrm ,\n.\\rule(*+*)x2.0\n.\\tenrm ]\n.\\"
+        "glue 3.33333 plus 1.66666 minus 1.11111\n.\\tenrm "
+        "b\n\n! OK.\n[kern]> \\box0=\n\\hbox(7.5+2.5)x21.44"
+        "449\n.\\tenrm a\n.\\tenrm ,\n.\\kern 2.0\n.\\tenrm"
+        " ]\n.\\glue 3.33333 plus 2.08331 minus 0.88889\n."
+        "\\tenrm b\n\n! OK.\n[box]> \\box0=\n\\hbox(7.5+2.5"
+        ")x24.72229\n.\\tenrm a\n.\\tenrm ,\n.\\hbox(4.3055"
+        "4+0.0)x5.2778\n..\\tenrm x\n.\\tenrm ]\n.\\glue 3."
+        "33333 plus 1.66666 minus 1.11111\n.\\tenrm b\n\n! "
+        "OK.\n[math]> \\box0=\n\\hbox(7.5+2.5)x25.15976\n."
+        "\\tenrm a\n.\\tenrm ,\n.\\mathon\n.\\teni x\n.\\ma"
+        "thoff\n.\\tenrm ]\n.\\glue 3.33333 plus 1.66666 mi"
+        "nus 1.11111\n.\\tenrm b\n\n! OK.\n[disc]> \\box0="
+        "\n\\hbox(7.5+2.5)x19.44449\n.\\tenrm a\n.\\tenrm ,"
+        "\n.\\discretionary\n.\\tenrm ]\n.\\glue 3.33333 pl"
+        "us 2.08331 minus 0.88889\n.\\tenrm b\n\n! OK.\n[no"
+        "ne]> \\box0=\n\\hbox(7.5+2.5)x19.44449\n.\\tenrm a"
+        "\n.\\tenrm ,\n.\\tenrm ]\n.\\glue 3.33333 plus 2.0"
+        "8331 minus 0.88889\n.\\tenrm b\n\n! OK.\n"
+);
+}
 
 /* A character with a space factor code of zero leaves the factor alone, and
    it is the character as read that counts, not the ligature it joined; see
@@ -5656,7 +5891,11 @@ int main(void)
         test_large_operators() != 0 ||
         test_operators_that_are_lists() != 0 ||
         test_the_space_factor_of_a_ligature() != 0 ||
+        test_what_resets_the_space_factor() != 0 ||
         test_an_accent_over_a_script() != 0 ||
+        test_an_empty_atom() != 0 ||
+        test_a_repeating_preamble() != 0 ||
+        test_a_column_of_negative_width() != 0 ||
         test_superscripts_in_display_style() != 0 ||
         test_protrusion_into_boxes() != 0 ||
         test_italic_correction_needs_a_character() != 0 ||

@@ -8677,6 +8677,11 @@ static int append_current_list_node(struct hstex_engine *engine,
                                     char *error, size_t error_capacity)
 {
     if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        /* A box or a rule in a horizontal list sets the space factor back to
+           a thousand; see docs/DECISIONS.md, what-resets-the-space-factor. */
+        if (node->kind == HSTEX_NODE_LIST || node->kind == HSTEX_NODE_RULE) {
+            engine->space_factor = 1000;
+        }
         return append_hbox_node(engine, node, error, error_capacity);
     }
     if (engine->mode == HSTEX_MODE_VERTICAL) {
@@ -18180,14 +18185,6 @@ static int math_field_restyle(struct hstex_engine *engine,
             single = (node->kind == HSTEX_NODE_CHARACTER ||
                       node->kind == HSTEX_NODE_LIGATURE) &&
                      node->shift == 0;
-            /* A list that is already one unshifted box needs no box of its
-               own; see docs/DECISIONS.md, a-list-that-is-one-box. */
-            if (node->kind == HSTEX_NODE_LIST && node->shift == 0) {
-                field->node = item;
-                field->single_character = 0U;
-                field->list_style = style;
-                return 0;
-            }
         }
     }
     uint32_t identifier = 0U;
@@ -18220,6 +18217,20 @@ static int math_field_box(struct hstex_engine *engine,
                              "math field refers to a missing node");
         }
         const struct hstex_node *node = &engine->nodes[field->node - 1U];
+        /* A sub-formula that came to one unshifted box is that box; the box
+           a \hbox put there is taken as it stands. See docs/DECISIONS.md,
+           a-list-that-is-one-box. */
+        if (field->sublist != 0U && node->value.list.node_count == 1U &&
+            (size_t)node->value.list.node_start <
+                engine->list_item_count) {
+            uint32_t item =
+                engine->list_items[node->value.list.node_start];
+            if (item != 0U && (size_t)item <= engine->node_count &&
+                engine->nodes[item - 1U].kind == HSTEX_NODE_LIST &&
+                engine->nodes[item - 1U].shift == 0) {
+                node = &engine->nodes[item - 1U];
+            }
+        }
         box->kind = node->value.list.box_kind;
         box->width = node->width;
         box->height = node->height;
@@ -21369,17 +21380,6 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
             single = (node->kind == HSTEX_NODE_CHARACTER ||
                       node->kind == HSTEX_NODE_LIGATURE) &&
                      node->shift == 0;
-            /* A list that came to one unshifted box is that box, not a box
-               around it; see docs/DECISIONS.md, a-list-that-is-one-box. */
-            if (node->kind == HSTEX_NODE_LIST && node->shift == 0) {
-                box.kind = node->value.list.box_kind;
-                box.width = node->width;
-                box.height = node->height;
-                box.depth = node->depth;
-                box.node_start = node->value.list.node_start;
-                box.node_count = node->value.list.node_count;
-                box.glue = node->value.list.glue;
-            }
         }
     }
     return math_append_box_field(engine, &box, single, record, item_style,
@@ -21399,6 +21399,9 @@ static int end_math(struct hstex_engine *engine, char *error,
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = list->outer_inner_mode;
     engine->displayed_math = list->outer_displayed;
+    /* A formula sets the space factor back to a thousand; see
+       docs/DECISIONS.md, what-resets-the-space-factor. */
+    engine->space_factor = 1000;
     /* The formula is fenced with nodes of its own rather than kerns: they
        carry \mathsurround, they tell the line breaker where a formula
        begins and ends, and \showbox names them. See docs/DECISIONS.md,
@@ -21804,18 +21807,21 @@ static int scan_align_preamble(struct hstex_engine *engine,
 /* Repeat the preamble from its && point until the wanted column exists. */
 static int extend_align_columns(struct hstex_align_column **columns,
                                 size_t *count, size_t *capacity,
-                                size_t loop_start, size_t wanted, char *error,
+                                size_t loop_start, size_t preamble_count,
+                                size_t wanted, char *error,
                                 size_t error_capacity)
 {
     if (wanted < *count) {
         return 0;
     }
-    if (loop_start == SIZE_MAX || loop_start >= *count) {
+    if (loop_start == SIZE_MAX || loop_start >= preamble_count) {
         return set_error(error, error_capacity,
                          "an alignment row has more entries than the "
                          "preamble has columns");
     }
-    size_t period = *count - loop_start;
+    /* The period is the preamble's own repeating part, not what the
+       columns have grown to. */
+    size_t period = preamble_count - loop_start;
     while (wanted >= *count) {
         if (*count == *capacity) {
             size_t next = *capacity == 0U ? 4U : *capacity * 2U;
@@ -22103,10 +22109,12 @@ static int finish_alignment(struct hstex_engine *engine,
                             const struct hstex_align_row *rows,
                             size_t row_count, bool matched_to,
                             bool matched_spread, int32_t requested_width,
-                            int32_t shift, char *error, size_t error_capacity)
+                            int32_t shift, bool display, char *error,
+                            size_t error_capacity)
 {
     for (size_t index = 0U; index < column_count; ++index) {
         columns[index].width = 0;
+        columns[index].measured = false;
     }
     /* Short spans first, so that a wide one only has to make up what the
        columns it covers still lack. */
@@ -22127,9 +22135,12 @@ static int finish_alignment(struct hstex_engine *engine,
                             covered += columns[column + step].tabskip.width;
                         }
                     }
-                    if ((int64_t)entry->width > covered) {
-                        columns[column + entry->span - 1U].width +=
+                    struct hstex_align_column *last =
+                        &columns[column + entry->span - 1U];
+                    if (!last->measured || (int64_t)entry->width > covered) {
+                        last->width +=
                             (int32_t)((int64_t)entry->width - covered);
+                        last->measured = true;
                     }
                 }
                 column += entry->span;
@@ -22174,7 +22185,8 @@ static int finish_alignment(struct hstex_engine *engine,
         size_t column = 0U;
         for (size_t cell = 0U; status == 0 && cell < rows[index].cell_count;
              ++cell) {
-            status = emit_math_glue(engine, skip, error, error_capacity);
+            status = emit_parameter_glue(engine, skip, HSTEX_GLUE_TAB_SKIP,
+                                         error, error_capacity);
             if (status != 0) {
                 break;
             }
@@ -22202,7 +22214,8 @@ static int finish_alignment(struct hstex_engine *engine,
         /* A row that stops early still carries the glue of the columns it
            did not reach, so that every row is the same shape. */
         for (; status == 0 && column <= column_count; ++column) {
-            status = emit_math_glue(engine, skip, error, error_capacity);
+            status = emit_parameter_glue(engine, skip, HSTEX_GLUE_TAB_SKIP,
+                                         error, error_capacity);
             if (column < column_count) {
                 skip = columns[column].tabskip;
             }
@@ -22219,9 +22232,35 @@ static int finish_alignment(struct hstex_engine *engine,
         if (status != 0) {
             return -1;
         }
+        /* Every entry of a row is as tall and as deep as the row itself; see
+           docs/DECISIONS.md, the-entries-of-a-row. */
+        for (size_t item = 0U;
+             item < packed.node_count &&
+             (size_t)packed.node_start + packed.node_count <=
+                 engine->list_item_count;
+             ++item) {
+            uint32_t identifier = engine->list_items[packed.node_start + item];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            struct hstex_node *entry = &engine->nodes[identifier - 1U];
+            if (entry->kind == HSTEX_NODE_LIST) {
+                entry->height = packed.height;
+                entry->depth = packed.depth;
+            }
+        }
         if (append_shifted_box_node(engine, &packed, shift, error,
                                     error_capacity) != 0) {
             return -1;
+        }
+        /* A row of a displayed alignment is a display line, and says so; see
+           docs/DECISIONS.md, display-alignments. */
+        struct hstex_vbox_builder *list = engine->active_vbox_builder;
+        if (display && list != NULL && list->count != 0U) {
+            uint32_t row_node = list->node_identifiers[list->count - 1U];
+            if (row_node != 0U && (size_t)row_node <= engine->node_count) {
+                engine->nodes[row_node - 1U].value.list.display = true;
+            }
         }
     }
     return 0;
@@ -22375,6 +22414,9 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     int status = scan_align_preamble(engine, &columns, &column_count,
                                      &loop_start, error, error_capacity);
     column_capacity = column_count;
+    /* What the preamble itself declared, which is what the repeating part is
+       measured against; see docs/DECISIONS.md, a-repeating-preamble. */
+    size_t preamble_columns = column_count;
     if (status == 0) {
         status = insert_every_cr(engine, error, error_capacity);
     }
@@ -22472,8 +22514,9 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                 break;
             }
             if (extend_align_columns(&columns, &column_count,
-                                     &column_capacity, loop_start, column,
-                                     error, error_capacity) != 0) {
+                                     &column_capacity, loop_start,
+                                     preamble_columns, column, error,
+                                     error_capacity) != 0) {
                 status = -1;
                 break;
             }
@@ -22528,7 +22571,7 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     if (status == 0) {
         status = finish_alignment(engine, columns, column_count, leading,
                                   rows, row_count, matched_to, matched_spread,
-                                  requested_width, shift, error,
+                                  requested_width, shift, display, error,
                                   error_capacity);
     }
     destroy_align_columns(columns, column_count);

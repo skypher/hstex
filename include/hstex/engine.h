@@ -809,6 +809,10 @@ struct hstex_align_column {
     size_t after_count;
     struct hstex_glue tabskip;
     int32_t width;
+    /* Whether any entry has claimed this column yet, so that the first one
+       sets the width even when it is negative; see docs/DECISIONS.md,
+       a-column-of-negative-width. */
+    bool measured;
 };
 
 /* One entry of a row: an unset box of its natural width, and how many
