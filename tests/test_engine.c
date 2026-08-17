@@ -1211,6 +1211,75 @@ static int test_accents(void)
         "[2.0pt|6.0pt|0.0pt]");
 }
 
+/* Equation numbers; see docs/DECISIONS.md, equation-numbers. */
+static int test_equation_numbers(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\chardef\\keep=200 \\chardef\\ln=201 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\textfont1=\\tenmi \\textfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont0=\\tenrm \\scriptfont1=\\tenmi "
+        "\\scriptfont2=\\tensy \\scriptfont3=\\tenex "
+        "\\scriptscriptfont0=\\tenrm \\scriptscriptfont1=\\tenmi "
+        "\\scriptscriptfont2=\\tensy \\scriptscriptfont3=\\tenex "
+        "\\hsize=100pt \\parindent=0pt \\baselineskip=0pt \\lineskip=0pt "
+        "\\lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\tolerance=10000 "
+        "\\parfillskip=0pt plus1fil \\abovedisplayskip=3pt "
+        "\\belowdisplayskip=4pt \\abovedisplayshortskip=1pt "
+        "\\belowdisplayshortskip=2pt \\predisplaypenalty=101 "
+        "\\postdisplaypenalty=102 \\tenrm \\hbadness=10000 \\hfuzz=1000pt "
+        "\\vbadness=10000 \\vfuzz=1000pt "
+        "\\def\\K#1{\\vrule width#1 height1pt depth0pt}"
+        "\\def\\H#1{\\vrule width#1 height5pt depth0pt}"
+        "\\long\\def\\r#1{\\setbox0=\\vbox{#1}"
+        "[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        "\\long\\def\\rl#1{\\setbox0=\\vbox{#1}"
+        "\\setbox\\keep=\\vbox{\\unvbox0 \\unskip \\unpenalty "
+        "\\global\\setbox\\ln=\\lastbox}[\\the\\wd\\ln|\\the\\ht\\ln]}"
+        /* Without a number, for comparison. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}$$\\par}"
+        /* A number that fits sits beside the equation on a line that runs
+           from the equation's left edge to the display's right edge. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{8pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{8pt}$$\\par}"
+        /* A number that does not fit -- counting a quad of space between --
+           goes on a line of its own, and the glue below the display goes. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{60pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{60pt}$$\\par}"
+        "\\r{\\noindent\\K{20pt}$$\\H{95pt}\\eqno\\H{8pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{95pt}\\eqno\\H{8pt}$$\\par}"
+        /* \leqno puts it on the left and does not shift the line. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{8pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{8pt}$$\\par}"
+        /* An equation wider than the display is squeezed, and its number
+           still goes below. */
+        "\\r{\\noindent\\K{20pt}$$\\H{130pt}\\eqno\\H{8pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{130pt}\\eqno\\H{8pt}$$\\par}"
+        /* A number wide enough to crowd the equation moves it left. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{20pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\eqno\\H{20pt}$$\\par}"
+        /* A \leqno that does not fit goes above, in place of the glue. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{60pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{60pt}$$\\par}"
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{20pt}$$\\par}"
+        "\\rl{\\noindent\\K{20pt}$$\\H{30pt}\\leqno\\H{20pt}$$\\par}"
+        "\\r{$$\\H{30pt}\\eqno\\H{8pt}$$\\par}"
+        "\\rl{$$\\H{30pt}\\eqno\\H{8pt}$$\\par}"
+        /* A formula inside a box inside a display is its own formula. */
+        "\\r{\\noindent\\K{20pt}$$\\H{30pt}\\hbox{$\\H{4pt}$}$$\\par}%",
+        "[100.0pt|13.0pt|0.0pt][100.0pt|13.0pt|0.0pt]"
+        "[65.0pt|5.0pt][100.0pt|14.0pt|0.0pt][60.0pt|5.0pt]"
+        "[100.0pt|14.0pt|0.0pt][8.0pt|5.0pt]"
+        "[100.0pt|13.0pt|0.0pt][65.0pt|5.0pt]"
+        "[100.0pt|14.0pt|0.0pt][8.0pt|5.0pt]"
+        "[100.0pt|13.0pt|0.0pt][75.0pt|5.0pt]"
+        "[100.0pt|15.0pt|0.0pt][30.0pt|5.0pt]"
+        "[100.0pt|13.0pt|0.0pt][75.0pt|5.0pt]"
+        "[100.0pt|8.0pt|0.0pt][65.0pt|5.0pt]"
+        "[100.0pt|13.0pt|0.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2298,7 +2367,7 @@ int main(void)
         test_math_scripts() != 0 || test_alignments() != 0 ||
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
-        test_accents() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_accents() != 0 || test_equation_numbers() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

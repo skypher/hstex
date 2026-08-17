@@ -211,6 +211,7 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_STYLE,
     HSTEX_COMMAND_MATH_CHOICE,
     HSTEX_COMMAND_ACCENT,
+    HSTEX_COMMAND_EQUATION_NUMBER,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -811,8 +812,10 @@ struct hstex_math_builder {
     uint8_t slot;
     size_t slot_target;
     /* Saved across the formula: inline math is an inner mode, so \ifinner is
-       true there and false in a display. */
+       true there and false in a display, and a formula inside a display is
+       not itself one. */
     bool outer_inner_mode;
+    bool outer_displayed;
     /* Branches of a \mathchoice still to be read, and which one is next. */
     uint8_t choice_remaining;
     uint8_t choice_index;
@@ -1059,12 +1062,20 @@ struct hstex_engine {
     bool building_alignment;
     /* True while the formula being read is a display. */
     bool displayed_math;
+    /* The equation a display has already read, while its number is being
+       read; which side the number goes on. */
+    bool reading_equation_number;
+    bool equation_number_on_left;
+    struct hstex_box displayed_equation;
     /* What \badness reports about the box packed most recently. */
     int32_t badness;
     /* The math lists being built, innermost last; empty outside math. */
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;
+    /* Where the current math context starts. A box body opens a fresh one
+       without disturbing the lists the enclosing formula is still holding. */
+    size_t math_floor;
     /* Name of the primitive the executor is currently running, for
        diagnostics: a scan that fails names the command that asked for the
        value, which is otherwise invisible from inside the scanner. */

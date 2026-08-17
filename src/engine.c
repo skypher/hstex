@@ -1866,6 +1866,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
          (int32_t)HSTEX_STYLE_SCRIPT_SCRIPT},
         {"mathchoice", HSTEX_COMMAND_MATH_CHOICE, 0},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
+        {"eqno", HSTEX_COMMAND_EQUATION_NUMBER, 0},
+        {"leqno", HSTEX_COMMAND_EQUATION_NUMBER, 1},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
         {"cr", HSTEX_COMMAND_CR, 0},
         {"crcr", HSTEX_COMMAND_CR, 1},
@@ -8476,6 +8478,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     /* A box body is a fresh place for formulas: a $ inside it opens and
        closes its own math list, not the one the box interrupted. */
     size_t previous_math_depth = engine->math_depth;
+    size_t previous_math_floor = engine->math_floor;
+    bool previous_displayed = engine->displayed_math;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8484,7 +8488,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = base_group_level;
     engine->group_stop_armed = true;
     engine->group_stop_hit = false;
-    engine->math_depth = 0U;
+    engine->math_floor = engine->math_depth;
+    engine->displayed_math = false;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -8555,6 +8560,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         pop_math_list(engine);
     }
     engine->math_depth = previous_math_depth;
+    engine->math_floor = previous_math_floor;
+    engine->displayed_math = previous_displayed;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -8683,6 +8690,8 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
     size_t previous_math_depth = engine->math_depth;
+    size_t previous_math_floor = engine->math_floor;
+    bool previous_displayed = engine->displayed_math;
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -8691,7 +8700,8 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = base_group_level;
     engine->group_stop_armed = true;
     engine->group_stop_hit = false;
-    engine->math_depth = 0U;
+    engine->math_floor = engine->math_depth;
+    engine->displayed_math = false;
     engine->active_hbox_builder = NULL;
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
@@ -8772,6 +8782,8 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
         pop_math_list(engine);
     }
     engine->math_depth = previous_math_depth;
+    engine->math_floor = previous_math_floor;
+    engine->displayed_math = previous_displayed;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -14864,11 +14876,13 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
 
 /* The closing $$ centres the formula in \displaywidth, surrounds it with the
    display penalties and skips, and lets the paragraph carry on. */
-static int end_display_math(struct hstex_engine *engine, char *error,
-                            size_t error_capacity)
+/* Translate the formula the engine has been reading into a box. */
+static int package_displayed_formula(struct hstex_engine *engine,
+                                     struct hstex_box *box, char *error,
+                                     size_t error_capacity)
 {
     struct hstex_math_builder *list = current_math_list(engine);
-    if (list == NULL || engine->math_depth != 1U) {
+    if (list == NULL || engine->math_depth != engine->math_floor + 1U) {
         return set_error(error, error_capacity,
                          "a display closed inside a math group");
     }
@@ -14877,16 +14891,158 @@ static int end_display_math(struct hstex_engine *engine, char *error,
     engine->active_hbox_builder = &builder;
     int status = translate_math_list(engine, list, error, error_capacity);
     engine->active_hbox_builder = previous;
-    struct hstex_box equation = {0};
     if (status == 0) {
-        status = finalize_hbox(engine, &builder, false, false, 0, &equation,
-                               error, error_capacity);
+        status = finalize_hbox(engine, &builder, false, false, 0, box, error,
+                               error_capacity);
     }
     free(builder.node_identifiers);
     pop_math_list(engine);
+    return status;
+}
+
+/* \eqno and \leqno end the equation and begin its number, which is set in
+   text style; see docs/DECISIONS.md, equation-numbers. */
+static int execute_equation_number(struct hstex_engine *engine, bool left,
+                                   char *error, size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_MATH || !engine->displayed_math ||
+        engine->reading_equation_number) {
+        return set_error(error, error_capacity,
+                         "an equation number is only allowed in a display");
+    }
+    struct hstex_box equation = {0};
+    if (package_displayed_formula(engine, &equation, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    engine->displayed_equation = equation;
+    engine->reading_equation_number = true;
+    engine->equation_number_on_left = left;
+    return push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
+                          error_capacity);
+}
+
+/* Build the line the display occupies, with its number beside it when there
+   is room. */
+/* Whether the number can stand beside the equation: the reference wants a
+   quad of the symbol family between them as well. */
+static int equation_number_fits(struct hstex_engine *engine,
+                                const struct hstex_box *equation,
+                                const struct hstex_box *number, int32_t width,
+                                bool *fits, char *error, size_t error_capacity)
+{
+    if (number == NULL) {
+        *fits = false;
+        return 0;
+    }
+    int32_t quad = 0;
+    if (math_symbol_parameter(engine, (uint8_t)HSTEX_MATH_TEXT, 6U, &quad,
+                              error, error_capacity) != 0) {
+        return -1;
+    }
+    *fits = (int64_t)equation->width + number->width + quad <= width;
+    return 0;
+}
+
+static int append_display_line(struct hstex_engine *engine,
+                               struct hstex_box equation,
+                               const struct hstex_box *number, bool left,
+                               int32_t width, int32_t indent, int32_t *shift,
+                               bool dropped, char *error,
+                               size_t error_capacity)
+{
+    (void)error;
+    (void)error_capacity;
+    int32_t e = number == NULL || dropped ? 0 : number->width;
+    if (e == 0 && equation.width > width) {
+        /* A box HSTeX has packed records no shrink, so an equation too wide
+           for the display is squeezed to fit rather than centred. */
+        equation.width = width;
+    }
+    int32_t w = equation.width;
+    int32_t d = (int32_t)(((int64_t)width - w + 1) / 2);
+    if (e > 0 && d < 2 * e) {
+        d = (int32_t)(((int64_t)width - w - e + 1) / 2);
+    }
+    *shift = indent + (left && e != 0 ? 0 : d);
+    if (e == 0) {
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_LIST,
+            .width = equation.width,
+            .height = equation.height,
+            .depth = equation.depth,
+            .shift = *shift,
+            .value.list = {
+                .node_start = equation.node_start,
+                .node_count = equation.node_count,
+                .box_kind = equation.kind,
+            },
+        };
+        return append_vbox_node(engine, &node, error, error_capacity);
+    }
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    enum hstex_mode previous_mode = engine->mode;
+    engine->active_hbox_builder = &builder;
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    struct hstex_node gap = {
+        .kind = HSTEX_NODE_KERN,
+        .width = (int32_t)((int64_t)width - w - e - d),
+    };
+    uint32_t identifier = 0U;
+    int status = 0;
+    const struct hstex_box *first = left ? number : &equation;
+    const struct hstex_box *second = left ? &equation : number;
+    if (store_box_node(engine, first, 0, &identifier, error, error_capacity) !=
+            0 ||
+        append_hbox_item(engine, identifier, error, error_capacity) != 0 ||
+        append_hbox_node(engine, &gap, error, error_capacity) != 0 ||
+        store_box_node(engine, second, 0, &identifier, error,
+                       error_capacity) != 0 ||
+        append_hbox_item(engine, identifier, error, error_capacity) != 0) {
+        status = -1;
+    }
+    struct hstex_box line = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, false, false, 0, &line, error,
+                               error_capacity);
+    }
+    free(builder.node_identifiers);
+    engine->active_hbox_builder = previous;
+    engine->mode = previous_mode;
     if (status != 0) {
         return -1;
     }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = line.width,
+        .height = line.height,
+        .depth = line.depth,
+        .shift = *shift,
+        .value.list = {
+            .node_start = line.node_start,
+            .node_count = line.node_count,
+            .box_kind = line.kind,
+        },
+    };
+    return append_vbox_node(engine, &node, error, error_capacity);
+}
+
+/* The closing $$ centres the formula in \displaywidth, surrounds it with the
+   display penalties and skips, and lets the paragraph carry on. */
+static int end_display_math(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    bool numbered = engine->reading_equation_number;
+    bool left = engine->equation_number_on_left;
+    struct hstex_box packaged = {0};
+    if (package_displayed_formula(engine, &packaged, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    struct hstex_box equation = numbered ? engine->displayed_equation : packaged;
+    struct hstex_box number = packaged;
+    engine->reading_equation_number = false;
     if (end_group(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -14896,14 +15052,21 @@ static int end_display_math(struct hstex_engine *engine, char *error,
 
     int32_t width = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_WIDTH];
     int32_t indent = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_INDENT];
-    /* An equation too wide for the display is squeezed to fit rather than
-       centred. */
-    if (equation.width > width) {
-        equation.width = width;
-    }
-    int32_t shift = (int32_t)(((int64_t)width - equation.width + 1) / 2);
     int32_t before = engine->dimen_parameters[HSTEX_DIMEN_PRE_DISPLAY_SIZE];
-    bool roomy = (int64_t)shift + indent <= (int64_t)before;
+    int32_t shift = 0;
+    bool fits = false;
+    if (equation_number_fits(engine, &equation, numbered ? &number : NULL,
+                             width, &fits, error, error_capacity) != 0) {
+        return -1;
+    }
+    bool dropped = numbered && !fits;
+
+    /* The line is measured first, because whether the number fits beside it
+       decides both the skips and where the number goes. */
+    int32_t trial = (int32_t)(((int64_t)width - equation.width + 1) / 2);
+    bool roomy = numbered && left
+                     ? true
+                     : (int64_t)trial + indent <= (int64_t)before;
     struct hstex_glue above =
         engine->glue_parameters[roomy ? HSTEX_GLUE_ABOVE_DISPLAY_SKIP
                                       : HSTEX_GLUE_ABOVE_DISPLAY_SHORT_SKIP];
@@ -14915,26 +15078,72 @@ static int end_display_math(struct hstex_engine *engine, char *error,
         .value.penalty =
             engine->integer_parameters[HSTEX_INTEGER_PRE_DISPLAY_PENALTY],
     };
-    if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
-        append_display_glue(engine, above, error, error_capacity) != 0) {
+    struct hstex_node infinite = {
+        .kind = HSTEX_NODE_PENALTY,
+        .value.penalty = HSTEX_INFINITE_PENALTY,
+    };
+
+    /* A number on the left that will not fit beside the equation takes the
+       place of the glue above it. */
+    bool left_alone = dropped && left;
+    if (left_alone) {
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_LIST,
+            .width = number.width,
+            .height = number.height,
+            .depth = number.depth,
+            .shift = indent,
+            .value.list = {
+                .node_start = number.node_start,
+                .node_count = number.node_count,
+                .box_kind = number.kind,
+            },
+        };
+        if (append_vbox_node(engine, &node, error, error_capacity) != 0 ||
+            append_vbox_node(engine, &infinite, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
+               append_display_glue(engine, above, error, error_capacity) != 0) {
         return -1;
     }
-    struct hstex_node node = {
-        .kind = HSTEX_NODE_LIST,
-        .width = equation.width,
-        .height = equation.height,
-        .depth = equation.depth,
-        .shift = indent + shift,
-        .value.list = {
-            .node_start = equation.node_start,
-            .node_count = equation.node_count,
-            .box_kind = equation.kind,
-        },
-    };
+
+    if (append_display_line(engine, equation, numbered ? &number : NULL, left,
+                            width, indent, &shift, dropped, error,
+                            error_capacity) != 0) {
+        return -1;
+    }
+    if (dropped && !left) {
+        /* A number on the right that would not fit goes below, against the
+           right edge, and the glue under the display goes away. */
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_LIST,
+            .width = number.width,
+            .height = number.height,
+            .depth = number.depth,
+            .shift = indent + width - number.width,
+            .value.list = {
+                .node_start = number.node_start,
+                .node_count = number.node_count,
+                .box_kind = number.kind,
+            },
+        };
+        if (append_vbox_node(engine, &infinite, error, error_capacity) != 0 ||
+            append_vbox_node(engine, &node, error, error_capacity) != 0) {
+            return -1;
+        }
+        below.width = 0;
+        below.stretch = 0;
+        below.shrink = 0;
+        below.stretch_order = 0U;
+        below.shrink_order = 0U;
+    }
     penalty.value.penalty =
         engine->integer_parameters[HSTEX_INTEGER_POST_DISPLAY_PENALTY];
-    if (append_vbox_node(engine, &node, error, error_capacity) != 0 ||
-        append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
+    if (append_vbox_node(engine, &penalty, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!(dropped && !left) &&
         append_display_glue(engine, below, error, error_capacity) != 0) {
         return -1;
     }
@@ -14981,9 +15190,12 @@ static int begin_math(struct hstex_engine *engine, char *error,
                        error_capacity) != 0) {
         return -1;
     }
-    /* A formula between single shifts is an inner mode. */
+    /* A formula between single shifts is an inner mode, and is never a
+       display even when one encloses it. */
     current_math_list(engine)->outer_inner_mode = engine->inner_mode;
+    current_math_list(engine)->outer_displayed = engine->displayed_math;
     engine->inner_mode = true;
+    engine->displayed_math = false;
     engine->mode = HSTEX_MODE_MATH;
     uint32_t every_math = engine->token_parameters[HSTEX_TOKEN_EVERY_MATH];
     if (every_math == 0U) {
@@ -15024,7 +15236,7 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
     struct hstex_math_builder *inner = current_math_list(engine);
-    if (inner == NULL || engine->math_depth < 2U) {
+    if (inner == NULL || engine->math_depth < engine->math_floor + 2U) {
         return set_error(error, error_capacity,
                          "a math group closed outside a formula");
     }
@@ -15107,12 +15319,13 @@ static int end_math(struct hstex_engine *engine, char *error,
                     size_t error_capacity)
 {
     struct hstex_math_builder *list = current_math_list(engine);
-    if (list == NULL || engine->math_depth != 1U) {
+    if (list == NULL || engine->math_depth != engine->math_floor + 1U) {
         return set_error(error, error_capacity,
                          "a formula closed inside a math group");
     }
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = list->outer_inner_mode;
+    engine->displayed_math = list->outer_displayed;
     int32_t surround = engine->dimen_parameters[HSTEX_DIMEN_MATH_SURROUND];
     int status = 0;
     if (surround != 0) {
@@ -15502,6 +15715,8 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
     size_t previous_math_depth = engine->math_depth;
+    size_t previous_math_floor = engine->math_floor;
+    bool previous_displayed = engine->displayed_math;
     int32_t previous_space_factor = engine->space_factor;
     bool previous_has_pending = engine->has_pending_character;
     bool previous_building = engine->building_alignment;
@@ -15513,7 +15728,8 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     engine->output_conditional_floor = engine->conditional_count;
     engine->group_stop_armed = false;
     engine->group_stop_hit = false;
-    engine->math_depth = 0U;
+    engine->math_floor = engine->math_depth;
+    engine->displayed_math = false;
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -15677,6 +15893,8 @@ static int evaluate_align_cell(struct hstex_engine *engine,
         pop_math_list(engine);
     }
     engine->math_depth = previous_math_depth;
+    engine->math_floor = previous_math_floor;
+    engine->displayed_math = previous_displayed;
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -17526,8 +17744,17 @@ handle_token:
                             !token_is_effective_category(
                                 engine, second,
                                 (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
-                            (void)set_error(error, error_capacity,
-                                            "a display must be closed by $$");
+                            char found[128];
+                            describe_token(engine, second, found,
+                                           sizeof(found));
+                            uint32_t line = 0U;
+                            const char *origin =
+                                current_source_line(engine, &line);
+                            (void)set_error(
+                                error, error_capacity,
+                                "a display must be closed by $$, found %s at "
+                                "%s:%u",
+                                found, origin, (unsigned int)line);
                             return HSTEX_ENGINE_ERROR;
                         }
                         if (end_display_math(engine, error, error_capacity) !=
@@ -17842,6 +18069,12 @@ handle_token:
             continue;
         case HSTEX_COMMAND_ACCENT:
             if (execute_accent(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_EQUATION_NUMBER:
+            if (execute_equation_number(engine, meaning->value.integer != 0,
+                                        error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
