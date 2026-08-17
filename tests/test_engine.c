@@ -562,6 +562,26 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* Character metrics come from the TFM tables, and a font without `at` is used
+   at its design size; see docs/DECISIONS.md, font-character-metrics. */
+static int test_font_character_metrics(void)
+{
+    return run_snippet(
+        "\\font\\fa=cmr10 \\font\\fb=cmr10 at 12.5pt \\font\\fc=cmr12 "
+        "\\font\\fd=cmr12 scaled 1002 "
+        "[\\the\\fontcharwd\\fa 65|\\the\\fontcharht\\fa 65]"
+        /* Character 60 has depth, character 11 an italic correction. */
+        "[\\the\\fontchardp\\fa 60|\\the\\fontcharic\\fa 11]"
+        /* A character the font does not define measures zero. */
+        "[\\the\\fontcharwd\\fa 128|\\the\\fontcharht\\fa 255]"
+        "[\\the\\fontcharwd\\fb 65]"
+        /* cmr12 is a twelve point design, so it is not cmr10 at ten points. */
+        "[\\the\\fontcharwd\\fc 65|\\the\\fontdimen6\\fc]"
+        "[\\the\\fontdimen6\\fd]%",
+        "[7.50002pt|6.83331pt][1.94444pt|0.77779pt][0.0pt|0.0pt][9.37502pt]"
+        "[8.80824pt|11.74988pt][11.77336pt]");
+}
+
 /* \scantokens makes characters of its argument without expanding it, then
    reads them back as a file; see docs/DECISIONS.md, scantokens. */
 static int test_scan_tokens(void)
@@ -1418,6 +1438,7 @@ int main(void)
         run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
                     "\\o{A}\\x{P}{Q}%",
                     "[P|Q|A]") != 0 ||
+        test_font_character_metrics() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||
         test_box_shift_and_packaging() != 0 || test_kerns_and_rules() != 0 ||

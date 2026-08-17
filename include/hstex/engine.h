@@ -167,6 +167,14 @@ enum hstex_command {
     HSTEX_COMMAND_KERN,
     HSTEX_COMMAND_HRULE,
     HSTEX_COMMAND_SCAN_TOKENS,
+    HSTEX_COMMAND_FONT_CHAR_DIMEN,
+};
+
+enum hstex_font_char_dimen {
+    HSTEX_FONT_CHAR_WIDTH = 0,
+    HSTEX_FONT_CHAR_HEIGHT,
+    HSTEX_FONT_CHAR_DEPTH,
+    HSTEX_FONT_CHAR_ITALIC,
 };
 
 enum hstex_box_dimen {
@@ -412,8 +420,22 @@ struct hstex_token_list {
     size_t count;
 };
 
+/* Width, height, depth and italic correction of one character, already
+   scaled to the font's size. A character the font does not define measures
+   zero in all four; see docs/DECISIONS.md, font-character-metrics. */
+struct hstex_char_metric {
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    int32_t italic;
+};
+
+#define HSTEX_FONT_CHARACTER_COUNT 256U
+
 struct hstex_font {
     char *name;
+    struct hstex_char_metric *characters;
+    int32_t design_size;
     /* The control sequence \the\font reports for this font. Re-declaring an
        already loaded font reuses it and renames it to the newer control
        sequence; see docs/DECISIONS.md, font-identifier. */

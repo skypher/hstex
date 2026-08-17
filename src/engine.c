@@ -601,9 +601,23 @@ static char *tfm_filename(const char *name, char *error,
     return filename;
 }
 
-static int load_tfm_parameters(struct hstex_font *font, const char *name,
-                               int32_t size, char *error,
-                               size_t error_capacity)
+/* A TFM dimension is a fixed-point multiple of the font's size, with twenty
+   fractional bits. Truncating the product is what the reference does; see
+   docs/DECISIONS.md, font-character-metrics. */
+static int32_t scale_fix_word(int32_t fixed, int32_t size)
+{
+    int64_t scaled = ((int64_t)fixed * (int64_t)size) >> 20;
+    if (scaled < -INT64_C(1073741823)) {
+        return -INT32_C(1073741823);
+    }
+    if (scaled > INT64_C(1073741823)) {
+        return INT32_C(1073741823);
+    }
+    return (int32_t)scaled;
+}
+
+static int open_tfm(const char *name, struct hstex_input *input, char *error,
+                    size_t error_capacity)
 {
     char *filename = tfm_filename(name, error, error_capacity);
     if (filename == NULL) {
@@ -616,16 +630,51 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
         return set_error(error, error_capacity,
                          "font metric file not found: %s", name);
     }
-
-    struct hstex_input input;
-    if (hstex_input_open(path, &input, error, error_capacity) != 0) {
-        free(path);
+    int status = hstex_input_open(path, input, error, error_capacity);
+    free(path);
+    if (status != 0) {
         return -1;
     }
-    free(path);
-    if (input.length < 24U || input.length % 4U != 0U) {
-        hstex_input_close(&input);
+    if (input->length < 24U || input->length % 4U != 0U) {
+        hstex_input_close(input);
         return set_error(error, error_capacity, "invalid TFM header: %s", name);
+    }
+    return 0;
+}
+
+/* The design size is a fixed-point number of points in the second header
+   word, which carries twenty fractional bits where a scaled point has
+   sixteen. */
+static int tfm_design_size(const char *name, int32_t *design, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_input input;
+    if (open_tfm(name, &input, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint16_t header_length = read_big_endian_u16(input.data + 2U);
+    if (header_length < 2U || (size_t)(6U + header_length) * 4U > input.length) {
+        hstex_input_close(&input);
+        return set_error(error, error_capacity,
+                         "TFM header is too short: %s", name);
+    }
+    int32_t fixed = read_big_endian_i32(input.data + 7U * 4U);
+    hstex_input_close(&input);
+    if (fixed <= 0) {
+        return set_error(error, error_capacity,
+                         "TFM design size is not positive: %s", name);
+    }
+    *design = fixed / 16;
+    return 0;
+}
+
+static int load_tfm_parameters(struct hstex_font *font, const char *name,
+                               int32_t size, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_input input;
+    if (open_tfm(name, &input, error, error_capacity) != 0) {
+        return -1;
     }
 
     uint16_t fields[12];
@@ -648,6 +697,59 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
         return set_error(error, error_capacity,
                          "inconsistent TFM table lengths: %s", name);
     }
+
+    /* Character metrics are indexes into shared width, height, depth and
+       italic tables; index zero in the width table means the font does not
+       define that character. */
+    size_t width_base = 6U + (size_t)lh + character_count;
+    size_t height_base = width_base + (size_t)fields[4];
+    size_t depth_base = height_base + (size_t)fields[5];
+    size_t italic_base = depth_base + (size_t)fields[6];
+    struct hstex_char_metric *characters =
+        calloc(HSTEX_FONT_CHARACTER_COUNT, sizeof(*characters));
+    if (characters == NULL) {
+        hstex_input_close(&input);
+        return set_error(error, error_capacity,
+                         "font character metric allocation failed");
+    }
+    for (size_t index = 0U; index < character_count; ++index) {
+        size_t code = (size_t)bc + index;
+        if (code >= HSTEX_FONT_CHARACTER_COUNT) {
+            break;
+        }
+        const uint8_t *info = input.data + (6U + (size_t)lh + index) * 4U;
+        size_t width_index = info[0];
+        if (width_index == 0U || width_index >= (size_t)fields[4]) {
+            continue;
+        }
+        size_t height_index = (size_t)(info[1] >> 4);
+        size_t depth_index = (size_t)(info[1] & 0x0FU);
+        size_t italic_index = (size_t)(info[2] >> 2);
+        struct hstex_char_metric *metric = &characters[code];
+        metric->width = scale_fix_word(
+            read_big_endian_i32(input.data + (width_base + width_index) * 4U),
+            size);
+        if (height_index != 0U && height_index < (size_t)fields[5]) {
+            metric->height = scale_fix_word(
+                read_big_endian_i32(input.data +
+                                    (height_base + height_index) * 4U),
+                size);
+        }
+        if (depth_index != 0U && depth_index < (size_t)fields[6]) {
+            metric->depth = scale_fix_word(
+                read_big_endian_i32(input.data +
+                                    (depth_base + depth_index) * 4U),
+                size);
+        }
+        if (italic_index != 0U && italic_index < (size_t)fields[7]) {
+            metric->italic = scale_fix_word(
+                read_big_endian_i32(input.data +
+                                    (italic_base + italic_index) * 4U),
+                size);
+        }
+    }
+    free(font->characters);
+    font->characters = characters;
 
     size_t parameter_count = fields[11];
     size_t parameter_word =
@@ -1664,6 +1766,27 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     }
     static const struct {
         const char *name;
+        enum hstex_font_char_dimen subtype;
+    } font_char_primitives[] = {
+        {"fontcharwd", HSTEX_FONT_CHAR_WIDTH},
+        {"fontcharht", HSTEX_FONT_CHAR_HEIGHT},
+        {"fontchardp", HSTEX_FONT_CHAR_DEPTH},
+        {"fontcharic", HSTEX_FONT_CHAR_ITALIC},
+    };
+    for (size_t index = 0U;
+         index < sizeof(font_char_primitives) / sizeof(font_char_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, font_char_primitives[index].name,
+                HSTEX_COMMAND_FONT_CHAR_DIMEN,
+                (int32_t)font_char_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
         enum hstex_box_dimen subtype;
     } box_dimen_primitives[] = {
         {"wd", HSTEX_BOX_DIMEN_WIDTH},
@@ -2012,6 +2135,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     for (size_t index = 0U; index < engine->font_count; ++index) {
         free(engine->fonts[index].name);
         free(engine->fonts[index].dimens);
+        free(engine->fonts[index].characters);
     }
     free(engine->meanings);
     free(engine->macros);
@@ -2855,6 +2979,9 @@ static int integer_from_control_sequence(
     case HSTEX_COMMAND_DIMEN:
     case HSTEX_COMMAND_DIM_EXPR:
     case HSTEX_COMMAND_FONT_DIMEN:
+    case HSTEX_COMMAND_FONT_CHAR_DIMEN:
+    case HSTEX_COMMAND_BOX_DIMEN:
+    case HSTEX_COMMAND_PAGE_DIMEN:
     case HSTEX_COMMAND_PREV_DEPTH:
     case HSTEX_COMMAND_SKIP_REGISTER:
     case HSTEX_COMMAND_GLUE_PARAMETER:
@@ -3361,6 +3488,38 @@ static int dimen_from_meaning(struct hstex_engine *engine,
         *value = engine->dimen_parameters[(size_t)index];
         return 1;
     }
+    if (meaning->command == HSTEX_COMMAND_FONT_CHAR_DIMEN) {
+        uint32_t identifier = 0U;
+        int32_t code = 0;
+        if (scan_font_identifier(engine, &identifier, error, error_capacity) !=
+                0 ||
+            scan_integer(engine, &code, error, error_capacity) != 0) {
+            return -1;
+        }
+        const struct hstex_font *font = font_by_identifier(engine, identifier);
+        if (font == NULL) {
+            return set_error(error, error_capacity,
+                             "font character dimension requires a font");
+        }
+        /* A character outside the font measures zero, as does one the font
+           leaves undefined. */
+        if (code < 0 || (size_t)code >= HSTEX_FONT_CHARACTER_COUNT ||
+            font->characters == NULL) {
+            *value = 0;
+            return 1;
+        }
+        const struct hstex_char_metric *metric =
+            &font->characters[(size_t)code];
+        *value = meaning->value.integer == (int32_t)HSTEX_FONT_CHAR_HEIGHT
+                     ? metric->height
+                     : meaning->value.integer == (int32_t)HSTEX_FONT_CHAR_DEPTH
+                           ? metric->depth
+                           : meaning->value.integer ==
+                                     (int32_t)HSTEX_FONT_CHAR_ITALIC
+                                 ? metric->italic
+                                 : metric->width;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_BOX_DIMEN) {
         int32_t index = 0;
         if (scan_integer(engine, &index, error, error_capacity) != 0 ||
@@ -3450,6 +3609,8 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_NUM_EXPR:
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
     case HSTEX_COMMAND_PAGE_INTEGER:
+    case HSTEX_COMMAND_FONT_CHAR_DIMEN:
+    case HSTEX_COMMAND_BOX_DIMEN:
     case HSTEX_COMMAND_CAT_CODE:
     case HSTEX_COMMAND_SF_CODE:
     case HSTEX_COMMAND_LC_CODE:
@@ -6874,7 +7035,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
     if (scan_input_filename(engine, &name, error, error_capacity) != 0) {
         return -1;
     }
-    int32_t size = INT32_C(10) * INT32_C(65536);
+    int32_t size = 0;
     bool matched_at = false;
     bool matched_scaled = false;
     if (try_keyword(engine, "at", &matched_at, error, error_capacity) != 0) {
@@ -6894,6 +7055,14 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
             free(name);
             return -1;
         }
+        /* Without `at`, the font is used at its own design size, and
+           `scaled` is a thousandth part of that rather than of ten points. */
+        int32_t design = 0;
+        if (tfm_design_size(name, &design, error, error_capacity) != 0) {
+            free(name);
+            return -1;
+        }
+        size = design;
         if (matched_scaled) {
             int32_t scale = 0;
             if (scan_integer(engine, &scale, error, error_capacity) != 0 ||
@@ -6902,8 +7071,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
                 return set_error(error, error_capacity,
                                  "invalid font scale");
             }
-            int64_t scaled =
-                (INT64_C(10) * INT64_C(65536) * scale + 500) / 1000;
+            int64_t scaled = ((int64_t)design * scale) / 1000;
             if (scaled <= 0 || scaled > INT32_C(1073741823)) {
                 free(name);
                 return set_error(error, error_capacity,
@@ -11826,6 +11994,10 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_FONT_CHAR_DIMEN:
+            return (enum hstex_engine_result)set_error(
+                error, error_capacity,
+                "font character dimensions cannot be assigned");
         case HSTEX_COMMAND_BOX_DIMEN:
             if (finish_assignment(
                     engine,
