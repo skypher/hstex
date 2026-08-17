@@ -1246,6 +1246,11 @@ enum hstex_engine_result hstex_engine_next_output(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
     size_t error_capacity);
+/* Run to the end of the input, building the main vertical list. Everything
+   `hstex_engine_next_output` hands back belongs to that list. */
+int hstex_engine_run(struct hstex_engine *engine,
+                     struct hstex_source_location *last, char *error,
+                     size_t error_capacity);
 const struct hstex_meaning *hstex_engine_meaning(
     const struct hstex_engine *engine, hstex_cs_id identifier);
 

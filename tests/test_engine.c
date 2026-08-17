@@ -2088,6 +2088,48 @@ static int test_ending_a_paragraph(void)
         "8|100.0pt|4.0pt]");
 }
 
+/* Text turned back into tokens keeps the space at category ten; see
+   docs/DECISIONS.md, spaces-in-expanded-text. */
+static int test_expansion_spaces(void)
+{
+    return run_snippet(
+        "\\hbadness=10000 \\hfuzz=1000pt \\def\\space{ }\\skip0=1pt"
+        " plus 2pt minus 3pt \\muskip0=1mu plus 2mu \\font\\fbig=cm"
+        "r10 at 12pt \\def\\plain#1 #2\\q{x}\\def\\grab#1 #2\\qmark"
+        "{[#1/#2]}\\def\\show#1{\\expandafter\\grab#1\\qmark}\\edef"
+        "\\x{\\the\\skip0}\\show\\x\\edef\\x{\\the\\muskip0}\\show"
+        "\\x\\edef\\x{\\meaning\\plain}\\show\\x\\edef\\x{\\fontnam"
+        "e\\fbig}\\show\\x\\edef\\x{\\detokenize{a b}}\\show\\x\\ed"
+        "ef\\x{\\string a\\string\\relax\\space b}\\show\\x\\edef\\"
+        "x{\\number 12 \\space\\number 34 }\\show\\x\\edef\\x{\\rom"
+        "annumeral 4 \\space\\romannumeral 9 }\\show\\x%",
+        "[1.0pt/plus 2.0pt minus 3.0pt][1.0mu/plus 2.0mu][macro:#1/"
+        "#2\\q ->x][cmr10/at 12.0pt][a/b][a\\relax/b][12/34][iv/ix]");
+}
+
+/* A box wider or taller than a dimension wraps rather than failing;
+   see docs/DECISIONS.md, oversize-boxes. */
+static int test_oversize_boxes(void)
+{
+    return run_snippet(
+        "\\hbadness=10000 \\hfuzz=1000pt \\vbadness=10000 \\vfuzz=1"
+        "000pt \\parindent=0pt \\baselineskip=0pt \\lineskip=0pt \\"
+        "lineskiplimit=0pt \\boxmaxdepth=16383.99998pt \\parskip=0p"
+        "t \\parfillskip=0pt plus1fil \\tolerance=10000 \\pretolera"
+        "nce=-1 \\hsize=100pt \\def\\R#1{\\vrule width#1pt height1p"
+        "t depth0pt}\\def\\H#1{\\hrule height#1pt}\\setbox0=\\hbox{"
+        "\\R{9000}\\R{9000}\\R{9000}}[1|\\the\\wd0]\\setbox0=\\hbox"
+        "{\\R{9000}\\R{9000}\\R{9000}\\R{9000}}[2|\\the\\wd0]\\setb"
+        "ox0=\\hbox to50pt{\\R{9000}\\R{9000}\\R{9000}}[3|\\the\\wd"
+        "0]\\setbox0=\\vbox{\\H{9000}\\H{9000}\\H{9000}}[4|\\the\\h"
+        "t0]\\setbox0=\\vbox{\\H{9000}\\H{9000}\\H{9000}\\H{9000}}["
+        "5|\\the\\ht0]\\setbox0=\\vbox to50pt{\\H{9000}\\H{9000}\\H"
+        "{9000}}[6|\\the\\ht0]\\setbox0=\\vbox{\\noindent\\R{9000}"
+        "\\R{9000}\\R{9000}\\par}[7|\\the\\wd0|\\the\\ht0]%",
+        "[1|27000.0pt][2|-29536.0pt][3|50.0pt][4|27000.0pt][5|-2953"
+        "6.0pt][6|50.0pt][7|100.0pt|1.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -3187,7 +3229,9 @@ int main(void)
         test_missing_characters() != 0 || test_leaders() != 0 ||
         test_string_bytes() != 0 ||
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
-        test_ending_a_paragraph() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_ending_a_paragraph() != 0 ||
+        test_expansion_spaces() != 0 ||
+        test_oversize_boxes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

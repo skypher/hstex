@@ -5618,8 +5618,14 @@ static int push_other_character_expansion(
 {
     struct token_vector expansion = {0};
     for (size_t index = 0U; index < length; ++index) {
+        /* Text turned back into tokens is all of category twelve except
+           for the space, which keeps category ten; see
+           docs/DECISIONS.md, spaces-in-expanded-text. */
+        uint8_t category = digits[index] == ' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
         if (vector_push(&expansion,
-                        hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                        hstex_token_character(category,
                                               (uint8_t)digits[index]),
                         error, error_capacity) != 0) {
             vector_destroy(&expansion);
@@ -5683,8 +5689,11 @@ static int expand_font_name(struct hstex_engine *engine,
     struct token_vector expansion = {0};
     size_t name_length = strlen(font->name);
     for (size_t index = 0U; index < name_length; ++index) {
+        uint8_t category = font->name[index] == ' '
+                               ? (uint8_t)HSTEX_CAT_SPACE
+                               : (uint8_t)HSTEX_CAT_OTHER;
         if (vector_push(&expansion,
-                        hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                        hstex_token_character(category,
                                               (uint8_t)font->name[index]),
                         error, error_capacity) != 0) {
             vector_destroy(&expansion);
@@ -8213,10 +8222,14 @@ static int append_hbox_node(struct hstex_engine *engine,
                          "%s:%u",
                          engine->executing_name, origin, (unsigned int)line);
     }
+    /* A horizontal list that has not been packed yet has no width of its
+       own -- a paragraph runs to whatever length it runs to, and only the
+       lines it is broken into have to fit a dimension. See
+       docs/DECISIONS.md, the-main-vertical-list. */
     int64_t width = builder->width + packed_dimen(node->width);
-    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
+    if (width < INT64_MIN / 2 || width > INT64_MAX / 2) {
         return set_error(error, error_capacity,
-                         "hbox width exceeds TeX's dimension range");
+                         "horizontal list width overflow");
     }
     uint32_t identifier = 0U;
     if (reserve_hbox_items(builder, builder->count + 1U, error,
@@ -8251,10 +8264,14 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
                          "horizontal node used outside an hbox");
     }
     const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    /* A horizontal list that has not been packed yet has no width of its
+       own -- a paragraph runs to whatever length it runs to, and only the
+       lines it is broken into have to fit a dimension. See
+       docs/DECISIONS.md, the-main-vertical-list. */
     int64_t width = builder->width + packed_dimen(node->width);
-    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
+    if (width < INT64_MIN / 2 || width > INT64_MAX / 2) {
         return set_error(error, error_capacity,
-                         "hbox width exceeds TeX's dimension range");
+                         "horizontal list width overflow");
     }
     if (reserve_hbox_items(builder, builder->count + 1U, error,
                            error_capacity) != 0) {
@@ -8883,21 +8900,19 @@ static int finalize_hbox(struct hstex_engine *engine,
                            error, error_capacity) != 0) {
         return -1;
     }
+    /* The reference sums the natural width into a scaled and lets it wrap;
+       a box wider than a dimension is not an error there, so it is not one
+       here. See docs/DECISIONS.md, oversize-boxes. */
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_HLIST;
-    box->width = (int32_t)builder->width;
+    box->width = (int32_t)(uint32_t)(uint64_t)builder->width;
     box->height = builder->height;
     box->depth = builder->depth;
     if (matched_to) {
         box->width = requested_width;
     } else if (matched_spread) {
         int64_t spread_width = builder->width + (int64_t)requested_width;
-        if (spread_width < -INT64_C(1073741823) ||
-            spread_width > INT64_C(1073741823)) {
-            return set_error(error, error_capacity,
-                             "spread hbox width exceeds TeX's dimension range");
-        }
-        box->width = (int32_t)spread_width;
+        box->width = (int32_t)(uint32_t)(uint64_t)spread_width;
     }
     struct hstex_glue total =
         list_total_glue(engine, builder->node_identifiers, builder->count);
@@ -8968,6 +8983,52 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
     return status;
 }
 
+/* One token of a vertical list, wherever that list is: the page, a \vbox, or
+   a \noalign. A character starts a paragraph, and once one is being built
+   its characters and spaces belong to it. See docs/DECISIONS.md,
+   the-main-vertical-list. */
+static int handle_vertical_list_token(struct hstex_engine *engine,
+                                      hstex_token token,
+                                      struct hstex_source_location location,
+                                      char *error, size_t error_capacity)
+{
+    if (engine->building_paragraph) {
+        if (token_is_space(token)) {
+            if (flush_pending_character(engine, error, error_capacity) != 0 ||
+                append_interword_glue(engine, error, error_capacity) != 0) {
+                return -1;
+            }
+            engine->space_factor = 1000;
+            return 0;
+        }
+        if (hstex_token_is_character(token)) {
+            return append_horizontal_character(
+                engine, hstex_token_character_code(token), error,
+                error_capacity);
+        }
+    }
+    if (token_is_space(token)) {
+        return 0;
+    }
+    if (hstex_token_is_control_sequence(token) &&
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token))
+                ->command == HSTEX_COMMAND_PAR) {
+        return 0;
+    }
+    if (hstex_token_is_character(token)) {
+        /* A character in a vertical list starts a paragraph, and is read
+           again once \everypar has run. */
+        if (push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        return start_paragraph(engine, true, error, error_capacity);
+    }
+    char found[128];
+    describe_token(engine, token, found, sizeof(found));
+    return set_error(error, error_capacity,
+                     "%s is not supported in a vertical list", found);
+}
+
 static int evaluate_vbox_contents(struct hstex_engine *engine,
                                   struct hstex_vbox_builder *builder,
                                   char *error, size_t error_capacity)
@@ -9023,57 +9084,11 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
             status = -1;
             break;
         }
-        /* A paragraph opened inside this vertical list is still being
-           filled, so its characters and spaces belong to it. */
-        if (engine->building_paragraph) {
-            if (token_is_space(token)) {
-                status = flush_pending_character(engine, error, error_capacity);
-                if (status == 0) {
-                    status =
-                        append_interword_glue(engine, error, error_capacity);
-                }
-                if (status != 0) {
-                    break;
-                }
-                engine->space_factor = 1000;
-                continue;
-            }
-            if (hstex_token_is_character(token)) {
-                status = append_horizontal_character(
-                    engine, hstex_token_character_code(token), error,
-                    error_capacity);
-                if (status != 0) {
-                    break;
-                }
-                continue;
-            }
+        status = handle_vertical_list_token(engine, token, location, error,
+                                            error_capacity);
+        if (status != 0) {
+            break;
         }
-        if (token_is_space(token)) {
-            continue;
-        }
-        if (hstex_token_is_control_sequence(token) &&
-            hstex_engine_meaning(engine,
-                                 hstex_token_control_sequence_id(token))
-                    ->command == HSTEX_COMMAND_PAR) {
-            continue;
-        }
-        if (hstex_token_is_character(token)) {
-            /* A character in a vertical list starts a paragraph, and is read
-               again once \everypar has run. */
-            status = push_one(engine, token, location, error, error_capacity);
-            if (status == 0) {
-                status = start_paragraph(engine, true, error, error_capacity);
-            }
-            if (status != 0) {
-                break;
-            }
-            continue;
-        }
-        char found[128];
-        describe_token(engine, token, found, sizeof(found));
-        status = set_error(error, error_capacity,
-                           "%s is not supported in a vertical list", found);
-        break;
     }
 
     /* A vertical list ends any paragraph it was still filling, the way an
@@ -9150,15 +9165,10 @@ static int finalize_vbox(struct hstex_engine *engine,
     struct hstex_glue total =
         list_total_glue(engine, builder->node_identifiers, builder->count);
     engine->badness = packing_badness(natural, height, &total);
-    if (height < -INT64_C(1073741823) ||
-        height > INT64_C(1073741823)) {
-        return set_error(error, error_capacity,
-                         "vbox height exceeds TeX's dimension range");
-    }
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_VLIST;
     box->width = builder->width;
-    box->height = (int32_t)height;
+    box->height = (int32_t)(uint32_t)(uint64_t)height;
     box->depth = depth;
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
@@ -20013,6 +20023,40 @@ static int execute_ignore_spaces(struct hstex_engine *engine, char *error,
         }
         return push_one(engine, token, location, error, error_capacity);
     }
+}
+
+/* Run the document: everything the executor does not handle itself belongs
+   to the main vertical list, which is built exactly as a \vbox body is. See
+   docs/DECISIONS.md, the-main-vertical-list. */
+int hstex_engine_run(struct hstex_engine *engine,
+                     struct hstex_source_location *last, char *error,
+                     size_t error_capacity)
+{
+    struct hstex_source_location location = {0};
+    for (;;) {
+        hstex_token token = 0U;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &location, error, error_capacity);
+        if (last != NULL) {
+            *last = location;
+        }
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (handle_vertical_list_token(engine, token, location, error,
+                                       error_capacity) != 0) {
+            return -1;
+        }
+    }
+    /* Whatever paragraph was still being filled ends the way \end ends it. */
+    if (engine->building_paragraph &&
+        finish_paragraph(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 enum hstex_engine_result hstex_engine_next_output(

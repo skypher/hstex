@@ -264,22 +264,12 @@ static int run_ini(const char *path)
     size_t output_tokens = 0U;
     struct hstex_source_location last_location = {0};
     int status = 0;
-    for (;;) {
-        hstex_token token = 0U;
-        enum hstex_engine_result result = hstex_engine_next_output(
-            &engine, &token, &last_location, error, sizeof(error));
-        if (result == HSTEX_ENGINE_EOF) {
-            break;
-        }
-        if (result == HSTEX_ENGINE_ERROR) {
-            const char *source = hstex_source_current_name(&engine.sources);
-            (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
-                          source == NULL ? path : source, last_location.line,
-                          last_location.column, error);
-            status = 1;
-            break;
-        }
-        ++output_tokens;
+    if (hstex_engine_run(&engine, &last_location, error, sizeof(error)) != 0) {
+        const char *source = hstex_source_current_name(&engine.sources);
+        (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
+                      source == NULL ? path : source, last_location.line,
+                      last_location.column, error);
+        status = 1;
     }
     if (status == 0) {
         (void)printf("path=%s output_tokens=%zu symbols=%zu macros=%zu\n", path,
@@ -297,22 +287,14 @@ static int drain_engine(struct hstex_engine *engine, const char *fallback_path,
     char error[512] = {0};
     struct hstex_source_location last_location = {0};
     *output_tokens = 0U;
-    for (;;) {
-        hstex_token token = 0U;
-        enum hstex_engine_result result = hstex_engine_next_output(
-            engine, &token, &last_location, error, sizeof(error));
-        if (result == HSTEX_ENGINE_EOF) {
-            return 0;
-        }
-        if (result == HSTEX_ENGINE_ERROR) {
-            const char *source = hstex_source_current_name(&engine->sources);
-            (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
-                          source == NULL ? fallback_path : source,
-                          last_location.line, last_location.column, error);
-            return 1;
-        }
-        ++*output_tokens;
+    if (hstex_engine_run(engine, &last_location, error, sizeof(error)) != 0) {
+        const char *source = hstex_source_current_name(&engine->sources);
+        (void)fprintf(stderr, "hstex: %s:%u:%u: %s\n",
+                      source == NULL ? fallback_path : source,
+                      last_location.line, last_location.column, error);
+        return 1;
     }
+    return 0;
 }
 
 static int run_latex(const char *format_path, const char *document_path)

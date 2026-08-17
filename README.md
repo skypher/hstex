@@ -96,10 +96,14 @@ clears them.
 The whole corpus now runs: all 217,376 lines of it, through every chapter,
 on the command above.
 
+The outermost vertical list is real: a character met there starts a
+paragraph exactly as one inside a `\vbox` does, and `hstex_engine_run`
+builds the list rather than handing the text back to the caller. The whole
+corpus is typeset that way.
+
 The page builder, the output routine, and PDF emission remain under
-construction, and there is no hyphenation yet. Text in outer vertical mode
-is still handed to the driver as output tokens rather than starting a
-paragraph, so nothing reaches a page.
+construction, and there is no hyphenation yet. Nothing takes material off
+the main vertical list, so the document is held in one list to the end.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 107, against `pdflatex`'s 41 seconds
