@@ -2645,6 +2645,167 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* An accent alone in braces takes the place of the ordinary atom the
+   braces would have made: {\widehat W} is the accent itself, scripts and
+   all, while \mathop{...} and a group of two keep their sub-formula; see
+   docs/DECISIONS.md, an-accent-alone-in-braces. */
+static int test_an_accent_alone_in_braces(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\def"
+    "\\W{\\mathaccent\"7016 W}\\message{[alone]}\\setbo"
+    "x0=\\hbox{$x{\\W}y$}\\showbox0 \\message{[ord]}\\s"
+    "etbox0=\\hbox{$x\\mathord{\\W^2}y$}\\showbox0 \\me"
+    "ssage{[op]}\\setbox0=\\hbox{$x\\mathop{\\W}y$}\\sh"
+    "owbox0 \\message{[two]}\\setbox0=\\hbox{$x{\\W a}y"
+    "$}\\showbox0 \\message{[frac]}\\setbox0=\\hbox{$\\"
+    "displaystyle{W\\over{\\W}}$}\\showbox0%"
+,
+    "[alone]> \\box0=\n\\hbox(8.20554+1.94444)x21.81021"
+    "\n.\\mathon\n.\\teni x\n.\\vbox(8.20554+0.0)x10.83"
+    "334\n..\\hbox(5.67776+0.0)x0.0, shifted 2.91667\n."
+    "..\\tenrm ^^V\n..\\kern-4.30554\n..\\hbox(6.83331+"
+    "0.0)x10.83334\n...\\teni W\n.\\teni y\n.\\kern0.35"
+    "878\n.\\mathoff\n\n! OK.\n[ord]> \\box0=\n\\hbox(8"
+    ".20554+1.94444)x25.79634\n.\\mathon\n.\\teni x\n."
+    "\\vbox(8.20554+0.0)x14.81947\n..\\hbox(5.67776+0.0"
+    ")x0.0, shifted 2.91667\n...\\tenrm ^^V\n..\\kern-5"
+    ".61226\n..\\hbox(8.14003+0.0)x14.81947\n...\\teni "
+    "W\n...\\kern1.3889\n...\\hbox(4.51111+0.0)x3.98613"
+    ", shifted -3.62892\n....\\sevenrm 2\n.\\teni y\n."
+    "\\kern0.35878\n.\\mathoff\n\n! OK.\n[op]> \\box0="
+    "\n\\hbox(8.20554+1.94444)x21.81021\n.\\mathon\n.\\"
+    "teni x\n.\\glue(\\thinmuskip) 0.0\n.\\hbox(8.20554"
+    "+0.0)x10.83334\n..\\vbox(8.20554+0.0)x10.83334\n.."
+    ".\\hbox(5.67776+0.0)x0.0, shifted 2.91667\n....\\t"
+    "enrm ^^V\n...\\kern-4.30554\n...\\hbox(6.83331+0.0"
+    ")x10.83334\n....\\teni W\n.\\glue(\\thinmuskip) 0."
+    "0\n.\\teni y\n.\\kern0.35878\n.\\mathoff\n\n! OK."
+    "\n[two]> \\box0=\n\\hbox(8.20554+1.94444)x27.0961"
+    "\n.\\mathon\n.\\teni x\n.\\hbox(8.20554+0.0)x16.11"
+    "923\n..\\vbox(8.20554+0.0)x10.83334\n...\\hbox(5.6"
+    "7776+0.0)x0.0, shifted 2.91667\n....\\tenrm ^^V\n."
+    "..\\kern-4.30554\n...\\hbox(6.83331+0.0)x10.83334"
+    "\n....\\teni W\n..\\teni a\n.\\teni y\n.\\kern0.35"
+    "878\n.\\mathoff\n\n! OK.\n[frac]> \\box0=\n\\hbox("
+    "13.59839+7.10547)x10.83334\n.\\mathon\n.\\hbox(13."
+    "59839+7.10547)x10.83334\n..\\hbox(13.59839+7.10547"
+    ")x10.83334\n...\\hbox(0.0+0.0)x0.0, shifted -2.5\n"
+    "...\\vbox(13.59839+7.10547)x10.83334\n....\\hbox(6"
+    ".83331+0.0)x10.83334\n.....\\teni W\n....\\kern4.0"
+    "6508\n....\\rule(0.39998+0.0)x*\n....\\kern1.19994"
+    "\n....\\vbox(8.20554+0.0)x10.83334\n.....\\hbox(5."
+    "67776+0.0)x0.0, shifted 2.91667\n......\\tenrm ^^V"
+    "\n.....\\kern-4.30554\n.....\\hbox(6.83331+0.0)x10"
+    ".83334\n......\\teni W\n...\\hbox(0.0+0.0)x0.0, sh"
+    "ifted -2.5\n.\\mathoff\n\n! OK.\n"
+);
+}
+
+/* A \left ... \right group is set at the style it lands in, not the one it
+   was read in: a fraction's numerator is smaller, and everything in the group
+   follows; see docs/DECISIONS.md, a-fence-is-set-in-place. */
+static int test_a_fence_is_set_in_place(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+        "ode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 \\catc"
+        "ode`\\_=8 \\showboxdepth=5 \\showboxbreadth=100 \\"
+        "nulldelimiterspace=1.2pt \\delimitershortfall=5pt "
+        "\\delimiterfactor=901 \\thinmuskip=3mu \\medmuskip"
+        "=4mu \\thickmuskip=5mu \\message{[display]}\\setbo"
+        "x0=\\hbox{$\\displaystyle\\left\\delimiter\"026A30"
+        "C \\mathchar\"1352 x\\right.$}\\showbox0 \\message"
+        "{[numerator]}\\setbox0=\\hbox{$\\displaystyle{\\le"
+        "ft\\delimiter\"026A30C \\mathchar\"1352 x\\right."
+        "\\over y}$}\\showbox0 \\message{[script]}\\setbox0"
+        "=\\hbox{$\\displaystyle\\left\\delimiter\"026A30C "
+        "\\mathchar\"1352 x\\right.^2$}\\showbox0%"
+,
+        "[display]> \\box0=\n\\hbox(14.50012+9.50012)x21.91"
+        "524\n.\\mathon\n.\\hbox(14.50012+9.50012)x21.91524"
+        "\n..\\vbox(0.0+24.00024)x3.33333, shifted -14.5001"
+        "2\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex ^^L"
+        "\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex ^^L"
+        "\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex ^^L"
+        "\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex ^^L"
+        "\n..\\vbox(13.61122+8.61124)x10.00002\n...\\hbox(1"
+        "3.61122+8.61124)x10.00002\n....\\hbox(0.0+22.22246"
+        ")x10.00002, shifted -13.61122\n.....\\tenex Z\n.."
+        "\\glue(\\thinmuskip) 1.66663\n..\\teni x\n..\\hbox"
+        "(0.0+0.0)x1.2, shifted -2.5\n.\\mathoff\n\n! OK.\n"
+        "[numerator]> \\box0=\n\\hbox(15.90005+8.80396)x20."
+        "98189\n.\\mathon\n.\\hbox(15.90005+8.80396)x20.981"
+        "89\n..\\hbox(15.90005+8.80396)x20.98189\n...\\hbox"
+        "(0.0+0.0)x1.2, shifted -2.5\n...\\vbox(15.90005+8."
+        "80396)x18.5819\n....\\hbox(8.50006+3.50006)x18.581"
+        "9\n.....\\vbox(0.0+12.00012)x3.33333, shifted -8.5"
+        "0006 []\n.....\\hbox(0.0+11.11122)x6.66667, shifte"
+        "d -8.0556 []\n.....\\glue(\\thinmuskip) 1.66663\n."
+        "....\\teni x\n.....\\hbox(0.0+0.0)x1.2, shifted -2"
+        ".5\n....\\kern1.19994\n....\\rule(0.39998+0.0)x*\n"
+        "....\\kern4.85397\n....\\hbox(4.30554+1.94444)x18."
+        "5819, glue set 6.66016fil\n.....\\glue 0.0 plus 1."
+        "0fil minus 1.0fil\n.....\\teni y\n.....\\kern0.358"
+        "78\n.....\\glue 0.0 plus 1.0fil minus 1.0fil\n..."
+        "\\hbox(0.0+0.0)x1.2, shifted -2.5\n.\\mathoff\n\n!"
+        " OK.\n[script]> \\box0=\n\\hbox(16.53903+9.50012)x"
+        "25.90137\n.\\mathon\n.\\hbox(14.50012+9.50012)x21."
+        "91524\n..\\vbox(0.0+24.00024)x3.33333, shifted -14"
+        ".50012\n...\\hbox(0.0+6.00006)x3.33333\n....\\tene"
+        "x ^^L\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex"
+        " ^^L\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex "
+        "^^L\n...\\hbox(0.0+6.00006)x3.33333\n....\\tenex ^"
+        "^L\n..\\vbox(13.61122+8.61124)x10.00002\n...\\hbox"
+        "(13.61122+8.61124)x10.00002\n....\\hbox(0.0+22.222"
+        "46)x10.00002, shifted -13.61122\n.....\\tenex Z\n."
+        ".\\glue(\\thinmuskip) 1.66663\n..\\teni x\n..\\hbo"
+        "x(0.0+0.0)x1.2, shifted -2.5\n.\\hbox(4.51111+0.0)"
+        "x3.98613, shifted -12.02792\n..\\sevenrm 2\n.\\mat"
+        "hoff\n\n! OK.\n"
+);
+}
+
 /* The two delimiters of a \left...\right group are an opening and a
    closing atom, so the spacing round what they hold is the ordinary spacing;
    see docs/DECISIONS.md, delimiters-are-atoms. */
@@ -6658,6 +6819,8 @@ int main(void)
         test_a_display_squeezed_to_fit() != 0 ||
         test_what_stands_between_delimiters() != 0 ||
         test_delimiters_are_atoms() != 0 ||
+        test_a_fence_is_set_in_place() != 0 ||
+        test_an_accent_alone_in_braces() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

@@ -782,6 +782,9 @@ enum hstex_noad_kind {
     HSTEX_NOAD_CHOICE,
     /* \radical: a delimiter over a nucleus, built when the list is set. */
     HSTEX_NOAD_RADICAL,
+    /* \left ... \right: a sub-formula between two delimiters, built when
+       the list is set so that the style it lands in is known. */
+    HSTEX_NOAD_FENCE,
     /* \mathaccent: the accent's mathchar is in `delimiter`. */
     HSTEX_NOAD_ACCENT,
     /* \overline and \underline: a rule over or under a nucleus. */
@@ -909,6 +912,8 @@ struct hstex_noad {
     uint32_t choices[4];
     /* The delimiter of a \radical. */
     int32_t delimiter;
+    /* The opening delimiter of a \left ... \right. */
+    int32_t left_delimiter;
     /* This atom's nucleus was read as a character of a text font, because
        another character of the same family follows it. Its italic
        correction is then dropped; see docs/DECISIONS.md,

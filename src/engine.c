@@ -17482,6 +17482,7 @@ static bool math_noad_is_atom(uint8_t kind)
     return kind == (uint8_t)HSTEX_NOAD_ATOM ||
            kind == (uint8_t)HSTEX_NOAD_RADICAL ||
            kind == (uint8_t)HSTEX_NOAD_ACCENT ||
+           kind == (uint8_t)HSTEX_NOAD_FENCE ||
            kind == (uint8_t)HSTEX_NOAD_OVERLINE ||
            kind == (uint8_t)HSTEX_NOAD_UNDERLINE ||
            kind == (uint8_t)HSTEX_NOAD_MIDDLE;
@@ -18045,6 +18046,10 @@ static int build_math_accent(struct hstex_engine *engine,
                              struct hstex_noad *noad, uint8_t style,
                              char *error, size_t error_capacity);
 
+static int build_math_fence(struct hstex_engine *engine,
+                            struct hstex_noad *outer_noad, uint8_t style,
+                            char *error, size_t error_capacity);
+
 static int build_operator_box(struct hstex_engine *engine,
                               struct hstex_noad *noad, uint8_t style,
                               int32_t *delta, struct hstex_node *boxed,
@@ -18240,6 +18245,30 @@ static int math_field_restyle(struct hstex_engine *engine,
     return 0;
 }
 
+/* A lone character keeps the width its italic correction gave the box but
+   loses the kern itself, so that an accent over it sees only the letter;
+   see docs/DECISIONS.md, a-clean-box-of-one-character. */
+static void simplify_clean_box(struct hstex_engine *engine,
+                               struct hstex_box *box)
+{
+    if (box->node_count != 2U ||
+        (size_t)box->node_start + 2U > engine->list_item_count) {
+        return;
+    }
+    const uint32_t *items = engine->list_items + box->node_start;
+    if (items[0] == 0U || (size_t)items[0] > engine->node_count ||
+        items[1] == 0U || (size_t)items[1] > engine->node_count) {
+        return;
+    }
+    const struct hstex_node *first = &engine->nodes[items[0] - 1U];
+    const struct hstex_node *second = &engine->nodes[items[1] - 1U];
+    if ((first->kind == HSTEX_NODE_CHARACTER ||
+         first->kind == HSTEX_NODE_LIGATURE) &&
+        second->kind == HSTEX_NODE_KERN) {
+        box->node_count = 1U;
+    }
+}
+
 static int math_field_box(struct hstex_engine *engine,
                           const struct hstex_math_field *field, uint8_t style,
                           struct hstex_box *box, char *error,
@@ -18280,6 +18309,7 @@ static int math_field_box(struct hstex_engine *engine,
         box->node_start = node->value.list.node_start;
         box->node_count = node->value.list.node_count;
         box->glue = node->value.list.glue;
+        simplify_clean_box(engine, box);
         return 0;
     }
     if (field->kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
@@ -18312,23 +18342,7 @@ static int math_field_box(struct hstex_engine *engine,
     if (status != 0) {
         return status;
     }
-    /* A lone character keeps the width its italic correction gave the box but
-       loses the kern itself, so that an accent over it sees only the letter;
-       see docs/DECISIONS.md, a-clean-box-of-one-character. */
-    if (box->node_count == 2U &&
-        (size_t)box->node_start + 2U <= engine->list_item_count) {
-        const uint32_t *items = engine->list_items + box->node_start;
-        if (items[0] != 0U && (size_t)items[0] <= engine->node_count &&
-            items[1] != 0U && (size_t)items[1] <= engine->node_count) {
-            const struct hstex_node *first = &engine->nodes[items[0] - 1U];
-            const struct hstex_node *second = &engine->nodes[items[1] - 1U];
-            if ((first->kind == HSTEX_NODE_CHARACTER ||
-                 first->kind == HSTEX_NODE_LIGATURE) &&
-                second->kind == HSTEX_NODE_KERN) {
-                box->node_count = 1U;
-            }
-        }
-    }
+    simplify_clean_box(engine, box);
     return 0;
 }
 
@@ -18723,6 +18737,11 @@ static int translate_math_list_with(struct hstex_engine *engine,
         }
         if (noad->kind == (uint8_t)HSTEX_NOAD_ACCENT &&
             build_math_accent(engine, noad, style, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+        if (noad->kind == (uint8_t)HSTEX_NOAD_FENCE &&
+            build_math_fence(engine, noad, style, error, error_capacity) !=
                 0) {
             return -1;
         }
@@ -19477,6 +19496,24 @@ static int math_range_box(struct hstex_engine *engine,
     }
     free(packed.node_identifiers);
     free(part.noads);
+    /* A side that came to one unshifted box is that box; see
+       docs/DECISIONS.md, a-list-that-is-one-box. */
+    if (status == 0 && box->node_count == 1U &&
+        (size_t)box->node_start < engine->list_item_count) {
+        uint32_t item = engine->list_items[box->node_start];
+        if (item != 0U && (size_t)item <= engine->node_count &&
+            engine->nodes[item - 1U].kind == HSTEX_NODE_LIST &&
+            engine->nodes[item - 1U].shift == 0) {
+            const struct hstex_node *only = &engine->nodes[item - 1U];
+            box->kind = only->value.list.box_kind;
+            box->width = only->width;
+            box->height = only->height;
+            box->depth = only->depth;
+            box->node_start = only->value.list.node_start;
+            box->node_count = only->value.list.node_count;
+            box->glue = only->value.list.glue;
+        }
+    }
     return status;
 }
 
@@ -19507,16 +19544,22 @@ static int math_rebox(struct hstex_engine *engine, struct hstex_box *box,
         },
     };
     int status = append_hbox_node(engine, &fill, error, error_capacity);
-    for (uint32_t offset = 0U; status == 0 && offset < box->node_count;
-         ++offset) {
-        size_t slot = (size_t)box->node_start + offset;
-        if (slot >= engine->list_item_count) {
-            status = set_error(error, error_capacity,
-                               "a fraction lost part of its list");
-            break;
+    if (status == 0 && box->kind == HSTEX_BOX_VLIST) {
+        /* A vertical list is set beside the glue whole; only a horizontal one
+           is unpacked. See docs/DECISIONS.md, a-side-that-stands-upright. */
+        status = append_box_node(engine, box, error, error_capacity);
+    } else {
+        for (uint32_t offset = 0U; status == 0 && offset < box->node_count;
+             ++offset) {
+            size_t slot = (size_t)box->node_start + offset;
+            if (slot >= engine->list_item_count) {
+                status = set_error(error, error_capacity,
+                                   "a fraction lost part of its list");
+                break;
+            }
+            status = append_hbox_item(engine, engine->list_items[slot], error,
+                                      error_capacity);
         }
-        status = append_hbox_item(engine, engine->list_items[slot], error,
-                                  error_capacity);
     }
     if (status == 0) {
         status = append_hbox_node(engine, &fill, error, error_capacity);
@@ -20301,6 +20344,11 @@ static int translate_math_fraction(struct hstex_engine *engine,
         math_rebox(engine, &denominator, width, error, error_capacity) != 0) {
         return -1;
     }
+    /* A side widened to match the other keeps its italic correction, because
+       the kern is no longer what the box ends with; a side left as it stands
+       loses it. See docs/DECISIONS.md, a-clean-box-of-one-character. */
+    simplify_clean_box(engine, &numerator);
+    simplify_clean_box(engine, &denominator);
 
     /* Where the two sides sit before the space between them is checked. */
     int32_t shift_up = 0;
@@ -20561,8 +20609,42 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
         };
         return math_append(engine, &noad, error, error_capacity);
     }
+    /* The group is kept as it stands and set when the list it belongs to is,
+       because the style it lands in is not known yet: a fraction sets its
+       numerator smaller. See docs/DECISIONS.md, a-fence-is-set-in-place. */
+    uint32_t record = 0U;
+    int stored = store_math_sublist(engine, list, &record, error,
+                                    error_capacity);
     int32_t left_code = list->left_delimiter;
-    uint8_t style = list->style;
+    pop_math_list(engine);
+    if (stored != 0) {
+        return -1;
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_FENCE,
+        .atom_class = (uint8_t)HSTEX_ATOM_INNER,
+        .delimiter = code,
+        .left_delimiter = left_code,
+        .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX, .sublist = record},
+    };
+    return math_append_atom(engine, &noad, error, error_capacity);
+}
+
+/* \left ... \right, set at the style the list it belongs to turned out to
+   have; see docs/DECISIONS.md, a-fence-is-set-in-place. */
+static int build_math_fence(struct hstex_engine *engine,
+                            struct hstex_noad *outer_noad, uint8_t style,
+                            char *error, size_t error_capacity)
+{
+    struct hstex_math_builder loaded = {0};
+    if (load_math_sublist(engine, outer_noad->nucleus.sublist, style, &loaded,
+                          error, error_capacity) != 0) {
+        free(loaded.noads);
+        return -1;
+    }
+    struct hstex_math_builder *list = &loaded;
+    int32_t code = outer_noad->delimiter;
+    int32_t left_code = outer_noad->left_delimiter;
     uint8_t size = math_size_of_style(style);
 
     /* A group with a \middle in it has to be set twice: once to find out how
@@ -20660,14 +20742,15 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
                                error_capacity);
     }
     free(builder.node_identifiers);
-    pop_math_list(engine);
     if (status != 0) {
+        free(loaded.noads);
         return -1;
     }
 
     int32_t axis = 0;
     if (math_symbol_parameter(engine, size, 22U, &axis, error,
                               error_capacity) != 0) {
+        free(loaded.noads);
         return -1;
     }
     /* The height the delimiters must cover is the group's own, taken before
@@ -20738,7 +20821,11 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
         .atom_class = (uint8_t)HSTEX_ATOM_INNER,
         .nucleus = {.kind = (uint8_t)HSTEX_MATH_FIELD_BOX, .node = identifier},
     };
-    return math_append_atom(engine, &noad, error, error_capacity);
+    outer_noad->kind = noad.kind;
+    outer_noad->atom_class = noad.atom_class;
+    outer_noad->nucleus = noad.nucleus;
+    free(loaded.noads);
+    return 0;
 }
 
 /* \vcenter builds a vertical box and hangs it on the axis of the symbol
@@ -21495,6 +21582,21 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         struct hstex_noad passed = inner->noads[0];
         pop_math_list(engine);
         return math_append_atom(engine, &passed, error, error_capacity);
+    }
+    /* An accent alone in braces takes the place of the ordinary atom the
+       braces would have made, scripts and all. Only an ordinary atom gives
+       way to it: \mathop{...} and a script keep the sub-formula. See
+       docs/DECISIONS.md, an-accent-alone-in-braces. */
+    if (inner->count == 1U &&
+        inner->noads[0].kind == (uint8_t)HSTEX_NOAD_ACCENT &&
+        inner->slot == (uint8_t)HSTEX_MATH_SLOT_NONE &&
+        outer->slot == (uint8_t)HSTEX_MATH_SLOT_NONE &&
+        (outer->forced_class < 0 ||
+         outer->forced_class == (int)HSTEX_ATOM_ORD)) {
+        struct hstex_noad passed = inner->noads[0];
+        outer->forced_class = -1;
+        pop_math_list(engine);
+        return math_append(engine, &passed, error, error_capacity);
     }
     struct hstex_hbox_builder builder = {0};
     struct hstex_hbox_builder *previous = engine->active_hbox_builder;
