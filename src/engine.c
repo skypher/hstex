@@ -1805,6 +1805,42 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    static const struct {
+        const char *name;
+        enum hstex_command command;
+        int32_t subtype;
+    } math_font_primitives[] = {
+        {"textfont", HSTEX_COMMAND_MATH_FONT, (int32_t)HSTEX_MATH_TEXT},
+        {"scriptfont", HSTEX_COMMAND_MATH_FONT, (int32_t)HSTEX_MATH_SCRIPT},
+        {"scriptscriptfont", HSTEX_COMMAND_MATH_FONT,
+         (int32_t)HSTEX_MATH_SCRIPT_SCRIPT},
+        {"mathchar", HSTEX_COMMAND_MATH_CHAR, 0},
+        {"mskip", HSTEX_COMMAND_MATH_SKIP, 0},
+        {"mkern", HSTEX_COMMAND_MATH_KERN, 0},
+        {"mathord", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_ORD},
+        {"mathop", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_OP},
+        {"mathbin", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_BIN},
+        {"mathrel", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_REL},
+        {"mathopen", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_OPEN},
+        {"mathclose", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_CLOSE},
+        {"mathpunct", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_PUNCT},
+        {"mathinner", HSTEX_COMMAND_MATH_CLASS, (int32_t)HSTEX_ATOM_INNER},
+        {"limits", HSTEX_COMMAND_MATH_LIMITS, 1},
+        {"nolimits", HSTEX_COMMAND_MATH_LIMITS, 0},
+        {"displaylimits", HSTEX_COMMAND_MATH_LIMITS, 2},
+    };
+    for (size_t index = 0U;
+         index < sizeof(math_font_primitives) / sizeof(math_font_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, math_font_primitives[index].name,
+                math_font_primitives[index].command,
+                math_font_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
     static const char *math_primitives[] = {
         "over",
         "atop",
@@ -2338,6 +2374,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     }
     null_font_entry->identifier_cs = null_font_cs;
     engine->current_font = null_font;
+    /* Every math family starts as \nullfont, so \the\textfont7 names a font
+       even before any family has been set up. */
+    for (size_t size = 0U; size < (size_t)HSTEX_MATH_SIZE_COUNT; ++size) {
+        for (size_t family = 0U; family < 16U; ++family) {
+            engine->math_fonts[size][family] = null_font;
+        }
+    }
     engine->output_directory = strdup(".");
     if (engine->output_directory == NULL) {
         (void)set_error(error, error_capacity,
@@ -2365,6 +2408,13 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         return;
     }
     hstex_source_stack_destroy(&engine->sources);
+    for (size_t index = 0U; index < engine->math_depth; ++index) {
+        free(engine->math_stack[index].noads);
+    }
+    free(engine->math_stack);
+    engine->math_stack = NULL;
+    engine->math_depth = 0U;
+    engine->math_capacity = 0U;
     for (size_t index = 0U; index < 16U; ++index) {
         if (engine->write_streams[index] != NULL) {
             (void)fclose(engine->write_streams[index]);
@@ -3138,6 +3188,26 @@ static int scan_font_identifier(struct hstex_engine *engine,
         *identifier = engine->current_font;
         return 0;
     }
+    if (meaning->command == HSTEX_COMMAND_MATH_FONT) {
+        int32_t size = meaning->value.integer;
+        int32_t family = 0;
+        if (scan_integer(engine, &family, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT || family < 0 ||
+            family > 15) {
+            return set_error(error, error_capacity,
+                             "math family %d is outside 0..15", family);
+        }
+        uint32_t assigned = engine->math_fonts[size][family];
+        if (font_by_identifier(engine, assigned) == NULL) {
+            return set_error(error, error_capacity,
+                             "math family %d has no font in this size",
+                             family);
+        }
+        *identifier = assigned;
+        return 0;
+    }
     if (meaning->command != HSTEX_COMMAND_FONT_GIVEN ||
         meaning->value.integer <= 0 ||
         font_by_identifier(engine, (uint32_t)meaning->value.integer) == NULL) {
@@ -3534,8 +3604,15 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
         }
         if (!saw_digit ||
             (sign > 0 && accumulated > (uint64_t)INT32_MAX)) {
+            char found[128];
+            describe_token(engine, token, found, sizeof(found));
+            uint32_t line = 0U;
+            const char *origin = current_source_line(engine, &line);
             return set_error(error, error_capacity,
-                             "invalid based integer constant");
+                             "invalid based integer constant, found %s for %s "
+                             "at %s:%u",
+                             found, engine->executing_name, origin,
+                             (unsigned int)line);
         }
         *value = sign > 0 ? (int32_t)accumulated
                           : (int32_t)(-(int64_t)accumulated);
@@ -5726,11 +5803,28 @@ static int expand_the_primitive(struct hstex_engine *engine,
         /* \the on a font yields that font's identifier control sequence, not
            a printed representation. */
         if (meaning->command == HSTEX_COMMAND_FONT ||
-            meaning->command == HSTEX_COMMAND_FONT_GIVEN) {
-            uint32_t font_identifier =
-                meaning->command == HSTEX_COMMAND_FONT
-                    ? engine->current_font
-                    : (uint32_t)meaning->value.integer;
+            meaning->command == HSTEX_COMMAND_FONT_GIVEN ||
+            meaning->command == HSTEX_COMMAND_MATH_FONT) {
+            uint32_t font_identifier = 0U;
+            if (meaning->command == HSTEX_COMMAND_MATH_FONT) {
+                int32_t size = meaning->value.integer;
+                int32_t family = 0;
+                if (scan_integer(engine, &family, error, error_capacity) != 0) {
+                    return -1;
+                }
+                if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT ||
+                    family < 0 || family > 15) {
+                    return set_error(error, error_capacity,
+                                     "math family %d is outside 0..15",
+                                     family);
+                }
+                font_identifier = engine->math_fonts[size][family];
+            } else {
+                font_identifier =
+                    meaning->command == HSTEX_COMMAND_FONT
+                        ? engine->current_font
+                        : (uint32_t)meaning->value.integer;
+            }
             const struct hstex_font *font =
                 font_by_identifier(engine, font_identifier);
             if (font == NULL || font->identifier_cs == 0U) {
@@ -7762,6 +7856,12 @@ static int font_lig_kern(const struct hstex_font *font, uint8_t left,
                          size_t error_capacity);
 static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
+static int math_append_node(struct hstex_engine *engine,
+                            const struct hstex_node *node, char *error,
+                            size_t error_capacity);
+static int math_append_box(struct hstex_engine *engine,
+                           const struct hstex_box *box, char *error,
+                           size_t error_capacity);
 
 static int32_t packed_dimen(int32_t value)
 {
@@ -8093,8 +8193,7 @@ static int append_current_list_node(struct hstex_engine *engine,
     if (engine->mode == HSTEX_MODE_VERTICAL) {
         return append_vbox_node(engine, node, error, error_capacity);
     }
-    return set_error(error, error_capacity,
-                     "list node is not supported in math mode");
+    return math_append_node(engine, node, error, error_capacity);
 }
 
 /* The five glue commands are the same in both directions; only the list they
@@ -8106,11 +8205,12 @@ static int execute_glue(struct hstex_engine *engine, int32_t subtype,
         return set_error(error, error_capacity,
                          "glue does not accept prefixes");
     }
-    if (!vertical && ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+    if (!vertical && engine->mode != HSTEX_MODE_MATH &&
+        ensure_horizontal_mode(engine, error, error_capacity) != 0) {
         return -1;
     }
     if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
-                 : engine->mode != HSTEX_MODE_HORIZONTAL) {
+                 : engine->mode == HSTEX_MODE_VERTICAL) {
         return set_error(error, error_capacity,
                          vertical ? "vertical glue requires vertical mode"
                                   : "horizontal glue requires horizontal mode");
@@ -8149,8 +8249,7 @@ static int execute_glue(struct hstex_engine *engine, int32_t subtype,
             .shrink_order = glue.shrink_order,
         },
     };
-    return vertical ? append_vbox_node(engine, &node, error, error_capacity)
-                    : append_hbox_node(engine, &node, error, error_capacity);
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 static int execute_penalty(struct hstex_engine *engine, char *error,
@@ -8940,9 +9039,12 @@ static int execute_box_constructor(struct hstex_engine *engine,
     if (status == 0 && box.kind == HSTEX_BOX_VOID) {
         return 0;
     }
-    return status == 0
-               ? append_box_node(engine, &box, error, error_capacity)
-               : -1;
+    if (status != 0) {
+        return -1;
+    }
+    return engine->mode == HSTEX_MODE_MATH
+               ? math_append_box(engine, &box, error, error_capacity)
+               : append_box_node(engine, &box, error, error_capacity);
 }
 
 static int execute_set_box(struct hstex_engine *engine, char *error,
@@ -12891,6 +12993,761 @@ static int execute_char(struct hstex_engine *engine, char *error,
                                        error_capacity);
 }
 
+/* ---------------------------------------------------------------------- */
+/* Math lists.                                                            */
+/*                                                                        */
+/* A formula is collected as a list of noads and translated into a        */
+/* horizontal list when it closes. Only the text size is implemented, and */
+/* scripts, fractions and delimiters are not; see docs/DECISIONS.md,      */
+/* math-mode, for what was measured and what is deferred.                 */
+/* ---------------------------------------------------------------------- */
+
+static struct hstex_math_builder *current_math_list(struct hstex_engine *engine)
+{
+    if (engine->math_depth == 0U) {
+        return NULL;
+    }
+    return &engine->math_stack[engine->math_depth - 1U];
+}
+
+static int push_math_list(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    if (engine->math_depth == engine->math_capacity) {
+        size_t capacity =
+            engine->math_capacity == 0U ? 8U : engine->math_capacity * 2U;
+        if (capacity > SIZE_MAX / sizeof(*engine->math_stack)) {
+            return set_error(error, error_capacity, "math list nesting overflow");
+        }
+        void *allocation =
+            realloc(engine->math_stack, capacity * sizeof(*engine->math_stack));
+        if (allocation == NULL) {
+            return set_error(error, error_capacity,
+                             "math list allocation failed");
+        }
+        engine->math_stack = allocation;
+        engine->math_capacity = capacity;
+    }
+    struct hstex_math_builder *builder =
+        &engine->math_stack[engine->math_depth++];
+    memset(builder, 0, sizeof(*builder));
+    builder->forced_class = -1;
+    return 0;
+}
+
+static void pop_math_list(struct hstex_engine *engine)
+{
+    if (engine->math_depth == 0U) {
+        return;
+    }
+    struct hstex_math_builder *builder =
+        &engine->math_stack[--engine->math_depth];
+    free(builder->noads);
+    memset(builder, 0, sizeof(*builder));
+}
+
+static int reserve_noads(struct hstex_math_builder *builder, size_t required,
+                         char *error, size_t error_capacity)
+{
+    if (required <= builder->capacity) {
+        return 0;
+    }
+    size_t capacity = builder->capacity == 0U ? 16U : builder->capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity, "math list overflow");
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*builder->noads)) {
+        return set_error(error, error_capacity, "math list overflow");
+    }
+    void *allocation =
+        realloc(builder->noads, capacity * sizeof(*builder->noads));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity, "math list allocation failed");
+    }
+    builder->noads = allocation;
+    builder->capacity = capacity;
+    return 0;
+}
+
+static int math_append(struct hstex_engine *engine,
+                       const struct hstex_noad *noad, char *error,
+                       size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (builder == NULL) {
+        return set_error(error, error_capacity,
+                         "math material used outside a formula");
+    }
+    if (reserve_noads(builder, builder->count + 1U, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    builder->noads[builder->count++] = *noad;
+    return 0;
+}
+
+/* \mathord and its relatives set the class of the atom that follows. */
+static int math_append_atom(struct hstex_engine *engine,
+                            struct hstex_noad *noad, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (builder == NULL) {
+        return set_error(error, error_capacity,
+                         "math material used outside a formula");
+    }
+    if (builder->forced_class >= 0) {
+        noad->atom_class = (uint8_t)builder->forced_class;
+        builder->forced_class = -1;
+    }
+    return math_append(engine, noad, error, error_capacity);
+}
+
+/* A mathcode of class 7 means "the family is \fam if that is a real family",
+   and is otherwise an ordinary atom in the code's own family; the reference
+   sets \fam to -1 on entry to a formula. */
+static int math_append_code(struct hstex_engine *engine, int32_t code,
+                            char *error, size_t error_capacity)
+{
+    if (code == 0x8000) {
+        return set_error(error, error_capacity,
+                         "active math characters are not implemented");
+    }
+    uint8_t class_code = (uint8_t)((code >> 12) & 0x7);
+    uint8_t family = (uint8_t)((code >> 8) & 0xF);
+    uint8_t character = (uint8_t)(code & 0xFF);
+    if (class_code == 7U) {
+        int32_t requested = engine->integer_parameters[HSTEX_INTEGER_FAMILY];
+        if (requested >= 0 && requested < 16) {
+            family = (uint8_t)requested;
+        }
+        class_code = (uint8_t)HSTEX_ATOM_ORD;
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_ATOM,
+        .atom_class = class_code,
+        .field = (uint8_t)HSTEX_MATH_FIELD_CHARACTER,
+        .family = family,
+        .character = character,
+    };
+    return math_append_atom(engine, &noad, error, error_capacity);
+}
+
+static int math_append_character(struct hstex_engine *engine, uint8_t code,
+                                 char *error, size_t error_capacity)
+{
+    int table = code_table_index(HSTEX_COMMAND_MATH_CODE);
+    if (table < 0) {
+        return set_error(error, error_capacity, "no mathcode table");
+    }
+    return math_append_code(engine, engine->code_tables[(size_t)table][code],
+                            error, error_capacity);
+}
+
+static int math_append_box(struct hstex_engine *engine,
+                           const struct hstex_box *box, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {
+            .node_start = box->node_start,
+            .node_count = box->node_count,
+            .box_kind = box->kind,
+        },
+    };
+    uint32_t identifier = 0U;
+    if (store_node(engine, &node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_ATOM,
+        .atom_class = (uint8_t)HSTEX_ATOM_ORD,
+        .field = (uint8_t)HSTEX_MATH_FIELD_BOX,
+        .node = identifier,
+    };
+    return math_append_atom(engine, &noad, error, error_capacity);
+}
+
+/* Glue, kerns and penalties keep the shape they already have. */
+static int math_append_node(struct hstex_engine *engine,
+                            const struct hstex_node *node, char *error,
+                            size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (store_node(engine, node, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_noad noad = {
+        .kind = (uint8_t)HSTEX_NOAD_NODE,
+        .node = identifier,
+    };
+    return math_append(engine, &noad, error, error_capacity);
+}
+
+static const struct hstex_font *math_family_font(struct hstex_engine *engine,
+                                                 uint8_t family)
+{
+    if (family >= 16U) {
+        return NULL;
+    }
+    return font_by_identifier(
+        engine, engine->math_fonts[HSTEX_MATH_TEXT][family]);
+}
+
+/* One mu is a eighteenth of the quad of the symbol family, truncated; a mu
+   quantity is that many times the stored value, again truncated toward zero.
+   See docs/DECISIONS.md, math-mode. */
+static int math_unit(struct hstex_engine *engine, int32_t *unit, char *error,
+                     size_t error_capacity)
+{
+    const struct hstex_font *symbols = math_family_font(engine, 2U);
+    if (symbols == NULL || symbols->dimen_count < 6U) {
+        return set_error(error, error_capacity,
+                         "math units need \\textfont2 with six parameters");
+    }
+    *unit = symbols->dimens[5] / 18;
+    return 0;
+}
+
+static int32_t scaled_by_unit(int32_t value, int32_t unit)
+{
+    bool negative = value < 0;
+    int64_t magnitude = negative ? -(int64_t)value : (int64_t)value;
+    int64_t result = magnitude * (int64_t)unit / INT64_C(65536);
+    return negative ? (int32_t)-result : (int32_t)result;
+}
+
+static struct hstex_glue math_glue_in_points(struct hstex_glue glue,
+                                             int32_t unit)
+{
+    struct hstex_glue result = glue;
+    result.width = scaled_by_unit(glue.width, unit);
+    result.stretch = scaled_by_unit(glue.stretch, unit);
+    result.shrink = scaled_by_unit(glue.shrink, unit);
+    return result;
+}
+
+/* The spacing between two adjacent atom classes, measured against pdfTeX:
+   0 none, 1 \thinmuskip, 2 \medmuskip, 3 \thickmuskip. The entries a Bin
+   atom can never reach are marked 0 because the class conversion below
+   removes them first. */
+static const uint8_t math_spacing_table[HSTEX_ATOM_CLASS_COUNT]
+                                       [HSTEX_ATOM_CLASS_COUNT] = {
+    /*            ord op   bin  rel  open close punct inner */
+    /* ord   */ {  0,  1,   2,   3,   0,   0,    0,    1 },
+    /* op    */ {  1,  1,   0,   3,   0,   0,    0,    1 },
+    /* bin   */ {  2,  2,   0,   0,   2,   0,    0,    2 },
+    /* rel   */ {  3,  3,   0,   0,   3,   0,    0,    3 },
+    /* open  */ {  0,  0,   0,   0,   0,   0,    0,    0 },
+    /* close */ {  0,  1,   2,   3,   0,   0,    0,    1 },
+    /* punct */ {  1,  1,   1,   1,   1,   1,    1,    1 },
+    /* inner */ {  1,  1,   2,   3,   1,   0,    1,    1 },
+};
+
+/* A Bin atom is only a binary operator between two things it can join. The
+   reference turns it into an Ord at the start of a list, after another Bin,
+   an Op, a Rel, an Open or a Punct, and before a Rel, a Close or a Punct or
+   the end of the list. */
+static void resolve_binary_atoms(struct hstex_math_builder *builder)
+{
+    int previous = -1;
+    for (size_t index = 0U; index < builder->count; ++index) {
+        struct hstex_noad *noad = &builder->noads[index];
+        if (noad->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+            continue;
+        }
+        if (noad->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
+            if (previous < 0 || previous == (int)HSTEX_ATOM_BIN ||
+                previous == (int)HSTEX_ATOM_OP ||
+                previous == (int)HSTEX_ATOM_REL ||
+                previous == (int)HSTEX_ATOM_OPEN ||
+                previous == (int)HSTEX_ATOM_PUNCT) {
+                noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+            }
+        } else if (noad->atom_class == (uint8_t)HSTEX_ATOM_REL ||
+                   noad->atom_class == (uint8_t)HSTEX_ATOM_CLOSE ||
+                   noad->atom_class == (uint8_t)HSTEX_ATOM_PUNCT) {
+            for (size_t back = index; back != 0U; --back) {
+                struct hstex_noad *earlier = &builder->noads[back - 1U];
+                if (earlier->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+                    continue;
+                }
+                if (earlier->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
+                    earlier->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+                }
+                break;
+            }
+        }
+        previous = (int)noad->atom_class;
+    }
+    for (size_t index = builder->count; index != 0U; --index) {
+        struct hstex_noad *noad = &builder->noads[index - 1U];
+        if (noad->kind != (uint8_t)HSTEX_NOAD_ATOM) {
+            continue;
+        }
+        if (noad->atom_class == (uint8_t)HSTEX_ATOM_BIN) {
+            noad->atom_class = (uint8_t)HSTEX_ATOM_ORD;
+        }
+        break;
+    }
+}
+
+static int math_character_metric(struct hstex_engine *engine,
+                                 const struct hstex_noad *noad,
+                                 const struct hstex_font **font,
+                                 const struct hstex_char_metric **metric,
+                                 char *error, size_t error_capacity)
+{
+    const struct hstex_font *resolved = math_family_font(engine, noad->family);
+    if (resolved == NULL) {
+        return set_error(error, error_capacity,
+                         "math family %u has no text font",
+                         (unsigned int)noad->family);
+    }
+    if (resolved->characters == NULL ||
+        resolved->characters[noad->character].tag < 0) {
+        return set_error(error, error_capacity,
+                         "math family %u has no character %u",
+                         (unsigned int)noad->family,
+                         (unsigned int)noad->character);
+    }
+    *font = resolved;
+    *metric = &resolved->characters[noad->character];
+    return 0;
+}
+
+/* Two adjacent ordinary characters of the same family go through that
+   font's ligature and kerning program, exactly as they would in text. */
+static int apply_math_ligatures(struct hstex_engine *engine,
+                                struct hstex_math_builder *builder,
+                                char *error, size_t error_capacity)
+{
+    for (size_t index = 0U; index + 1U < builder->count;) {
+        struct hstex_noad *left = &builder->noads[index];
+        struct hstex_noad *right = &builder->noads[index + 1U];
+        if (left->kind != (uint8_t)HSTEX_NOAD_ATOM ||
+            right->kind != (uint8_t)HSTEX_NOAD_ATOM ||
+            left->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
+            right->atom_class != (uint8_t)HSTEX_ATOM_ORD ||
+            left->field != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            right->field != (uint8_t)HSTEX_MATH_FIELD_CHARACTER ||
+            left->family != right->family) {
+            ++index;
+            continue;
+        }
+        const struct hstex_font *font = NULL;
+        const struct hstex_char_metric *metric = NULL;
+        if (math_character_metric(engine, left, &font, &metric, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+        bool kerned = false;
+        bool ligatured = false;
+        int32_t kern = 0;
+        uint8_t ligature = 0U;
+        if (font_lig_kern(font, (uint8_t)left->character,
+                          (uint8_t)right->character, &kerned, &kern,
+                          &ligatured, &ligature, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (ligatured) {
+            left->character = ligature;
+            memmove(&builder->noads[index + 1U], &builder->noads[index + 2U],
+                    (builder->count - index - 2U) * sizeof(*builder->noads));
+            --builder->count;
+            continue;
+        }
+        if (kerned) {
+            struct hstex_node node = {
+                .kind = HSTEX_NODE_KERN,
+                .width = kern,
+            };
+            uint32_t identifier = 0U;
+            struct hstex_noad inserted = {
+                .kind = (uint8_t)HSTEX_NOAD_NODE,
+            };
+            if (store_node(engine, &node, &identifier, error,
+                           error_capacity) != 0 ||
+                reserve_noads(builder, builder->count + 1U, error,
+                              error_capacity) != 0) {
+                return -1;
+            }
+            inserted.node = identifier;
+            memmove(&builder->noads[index + 2U], &builder->noads[index + 1U],
+                    (builder->count - index - 1U) * sizeof(*builder->noads));
+            builder->noads[index + 1U] = inserted;
+            ++builder->count;
+            index += 2U;
+            continue;
+        }
+        ++index;
+    }
+    return 0;
+}
+
+/* A large operator sits with its middle on the axis of the symbol family.
+   The builder derives the reach of a shifted node itself, so only the
+   displacement is recorded here. */
+static int centre_on_axis(struct hstex_engine *engine, struct hstex_node *node,
+                          char *error, size_t error_capacity)
+{
+    const struct hstex_font *symbols = math_family_font(engine, 2U);
+    if (symbols == NULL || symbols->dimen_count < 22U) {
+        return set_error(error, error_capacity,
+                         "a large operator needs \\textfont2 with "
+                         "twenty-two parameters");
+    }
+    node->shift =
+        (int32_t)(((int64_t)packed_dimen(node->height) -
+                   (int64_t)packed_dimen(node->depth) + 1) /
+                  2) -
+        symbols->dimens[21];
+    return 0;
+}
+
+static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
+                          char *error, size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+static int emit_math_kern(struct hstex_engine *engine, int32_t amount,
+                          char *error, size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_KERN,
+        .width = amount,
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* Translate one finished math list into the horizontal list the engine is
+   building. The caller has already pointed active_hbox_builder at it. */
+static int translate_math_list(struct hstex_engine *engine,
+                               struct hstex_math_builder *builder, char *error,
+                               size_t error_capacity)
+{
+    resolve_binary_atoms(builder);
+    if (apply_math_ligatures(engine, builder, error, error_capacity) != 0) {
+        return -1;
+    }
+    int previous_class = -1;
+    for (size_t index = 0U; index < builder->count; ++index) {
+        struct hstex_noad *noad = &builder->noads[index];
+        if (noad->kind == (uint8_t)HSTEX_NOAD_NODE) {
+            if (append_hbox_item(engine, noad->node, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        if (noad->kind == (uint8_t)HSTEX_NOAD_MU_GLUE ||
+            noad->kind == (uint8_t)HSTEX_NOAD_MU_KERN) {
+            int32_t unit = 0;
+            if (math_unit(engine, &unit, error, error_capacity) != 0) {
+                return -1;
+            }
+            int status =
+                noad->kind == (uint8_t)HSTEX_NOAD_MU_GLUE
+                    ? emit_math_glue(engine,
+                                     math_glue_in_points(noad->glue, unit),
+                                     error, error_capacity)
+                    : emit_math_kern(engine, scaled_by_unit(noad->kern, unit),
+                                     error, error_capacity);
+            if (status != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (previous_class >= 0) {
+            uint8_t which =
+                math_spacing_table[previous_class][noad->atom_class];
+            if (which != 0U) {
+                static const size_t parameters[4] = {
+                    0U,
+                    (size_t)HSTEX_MUGLUE_THIN,
+                    (size_t)HSTEX_MUGLUE_MEDIUM,
+                    (size_t)HSTEX_MUGLUE_THICK,
+                };
+                int32_t unit = 0;
+                if (math_unit(engine, &unit, error, error_capacity) != 0) {
+                    return -1;
+                }
+                struct hstex_glue amount = math_glue_in_points(
+                    engine->muglue_parameters[parameters[which]], unit);
+                if (emit_math_glue(engine, amount, error, error_capacity) !=
+                    0) {
+                    return -1;
+                }
+            }
+        }
+        previous_class = (int)noad->atom_class;
+        if (noad->field == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
+            continue;
+        }
+        if (noad->field == (uint8_t)HSTEX_MATH_FIELD_BOX) {
+            if (noad->node == 0U || noad->node > engine->node_count) {
+                return set_error(error, error_capacity,
+                                 "math list refers to a missing node");
+            }
+            if (noad->atom_class != (uint8_t)HSTEX_ATOM_OP) {
+                if (append_hbox_item(engine, noad->node, error,
+                                     error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
+            }
+            struct hstex_node centred = engine->nodes[noad->node - 1U];
+            if (centre_on_axis(engine, &centred, error, error_capacity) != 0) {
+                return -1;
+            }
+            if (append_hbox_node(engine, &centred, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        const struct hstex_font *font = NULL;
+        const struct hstex_char_metric *metric = NULL;
+        if (math_character_metric(engine, noad, &font, &metric, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_CHARACTER,
+            .width = metric->width,
+            .height = metric->height,
+            .depth = metric->depth,
+            .value.character = {
+                .font = engine->math_fonts[HSTEX_MATH_TEXT][noad->family],
+                .character = noad->character,
+            },
+        };
+        if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP &&
+            centre_on_axis(engine, &node, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (metric->italic != 0 &&
+            emit_math_kern(engine, metric->italic, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Entering a formula opens a group, sets \fam to none, and inserts
+   \everymath. The reference sets \fam before \everymath runs, so a token
+   list may select a family for the whole formula. */
+static int begin_math(struct hstex_engine *engine, char *error,
+                      size_t error_capacity)
+{
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (begin_group(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
+                                 false, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (push_math_list(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->mode = HSTEX_MODE_MATH;
+    uint32_t every_math = engine->token_parameters[HSTEX_TOKEN_EVERY_MATH];
+    if (every_math == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, every_math);
+    struct hstex_source_location location = {0};
+    if (list == NULL ||
+        hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return set_error(error, error_capacity,
+                         "could not install everymath tokens");
+    }
+    return 0;
+}
+
+/* A brace inside a formula collects a sub-formula, which becomes one
+   ordinary atom. */
+static int begin_math_group(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    return push_math_list(engine, error, error_capacity);
+}
+
+static int finish_math_group(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    struct hstex_math_builder *inner = current_math_list(engine);
+    if (inner == NULL || engine->math_depth < 2U) {
+        return set_error(error, error_capacity,
+                         "a math group closed outside a formula");
+    }
+    struct hstex_hbox_builder builder = {0};
+    struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+    engine->active_hbox_builder = &builder;
+    int status = translate_math_list(engine, inner, error, error_capacity);
+    engine->active_hbox_builder = previous;
+    struct hstex_box box = {0};
+    if (status == 0) {
+        status = finalize_hbox(engine, &builder, false, false, 0, &box, error,
+                               error_capacity);
+    }
+    free(builder.node_identifiers);
+    pop_math_list(engine);
+    if (status != 0) {
+        return -1;
+    }
+    return math_append_box(engine, &box, error, error_capacity);
+}
+
+/* Leaving a formula puts \mathsurround on both sides of the translation and
+   splices it into the horizontal list that was interrupted. */
+static int end_math(struct hstex_engine *engine, char *error,
+                    size_t error_capacity)
+{
+    struct hstex_math_builder *list = current_math_list(engine);
+    if (list == NULL || engine->math_depth != 1U) {
+        return set_error(error, error_capacity,
+                         "a formula closed inside a math group");
+    }
+    engine->mode = HSTEX_MODE_HORIZONTAL;
+    int32_t surround = engine->dimen_parameters[HSTEX_DIMEN_MATH_SURROUND];
+    int status = 0;
+    if (surround != 0) {
+        status = emit_math_kern(engine, surround, error, error_capacity);
+    }
+    if (status == 0) {
+        status = translate_math_list(engine, list, error, error_capacity);
+    }
+    if (status == 0 && surround != 0) {
+        status = emit_math_kern(engine, surround, error, error_capacity);
+    }
+    pop_math_list(engine);
+    if (status != 0) {
+        return -1;
+    }
+    return end_group(engine, error, error_capacity);
+}
+
+/* \textfont, \scriptfont and \scriptscriptfont: a family number, then a font.
+   The assignment is local, like a register's. */
+static int execute_math_font(struct hstex_engine *engine, int32_t size,
+                             char *error, size_t error_capacity)
+{
+    int32_t family = 0;
+    if (scan_integer(engine, &family, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (family < 0 || family > 15) {
+        return set_error(error, error_capacity,
+                         "math family %d is outside 0..15", family);
+    }
+    if (scan_optional_equals(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint32_t identifier = 0U;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT) {
+        return set_error(error, error_capacity, "invalid math font size");
+    }
+    uint32_t index = (uint32_t)size * 16U + (uint32_t)family;
+    bool global = assignment_is_global(engine, false);
+    uint32_t *level = &engine->math_font_levels[size][family];
+    if (!global && engine->group_level != 0U) {
+        if (save_value(engine, HSTEX_SAVE_MATH_FONT, index, *level,
+                       (int32_t)engine->math_fonts[size][family], 0U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+        *level = engine->group_level;
+    } else {
+        *level = 0U;
+    }
+    engine->math_fonts[size][family] = identifier;
+    engine->pending_global = false;
+    return 0;
+}
+
+static int execute_math_char(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    int32_t code = 0;
+    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (code < 0 || code > 0x7FFF) {
+        return set_error(error, error_capacity,
+                         "mathchar %d is outside 0..32767", code);
+    }
+    if (engine->mode != HSTEX_MODE_MATH) {
+        return set_error(error, error_capacity,
+                         "a math character is only allowed in a formula");
+    }
+    return math_append_code(engine, code, error, error_capacity);
+}
+
+static int execute_math_class(struct hstex_engine *engine, int32_t class_code,
+                              char *error, size_t error_capacity)
+{
+    struct hstex_math_builder *builder = current_math_list(engine);
+    if (engine->mode != HSTEX_MODE_MATH || builder == NULL) {
+        return set_error(error, error_capacity,
+                         "a math class is only allowed in a formula");
+    }
+    builder->forced_class = class_code;
+    return 0;
+}
+
+static int execute_math_skip(struct hstex_engine *engine, bool kern,
+                             char *error, size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_MATH) {
+        return set_error(error, error_capacity,
+                         "math glue is only allowed in a formula");
+    }
+    struct hstex_glue glue = {0};
+    if (scan_math_glue(engine, &glue, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_noad noad = {0};
+    if (kern) {
+        noad.kind = (uint8_t)HSTEX_NOAD_MU_KERN;
+        noad.kern = glue.width;
+    } else {
+        noad.kind = (uint8_t)HSTEX_NOAD_MU_GLUE;
+        noad.glue = glue;
+    }
+    return math_append(engine, &noad, error, error_capacity);
+}
+
 static int execute_write(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
@@ -13303,30 +14160,15 @@ static bool meanings_equal(const struct hstex_engine *engine,
     }
     case HSTEX_COMMAND_TOKEN_ALIAS:
         return left->value.token == right->value.token;
-    case HSTEX_COMMAND_CHAR_GIVEN:
-    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
-    case HSTEX_COMMAND_COUNT_REGISTER:
-    case HSTEX_COMMAND_INTEGER_PARAMETER:
-    case HSTEX_COMMAND_INTEGER_CONSTANT:
-    case HSTEX_COMMAND_DIMEN_REGISTER:
-    case HSTEX_COMMAND_SKIP_REGISTER:
-    case HSTEX_COMMAND_MUSKIP_REGISTER:
-    case HSTEX_COMMAND_TOKS_REGISTER:
-    case HSTEX_COMMAND_DIMEN_PARAMETER:
-    case HSTEX_COMMAND_GLUE_PARAMETER:
-    case HSTEX_COMMAND_MUGLUE_PARAMETER:
-    case HSTEX_COMMAND_TOKEN_PARAMETER:
-    case HSTEX_COMMAND_FONT_GIVEN:
-    case HSTEX_COMMAND_INTERACTION_MODE:
-    case HSTEX_COMMAND_VSKIP:
-    case HSTEX_COMMAND_MATH_PRIMITIVE:
-    case HSTEX_COMMAND_PENALTY_ARRAY:
-    case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
-    case HSTEX_COMMAND_PAGE_INTEGER:
-    case HSTEX_COMMAND_PAGE_DIMEN:
-        return left->value.integer == right->value.integer;
-    default:
+    case HSTEX_COMMAND_UNDEFINED:
         return true;
+    default:
+        /* A whole family of primitives shares one command and is told apart
+           by its subtype, so the subtype is part of the meaning: this is what
+           keeps \hfil unequal to \hfill and \mathbin unequal to \mathpunct.
+           A primitive with no subtype carries zero and still compares equal.
+           LaTeX's \DeclareMathSymbol asks exactly this question. */
+        return left->value.integer == right->value.integer;
     }
 }
 
@@ -13969,6 +14811,16 @@ static int end_group(struct hstex_engine *engine, char *error,
                 engine->catcode_levels[save.index] = save.previous_level;
             }
             break;
+        case HSTEX_SAVE_MATH_FONT: {
+            size_t size = save.index / 16U;
+            size_t family = save.index % 16U;
+            if (engine->math_font_levels[size][family] == leaving_level) {
+                engine->math_fonts[size][family] =
+                    (uint32_t)save.previous.integer;
+                engine->math_font_levels[size][family] = save.previous_level;
+            }
+            break;
+        }
         case HSTEX_SAVE_COUNT:
             if (engine->count_levels[save.index] == leaving_level) {
                 engine->counts[save.index] = save.previous.integer;
@@ -14168,13 +15020,44 @@ enum hstex_engine_result hstex_engine_next_output(
 
 handle_token:
         if (hstex_token_is_character(*token)) {
+            /* A formula is delimited by math shifts rather than braces, so
+               the executor recognises them itself; see docs/DECISIONS.md,
+               math-mode. */
+            if (token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
+                /* Math shift starts a paragraph in vertical mode, and like
+                   every other horizontal command it is read again once
+                   \everypar has run. */
+                if (engine->mode == HSTEX_MODE_VERTICAL) {
+                    if (push_one(engine, *token, *location, error,
+                                 error_capacity) != 0 ||
+                        start_paragraph(engine, true, error, error_capacity) !=
+                            0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
+                if ((engine->mode == HSTEX_MODE_MATH
+                         ? end_math(engine, error, error_capacity)
+                         : begin_math(engine, error, error_capacity)) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (token_is_category(*token, HSTEX_CAT_BEGIN_GROUP)) {
+                if (engine->mode == HSTEX_MODE_MATH &&
+                    begin_math_group(engine, error, error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
                 if (begin_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_END_GROUP)) {
+                if (engine->mode == HSTEX_MODE_MATH &&
+                    finish_math_group(engine, error, error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
                 if (end_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
@@ -14196,6 +15079,29 @@ handle_token:
                 (void)set_error(error, error_capacity,
                                 "definition prefix followed by a character");
                 return HSTEX_ENGINE_ERROR;
+            }
+            /* Inside a formula a character is an atom, not something the
+               enclosing list builder should see. Spaces are ignored. */
+            if (engine->mode == HSTEX_MODE_MATH) {
+                if (token_is_space(*token)) {
+                    continue;
+                }
+                if (token_is_category(*token, HSTEX_CAT_SUPERSCRIPT) ||
+                    token_is_category(*token, HSTEX_CAT_SUBSCRIPT)) {
+                    (void)set_error(error, error_capacity,
+                                    "%s are not implemented",
+                                    token_is_category(*token,
+                                                      HSTEX_CAT_SUPERSCRIPT)
+                                        ? "superscripts"
+                                        : "subscripts");
+                    return HSTEX_ENGINE_ERROR;
+                }
+                if (math_append_character(
+                        engine, hstex_token_character_code(*token), error,
+                        error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
             }
             return HSTEX_ENGINE_TOKEN;
         }
@@ -14374,6 +15280,41 @@ handle_token:
             if (finish_assignment(
                     engine, scan_char_definition(engine, error, error_capacity),
                     error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_FONT:
+            if (execute_math_font(engine, meaning->value.integer, error,
+                                  error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_CHAR:
+            if (execute_math_char(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_CLASS:
+            if (execute_math_class(engine, meaning->value.integer, error,
+                                   error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_LIMITS:
+            /* Limit placement only shows in display style, which is not
+               implemented; in text style the reference measures the same
+               either way. */
+            if (engine->mode != HSTEX_MODE_MATH) {
+                (void)set_error(error, error_capacity,
+                                "limit placement is only allowed in a formula");
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MATH_SKIP:
+        case HSTEX_COMMAND_MATH_KERN:
+            if (execute_math_skip(engine,
+                                  meaning->command == HSTEX_COMMAND_MATH_KERN,
+                                  error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

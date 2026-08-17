@@ -197,6 +197,12 @@ enum hstex_command {
     HSTEX_COMMAND_ITALIC_CORRECTION,
     HSTEX_COMMAND_CHAR,
     HSTEX_COMMAND_REMOVE_LAST,
+    HSTEX_COMMAND_MATH_FONT,
+    HSTEX_COMMAND_MATH_CHAR,
+    HSTEX_COMMAND_MATH_CLASS,
+    HSTEX_COMMAND_MATH_SKIP,
+    HSTEX_COMMAND_MATH_KERN,
+    HSTEX_COMMAND_MATH_LIMITS,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -560,6 +566,7 @@ enum hstex_save_kind {
     HSTEX_SAVE_TOKEN_PARAMETER,
     HSTEX_SAVE_BOX,
     HSTEX_SAVE_AFTER_GROUP,
+    HSTEX_SAVE_MATH_FONT,
 };
 
 struct hstex_glue {
@@ -661,6 +668,67 @@ struct hstex_box {
    resolved when the page is shipped, so it is a value outside the legal
    dimension range rather than a flag; see docs/DECISIONS.md, rules-and-kerns. */
 #define HSTEX_RUNNING_DIMEN (-INT32_C(1073741824))
+
+/* The three sizes a math family is set in. Only the text size is used so
+   far; see docs/DECISIONS.md, math-mode. */
+enum hstex_math_size {
+    HSTEX_MATH_TEXT = 0,
+    HSTEX_MATH_SCRIPT,
+    HSTEX_MATH_SCRIPT_SCRIPT,
+    HSTEX_MATH_SIZE_COUNT,
+};
+
+/* An atom's class decides the spacing around it. Classes 0..6 are the
+   mathcode classes; class 7 in a mathcode means "use \fam" and never reaches
+   a noad, so the slot is reused for Inner. */
+enum hstex_atom_class {
+    HSTEX_ATOM_ORD = 0,
+    HSTEX_ATOM_OP,
+    HSTEX_ATOM_BIN,
+    HSTEX_ATOM_REL,
+    HSTEX_ATOM_OPEN,
+    HSTEX_ATOM_CLOSE,
+    HSTEX_ATOM_PUNCT,
+    HSTEX_ATOM_INNER,
+    HSTEX_ATOM_CLASS_COUNT,
+};
+
+enum hstex_noad_kind {
+    /* An atom: a class and a nucleus. */
+    HSTEX_NOAD_ATOM = 0,
+    /* A list node that was built already and passes through untouched. */
+    HSTEX_NOAD_NODE,
+    /* Glue and kerns measured in mu, converted when the list is translated. */
+    HSTEX_NOAD_MU_GLUE,
+    HSTEX_NOAD_MU_KERN,
+};
+
+enum hstex_math_field {
+    HSTEX_MATH_FIELD_EMPTY = 0,
+    HSTEX_MATH_FIELD_CHARACTER,
+    HSTEX_MATH_FIELD_BOX,
+};
+
+/* One item of a math list. */
+struct hstex_noad {
+    uint8_t kind;
+    uint8_t atom_class;
+    uint8_t field;
+    uint8_t family;
+    uint32_t character;
+    /* Identifier of the stored node, for NODE items and box nuclei. */
+    uint32_t node;
+    struct hstex_glue glue;
+    int32_t kern;
+};
+
+struct hstex_math_builder {
+    struct hstex_noad *noads;
+    size_t count;
+    size_t capacity;
+    /* The class \mathord and its relatives forced on the next atom, or -1. */
+    int32_t forced_class;
+};
 
 enum hstex_node_kind {
     HSTEX_NODE_RULE = 0,
@@ -890,6 +958,14 @@ struct hstex_engine {
     uint32_t group_stop_level;
     bool group_stop_armed;
     bool group_stop_hit;
+    /* \textfont, \scriptfont and \scriptscriptfont, by family, with the
+       group level each was last set at so they restore like other registers. */
+    uint32_t math_fonts[HSTEX_MATH_SIZE_COUNT][16];
+    uint32_t math_font_levels[HSTEX_MATH_SIZE_COUNT][16];
+    /* The math lists being built, innermost last; empty outside math. */
+    struct hstex_math_builder *math_stack;
+    size_t math_depth;
+    size_t math_capacity;
     /* Name of the primitive the executor is currently running, for
        diagnostics: a scan that fails names the command that asked for the
        value, which is otherwise invisible from inside the scanner. */

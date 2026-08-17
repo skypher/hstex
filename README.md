@@ -63,9 +63,15 @@ they opened ends, so a box may be opened by one macro and closed by an
 commands are built on. The corpus now runs through `\maketitle` and into the
 abstract, and stops at `\halign`.
 
-Line breaking, math mode, alignments, the page builder, the output routine,
-and PDF emission remain under construction. A paragraph wider than `\hsize`
-reports an error rather than being set as one overfull line.
+Inline formulas are typeset. `$...$` builds a math list, the atom classes
+from the mathcodes decide the spacing between them, math families come from
+`\textfont` and `\fam`, and the characters carry their italic corrections
+and their family's ligature program. Superscripts and subscripts are the
+next gap.
+
+Line breaking, math scripts, alignments, the page builder, the output
+routine, and PDF emission remain under construction. A paragraph wider than
+`\hsize` reports an error rather than being set as one overfull line.
 
 ## Build
 

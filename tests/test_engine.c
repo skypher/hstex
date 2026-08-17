@@ -721,6 +721,59 @@ static int test_streaming_box_bodies(void)
         "[7.0pt][7.0pt][9.0pt][7.0pt][5|6]");
 }
 
+/* Inline formulas: atom classes and the spacing between them, math families,
+   italic corrections and the family's ligature program; see
+   docs/DECISIONS.md, math-mode. */
+static int test_math_mode(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 "
+        "\\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tensy=cmsy10 "
+        "\\font\\tenex=cmex10 "
+        "\\textfont0=\\tenrm \\scriptfont0=\\tenrm \\scriptscriptfont0=\\tenrm "
+        "\\textfont1=\\tenmi \\scriptfont1=\\tenmi \\scriptscriptfont1=\\tenmi "
+        "\\textfont2=\\tensy \\scriptfont2=\\tensy \\scriptscriptfont2=\\tensy "
+        "\\textfont3=\\tenex \\scriptfont3=\\tenex \\scriptscriptfont3=\\tenex "
+        "\\thinmuskip=3mu \\medmuskip=4mu \\thickmuskip=5mu "
+        "\\def\\O{\\mathchar\"0030 }"
+        "\\def\\m#1{\\setbox0=\\hbox{$#1$}[\\the\\wd0|\\the\\ht0|\\the\\dp0]}"
+        /* One ordinary atom, then two: Ord-Ord has no space between. */
+        "\\m{\\O}\\m{\\O\\O}"
+        /* A binary operator takes \medmuskip, a relation \thickmuskip and
+           punctuation \thinmuskip -- but only where the class survives. */
+        "\\m{\\O\\mathchar\"2030 \\O}\\m{\\O\\mathchar\"3030 \\O}"
+        "\\m{\\O\\mathchar\"6030 \\O}\\m{\\O\\mathinner{\\O}\\O}"
+        /* A large operator is centred on the axis of family two. */
+        "\\m{\\mathop{\\O}}"
+        /* \mskip and \mkern measure in mu. */
+        "\\m{\\O\\mskip9mu\\O}\\m{\\O\\mkern9mu\\O}"
+        /* A braced sub-formula is one ordinary atom. */
+        "\\m{\\O{\\O\\O}\\O}"
+        /* Adjacent characters of one family use its ligature and kern
+           program, and every character gets its italic correction. */
+        "\\m{\\mathchar\"0066 \\mathchar\"0069 }"
+        "\\m{\\mathchar\"0041 \\mathchar\"0056 }"
+        /* Class seven takes its family from \fam when that names one. */
+        "\\mathcode`z=\"7031 \\m{z}\\m{\\fam2 z}"
+        /* \mathsurround goes on both sides of the whole formula. */
+        "\\mathsurround=5pt \\m{\\O}\\mathsurround=0pt "
+        /* \everymath runs after \fam has been cleared, so it may set one. */
+        "\\everymath={\\fam2 }\\m{\\mathchar\"7031 }\\everymath={}"
+        /* A box is an ordinary atom. */
+        "\\m{\\hbox{}\\O}"
+        /* A binary operator between an Op and a Rel is not binary at all. */
+        "\\m{\\mathchar\"1030 \\mathchar\"2030 \\mathchar\"3030 }%",
+        "[5.00002pt|6.44444pt|0.0pt][10.00003pt|6.44444pt|0.0pt]"
+        "[19.44438pt|6.44444pt|0.0pt][20.55547pt|6.44444pt|0.0pt]"
+        "[16.66667pt|6.44444pt|0.0pt][18.3333pt|6.44444pt|0.0pt]"
+        "[5.00002pt|5.72221pt|0.72223pt][14.99991pt|6.44444pt|0.0pt]"
+        "[14.99991pt|6.44444pt|0.0pt][20.00006pt|6.44444pt|0.0pt]"
+        "[5.55557pt|6.94444pt|0.0pt][14.02777pt|6.83331pt|0.0pt]"
+        "[5.00002pt|6.44444pt|0.0pt][10.00002pt|4.30554pt|0.0pt]"
+        "[15.00002pt|6.44444pt|0.0pt][10.00002pt|4.30554pt|0.0pt]"
+        "[5.00002pt|6.44444pt|0.0pt][19.44438pt|6.44444pt|0.72223pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -1804,7 +1857,7 @@ int main(void)
         test_box_and_font_conditionals() != 0 ||
         test_box_grammar_and_spacing() != 0 || test_paragraphs() != 0 ||
         test_starting_a_paragraph() != 0 || test_implicit_braces() != 0 ||
-        test_streaming_box_bodies() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_streaming_box_bodies() != 0 || test_math_mode() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
