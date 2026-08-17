@@ -1969,6 +1969,57 @@ static int test_string_bytes(void)
         "6163726F3A2D3E78][7|0A][8|macro:->Q]");
 }
 
+/* \middle; see docs/DECISIONS.md, middle-delimiters. */
+static int test_middle_delimiters(void)
+{
+    return run_snippet(
+        "\\catcode`\\$=3 \\mathsurround=0pt \\hbadness=10000 \\hfuz"
+        "z=1000pt \\nulldelimiterspace=1.2pt \\scriptspace=0.5pt \\"
+        "delimiterfactor=901 \\delimitershortfall=5pt \\thinmuskip="
+        "3mu \\medmuskip=4mu plus2mu minus4mu \\thickmuskip=5mu plu"
+        "s5mu \\font\\tenrm=cmr10 \\font\\tenmi=cmmi10 \\font\\tens"
+        "y=cmsy10 \\font\\tenex=cmex10 \\font\\sevenrm=cmr7 \\font"
+        "\\seveni=cmmi7 \\font\\sevensy=cmsy7 \\font\\fiverm=cmr5 "
+        "\\font\\fivei=cmmi5 \\font\\fivesy=cmsy5 \\textfont0=\\ten"
+        "rm \\scriptfont0=\\sevenrm \\scriptscriptfont0=\\fiverm \\"
+        "textfont1=\\tenmi \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sevensy \\s"
+        "criptscriptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont"
+        "3=\\tenex \\scriptscriptfont3=\\tenex \\tenrm \\delcode`\\"
+        "(=\"028300 \\delcode`\\)=\"029301 \\delcode`\\|=\"26A30C "
+        "\\delcode`\\.=0 \\def\\R#1#2#3{\\vrule width#1pt height#2p"
+        "t depth#3pt}\\def\\O{\\mathord{\\R{5}{10}{5}}}\\def\\P{\\m"
+        "athop{\\R{5}{10}{5}}}\\def\\M#1{\\setbox0=\\hbox{$#1$}}\\M"
+        "{\\left(\\R{5}{10}{5}\\right)}[1|\\the\\wd0|\\the\\ht0|\\t"
+        "he\\dp0]\\M{\\left(\\R{5}{10}{5}\\middle|\\R{5}{10}{5}\\ri"
+        "ght)}[2|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\left(\\R{5}"
+        "{10}{5}\\middle.\\R{5}{10}{5}\\right)}[3|\\the\\wd0|\\the"
+        "\\ht0|\\the\\dp0]\\M{\\left.\\R{5}{10}{5}\\middle|\\R{5}{1"
+        "0}{5}\\right.}[4|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\le"
+        "ft(\\R{5}{10}{5}\\middle|\\R{5}{10}{5}\\middle|\\R{5}{10}{"
+        "5}\\right)}[5|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\left("
+        "\\P\\middle|\\O\\right)}[6|\\the\\wd0|\\the\\ht0|\\the\\dp"
+        "0]\\M{\\left(\\P\\mathord{\\R{3.33333}{1}{0}}\\O\\right)}["
+        "7|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\left(\\O\\middle|"
+        "\\P\\right)}[8|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\left"
+        "(\\O\\mathclose{\\R{3.33333}{1}{0}}\\P\\right)}[9|\\the\\w"
+        "d0|\\the\\ht0|\\the\\dp0]\\M{\\left(\\R{5}{2}{1}\\middle|"
+        "\\R{5}{2}{1}\\right)}[10|\\the\\wd0|\\the\\ht0|\\the\\dp0]"
+        "\\M{\\scriptstyle\\left(\\R{5}{10}{5}\\middle|\\R{5}{10}{5"
+        "}\\right)}[11|\\the\\wd0|\\the\\ht0|\\the\\dp0]\\M{\\left("
+        "\\left(\\R{5}{10}{5}\\middle|\\R{5}{10}{5}\\right)\\middle"
+        "|\\R{5}{1}{1}\\right)}[12|\\the\\wd0|\\the\\ht0|\\the\\dp0"
+        "]%",
+        "[1|16.94446pt|11.50008pt|6.50009pt][2|25.27779pt|11.50009p"
+        "t|6.50009pt][3|23.14445pt|11.50008pt|6.50009pt][4|15.73332"
+        "pt|11.50009pt|6.50009pt][5|33.61111pt|11.50009pt|6.50009pt"
+        "][6|25.27779pt|11.50009pt|6.50009pt][7|26.94441pt|11.50008"
+        "pt|6.50009pt][8|25.27779pt|11.50009pt|6.50009pt][9|26.9444"
+        "1pt|11.50008pt|6.50009pt][10|20.55559pt|7.5pt|2.5pt][11|25"
+        ".27779pt|10.75009pt|7.25009pt][12|45.55557pt|11.50009pt|6."
+        "50009pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -3066,7 +3117,8 @@ int main(void)
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
         test_over_and_underline() != 0 ||
         test_missing_characters() != 0 || test_leaders() != 0 ||
-        test_string_bytes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_string_bytes() != 0 ||
+        test_middle_delimiters() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

@@ -1934,6 +1934,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"delimiter", HSTEX_COMMAND_DELIMITER, 0},
         {"left", HSTEX_COMMAND_LEFT_RIGHT, 0},
         {"right", HSTEX_COMMAND_LEFT_RIGHT, 1},
+        {"middle", HSTEX_COMMAND_LEFT_RIGHT, 2},
         {"accent", HSTEX_COMMAND_ACCENT, 0},
         {"vcenter", HSTEX_COMMAND_VCENTER, 0},
         {"parshape", HSTEX_COMMAND_PAR_SHAPE, 0},
@@ -14293,7 +14294,8 @@ static bool math_noad_is_atom(uint8_t kind)
     return kind == (uint8_t)HSTEX_NOAD_ATOM ||
            kind == (uint8_t)HSTEX_NOAD_RADICAL ||
            kind == (uint8_t)HSTEX_NOAD_OVERLINE ||
-           kind == (uint8_t)HSTEX_NOAD_UNDERLINE;
+           kind == (uint8_t)HSTEX_NOAD_UNDERLINE ||
+           kind == (uint8_t)HSTEX_NOAD_MIDDLE;
 }
 
 static int math_append(struct hstex_engine *engine,
@@ -14615,7 +14617,12 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
                 break;
             }
         }
-        previous = (int)noad->atom_class;
+        /* A \middle is a closing atom to what stands before it and an
+           opening one to what follows; see docs/DECISIONS.md,
+           middle-delimiters. */
+        previous = noad->kind == (uint8_t)HSTEX_NOAD_MIDDLE
+                       ? (int)HSTEX_ATOM_OPEN
+                       : (int)noad->atom_class;
     }
     for (size_t index = builder->count; index != 0U; --index) {
         struct hstex_noad *noad = &builder->noads[index - 1U];
@@ -14799,6 +14806,11 @@ static int build_math_radical(struct hstex_engine *engine,
 static int build_math_line(struct hstex_engine *engine,
                            struct hstex_noad *noad, uint8_t style, bool over,
                            char *error, size_t error_capacity);
+
+static int variant_delimiter(struct hstex_engine *engine, int32_t code,
+                             uint8_t size, int32_t wanted,
+                             struct hstex_box *box, char *error,
+                             size_t error_capacity);
 
 /* Pack one field into a box at the given style. An empty field gives an empty
    box, a character gives that character with its italic correction, and a box
@@ -15404,6 +15416,35 @@ static int translate_math_list(struct hstex_engine *engine,
                             error_capacity) != 0) {
             return -1;
         }
+        bool middle_atom = noad->kind == (uint8_t)HSTEX_NOAD_MIDDLE;
+        if (middle_atom) {
+            /* While the group is being measured the delimiter is not there
+               yet; it takes its size from the whole group. */
+            noad->kind = (uint8_t)HSTEX_NOAD_ATOM;
+            noad->atom_class = (uint8_t)HSTEX_ATOM_CLOSE;
+            memset(&noad->nucleus, 0, sizeof(noad->nucleus));
+            if (engine->middle_delimiter_size >= 0) {
+                struct hstex_box piece = {0};
+                int32_t axis = 0;
+                if (variant_delimiter(engine, noad->delimiter, size,
+                                      engine->middle_delimiter_size, &piece,
+                                      error, error_capacity) != 0 ||
+                    math_symbol_parameter(engine, size, 22U, &axis, error,
+                                          error_capacity) != 0) {
+                    return -1;
+                }
+                uint32_t placed = 0U;
+                if (store_box_node(engine, &piece,
+                                   half_of((int64_t)piece.height -
+                                           piece.depth) -
+                                       axis,
+                                   &placed, error, error_capacity) != 0) {
+                    return -1;
+                }
+                noad->nucleus.kind = (uint8_t)HSTEX_MATH_FIELD_BOX;
+                noad->nucleus.node = placed;
+            }
+        }
         if (noad->kind == (uint8_t)HSTEX_NOAD_NODE) {
             if (append_hbox_item(engine, noad->node, error, error_capacity) !=
                 0) {
@@ -15454,7 +15495,8 @@ static int translate_math_list(struct hstex_engine *engine,
                 }
             }
         }
-        previous_class = (int)noad->atom_class;
+        previous_class = middle_atom ? (int)HSTEX_ATOM_OPEN
+                                     : (int)noad->atom_class;
 
         int32_t nucleus_height = 0;
         int32_t nucleus_depth = 0;
@@ -16500,7 +16542,32 @@ static int scan_delimiter(struct hstex_engine *engine, int32_t *code,
 
 /* \left opens a list of its own; \right closes it and makes an inner atom of
    the two delimiters with that list between them. */
-static int execute_left_right(struct hstex_engine *engine, bool right,
+/* How tall a \\left group's delimiters must be: the contents' reach from the
+   axis, scaled by \\delimiterfactor, but never more than
+   \\delimitershortfall short of covering them twice over. */
+static int32_t delimiter_target(struct hstex_engine *engine, int32_t height,
+                                int32_t depth, int32_t axis)
+{
+    int64_t below = (int64_t)depth + axis;
+    int64_t above = (int64_t)height + depth - below;
+    int64_t reach = above > below ? above : below;
+    int64_t factor =
+        (reach / 500) *
+        engine->integer_parameters[HSTEX_INTEGER_DELIMITER_FACTOR];
+    int64_t shortfall =
+        reach + reach -
+        engine->dimen_parameters[HSTEX_DIMEN_DELIMITER_SHORTFALL];
+    int64_t wanted = factor > shortfall ? factor : shortfall;
+    if (wanted < 0) {
+        wanted = 0;
+    }
+    if (wanted > HSTEX_MAX_DIMEN) {
+        wanted = HSTEX_MAX_DIMEN;
+    }
+    return (int32_t)wanted;
+}
+
+static int execute_left_right(struct hstex_engine *engine, int32_t kind,
                               char *error, size_t error_capacity)
 {
     struct hstex_math_builder *list = current_math_list(engine);
@@ -16512,7 +16579,7 @@ static int execute_left_right(struct hstex_engine *engine, bool right,
     if (scan_delimiter(engine, &code, error, error_capacity) != 0) {
         return -1;
     }
-    if (!right) {
+    if (kind == 0) {
         uint8_t style = list->current_style;
         if (push_math_list(engine, style, error, error_capacity) != 0) {
             return -1;
@@ -16523,17 +16590,89 @@ static int execute_left_right(struct hstex_engine *engine, bool right,
     }
     if (!list->is_left_group || engine->math_depth <= engine->math_floor + 1U) {
         return set_error(error, error_capacity,
-                         "\\right has no matching \\left");
+                         kind == 2 ? "\\middle has no matching \\left"
+                                   : "\\right has no matching \\left");
+    }
+    if (kind == 2) {
+        /* The delimiter cannot be made yet: it is as tall as the whole group
+           will turn out to be. See docs/DECISIONS.md, middle-delimiters. */
+        struct hstex_noad noad = {
+            .kind = (uint8_t)HSTEX_NOAD_MIDDLE,
+            .atom_class = (uint8_t)HSTEX_ATOM_CLOSE,
+            .delimiter = code,
+        };
+        return math_append(engine, &noad, error, error_capacity);
     }
     int32_t left_code = list->left_delimiter;
     uint8_t style = list->style;
     uint8_t size = math_size_of_style(style);
 
+    /* A group with a \middle in it has to be set twice: once to find out how
+       tall it is, and again with delimiters of that height in place. */
+    bool has_middle = false;
+    for (size_t index = 0U; index < list->count; ++index) {
+        if (list->noads[index].kind == (uint8_t)HSTEX_NOAD_MIDDLE) {
+            has_middle = true;
+            break;
+        }
+    }
+    int32_t previous_size = engine->middle_delimiter_size;
+    struct hstex_box measured = {0};
+    if (has_middle) {
+        struct hstex_math_builder trial = {0};
+        trial.forced_class = -1;
+        trial.style = list->style;
+        trial.current_style = list->current_style;
+        if (list->count != 0U) {
+            if (reserve_noads(&trial, list->count, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            memcpy(trial.noads, list->noads,
+                   list->count * sizeof(*trial.noads));
+            trial.count = list->count;
+        }
+        struct hstex_hbox_builder measuring = {0};
+        struct hstex_hbox_builder *outer = engine->active_hbox_builder;
+        engine->active_hbox_builder = &measuring;
+        engine->middle_delimiter_size = -1;
+        int trial_status =
+            translate_math_list(engine, &trial, error, error_capacity);
+        engine->active_hbox_builder = outer;
+        if (trial_status == 0) {
+            trial_status = finalize_hbox(engine, &measuring, false, false, 0,
+                                         &measured, error, error_capacity);
+        }
+        free(measuring.node_identifiers);
+        free(trial.noads);
+        if (trial_status != 0) {
+            engine->middle_delimiter_size = previous_size;
+            return -1;
+        }
+    }
+
     struct hstex_hbox_builder builder = {0};
     struct hstex_hbox_builder *previous = engine->active_hbox_builder;
     engine->active_hbox_builder = &builder;
-    int status = translate_math_list(engine, list, error, error_capacity);
+    engine->middle_delimiter_size = -1;
+    int32_t target = -1;
+    int status = 0;
+    if (has_middle) {
+        int32_t trial_axis = 0;
+        if (math_symbol_parameter(engine, size, 22U, &trial_axis, error,
+                                  error_capacity) != 0) {
+            status = -1;
+        } else {
+            target = delimiter_target(engine, measured.height, measured.depth,
+                                      trial_axis);
+            engine->middle_delimiter_size = target;
+        }
+    }
+    if (status == 0) {
+        status = translate_math_list(engine, list, error, error_capacity);
+    }
     engine->active_hbox_builder = previous;
+    engine->middle_delimiter_size = previous_size;
     struct hstex_box inner = {0};
     if (status == 0) {
         status = finalize_hbox(engine, &builder, false, false, 0, &inner, error,
@@ -16550,30 +16689,18 @@ static int execute_left_right(struct hstex_engine *engine, bool right,
                               error_capacity) != 0) {
         return -1;
     }
-    /* How far the contents reach from the axis, in both directions. */
-    int64_t below = (int64_t)inner.depth + axis;
-    int64_t above = (int64_t)inner.height + inner.depth - below;
-    int64_t reach = above > below ? above : below;
-    int64_t factor =
-        (reach / 500) *
-        engine->integer_parameters[HSTEX_INTEGER_DELIMITER_FACTOR];
-    int64_t shortfall =
-        reach + reach -
-        engine->dimen_parameters[HSTEX_DIMEN_DELIMITER_SHORTFALL];
-    int64_t wanted = factor > shortfall ? factor : shortfall;
-    if (wanted < 0) {
-        wanted = 0;
-    }
-    if (wanted > HSTEX_MAX_DIMEN) {
-        wanted = HSTEX_MAX_DIMEN;
-    }
+    /* The height the delimiters must cover is the group's own, taken before
+       any \\middle delimiter was put into it. */
+    int32_t wanted =
+        target >= 0 ? target
+                    : delimiter_target(engine, inner.height, inner.depth, axis);
 
     struct hstex_box left_box = {0};
     struct hstex_box right_box = {0};
-    if (variant_delimiter(engine, left_code, size, (int32_t)wanted, &left_box,
-                          error, error_capacity) != 0 ||
-        variant_delimiter(engine, code, size, (int32_t)wanted, &right_box,
-                          error, error_capacity) != 0) {
+    if (variant_delimiter(engine, left_code, size, wanted, &left_box, error,
+                          error_capacity) != 0 ||
+        variant_delimiter(engine, code, size, wanted, &right_box, error,
+                          error_capacity) != 0) {
         return -1;
     }
 
@@ -20297,7 +20424,7 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_LEFT_RIGHT:
-            if (execute_left_right(engine, meaning->value.integer != 0, error,
+            if (execute_left_right(engine, meaning->value.integer, error,
                                    error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }

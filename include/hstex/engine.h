@@ -756,6 +756,9 @@ enum hstex_noad_kind {
     /* \overline and \underline: a rule over or under a nucleus. */
     HSTEX_NOAD_OVERLINE,
     HSTEX_NOAD_UNDERLINE,
+    /* \middle: a delimiter as tall as the \left group that holds it, whose
+       size is only known once that group has been measured. */
+    HSTEX_NOAD_MIDDLE,
 };
 
 enum hstex_math_field_kind {
@@ -1166,6 +1169,10 @@ struct hstex_engine {
     bool reading_equation_number;
     bool equation_number_on_left;
     struct hstex_box displayed_equation;
+    /* How tall the delimiters of the \left group being set must be, or -1
+       while the group is still being measured; see docs/DECISIONS.md,
+       middle-delimiters. */
+    int32_t middle_delimiter_size;
     /* The box \leaders read, waiting for the glue that will repeat it. */
     uint32_t pending_leader;
     uint8_t pending_leader_kind;
