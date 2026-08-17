@@ -110,17 +110,41 @@ the way the reference sets them, `\output` runs in a group of its own, and
 `\vsplit` breaks a box the same way. LaTeX's own output routine runs on the
 corpus.
 
+Output commands that `\immediate` has not claimed become whatsits: a
+`\write` keeps its text unexpanded until the page it sits on is shipped,
+which is what lets LaTeX write a page number it does not yet know. The corpus
+now writes an `.aux` file whose first eighteen entries are byte for byte
+`pdflatex`'s.
+
+Paragraphs are hyphenated. The pattern trie and the exception list were
+already there; what runs them is a pass between the first and second attempts
+at breaking, following the reference's rules about what counts as a word --
+only after glue, letters of one font, `\uchyph` for a capital, ligatures read
+as the letters they were made of, and nothing at all for a word an explicit
+hyphen follows. `\discretionary` and `\-` are nodes the breaker treats as a
+third kind of breakpoint, with `\hyphenpenalty`, `\exhyphenpenalty`,
+`\brokenpenalty` and the two hyphen demerits.
+
+Characters protrude past the margins where `\lpcode` and `\rpcode` say they
+may, and the protrusion counts toward the line's width in the breaker once
+`\pdfprotrudechars` has reached two -- which is what `microtype` asks for.
+`\emergencystretch` buys the third pass. Formulas in a paragraph are fenced
+with math nodes carrying `\mathsurround`, and a binary operator or a relation
+leaves `\binoppenalty` or `\relpenalty` behind it.
+
+Together these are enough for the corpus's first chapter to match `pdflatex`
+page for page: its first two pages agree with the reference node for node,
+down to every kern, discretionary and glue set.
+
 What `\shipout` does not do yet is write anything: there is no page
-description, so no PDF. Insertions, marks and hyphenation are still to come.
-The corpus none the less comes to 2,303 pages against `pdflatex`'s 2,335,
-which is as close as it can be while paragraphs are set without
-hyphenation.
+description, so no PDF. Insertions and marks are still to come. The corpus
+comes to 2,303 pages against `pdflatex`'s 2,335.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
-23 seconds, and the whole corpus about 109, against `pdflatex`'s 41 seconds
+23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
 for the same source with a prebuilt format and an 11 MB PDF at the end. A
 large part of that is allocation: a definition is a fresh record every time,
-so the bootstrap alone leaves 417,000 of them and the corpus 7.9 million.
+so the bootstrap alone leaves 417,000 of them and the corpus 7.8 million.
 Nothing has been tuned yet; correctness came first.
 
 ## Build
