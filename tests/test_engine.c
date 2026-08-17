@@ -1084,6 +1084,89 @@ static int test_badness(void)
         "[3168][100][800][12]");
 }
 
+/* Breaking a paragraph into lines. Every word is a rule whose height says
+   which word it is, so peeling the lines off the back of the vertical list
+   reports where each line ended. See docs/DECISIONS.md, line-breaking. */
+static int test_line_breaking(void)
+{
+    return run_snippet(
+        "\\chardef\\keep=200 \\chardef\\ln=201 "
+        "\\baselineskip=0pt \\lineskip=0pt \\lineskiplimit=0pt "
+        "\\boxmaxdepth=16383.99998pt \\parindent=0pt \\pretolerance=-1 "
+        "\\tolerance=10000 \\linepenalty=10 \\adjdemerits=10000 "
+        "\\doublehyphendemerits=10000 \\finalhyphendemerits=5000 "
+        "\\looseness=0 \\clubpenalty=0 \\widowpenalty=0 \\brokenpenalty=0 "
+        "\\interlinepenalty=0 \\leftskip=0pt \\rightskip=0pt "
+        "\\parfillskip=0pt plus1fil \\hbadness=10000 \\hfuzz=1000pt "
+        "\\vbadness=10000 \\vfuzz=1000pt \\emergencystretch=0pt "
+        "\\def\\W#1#2{\\vrule width#1pt height#2pt depth0pt}"
+        "\\def\\G{\\hskip0pt plus2pt minus1pt }"
+        "\\def\\peel{\\setbox\\keep=\\vbox{\\unvbox0 "
+        "\\global\\setbox\\ln=\\lastbox \\unskip \\unpenalty}"
+        "\\global\\setbox0=\\box\\keep"
+        "\\ifvoid\\ln \\else(\\the\\ht\\ln)\\expandafter\\peel \\fi}"
+        "\\long\\def\\run#1#2{[\\setbox0=\\vbox{\\hsize=#1 \\noindent#2\\par}"
+        "\\peel]}"
+        "\\long\\def\\runi#1#2{[\\setbox0=\\vbox{\\hsize=#1 \\indent#2\\par}"
+        "\\peel]}"
+        "\\def\\six{\\W{10}{1.01}\\G\\W{10}{1.02}\\G\\W{10}{1.03}\\G"
+        "\\W{10}{1.04}\\G\\W{10}{1.05}\\G\\W{10}{1.06}}"
+        "\\def\\uneven{\\W{20}{1.01}\\G\\W{5}{1.02}\\G\\W{5}{1.03}\\G"
+        "\\W{20}{1.04}\\G\\W{5}{1.05}\\G\\W{5}{1.06}}"
+        "\\def\\five{\\W{9}{1.01}\\G\\W{9}{1.02}\\G\\W{9}{1.03}\\G"
+        "\\W{9}{1.04}\\G\\W{9}{1.05}}"
+        "\\def\\four{\\W{10}{1.01}\\G\\W{10}{1.02}\\G\\W{10}{1.03}\\G"
+        "\\W{10}{1.04}}"
+        /* Six equal words at widths that call for one to six lines. */
+        "\\run{100pt}{\\six}\\run{40pt}{\\six}\\run{25pt}{\\six}"
+        "\\run{35pt}{\\six}\\run{22pt}{\\six}\\run{12pt}{\\six}"
+        /* Uneven words, where filling each line as far as it goes is not
+           what the reference does. */
+        "\\run{32pt}{\\uneven}\\run{30pt}{\\uneven}\\run{26pt}{\\uneven}"
+        "\\run{60pt}{\\uneven}"
+        /* A penalty is a breakpoint, and its size counts in the demerits. */
+        "\\run{45pt}{\\W{10}{1.01}\\G\\W{10}{1.02}\\penalty-200 \\G"
+        "\\W{10}{1.03}\\G\\W{10}{1.04}}"
+        "\\run{45pt}{\\W{10}{1.01}\\G\\W{10}{1.02}\\penalty200 \\G"
+        "\\W{10}{1.03}\\G\\W{10}{1.04}}"
+        /* \leftskip and \rightskip are part of every line. */
+        "\\rightskip=5pt \\run{35pt}{\\six}\\rightskip=0pt "
+        "\\leftskip=5pt \\run{35pt}{\\six}\\leftskip=0pt "
+        /* Rigid glue still offers breaks, at a badness of exactly 10000. */
+        "\\run{35pt}{\\W{10}{1.01}\\hskip2pt \\W{10}{1.02}\\hskip2pt "
+        "\\W{10}{1.03}\\hskip2pt \\W{10}{1.04}}"
+        "\\run{40pt}{\\W{9}{1.01}\\G\\W{9}{1.02}\\G\\W{9}{1.03}\\G"
+        "\\W{9}{1.04}\\G\\W{30}{1.05}}"
+        /* A break of -10000 is taken even when the paragraph would fit on
+           one line; 10000 stops the glue after it being a break at all. */
+        "\\run{100pt}{\\W{10}{1.01}\\G\\W{10}{1.02}\\penalty-10000 \\G"
+        "\\W{10}{1.03}\\G\\W{10}{1.04}}"
+        "\\run{25pt}{\\W{10}{1.01}\\G\\W{10}{1.02}\\penalty10000 \\G"
+        "\\W{10}{1.03}\\G\\W{10}{1.04}}"
+        /* \pretolerance accepts a first pass; a tolerance nothing can meet
+           falls through to the pass that takes what it can get. */
+        "\\pretolerance=10000 \\run{35pt}{\\four}\\pretolerance=-1 "
+        "\\tolerance=1 \\run{35pt}{\\four}\\tolerance=10000 "
+        "\\parindent=15pt \\runi{35pt}{\\four}\\parindent=0pt "
+        /* Demerits that push towards evenness, and towards fewer lines. */
+        "\\adjdemerits=0 \\run{31pt}{\\five}"
+        "\\adjdemerits=1000000 \\run{31pt}{\\five}\\adjdemerits=10000 "
+        "\\linepenalty=1000 \\run{31pt}{\\five}\\linepenalty=10 "
+        /* Hanging indentation narrows the lines it covers. */
+        "\\hangindent=10pt \\hangafter=1 \\run{40pt}{\\five}"
+        "\\hangindent=0pt%",
+        "[(1.06pt)][(1.06pt)(1.04pt)][(1.06pt)(1.04pt)(1.02pt)]"
+        "[(1.06pt)(1.03pt)][(1.06pt)(1.04pt)(1.02pt)]"
+        "[(1.06pt)(1.05pt)(1.04pt)(1.03pt)(1.02pt)(1.01pt)]"
+        "[(1.06pt)(1.03pt)][(1.06pt)(1.03pt)]"
+        "[(1.06pt)(1.04pt)(1.02pt)][(1.06pt)][(1.04pt)][(1.04pt)]"
+        "[(1.06pt)(1.03pt)][(1.06pt)(1.03pt)][(1.04pt)(1.03pt)]"
+        "[(1.05pt)(1.04pt)][(1.04pt)(1.02pt)]"
+        "[(1.04pt)(1.03pt)(1.01pt)][(1.04pt)(1.03pt)][(1.04pt)]"
+        "[(1.04pt)(1.02pt)][(1.05pt)(1.03pt)][(1.05pt)(1.03pt)]"
+        "[(1.05pt)(1.03pt)][(1.05pt)(1.04pt)]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2170,7 +2253,7 @@ int main(void)
         test_streaming_box_bodies() != 0 || test_math_mode() != 0 ||
         test_math_scripts() != 0 || test_alignments() != 0 ||
         test_display_math() != 0 || test_math_choices() != 0 ||
-        test_badness() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_badness() != 0 || test_line_breaking() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

@@ -681,6 +681,7 @@ struct hstex_box {
 /* The reference's two sentinel badnesses: the worst a box can be and still
    be set, and what an overfull box reports. */
 #define HSTEX_INFINITE_BADNESS 10000
+#define HSTEX_INFINITE_PENALTY 10000
 #define HSTEX_OVERFULL_BADNESS 1000000
 
 enum hstex_math_size {
@@ -828,6 +829,10 @@ enum hstex_node_kind {
 
 struct hstex_node {
     enum hstex_node_kind kind;
+    /* A kern written as \kern is explicit: it may be broken at and it is not
+       thrown away at the start of a line. A kern the engine put there itself
+       -- a font kern, an italic correction, math spacing -- is not. */
+    bool explicit_kern;
     int32_t width;
     int32_t height;
     int32_t depth;

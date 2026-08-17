@@ -8348,6 +8348,7 @@ static int execute_kern(struct hstex_engine *engine, char *error,
     }
     struct hstex_node kern = {
         .kind = HSTEX_NODE_KERN,
+        .explicit_kern = true,
         .width = amount,
         .height = 0,
         .depth = 0,
@@ -12981,9 +12982,578 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
 
 /* End a paragraph: the list is finished off and broken into lines, which join
    the vertical list. Only a paragraph that fits on one line is handled. */
+/* ---------------------------------------------------------------------- */
+/* Breaking a paragraph into lines.                                       */
+/*                                                                        */
+/* The reference's optimal-fit method: every legal breakpoint is tried    */
+/* against every break that could still start the line, and the sequence  */
+/* with the fewest demerits wins. See docs/DECISIONS.md, line-breaking.   */
+/* ---------------------------------------------------------------------- */
+
+#define HSTEX_AWFUL_BADNESS INT64_C(0x3FFFFFFF)
+#define HSTEX_EJECT_PENALTY (-10000)
+
+enum hstex_fitness {
+    HSTEX_FIT_VERY_LOOSE = 0,
+    HSTEX_FIT_LOOSE,
+    HSTEX_FIT_DECENT,
+    HSTEX_FIT_TIGHT,
+    HSTEX_FIT_COUNT,
+};
+
+/* Everything a line's measurement needs, summed over the nodes before a
+   point so that any line's totals are one subtraction apart. */
+struct hstex_break_totals {
+    int64_t width;
+    int64_t stretch[4];
+    int64_t shrink;
+};
+
+/* One break that a later line could start from. */
+struct hstex_break_record {
+    size_t breakpoint;
+    size_t start;
+    int32_t line;
+    uint8_t fitness;
+    int64_t demerits;
+    size_t previous;
+};
+
+struct hstex_break_state {
+    struct hstex_break_totals *totals;
+    size_t node_count;
+    struct hstex_break_record *records;
+    size_t record_count;
+    size_t record_capacity;
+    size_t *active;
+    size_t active_count;
+    size_t active_capacity;
+};
+
+static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
+                          char *error, size_t error_capacity);
+
+static bool node_is_discardable(const struct hstex_node *node)
+{
+    switch (node->kind) {
+    case HSTEX_NODE_GLUE:
+    case HSTEX_NODE_PENALTY:
+        return true;
+    case HSTEX_NODE_KERN:
+        return !node->explicit_kern;
+    default:
+        return false;
+    }
+}
+
+/* Where the line after a break really begins: the reference throws away the
+   glue, penalties and engine-made kerns that follow it. */
+static size_t line_start_after(const struct hstex_engine *engine,
+                               const uint32_t *items, size_t count,
+                               size_t breakpoint)
+{
+    size_t index = breakpoint;
+    while (index < count) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            break;
+        }
+        if (!node_is_discardable(&engine->nodes[identifier - 1U])) {
+            break;
+        }
+        ++index;
+    }
+    return index;
+}
+
+static int reserve_break_records(struct hstex_break_state *state, char *error,
+                                 size_t error_capacity)
+{
+    if (state->record_count < state->record_capacity) {
+        return 0;
+    }
+    size_t next = state->record_capacity == 0U ? 32U : state->record_capacity * 2U;
+    if (next > SIZE_MAX / sizeof(*state->records)) {
+        return set_error(error, error_capacity, "break record overflow");
+    }
+    void *allocation = realloc(state->records, next * sizeof(*state->records));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity, "break record allocation failed");
+    }
+    state->records = allocation;
+    state->record_capacity = next;
+    return 0;
+}
+
+static int reserve_active_breaks(struct hstex_break_state *state, char *error,
+                                 size_t error_capacity)
+{
+    if (state->active_count < state->active_capacity) {
+        return 0;
+    }
+    size_t next = state->active_capacity == 0U ? 16U : state->active_capacity * 2U;
+    if (next > SIZE_MAX / sizeof(*state->active)) {
+        return set_error(error, error_capacity, "active break overflow");
+    }
+    void *allocation = realloc(state->active, next * sizeof(*state->active));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity, "active break allocation failed");
+    }
+    state->active = allocation;
+    state->active_capacity = next;
+    return 0;
+}
+
+/* The badness and fitness of a line that runs short or long by `shortfall`,
+   with `totals` the glue it has available. */
+static int32_t line_badness(int64_t shortfall,
+                            const struct hstex_break_totals *totals,
+                            uint8_t *fitness)
+{
+    if (shortfall > 0) {
+        if (totals->stretch[1] != 0 || totals->stretch[2] != 0 ||
+            totals->stretch[3] != 0) {
+            *fitness = (uint8_t)HSTEX_FIT_DECENT;
+            return 0;
+        }
+        if (shortfall > INT64_C(7230584) && totals->stretch[0] < INT64_C(1663497)) {
+            *fitness = (uint8_t)HSTEX_FIT_VERY_LOOSE;
+            return HSTEX_INFINITE_BADNESS;
+        }
+        int32_t badness =
+            glue_badness((int32_t)shortfall, (int32_t)totals->stretch[0]);
+        *fitness = badness > 99   ? (uint8_t)HSTEX_FIT_VERY_LOOSE
+                   : badness > 12 ? (uint8_t)HSTEX_FIT_LOOSE
+                                  : (uint8_t)HSTEX_FIT_DECENT;
+        return badness;
+    }
+    if (-shortfall > totals->shrink) {
+        *fitness = (uint8_t)HSTEX_FIT_TIGHT;
+        return HSTEX_INFINITE_BADNESS + 1;
+    }
+    int32_t badness =
+        glue_badness((int32_t)-shortfall, (int32_t)totals->shrink);
+    *fitness = badness > 12 ? (uint8_t)HSTEX_FIT_TIGHT
+                            : (uint8_t)HSTEX_FIT_DECENT;
+    return badness;
+}
+
+/* Try every active break as the start of a line ending here. */
+static int try_break_at(struct hstex_engine *engine,
+                        struct hstex_break_state *state,
+                        const uint32_t *items, size_t count,
+                        const struct hstex_break_totals *background,
+                        int32_t line_width, size_t breakpoint,
+                        int32_t penalty, int32_t threshold, bool final_pass,
+                        char *error, size_t error_capacity)
+{
+    int64_t minimal[HSTEX_FIT_COUNT];
+    size_t best[HSTEX_FIT_COUNT];
+    int32_t best_line[HSTEX_FIT_COUNT];
+    for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
+        minimal[fit] = HSTEX_AWFUL_BADNESS;
+        best[fit] = SIZE_MAX;
+        best_line[fit] = 0;
+    }
+    int64_t minimum = HSTEX_AWFUL_BADNESS;
+    int32_t line_penalty = engine->integer_parameters[HSTEX_INTEGER_LINE_PENALTY];
+    int32_t adjacent = engine->integer_parameters[HSTEX_INTEGER_ADJ_DEMERITS];
+
+    size_t kept = 0U;
+    for (size_t slot = 0U; slot < state->active_count; ++slot) {
+        size_t index = state->active[slot];
+        const struct hstex_break_record *record = &state->records[index];
+        struct hstex_break_totals totals = *background;
+        totals.width += state->totals[breakpoint].width -
+                        state->totals[record->start].width;
+        for (size_t order = 0U; order < 4U; ++order) {
+            totals.stretch[order] += state->totals[breakpoint].stretch[order] -
+                                     state->totals[record->start].stretch[order];
+        }
+        totals.shrink += state->totals[breakpoint].shrink -
+                         state->totals[record->start].shrink;
+        uint8_t fitness = (uint8_t)HSTEX_FIT_DECENT;
+        int32_t badness =
+            line_badness((int64_t)line_width - totals.width, &totals, &fitness);
+
+        bool artificial = false;
+        bool stays_active = true;
+        if (badness > HSTEX_INFINITE_BADNESS || penalty == HSTEX_EJECT_PENALTY) {
+            if (final_pass && minimum == HSTEX_AWFUL_BADNESS &&
+                slot + 1U == state->active_count && kept == 0U) {
+                artificial = true;
+            } else if (badness > threshold) {
+                continue; /* this break can never start a line again */
+            }
+            stays_active = false;
+        } else {
+            if (badness > threshold) {
+                state->active[kept++] = index;
+                continue;
+            }
+        }
+
+        int64_t demerits;
+        if (artificial) {
+            demerits = 0;
+        } else {
+            int64_t scaled = (int64_t)line_penalty + badness;
+            demerits = scaled >= HSTEX_INFINITE_BADNESS ||
+                               scaled <= -HSTEX_INFINITE_BADNESS
+                           ? INT64_C(100000000)
+                           : scaled * scaled;
+            if (penalty != 0) {
+                if (penalty > 0) {
+                    demerits += (int64_t)penalty * penalty;
+                } else if (penalty > HSTEX_EJECT_PENALTY) {
+                    demerits -= (int64_t)penalty * penalty;
+                }
+            }
+            int fit_gap = (int)fitness - (int)record->fitness;
+            if (fit_gap > 1 || fit_gap < -1) {
+                demerits += adjacent;
+            }
+        }
+        demerits += record->demerits;
+        if (demerits <= minimal[fitness]) {
+            minimal[fitness] = demerits;
+            best[fitness] = index;
+            best_line[fitness] = record->line;
+            if (demerits < minimum) {
+                minimum = demerits;
+            }
+        }
+        if (stays_active) {
+            state->active[kept++] = index;
+        }
+    }
+    state->active_count = kept;
+
+    if (minimum == HSTEX_AWFUL_BADNESS) {
+        return 0;
+    }
+    int64_t ceiling = minimum + (adjacent < 0 ? -(int64_t)adjacent : adjacent);
+    size_t start = line_start_after(engine, items, count, breakpoint);
+    for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
+        if (minimal[fit] > ceiling) {
+            continue;
+        }
+        if (reserve_break_records(state, error, error_capacity) != 0 ||
+            reserve_active_breaks(state, error, error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_break_record *record = &state->records[state->record_count];
+        record->breakpoint = breakpoint;
+        record->start = start;
+        record->line = best_line[fit] + 1;
+        record->fitness = (uint8_t)fit;
+        record->demerits = minimal[fit];
+        record->previous = best[fit];
+        state->active[state->active_count++] = state->record_count;
+        ++state->record_count;
+    }
+    return 0;
+}
+
+/* The width a given line is set to. Hanging indentation narrows the lines it
+   covers; \parshape is not implemented. */
+static int32_t line_width_for(const struct hstex_engine *engine, int32_t line)
+{
+    int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
+    int32_t hang = engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT];
+    if (hang == 0) {
+        return hsize;
+    }
+    int32_t after = engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER];
+    bool hanging = after >= 0 ? line > after : line <= -after;
+    int32_t amount = hang < 0 ? -hang : hang;
+    return hanging ? hsize - amount : hsize;
+}
+
+static int32_t line_shift_for(const struct hstex_engine *engine, int32_t line)
+{
+    int32_t hang = engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT];
+    if (hang <= 0) {
+        return 0;
+    }
+    int32_t after = engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER];
+    bool hanging = after >= 0 ? line > after : line <= -after;
+    return hanging ? hang : 0;
+}
+
+/* One pass over the paragraph at a given badness threshold. Returns 1 when a
+   sequence of breaks was found, 0 when none was. */
+static int find_paragraph_breaks(struct hstex_engine *engine,
+                                 struct hstex_break_state *state,
+                                 const uint32_t *items, size_t count,
+                                 const struct hstex_break_totals *background,
+                                 int32_t threshold, bool final_pass,
+                                 size_t *best, char *error,
+                                 size_t error_capacity)
+{
+    state->record_count = 0U;
+    state->active_count = 0U;
+    if (reserve_break_records(state, error, error_capacity) != 0 ||
+        reserve_active_breaks(state, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_break_record *first = &state->records[state->record_count];
+    first->breakpoint = 0U;
+    first->start = 0U;
+    first->line = 0;
+    first->fitness = (uint8_t)HSTEX_FIT_DECENT;
+    first->demerits = 0;
+    first->previous = SIZE_MAX;
+    state->active[state->active_count++] = state->record_count;
+    ++state->record_count;
+
+    bool after_box = false;
+    for (size_t index = 0U; index < count; ++index) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        int32_t penalty = 0;
+        bool legal = false;
+        if (node->kind == HSTEX_NODE_GLUE) {
+            legal = after_box;
+        } else if (node->kind == HSTEX_NODE_KERN) {
+            if (node->explicit_kern && index + 1U < count) {
+                uint32_t next = items[index + 1U];
+                legal = next != 0U && (size_t)next <= engine->node_count &&
+                        engine->nodes[next - 1U].kind == HSTEX_NODE_GLUE;
+            }
+        } else if (node->kind == HSTEX_NODE_PENALTY) {
+            penalty = node->value.penalty;
+            legal = penalty < HSTEX_INFINITE_BADNESS;
+        }
+        if (legal && state->active_count != 0U) {
+            int32_t line = state->records[state->active[0]].line + 1;
+            if (try_break_at(engine, state, items, count, background,
+                             line_width_for(engine, line), index, penalty,
+                             threshold, final_pass, error,
+                             error_capacity) != 0) {
+                return -1;
+            }
+        }
+        after_box = !node_is_discardable(node);
+    }
+    if (state->active_count == 0U) {
+        *best = SIZE_MAX;
+        return 0;
+    }
+    int32_t last_line = state->records[state->active[0]].line + 1;
+    if (try_break_at(engine, state, items, count, background,
+                     line_width_for(engine, last_line), count,
+                     HSTEX_EJECT_PENALTY, threshold, final_pass, error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    /* Whatever the forced final break created is the answer; the cheapest of
+       them is the paragraph's shape. */
+    size_t chosen = SIZE_MAX;
+    int64_t cheapest = HSTEX_AWFUL_BADNESS;
+    for (size_t slot = 0U; slot < state->active_count; ++slot) {
+        size_t index = state->active[slot];
+        if (state->records[index].breakpoint != count) {
+            continue;
+        }
+        if (state->records[index].demerits < cheapest) {
+            cheapest = state->records[index].demerits;
+            chosen = index;
+        }
+    }
+    *best = chosen;
+    return chosen == SIZE_MAX ? 0 : 1;
+}
+
+/* Package the chosen sequence of breaks into lines and contribute them. */
+static int emit_paragraph_lines(struct hstex_engine *engine,
+                                struct hstex_break_state *state,
+                                const uint32_t *items, size_t count,
+                                size_t best, struct hstex_box *out_last,
+                                char *error, size_t error_capacity)
+{
+    size_t depth = 0U;
+    for (size_t index = best; index != SIZE_MAX;
+         index = state->records[index].previous) {
+        ++depth;
+    }
+    size_t *chain = calloc(depth, sizeof(*chain));
+    if (chain == NULL) {
+        return set_error(error, error_capacity, "line chain allocation failed");
+    }
+    size_t position = depth;
+    for (size_t index = best; index != SIZE_MAX;
+         index = state->records[index].previous) {
+        chain[--position] = index;
+    }
+
+    struct hstex_glue left = engine->glue_parameters[HSTEX_GLUE_LEFT_SKIP];
+    struct hstex_glue right = engine->glue_parameters[HSTEX_GLUE_RIGHT_SKIP];
+    int32_t interline =
+        engine->integer_parameters[HSTEX_INTEGER_INTERLINE_PENALTY];
+    int32_t club = engine->integer_parameters[HSTEX_INTEGER_CLUB_PENALTY];
+    int32_t widow = engine->integer_parameters[HSTEX_INTEGER_WIDOW_PENALTY];
+    int status = 0;
+    size_t lines = depth - 1U;
+    for (size_t line = 1U; status == 0 && line < depth; ++line) {
+        size_t from = state->records[chain[line - 1U]].start;
+        size_t to = state->records[chain[line]].breakpoint;
+        struct hstex_hbox_builder builder = {0};
+        struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        enum hstex_mode previous_mode = engine->mode;
+        engine->active_hbox_builder = &builder;
+        engine->mode = HSTEX_MODE_HORIZONTAL;
+        status = emit_math_glue(engine, left, error, error_capacity);
+        for (size_t index = from; status == 0 && index < to && index < count;
+             ++index) {
+            status = append_hbox_item(engine, items[index], error,
+                                      error_capacity);
+        }
+        if (status == 0) {
+            status = emit_math_glue(engine, right, error, error_capacity);
+        }
+        struct hstex_box box = {0};
+        if (status == 0) {
+            status = finalize_hbox(engine, &builder, true, false,
+                                   line_width_for(engine, (int32_t)line), &box,
+                                   error, error_capacity);
+        }
+        free(builder.node_identifiers);
+        engine->active_hbox_builder = previous;
+        engine->mode = previous_mode;
+        if (status != 0) {
+            break;
+        }
+        if (out_last != NULL) {
+            *out_last = box;
+        }
+        struct hstex_node line_node = {
+            .kind = HSTEX_NODE_LIST,
+            .width = box.width,
+            .height = box.height,
+            .depth = box.depth,
+            .shift = line_shift_for(engine, (int32_t)line),
+            .value.list = {
+                .node_start = box.node_start,
+                .node_count = box.node_count,
+                .box_kind = box.kind,
+            },
+        };
+        status = append_vbox_node(engine, &line_node, error, error_capacity);
+        if (status == 0 && line != lines) {
+            int32_t penalty = interline;
+            if (line == 1U) {
+                penalty += club;
+            }
+            if (line + 1U == lines) {
+                penalty += widow;
+            }
+            if (penalty != 0) {
+                struct hstex_node node = {
+                    .kind = HSTEX_NODE_PENALTY,
+                    .value.penalty = penalty,
+                };
+                status = append_vbox_node(engine, &node, error, error_capacity);
+            }
+        }
+    }
+    free(chain);
+    return status;
+}
+
+/* Break the paragraph the engine has been filling into lines. */
+static int break_paragraph(struct hstex_engine *engine,
+                           struct hstex_box *out_last, char *error,
+                           size_t error_capacity)
+{
+    struct hstex_hbox_builder *paragraph = engine->paragraph_builder;
+    size_t count = paragraph->count;
+    const uint32_t *items = paragraph->node_identifiers;
+    struct hstex_break_state state = {0};
+    state.node_count = count;
+    state.totals = calloc(count + 1U, sizeof(*state.totals));
+    if (state.totals == NULL) {
+        return set_error(error, error_capacity, "break totals allocation failed");
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        state.totals[index + 1U] = state.totals[index];
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        state.totals[index + 1U].width += packed_dimen(node->width);
+        if (node->kind == HSTEX_NODE_GLUE) {
+            uint8_t up = node->value.glue.stretch_order;
+            if (up < 4U) {
+                state.totals[index + 1U].stretch[up] += node->value.glue.stretch;
+            }
+            if (node->value.glue.shrink_order == 0U) {
+                state.totals[index + 1U].shrink += node->value.glue.shrink;
+            }
+        }
+    }
+    struct hstex_break_totals background = {0};
+    struct hstex_glue left = engine->glue_parameters[HSTEX_GLUE_LEFT_SKIP];
+    struct hstex_glue right = engine->glue_parameters[HSTEX_GLUE_RIGHT_SKIP];
+    background.width = (int64_t)left.width + right.width;
+    if (left.stretch_order < 4U) {
+        background.stretch[left.stretch_order] += left.stretch;
+    }
+    if (right.stretch_order < 4U) {
+        background.stretch[right.stretch_order] += right.stretch;
+    }
+    if (left.shrink_order == 0U) {
+        background.shrink += left.shrink;
+    }
+    if (right.shrink_order == 0U) {
+        background.shrink += right.shrink;
+    }
+
+    size_t best = SIZE_MAX;
+    int found = 0;
+    int32_t pretolerance = engine->integer_parameters[HSTEX_INTEGER_PRETOLERANCE];
+    if (pretolerance >= 0) {
+        found = find_paragraph_breaks(engine, &state, items, count, &background,
+                                      pretolerance, false, &best, error,
+                                      error_capacity);
+    }
+    if (found == 0) {
+        found = find_paragraph_breaks(
+            engine, &state, items, count, &background,
+            engine->integer_parameters[HSTEX_INTEGER_TOLERANCE], false, &best,
+            error, error_capacity);
+    }
+    if (found == 0) {
+        found = find_paragraph_breaks(
+            engine, &state, items, count, &background,
+            engine->integer_parameters[HSTEX_INTEGER_TOLERANCE], true, &best,
+            error, error_capacity);
+    }
+    int status = found < 0 ? -1 : 0;
+    if (status == 0 && found == 0) {
+        status = set_error(error, error_capacity,
+                           "no way to break this paragraph into lines");
+    }
+    if (status == 0) {
+        status = emit_paragraph_lines(engine, &state, items, count, best,
+                                      out_last, error, error_capacity);
+    }
+    free(state.totals);
+    free(state.records);
+    free(state.active);
+    return status;
+}
+
 /* Package the paragraph so far as one line. A paragraph with nothing in it
    contributes no line at all, which is what the reference does and what
    \noindent$$ depends on. */
+/* Package the paragraph so far into lines and contribute them. A paragraph
+   with nothing in it contributes nothing at all, which is what the reference
+   does and what \noindent$$ depends on. */
 static int finish_paragraph_line(struct hstex_engine *engine,
                                  struct hstex_box *out_line, char *error,
                                  size_t error_capacity)
@@ -13002,7 +13572,7 @@ static int finish_paragraph_line(struct hstex_engine *engine,
     }
     struct hstex_node penalty = {
         .kind = HSTEX_NODE_PENALTY,
-        .value.penalty = 10000,
+        .value.penalty = HSTEX_INFINITE_PENALTY,
     };
     struct hstex_glue fill = engine->glue_parameters[HSTEX_GLUE_PAR_FILL_SKIP];
     struct hstex_node fill_node = {
@@ -13019,74 +13589,13 @@ static int finish_paragraph_line(struct hstex_engine *engine,
         append_hbox_node(engine, &fill_node, error, error_capacity) != 0) {
         return -1;
     }
-
-    struct hstex_hbox_builder *paragraph = engine->paragraph_builder;
-    int32_t hsize = engine->dimen_parameters[HSTEX_DIMEN_HSIZE];
-    struct hstex_glue left = engine->glue_parameters[HSTEX_GLUE_LEFT_SKIP];
-    struct hstex_glue right = engine->glue_parameters[HSTEX_GLUE_RIGHT_SKIP];
-    int64_t natural = paragraph->width + left.width + right.width;
-    /* \parfillskip stretches without limit, so a line that is not already too
-       wide can always be set to \hsize. Anything wider needs a break, and
-       breaking paragraphs is not implemented. */
-    if (natural > hsize) {
-        return set_error(error, error_capacity,
-                         "breaking a paragraph into lines is not implemented");
-    }
-
-    struct hstex_hbox_builder line = {0};
-    int status = 0;
-    if (left.width != 0 || left.stretch != 0 || left.shrink != 0) {
-        struct hstex_node node = {
-            .kind = HSTEX_NODE_GLUE,
-            .width = left.width,
-            .value.glue = {
-                .stretch = left.stretch,
-                .shrink = left.shrink,
-                .stretch_order = left.stretch_order,
-                .shrink_order = left.shrink_order,
-            },
-        };
-        engine->active_hbox_builder = &line;
-        status = append_hbox_node(engine, &node, error, error_capacity);
-    }
-    engine->active_hbox_builder = &line;
-    for (size_t index = 0U; status == 0 && index < paragraph->count; ++index) {
-        status = append_hbox_item(engine, paragraph->node_identifiers[index],
-                                  error, error_capacity);
-    }
-    if (status == 0) {
-        /* \rightskip closes every line, even when it measures nothing. */
-        struct hstex_node node = {
-            .kind = HSTEX_NODE_GLUE,
-            .width = right.width,
-            .value.glue = {
-                .stretch = right.stretch,
-                .shrink = right.shrink,
-                .stretch_order = right.stretch_order,
-                .shrink_order = right.shrink_order,
-            },
-        };
-        status = append_hbox_node(engine, &node, error, error_capacity);
-    }
-    struct hstex_box box;
-    if (status == 0) {
-        status = finalize_hbox(engine, &line, true, false, hsize, &box, error,
-                               error_capacity);
-    }
-    free(line.node_identifiers);
-
+    int status = break_paragraph(engine, out_line, error, error_capacity);
     engine->active_hbox_builder = NULL;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = false;
     engine->building_paragraph = false;
     engine->has_pending_character = false;
-    if (status != 0) {
-        return -1;
-    }
-    if (out_line != NULL) {
-        *out_line = box;
-    }
-    return append_box_node(engine, &box, error, error_capacity);
+    return status;
 }
 
 static int finish_paragraph(struct hstex_engine *engine, char *error,
