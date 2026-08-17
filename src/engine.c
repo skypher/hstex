@@ -11237,34 +11237,15 @@ static int append_token_description(struct hstex_engine *engine,
                      "internal token in meaning description");
 }
 
+/* \string makes tokens, and a token list is never written in ^^ notation:
+   the reference reserves that for what it prints to the terminal. So every
+   byte goes through as it stands, however unprintable it would look. See
+   docs/DECISIONS.md, string-is-not-escaped. */
 static int append_string_character(uint8_t **bytes, size_t *count,
                                    size_t *capacity, uint8_t character,
                                    char *error, size_t error_capacity)
 {
-    if (character >= UINT8_C(32) && character <= UINT8_C(126)) {
-        return append_byte(bytes, count, capacity, character, error,
-                           error_capacity);
-    }
-    if (append_byte(bytes, count, capacity, (uint8_t)'^', error,
-                    error_capacity) != 0 ||
-        append_byte(bytes, count, capacity, (uint8_t)'^', error,
-                    error_capacity) != 0) {
-        return -1;
-    }
-    if (character < UINT8_C(128)) {
-        uint8_t visible = character < UINT8_C(64)
-                              ? (uint8_t)(character + UINT8_C(64))
-                              : (uint8_t)(character - UINT8_C(64));
-        return append_byte(bytes, count, capacity, visible, error,
-                           error_capacity);
-    }
-    static const uint8_t hexadecimal[] = "0123456789abcdef";
-    if (append_byte(bytes, count, capacity, hexadecimal[character >> 4U], error,
-                    error_capacity) != 0) {
-        return -1;
-    }
-    return append_byte(bytes, count, capacity,
-                       hexadecimal[character & UINT8_C(0x0f)], error,
+    return append_byte(bytes, count, capacity, character, error,
                        error_capacity);
 }
 

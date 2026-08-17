@@ -1949,6 +1949,26 @@ static int test_leaders(void)
         "0pt|2.0pt|1.0pt][10|9.0pt|7.0pt|0.0pt]");
 }
 
+/* \string makes tokens, never ^^ notation; see docs/DECISIONS.md,
+   string-is-not-escaped. */
+static int test_string_bytes(void)
+{
+    return run_snippet(
+        "\\catcode`\\\x03=12 \\catcode`\\\xc3=12 \\catcod"
+        "e`\\\x7f=12 [1|\\pdfescapehex{\\string\x03}][2|"
+        "\\pdfescapehex{\\string\xc3}][3|\\pdfescapehex{"
+        "\\string\x7f}][4|\\pdfescapehex{\\string A}][5|"
+        "\\pdfescapehex{\\string\\relax}]\\catcode`\\\xc3"
+        "=13 \\def\xc3{x}[6|\\pdfescapehex{\\string\xc3}|"
+        "\\pdfescapehex{\\meaning\xc3}]{\\catcode`\\^=7 "
+        "\\catcode`\\^^J=13 \\xdef\\saved{\\string^^J}}[7"
+        "|\\pdfescapehex{\\saved}]\\expandafter\\def\\csn"
+        "ame u8:\\string\xc3\\endcsname{Q}[8|\\expandafte"
+        "r\\meaning\\csname u8:\\string\xc3\\endcsname]%",
+        "[1|03][2|C3][3|7F][4|41][5|5C72656C6178][6|C3|6D"
+        "6163726F3A2D3E78][7|0A][8|macro:->Q]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -2904,10 +2924,13 @@ int main(void)
                     "\\edef\\saved{\\expandafter\\strip\\meaning\\a}"
                     "\\saved%",
                     "./") != 0 ||
+        /* \string makes tokens, so the byte goes through as it stands;
+           only what is printed to the terminal uses ^^ notation. See
+           docs/DECISIONS.md, string-is-not-escaped. */
         run_snippet("{\\catcode`\\^=7 \\catcode`\\^^J=13 "
                     "\\xdef\\saved{\\string^^J}}"
                     "\\saved%",
-                    "^^J") != 0 ||
+                    "\n") != 0 ||
         run_snippet("\\if AAT\\else F\\fi\\if ABF\\else T\\fi%",
                     "TT") != 0 ||
         run_snippet("\\def\\base#1{\\if c#1N\\else"
@@ -3042,7 +3065,8 @@ int main(void)
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
         test_over_and_underline() != 0 ||
-        test_missing_characters() != 0 || test_leaders() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_missing_characters() != 0 || test_leaders() != 0 ||
+        test_string_bytes() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
