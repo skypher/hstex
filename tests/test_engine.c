@@ -562,6 +562,25 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \meaning names a macro's prefixes behind the escape character, in the
+   order \protected, \long, \outer, with no separator; see
+   docs/DECISIONS.md, meaning-prefixes. */
+static int test_meaning_prefixes(void)
+{
+    return run_snippet(
+        "\\def\\a#1{X}\\long\\def\\b#1{X}\\outer\\def\\c{X}"
+        "\\protected\\def\\d{X}\\protected\\long\\def\\e#1{X}"
+        "\\long\\outer\\def\\f{X}"
+        "[\\meaning\\a][\\meaning\\b][\\meaning\\c][\\meaning\\d]"
+        "[\\meaning\\e][\\meaning\\f]"
+        /* The prefixes follow \escapechar like any other control sequence. */
+        "\\escapechar=`\\! [\\meaning\\b]"
+        "\\escapechar=-1 [\\meaning\\b]%",
+        "[macro:#1->X][\\long macro:#1->X][\\outer macro:->X]"
+        "[\\protected macro:->X][\\protected\\long macro:#1->X]"
+        "[\\long\\outer macro:->X][!long macro:#1->X][long macro:#1->X]");
+}
+
 /* The last-node queries and the PDF objects the document builds; see
    docs/DECISIONS.md, last-node-queries and pdf-objects. */
 static int test_last_node_and_pdf_objects(void)
@@ -1522,6 +1541,7 @@ int main(void)
                     "[P|Q|A]") != 0 ||
         test_font_character_metrics() != 0 || test_protrusion_codes() != 0 ||
         test_box_and_font_conditionals() != 0 ||
+        test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||

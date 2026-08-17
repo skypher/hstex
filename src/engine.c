@@ -10211,21 +10211,39 @@ static int expand_meaning(struct hstex_engine *engine,
             (size_t)meaning->value.macro_identifier <= engine->macro_count) {
             const struct hstex_macro *macro =
                 &engine->macros[meaning->value.macro_identifier - 1U];
-            if ((macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U &&
-                append_text_bytes(&bytes, &count, &capacity, "long ", error,
-                                  error_capacity) != 0) {
-                free(bytes);
-                return -1;
+            /* The prefixes are named in the order \protected, \long,
+               \outer, each behind the escape character and with no
+               separator; one space then precedes `macro:'. */
+            static const struct {
+                uint8_t flag;
+                const char *name;
+            } prefixes[] = {
+                {(uint8_t)HSTEX_MACRO_PROTECTED, "protected"},
+                {(uint8_t)HSTEX_MACRO_LONG, "long"},
+                {(uint8_t)HSTEX_MACRO_OUTER, "outer"},
+            };
+            bool prefixed = false;
+            for (size_t index = 0U;
+                 index < sizeof(prefixes) / sizeof(prefixes[0]); ++index) {
+                if ((macro->flags & prefixes[index].flag) == 0U) {
+                    continue;
+                }
+                int32_t escape =
+                    engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+                if ((escape >= 0 && escape <= 255 &&
+                     append_byte(&bytes, &count, &capacity, (uint8_t)escape,
+                                 error, error_capacity) != 0) ||
+                    append_text_bytes(&bytes, &count, &capacity,
+                                      prefixes[index].name, error,
+                                      error_capacity) != 0) {
+                    free(bytes);
+                    return -1;
+                }
+                prefixed = true;
             }
-            if ((macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U &&
-                append_text_bytes(&bytes, &count, &capacity, "outer ", error,
-                                  error_capacity) != 0) {
-                free(bytes);
-                return -1;
-            }
-            if ((macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U &&
-                append_text_bytes(&bytes, &count, &capacity, "protected ",
-                                  error, error_capacity) != 0) {
+            if (prefixed &&
+                append_byte(&bytes, &count, &capacity, (uint8_t)' ', error,
+                            error_capacity) != 0) {
                 free(bytes);
                 return -1;
             }
