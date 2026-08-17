@@ -166,6 +166,7 @@ enum hstex_command {
     HSTEX_COMMAND_BOX_DIMEN,
     HSTEX_COMMAND_KERN,
     HSTEX_COMMAND_HRULE,
+    HSTEX_COMMAND_SCAN_TOKENS,
 };
 
 enum hstex_box_dimen {

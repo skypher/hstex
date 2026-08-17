@@ -49,6 +49,10 @@ void hstex_source_stack_init(struct hstex_source_stack *stack,
 void hstex_source_stack_destroy(struct hstex_source_stack *stack);
 int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
                            char *error, size_t error_capacity);
+int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
+                                  uint8_t *bytes, size_t length,
+                                  const char *name, char *error,
+                                  size_t error_capacity);
 int hstex_source_push_tokens(struct hstex_source_stack *stack,
                              const hstex_token *tokens, size_t count,
                              struct hstex_source_location location, char *error,

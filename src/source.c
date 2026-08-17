@@ -126,6 +126,45 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     return 0;
 }
 
+/* A pseudo-file reads an in-memory string with the same line handling as a
+   real file, which is what \scantokens needs. The bytes are taken over. */
+int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
+                                  uint8_t *bytes, size_t length,
+                                  const char *name, char *error,
+                                  size_t error_capacity)
+{
+    if (stack == NULL || stack->lexical_state == NULL ||
+        (length != 0U && bytes == NULL)) {
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "invalid pseudo-file source request");
+    }
+    pop_exhausted_token_frames(stack);
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    size_t name_length = strlen(name);
+    char *name_copy = malloc(name_length + 1U);
+    if (name_copy == NULL) {
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "pseudo-file name allocation failed");
+    }
+    memcpy(name_copy, name, name_length + 1U);
+
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    memset(frame, 0, sizeof(*frame));
+    frame->kind = HSTEX_SOURCE_FILE;
+    frame->value.file.input.data = bytes;
+    frame->value.file.input.length = length;
+    frame->value.file.input.storage = HSTEX_INPUT_STORAGE_OWNED;
+    frame->value.file.path = name_copy;
+    hstex_mouth_init(&frame->value.file.mouth, bytes, length,
+                     stack->lexical_state);
+    return 0;
+}
+
 int hstex_source_push_tokens(struct hstex_source_stack *stack,
                              const hstex_token *tokens, size_t count,
                              struct hstex_source_location location, char *error,

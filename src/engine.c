@@ -71,6 +71,9 @@ struct hstex_vbox_builder {
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
 static void clear_match_groups(struct hstex_engine *engine);
+static int expand_scan_tokens(struct hstex_engine *engine,
+                              struct hstex_source_location location,
+                              char *error, size_t error_capacity);
 static bool conditional_test_pending(const struct hstex_engine *engine);
 static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
@@ -1464,6 +1467,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"expanded", HSTEX_COMMAND_EXPANDED},
         {"unexpanded", HSTEX_COMMAND_UNEXPANDED},
         {"detokenize", HSTEX_COMMAND_DETOKENIZE},
+        {"scantokens", HSTEX_COMMAND_SCAN_TOKENS},
         {"begingroup", HSTEX_COMMAND_BEGIN_GROUP},
         {"endgroup", HSTEX_COMMAND_END_GROUP},
         {"catcode", HSTEX_COMMAND_CAT_CODE},
@@ -6114,6 +6118,9 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
         return expand_pdf_string_compare(engine, location, error,
                                          error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_SCAN_TOKENS) {
+        return expand_scan_tokens(engine, location, error, error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_PDF_MATCH) {
         return expand_pdf_match(engine, location, error, error_capacity);
     }
@@ -6352,6 +6359,13 @@ enum hstex_engine_result hstex_engine_next_expanded(
         if (meaning->command == HSTEX_COMMAND_PDF_STRING_COMPARE) {
             if (expand_pdf_string_compare(engine, *location, error,
                                           error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_SCAN_TOKENS) {
+            if (expand_scan_tokens(engine, *location, error, error_capacity) !=
+                0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -10262,6 +10276,71 @@ static int expand_pdf_last_match(struct hstex_engine *engine,
     return status;
 }
 
+/* \scantokens turns its argument into characters, without expanding it, and
+   reads them back as though they came from a file: each line ends with
+   \endlinechar and the catcodes in force at that moment apply; see
+   docs/DECISIONS.md, scantokens. */
+static int expand_scan_tokens(struct hstex_engine *engine,
+                              struct hstex_source_location location,
+                              char *error, size_t error_capacity)
+{
+    hstex_token opening = 0U;
+    struct hstex_source_location opening_location;
+    enum hstex_engine_result opening_result =
+        expanded_next_non_space_unrestricted(engine, &opening,
+                                             &opening_location, error,
+                                             error_capacity);
+    if (opening_result == HSTEX_ENGINE_ERROR) {
+        return -1;
+    }
+    if (opening_result != HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "scantokens requires a braced token list");
+    }
+    struct token_vector input = {0};
+    if (scan_balanced_group(engine, &input, true, error, error_capacity) != 0) {
+        vector_destroy(&input);
+        return -1;
+    }
+    (void)location;
+
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    for (size_t index = 0U; index < input.count; ++index) {
+        hstex_token token = normalize_frozen_control_sequence(input.data[index]);
+        if (hstex_token_is_character(token)) {
+            uint8_t character = hstex_token_character_code(token);
+            if ((token_is_category(token, HSTEX_CAT_PARAMETER) &&
+                 append_byte(&bytes, &count, &capacity, character, error,
+                             error_capacity) != 0) ||
+                append_byte(&bytes, &count, &capacity, character, error,
+                            error_capacity) != 0) {
+                vector_destroy(&input);
+                free(bytes);
+                return -1;
+            }
+            continue;
+        }
+        if (!hstex_token_is_control_sequence(token)) {
+            vector_destroy(&input);
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "internal token inside scantokens");
+        }
+        if (serialize_control_sequence(engine, token, &bytes, &count, &capacity,
+                                       true, error, error_capacity) != 0) {
+            vector_destroy(&input);
+            free(bytes);
+            return -1;
+        }
+    }
+    vector_destroy(&input);
+    return hstex_source_push_pseudo_file(&engine->sources, bytes, count,
+                                         "<scantokens>", error, error_capacity);
+}
+
 static int expand_pdf_string_compare(
     struct hstex_engine *engine, struct hstex_source_location location,
     char *error, size_t error_capacity)
@@ -12161,6 +12240,7 @@ handle_token:
         case HSTEX_COMMAND_DETOKENIZE:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:
+        case HSTEX_COMMAND_SCAN_TOKENS:
         case HSTEX_COMMAND_PDF_MATCH:
         case HSTEX_COMMAND_PDF_LAST_MATCH:
         case HSTEX_COMMAND_PDF_ESCAPE_STRING:

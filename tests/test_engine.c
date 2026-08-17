@@ -562,6 +562,27 @@ static int test_box_shift_and_packaging(void)
         "[17.0pt|2.0pt][6.0pt|1.0pt][1.0pt|0.0pt]");
 }
 
+/* \scantokens makes characters of its argument without expanding it, then
+   reads them back as a file; see docs/DECISIONS.md, scantokens. */
+static int test_scan_tokens(void)
+{
+    return run_snippet(
+        "\\def\\b{XY}\\def\\spc{ }"
+        "\\edef\\r{\\scantokens{abc}}<\\detokenize\\expandafter{\\r}>"
+        /* \noexpand and \string survive as characters, so they act on the
+           re-read, not on the argument. */
+        "\\edef\\r{\\scantokens{\\noexpand\\b}}<\\detokenize\\expandafter{\\r}>"
+        "\\edef\\r{\\scantokens{\\string\\b}}<\\detokenize\\expandafter{\\r}>"
+        "\\edef\\r{\\scantokens{\\b}}<\\detokenize\\expandafter{\\r}>"
+        "\\edef\\r{\\scantokens{a\\spc b}}<\\detokenize\\expandafter{\\r}>"
+        "\\edef\\r{\\scantokens{a#b}}<\\detokenize\\expandafter{\\r}>"
+        "\\edef\\r{\\scantokens{}}<\\detokenize\\expandafter{\\r}>"
+        /* \endlinechar ends each line, so switching it off drops the space. */
+        "\\endlinechar=-1 "
+        "\\edef\\r{\\scantokens{abc}}<\\detokenize\\expandafter{\\r}>%",
+        "<abc ><\\b ><\\b><XY><a b ><a##b ><><abc>");
+}
+
 /* \else, \or and \fi met while a conditional is still scanning its own test
    stand for \relax; see docs/DECISIONS.md, unevaluated-conditionals. */
 static int test_unevaluated_conditionals(void)
@@ -1397,7 +1418,7 @@ int main(void)
         run_snippet("\\def\\o#1{\\edef\\x##1##2{[\\noexpand##1|\\noexpand##2|#1]}}"
                     "\\o{A}\\x{P}{Q}%",
                     "[P|Q|A]") != 0 ||
-        test_unevaluated_conditionals() != 0 ||
+        test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||
         test_defined_register_meanings() != 0 ||
         test_box_shift_and_packaging() != 0 || test_kerns_and_rules() != 0 ||
         test_scaled_printing() != 0 ||
