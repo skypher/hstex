@@ -11054,6 +11054,9 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             (void)fputs(", shifted ", out);
             show_scaled(out, node->shift);
         }
+        if (node->value.list.display) {
+            (void)fputs(", display", out);
+        }
         if (node->value.list.node_count == 0U) {
             return;
         }
@@ -15657,7 +15660,10 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
     int32_t interline =
         engine->integer_parameters[HSTEX_INTEGER_INTERLINE_PENALTY];
     int32_t club = engine->integer_parameters[HSTEX_INTEGER_CLUB_PENALTY];
-    int32_t widow = engine->integer_parameters[HSTEX_INTEGER_WIDOW_PENALTY];
+    int32_t widow =
+        engine->integer_parameters[engine->breaking_for_display
+                                       ? HSTEX_INTEGER_DISPLAY_WIDOW_PENALTY
+                                       : HSTEX_INTEGER_WIDOW_PENALTY];
     int status = 0;
     size_t lines = depth - 1U;
     engine->paragraph_lines =
@@ -18076,8 +18082,9 @@ static int translate_math_list_with(struct hstex_engine *engine,
 }
 
 static int append_display_glue(struct hstex_engine *engine,
-                               struct hstex_glue glue, char *error,
-                               size_t error_capacity)
+                               struct hstex_glue glue,
+                               enum hstex_glue_parameter parameter,
+                               char *error, size_t error_capacity)
 {
     struct hstex_node node = {
         .kind = HSTEX_NODE_GLUE,
@@ -18087,6 +18094,7 @@ static int append_display_glue(struct hstex_engine *engine,
             .shrink = glue.shrink,
             .stretch_order = glue.stretch_order,
             .shrink_order = glue.shrink_order,
+            .parameter = 1U + (uint8_t)parameter,
         },
     };
     return append_vbox_node(engine, &node, error, error_capacity);
@@ -18160,7 +18168,11 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     struct hstex_box line = {0};
     bool had_line = engine->paragraph_builder != NULL &&
                     engine->paragraph_builder->count != 0U;
-    if (finish_paragraph_line(engine, &line, error, error_capacity) != 0) {
+    /* The line before a display is a widow of a different kind. */
+    engine->breaking_for_display = true;
+    int broken = finish_paragraph_line(engine, &line, error, error_capacity);
+    engine->breaking_for_display = false;
+    if (broken != 0) {
         return -1;
     }
     int32_t size = pre_display_size(engine, &line, had_line);
@@ -19530,6 +19542,7 @@ static int append_display_line(struct hstex_engine *engine,
                 .node_count = equation.node_count,
                 .box_kind = equation.kind,
                 .glue = equation.glue,
+                .display = true,
             },
         };
         return append_vbox_node(engine, &node, error, error_capacity);
@@ -19578,6 +19591,7 @@ static int append_display_line(struct hstex_engine *engine,
             .node_count = line.node_count,
             .box_kind = line.kind,
             .glue = line.glue,
+            .display = true,
         },
     };
     return append_vbox_node(engine, &node, error, error_capacity);
@@ -19625,12 +19639,14 @@ static int end_display_math(struct hstex_engine *engine, char *error,
     bool roomy = numbered && left
                      ? true
                      : (int64_t)trial + indent <= (int64_t)before;
-    struct hstex_glue above =
-        engine->glue_parameters[roomy ? HSTEX_GLUE_ABOVE_DISPLAY_SKIP
-                                      : HSTEX_GLUE_ABOVE_DISPLAY_SHORT_SKIP];
-    struct hstex_glue below =
-        engine->glue_parameters[roomy ? HSTEX_GLUE_BELOW_DISPLAY_SKIP
-                                      : HSTEX_GLUE_BELOW_DISPLAY_SHORT_SKIP];
+    enum hstex_glue_parameter above_parameter =
+        roomy ? HSTEX_GLUE_ABOVE_DISPLAY_SKIP
+              : HSTEX_GLUE_ABOVE_DISPLAY_SHORT_SKIP;
+    enum hstex_glue_parameter below_parameter =
+        roomy ? HSTEX_GLUE_BELOW_DISPLAY_SKIP
+              : HSTEX_GLUE_BELOW_DISPLAY_SHORT_SKIP;
+    struct hstex_glue above = engine->glue_parameters[above_parameter];
+    struct hstex_glue below = engine->glue_parameters[below_parameter];
     struct hstex_node penalty = {
         .kind = HSTEX_NODE_PENALTY,
         .value.penalty =
@@ -19663,7 +19679,8 @@ static int end_display_math(struct hstex_engine *engine, char *error,
             return -1;
         }
     } else if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
-               append_display_glue(engine, above, error, error_capacity) != 0) {
+               append_display_glue(engine, above, above_parameter, error,
+                                   error_capacity) != 0) {
         return -1;
     }
 
@@ -19704,7 +19721,8 @@ static int end_display_math(struct hstex_engine *engine, char *error,
         return -1;
     }
     if (!(dropped && !left) &&
-        append_display_glue(engine, below, error, error_capacity) != 0) {
+        append_display_glue(engine, below, below_parameter, error,
+                            error_capacity) != 0) {
         return -1;
     }
     return resume_paragraph_after_display(engine, error, error_capacity);
@@ -19757,7 +19775,7 @@ static int end_display_alignment(struct hstex_engine *engine, char *error,
     if (status == 0) {
         status = append_display_glue(
             engine, engine->glue_parameters[HSTEX_GLUE_ABOVE_DISPLAY_SKIP],
-            error, error_capacity);
+            HSTEX_GLUE_ABOVE_DISPLAY_SKIP, error, error_capacity);
     }
     for (size_t index = 0U; status == 0 && rows != NULL && index < rows->count;
          ++index) {
@@ -19776,7 +19794,7 @@ static int end_display_alignment(struct hstex_engine *engine, char *error,
     if (append_vbox_node(engine, &penalty, error, error_capacity) != 0 ||
         append_display_glue(
             engine, engine->glue_parameters[HSTEX_GLUE_BELOW_DISPLAY_SKIP],
-            error, error_capacity) != 0) {
+            HSTEX_GLUE_BELOW_DISPLAY_SKIP, error, error_capacity) != 0) {
         return -1;
     }
     if (end_group(engine, error, error_capacity) != 0) {

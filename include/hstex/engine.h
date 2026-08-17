@@ -1014,6 +1014,9 @@ struct hstex_node {
             uint32_t node_count;
             enum hstex_box_kind box_kind;
             struct hstex_glue_set glue;
+            /* This box is the line a display formula was set as, which
+               \showbox says so of; see docs/DECISIONS.md, display-math. */
+            bool display;
         } list;
         struct {
             /* What is set instead of the following `replace_count` nodes
@@ -1293,6 +1296,10 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* The paragraph being broken is being broken because a display formula
+       is starting, so \displaywidowpenalty stands in for \widowpenalty;
+       see docs/DECISIONS.md, display-math. */
+    bool breaking_for_display;
     /* The box \leaders read, waiting for the glue that will repeat it. */
     uint32_t pending_leader;
     uint8_t pending_leader_kind;

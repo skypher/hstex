@@ -1496,6 +1496,87 @@ static int test_emergency_stretch(void)
         "[]\n\n! OK.\n");
 }
 
+/* A display formula's line is marked, its skips keep the names of the
+   parameters they came from, and the line before it is a widow of a
+   different kind; see docs/DECISIONS.md, display-math. */
+static int test_display_skips_and_widows(void)
+{
+    return run_document(
+        "\\catcode`\\$=3 \\tracingonline=1 \\showboxdepth=3 \\s"
+        "howboxbreadth=60 \\hbadness=10000 \\vbadness=10000 \\h"
+        "fuzz=1000pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0"
+        "pt \\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\l"
+        "ineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt plus"
+        "1fil \\leftskip=0pt \\rightskip=0pt \\tolerance=10000 "
+        "\\pretolerance=-1 \\spaceskip=4pt \\font\\tenrm=cmr10 "
+        "\\font\\sevenrm=cmr7 \\font\\fiverm=cmr5 \\font\\teni="
+        "cmmi10 \\font\\seveni=cmmi7 \\font\\fivei=cmmi5 \\font"
+        "\\tensy=cmsy10 \\font\\sevensy=cmsy7 \\font\\fivesy=cm"
+        "sy5 \\font\\tenex=cmex10 \\textfont0=\\tenrm \\scriptf"
+        "ont0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfont"
+        "1=\\teni \\scriptfont1=\\seveni \\scriptscriptfont1=\\"
+        "fivei \\textfont2=\\tensy \\scriptfont2=\\sevensy \\sc"
+        "riptscriptfont2=\\fivesy \\textfont3=\\tenex \\scriptf"
+        "ont3=\\tenex \\scriptscriptfont3=\\tenex \\tenrm \\mat"
+        "hcode`\\+=\"202B \\thinmuskip=3mu \\medmuskip=4mu plus"
+        " 2mu minus 4mu \\thickmuskip=5mu plus 5mu \\abovedispl"
+        "ayskip=10pt plus2pt \\belowdisplayskip=11pt plus2pt \\"
+        "abovedisplayshortskip=1pt plus3pt \\belowdisplayshorts"
+        "kip=2pt plus3pt \\predisplaypenalty=10000 \\postdispla"
+        "ypenalty=0 \\widowpenalty=150 \\displaywidowpenalty=50"
+        " \\clubpenalty=0 \\interlinepenalty=0 \\message{[short"
+        "]}\\setbox0=\\vbox{\\noindent aa $$x+y$$ bb\\par}\\sho"
+        "wbox0 \\message{[long]}\\setbox0=\\vbox{\\noindent aa "
+        "aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa $$x+y$$ b"
+        "b\\par}\\showbox0%",
+        "[short]> \\box0=\n\\vbox(31.30554+0.0)x200.0\n.\\hbox("
+        "4.30554+0.0)x200.0, glue set 189.99997fil\n..\\tenrm a"
+        "\n..\\tenrm a\n..\\penalty 10000\n..\\glue(\\parfillsk"
+        "ip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n.\\pen"
+        "alty 10000\n.\\glue(\\abovedisplayshortskip) 1.0 plus "
+        "3.0\n.\\glue(\\baselineskip) 6.16667\n.\\hbox(5.83333+"
+        "1.94444)x23.199, shifted 88.4005, display\n..\\teni x\n"
+        "..\\glue(\\medmuskip) 2.22217 plus 1.11108 minus 2.222"
+        "17\n..\\tenrm +\n..\\glue(\\medmuskip) 2.22217 plus 1."
+        "11108 minus 2.22217\n..\\teni y\n..\\kern0.35878\n.\\p"
+        "enalty 0\n.\\glue(\\belowdisplayshortskip) 2.0 plus 3."
+        "0\n.\\glue(\\baselineskip) 3.11111\n.\\hbox(6.94444+0."
+        "0)x200.0, glue set 188.88885fil\n..\\tenrm b\n..\\tenr"
+        "m b\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 pl"
+        "us 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n[long]>"
+        " \\box0=\n\\vbox(43.30554+0.0)x200.0\n.\\hbox(4.30554+"
+        "0.0)x200.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\space"
+        "skip) 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaces"
+        "kip) 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spacesk"
+        "ip) 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceski"
+        "p) 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip"
+        ") 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip)"
+        " 4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) "
+        "4.0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4"
+        ".0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4."
+        "0\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4.0"
+        "\n..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4.0\n"
+        "..\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4.0\n."
+        ".\\tenrm a\n..\\tenrm a\n..\\glue(\\spaceskip) 4.0\n.."
+        "\\tenrm a\n..\\tenrm a\n..\\glue(\\rightskip) 0.0\n.\\"
+        "penalty 50\n.\\glue(\\baselineskip) 7.69446\n.\\hbox(4"
+        ".30554+0.0)x200.0, glue set 175.99994fil\n..\\tenrm a\n"
+        "..\\tenrm a\n..\\glue(\\spaceskip) 4.0\n..\\tenrm a\n."
+        ".\\tenrm a\n..\\penalty 10000\n..\\glue(\\parfillskip)"
+        " 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n.\\penalt"
+        "y 10000\n.\\glue(\\abovedisplayshortskip) 1.0 plus 3.0"
+        "\n.\\glue(\\baselineskip) 6.16667\n.\\hbox(5.83333+1.9"
+        "4444)x23.199, shifted 88.4005, display\n..\\teni x\n.."
+        "\\glue(\\medmuskip) 2.22217 plus 1.11108 minus 2.22217"
+        "\n..\\tenrm +\n..\\glue(\\medmuskip) 2.22217 plus 1.11"
+        "108 minus 2.22217\n..\\teni y\n..\\kern0.35878\n.\\pen"
+        "alty 0\n.\\glue(\\belowdisplayshortskip) 2.0 plus 3.0\n"
+        ".\\glue(\\baselineskip) 3.11111\n.\\hbox(6.94444+0.0)x"
+        "200.0, glue set 188.88885fil\n..\\tenrm b\n..\\tenrm b"
+        "\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 plus "
+        "1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n");
+}
+
 /* \patterns put discretionaries in words the second pass reads out of the
    paragraph; see docs/DECISIONS.md, hyphenation. */
 static int test_hyphenation(void)
@@ -4335,6 +4416,7 @@ int main(void)
         test_math_text_characters() != 0 ||
         test_infinite_page_penalty() != 0 ||
         test_emergency_stretch() != 0 ||
+        test_display_skips_and_widows() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
