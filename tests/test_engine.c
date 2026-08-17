@@ -2061,6 +2061,33 @@ static int test_nonscript(void)
         "t]");
 }
 
+/* Vertical commands met in a paragraph end it; see docs/DECISIONS.md,
+   ending-a-paragraph. */
+static int test_ending_a_paragraph(void)
+{
+    return run_snippet(
+        "\\catcode`\\&=4 \\hbadness=10000 \\hfuzz=1000pt \\vbadness"
+        "=10000 \\vfuzz=1000pt \\parindent=0pt \\baselineskip=0pt "
+        "\\lineskip=0pt \\lineskiplimit=0pt \\boxmaxdepth=16383.999"
+        "98pt \\parskip=0pt \\parfillskip=0pt plus1fil \\tolerance="
+        "10000 \\tabskip=0pt \\hsize=100pt \\def\\R#1{\\vrule width"
+        "#1pt height1pt depth0pt}\\setbox9=\\vbox{\\hrule height2pt"
+        "}\\setbox0=\\vbox{\\noindent\\hrule height3pt}[1|\\the\\wd"
+        "0|\\the\\ht0]\\setbox0=\\vbox{\\noindent\\R{9}\\hrule heig"
+        "ht3pt}[2|\\the\\wd0|\\the\\ht0]\\setbox0=\\vbox{\\noindent"
+        "\\R{9}\\vskip5pt\\R{4}}[3|\\the\\wd0|\\the\\ht0]\\setbox0="
+        "\\vbox{\\noindent\\R{9}\\vfil\\R{4}}[4|\\the\\wd0|\\the\\h"
+        "t0]\\setbox0=\\vbox{\\noindent\\R{9}\\unvcopy9}[5|\\the\\w"
+        "d0|\\the\\ht0]\\setbox0=\\vbox{\\noindent\\R{9}\\halign{#"
+        "\\cr\\R{7}\\cr}}[6|\\the\\wd0|\\the\\ht0]\\setbox0=\\vbox{"
+        "\\hbox{\\R{9}}\\hrule height3pt}[7|\\the\\wd0|\\the\\ht0]"
+        "\\setbox0=\\vbox{\\noindent\\R{9}\\par\\hrule height3pt}[8"
+        "|\\the\\wd0|\\the\\ht0]%",
+        "[1|0.0pt|3.0pt][2|100.0pt|4.0pt][3|100.0pt|7.0pt][4|100.0p"
+        "t|2.0pt][5|100.0pt|3.0pt][6|100.0pt|2.0pt][7|9.0pt|4.0pt]["
+        "8|100.0pt|4.0pt]");
+}
+
 /* The five glue commands measure the same in both directions; see
    docs/DECISIONS.md, horizontal-glue. */
 static int test_horizontal_glue(void)
@@ -3159,7 +3186,8 @@ int main(void)
         test_over_and_underline() != 0 ||
         test_missing_characters() != 0 || test_leaders() != 0 ||
         test_string_bytes() != 0 ||
-        test_middle_delimiters() != 0 || test_nonscript() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
+        test_middle_delimiters() != 0 || test_nonscript() != 0 ||
+        test_ending_a_paragraph() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
         test_scan_tokens() != 0 || test_unevaluated_conditionals() != 0 ||

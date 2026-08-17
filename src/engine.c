@@ -14093,6 +14093,25 @@ static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
 /* The commands that begin a paragraph when they are met in vertical mode.
    Everything else either belongs to the vertical list or is an error there:
    pdfTeX rejects \/ in internal vertical mode rather than starting one. */
+/* The commands that end a paragraph when they are met while one is being
+   built: the reference puts a \par in front of them and reads them again,
+   so that what they make goes into the vertical list. See
+   docs/DECISIONS.md, ending-a-paragraph. */
+static bool command_ends_paragraph(const struct hstex_meaning *meaning)
+{
+    switch (meaning->command) {
+    case HSTEX_COMMAND_HRULE:
+    case HSTEX_COMMAND_VSKIP:
+    case HSTEX_COMMAND_HALIGN:
+        return true;
+    case HSTEX_COMMAND_UNBOX:
+        return meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL ||
+               meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
+    default:
+        return false;
+    }
+}
+
 static bool command_starts_paragraph(const struct hstex_meaning *meaning)
 {
     switch (meaning->command) {
@@ -20269,6 +20288,17 @@ handle_token:
             if (push_one(engine, *token, *location, error, error_capacity) !=
                     0 ||
                 start_paragraph(engine, true, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (engine->mode == HSTEX_MODE_HORIZONTAL &&
+            engine->building_paragraph && !engine->pending_global &&
+            engine->pending_macro_flags == 0U &&
+            command_ends_paragraph(meaning)) {
+            if (push_one(engine, *token, *location, error, error_capacity) !=
+                    0 ||
+                finish_paragraph(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

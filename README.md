@@ -60,8 +60,7 @@ the token is put back so that `\everypar` runs before the command scans its
 own operands. Box bodies are executed on the live input and end when the group
 they opened ends, so a box may be opened by one macro and closed by an
 `\egroup` another produces — the shape LaTeX's colour, minipage and parbox
-commands are built on. The corpus now runs through `\maketitle` and into the
-abstract, and stops at `\halign`.
+commands are built on.
 
 Inline formulas are typeset. `$...$` builds a math list, the atom classes
 from the mathcodes decide the spacing between them, math families come from
@@ -71,17 +70,31 @@ the script and scriptscript styles with the reference's shift arithmetic,
 which is where `\scriptfont` and `\scriptscriptfont` come in.
 
 `\halign` builds alignments: the preamble's templates, `\tabskip` glue at
-every boundary, `\omit`, `\span`, `\noalign`, and the `&&` repeat. That is
-what `\begin{tabular}` needs, so the corpus now runs through `\maketitle`,
-the abstract and the table of contents and into its first chapter.
+every boundary, `\omit`, `\span`, `\noalign`, `\everycr`, and the `&&`
+repeat, in a vertical list or as the whole of a display. That is what
+`\begin{tabular}` needs and what amsmath's `align`, `gather` and `multline`
+are built on.
 
 Display math is set too: `$$...$$` breaks the paragraph so far, centres the
 equation in `\displaywidth`, and chooses the short or long display skips
-from how far the line above reaches.
+from how far the line above reaches. `\eqno` and `\leqno` put a number
+beside it or below it.
+
+The rest of the math builders are in: `\over` and its five relatives,
+`\radical`, `\overline`, `\underline`, `\left`, `\right`, `\middle`,
+`\vcenter`, `\mathchoice` and `\nonscript`. A sub-formula keeps its own
+list as well as the box it was set as, so a fraction inside a fraction and a
+`\mathchoice` inside either come out at the size the style they land in
+asks for.
 
 Paragraphs are broken into lines by the reference's optimal-fit method:
 badness and fitness per line, demerits over the whole paragraph, and the
-three passes `\pretolerance` and `\tolerance` select between.
+three passes `\pretolerance` and `\tolerance` select between. `\parshape`
+and `\hangindent` shape them, and both are cleared where the reference
+clears them.
+
+The whole corpus now runs: all 217,376 lines of it, through every chapter,
+on the command above.
 
 The page builder, the output routine, and PDF emission remain under
 construction, and there is no hyphenation yet.
