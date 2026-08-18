@@ -3497,6 +3497,68 @@ static int test_a_margin_kern_behind_the_leftskip(void)
     return run_document_parts(source, expected);
 }
 
+/* A brace that ends a box ends the paragraph inside it while the parameters
+   that paragraph was set with are still in force, even when the box stands
+   in an alignment entry; and the lines a nested list breaks are that list's
+   own count, not the enclosing paragraph's. See docs/DECISIONS.md,
+   a-paragraph-a-brace-ends. */
+static int test_a_paragraph_a_brace_ends(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\parfillskip=0pt plus "
+        "1fil \\setbox0=\\vbox{\\halign{#\\cr\\vbox{\\hsize"
+        "=50pt \\parfillskip=0pt \\noindent a}\\cr\\vbox{\\"
+        "hsize=50pt \\parfillskip=0pt \\noindent a\\par}\\c"
+        "r}}\\showbox0 \\setbox0=\\vbox{\\noindent aaa \\se"
+        "tbox1=\\vbox{\\noindent bbb\\par}ccc ccc ccc ccc\\"
+        "par \\message{[PG \\the\\prevgraf]}}\\message{[PG "
+        "\\the\\prevgraf]}\\setbox0=\\vbox{\\noindent aaa "
+        "\\setbox1=\\vbox{\\hsize=40pt \\noindent bbb bbb b"
+        "bb\\par}ccc\\par \\message{[PG \\the\\prevgraf]}} "
+        "\\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n> \\box0=\n\\vbox(16.305"
+        "54+0.0)x50.0\n.\\hbox(4.30554+0.0)x50.0\n..\\glue("
+        "\\tabskip) 0.0\n..\\hbox(4.30554+0.0)x50.0\n...\\v"
+        "box(4.30554+0.0)x50.0\n....\\hbox(4.30554+0.0)x50."
+        "0\n.....\\tenrm a\n.....\\penalty 10000\n.....\\gl"
+        "ue(\\parfillskip) 0.0\n.....\\glue(\\rightskip) 0."
+        "0\n..\\glue(\\tabskip) 0.0\n.\\glue(\\baselineskip"
+        ") 7.69446\n.\\hbox(4.30554+0.0)x50.0\n..\\glue(\\t"
+        "abskip) 0.0\n..\\hbox(4.30554+0.0)x50.0\n...\\vbox"
+        "(4.30554+0.0)x50.0\n....\\hbox(4.30554+0.0)x50.0\n"
+        ".....\\tenrm a\n.....\\penalty 10000\n.....\\glue("
+        "\\parfillskip) 0.0\n.....\\glue(\\rightskip) 0.0\n"
+        "..\\glue(\\tabskip) 0.0\n\n! OK.\n[PG 1] [PG 0] [P"
+        "G 1]\n> \\box254=void\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 static int test_what_a_split_leaves_behind(void)
 {
     static const char *const source[] = {
@@ -9021,6 +9083,7 @@ int main(void)
         test_a_margin_kern_behind_the_leftskip() != 0 ||
         test_no_hyphens_inside_a_formula() != 0 ||
         test_a_line_too_short_to_measure() != 0 ||
+        test_a_paragraph_a_brace_ends() != 0 ||
         test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||

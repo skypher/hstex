@@ -1992,6 +1992,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"indent", 1, HSTEX_COMMAND_INDENT},
         {"noindent", 0, HSTEX_COMMAND_INDENT},
         {"spacefactor", 0, HSTEX_COMMAND_SPACE_FACTOR},
+        {"prevgraf", 0, HSTEX_COMMAND_PREV_GRAF},
         {"unskip", (int32_t)HSTEX_NODE_GLUE, HSTEX_COMMAND_REMOVE_LAST},
         {"unkern", (int32_t)HSTEX_NODE_KERN, HSTEX_COMMAND_REMOVE_LAST},
         {"unpenalty", (int32_t)HSTEX_NODE_PENALTY, HSTEX_COMMAND_REMOVE_LAST},
@@ -3678,6 +3679,12 @@ static int integer_from_control_sequence(
         }
         *value = engine->space_factor;
         return 0;
+    case HSTEX_COMMAND_PREV_GRAF:
+        /* The lines the vertical list this is in has had from paragraphs so
+           far; readable in any mode. See docs/DECISIONS.md,
+           a-paragraph-a-brace-ends. */
+        *value = engine->prev_graf;
+        return 0;
     case HSTEX_COMMAND_LAST_ITEM: {
         const struct hstex_node *node = last_item_node(engine);
         if (meaning->value.integer == (int32_t)HSTEX_LAST_NODE_TYPE) {
@@ -4479,6 +4486,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_PDF_LAST_NUMBER:
     case HSTEX_COMMAND_LAST_ITEM:
     case HSTEX_COMMAND_SPACE_FACTOR:
+    case HSTEX_COMMAND_PREV_GRAF:
     case HSTEX_COMMAND_BOX_DIMEN:
     case HSTEX_COMMAND_MARGIN_KERN:
     case HSTEX_COMMAND_CAT_CODE:
@@ -9552,6 +9560,10 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     enum hstex_mode previous_mode = engine->mode;
     bool previous_inner_mode = engine->inner_mode;
     int32_t previous_depth = engine->prev_depth;
+    /* The lines of a paragraph broken in here are that list's own count,
+       not the enclosing one's. See docs/DECISIONS.md,
+       lines-carry-on-past-a-display. */
+    int32_t previous_graf = engine->prev_graf;
     uint32_t previous_stop_level = engine->group_stop_level;
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
@@ -9616,6 +9628,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
         *ending_depth = engine->prev_depth;
     }
     engine->prev_depth = previous_depth;
+    engine->prev_graf = previous_graf;
     engine->output_group_floor = previous_group_floor;
     engine->output_conditional_floor = previous_conditional_floor;
     engine->group_stop_level = previous_stop_level;
@@ -19139,6 +19152,7 @@ static int break_paragraph(struct hstex_engine *engine,
     int32_t pretolerance = engine->integer_parameters[HSTEX_INTEGER_PRETOLERANCE];
     if (pretolerance >= 0) {
         if (state.trace.active) {
+            print_fresh_line(engine);
             print_text(engine, "@firstpass\n");
         }
         found = find_paragraph_breaks(engine, &state, items, count, &background,
@@ -27065,8 +27079,7 @@ handle_token:
                 /* A brace that ends a box body ends the paragraph inside it
                    first, while the parameters that paragraph was set with
                    are still in force. */
-                if (engine->building_alignment == false &&
-                    engine->building_paragraph && engine->group_stop_armed &&
+                if (engine->building_paragraph && engine->group_stop_armed &&
                     engine->group_level == engine->group_stop_level + 1U &&
                     finish_paragraph(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
@@ -27631,6 +27644,26 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             engine->space_factor = factor;
+            continue;
+        }
+        case HSTEX_COMMAND_PREV_GRAF: {
+            int32_t lines = 0;
+            if (finish_assignment(
+                    engine,
+                    scan_optional_equals(engine, error, error_capacity) != 0 ||
+                            scan_integer(engine, &lines, error,
+                                         error_capacity) != 0
+                        ? -1
+                        : 0,
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            if (lines < 0) {
+                (void)set_error(error, error_capacity,
+                                "prevgraf cannot be negative");
+                return HSTEX_ENGINE_ERROR;
+            }
+            engine->prev_graf = lines;
             continue;
         }
         case HSTEX_COMMAND_REMOVE_LAST:
