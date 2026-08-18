@@ -251,6 +251,10 @@ struct hstex_color_stack {
     char *initial;
     bool page;
     bool direct;
+    /* Whether \pdfcolorstackinit made this one, which is what decides
+       whether a page begins by saying what colour it is in. See
+       docs/DECISIONS.md, colour-on-a-page. */
+    bool created;
     char **values;
     size_t count;
     size_t capacity;
@@ -1069,6 +1073,7 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_SPECIAL,
     HSTEX_WHATSIT_COLOR_STACK,
     HSTEX_WHATSIT_PDF_DEST,
+    HSTEX_WHATSIT_LITERAL,
     HSTEX_WHATSIT_START_LINK,
     HSTEX_WHATSIT_END_LINK,
     HSTEX_WHATSIT_ANNOT,
@@ -1346,6 +1351,10 @@ struct hstex_engine {
     struct hstex_pdf_object *pdf_objects;
     size_t pdf_object_count;
     size_t pdf_object_capacity;
+    /* The colour stacks as the pages are written, which is not where they
+       stand as the document is read. */
+    struct hstex_color_stack *pdf_colours;
+    size_t pdf_colour_count;
     /* What the links and outlines of the document aim at. */
     struct hstex_pdf_action *pdf_actions;
     size_t pdf_action_count;

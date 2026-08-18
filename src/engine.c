@@ -11553,12 +11553,34 @@ static void show_whatsit(struct hstex_engine *engine,
         free(type);
         return;
     }
+    if (kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
+        static const char *const modes[4] = {"", " direct", " page",
+                                             " shipout"};
+        uint8_t mode = node->value.whatsit.action;
+        print_text(engine, "\\pdfliteral");
+        print_text(engine, modes[mode > 3U ? 0U : mode]);
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        char ignored[256];
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) == 0) {
+            print_byte(engine, '{');
+            if (text_count != 0U) {
+                print_bytes(engine, (const char *)text, text_count);
+            }
+            print_byte(engine, '}');
+        }
+        free(text);
+        return;
+    }
     if (kind == (uint8_t)HSTEX_WHATSIT_END_LINK) {
         print_text(engine, "\\pdfendlink");
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_START_LINK ||
-        kind == (uint8_t)HSTEX_WHATSIT_ANNOT) {
+        kind == (uint8_t)HSTEX_WHATSIT_ANNOT ||
+        kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
         bool link = kind == (uint8_t)HSTEX_WHATSIT_START_LINK;
         print_text(engine, link ? "\\pdfstartlink(" : "\\pdfannot(");
         show_rule_dimen(engine, node->height);
@@ -13365,6 +13387,94 @@ static int pdf_page_font(struct hstex_engine *engine, uint32_t identifier,
 }
 
 
+
+/* The colour stacks as the pages are written. A page says what colour it is
+   in when the stack it comes from asked for that and has something on it;
+   what a stack has on it as a page is written is not what it has as the
+   document is read, so the two are kept apart. See docs/DECISIONS.md,
+   colour-on-a-page. */
+static struct hstex_color_stack *pdf_colour_state(struct hstex_engine *engine,
+                                                  size_t number, char *error,
+                                                  size_t error_capacity)
+{
+    if (number >= engine->color_stack_count) {
+        (void)set_error(error, error_capacity, "colour stack %zu is not there",
+                        number);
+        return NULL;
+    }
+    if (number >= engine->pdf_colour_count) {
+        size_t wanted = engine->color_stack_count;
+        struct hstex_color_stack *grown =
+            realloc(engine->pdf_colours, wanted * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "colour stack allocation failed");
+            return NULL;
+        }
+        memset(grown + engine->pdf_colour_count, 0,
+               (wanted - engine->pdf_colour_count) * sizeof(*grown));
+        engine->pdf_colours = grown;
+        engine->pdf_colour_count = wanted;
+    }
+    struct hstex_color_stack *state = &engine->pdf_colours[number];
+    const struct hstex_color_stack *stack = &engine->color_stacks[number];
+    /* A stack the document made starts with its own colour on it; the one
+       that is always there starts with nothing. */
+    if (!state->created && stack->created) {
+        state->created = true;
+        if (state->capacity == 0U) {
+            state->values = malloc(sizeof(*state->values));
+            if (state->values == NULL) {
+                (void)set_error(error, error_capacity,
+                                "colour stack allocation failed");
+                return NULL;
+            }
+            state->capacity = 1U;
+        }
+        state->values[0] = NULL;
+        state->count = 1U;
+    }
+    return state;
+}
+
+static const char *pdf_colour_current(const struct hstex_engine *engine,
+                                      const struct hstex_color_stack *state,
+                                      size_t number)
+{
+    const char *initial = engine->color_stacks[number].initial;
+    if (state->count == 0U || state->values[state->count - 1U] == NULL) {
+        return initial == NULL ? "" : initial;
+    }
+    return state->values[state->count - 1U];
+}
+
+static int pdf_colour_push(struct hstex_color_stack *state, const char *value,
+                           char *error, size_t error_capacity)
+{
+    if (state->count == state->capacity) {
+        size_t capacity = state->capacity == 0U ? 8U : state->capacity * 2U;
+        char **grown = realloc(state->values, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "colour stack allocation failed");
+        }
+        state->values = grown;
+        state->capacity = capacity;
+    }
+    char *copy = NULL;
+    if (value != NULL) {
+        size_t length = strlen(value);
+        copy = malloc(length + 1U);
+        if (copy == NULL) {
+            return set_error(error, error_capacity,
+                             "colour stack allocation failed");
+        }
+        memcpy(copy, value, length + 1U);
+    }
+    state->values[state->count++] = copy;
+    return 0;
+}
+
 /* The size a font is used at, in big points with four decimals, which is how
    the reference writes it. */
 static int pdf_font_size(struct hstex_engine *engine, int32_t size, char *error,
@@ -13516,6 +13626,12 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_placed = true;
     }
     if (!engine->pdf_in_array) {
+        /* The array is set off from whatever stands before it. */
+        if (engine->pdf_page_count != 0U &&
+            engine->pdf_page[engine->pdf_page_count - 1U] != ' ' &&
+            pdf_text(engine, " ", error, error_capacity) != 0) {
+            return -1;
+        }
         if (pdf_text(engine, "[", error, error_capacity) != 0) {
             return -1;
         }
@@ -13580,6 +13696,194 @@ static int pdf_place_rule(struct hstex_engine *engine, int32_t left,
         pdf_number(engine, height, error, error_capacity) != 0 ||
         pdf_text(engine, " re f\nQ\n", error, error_capacity) != 0) {
         return -1;
+    }
+    return 0;
+}
+
+
+static char *own_general_text(const uint8_t *bytes, size_t count);
+
+/* Text the document itself wrote, put in the page where it stands. A direct
+   one goes in as it is, without leaving the text object; a page one goes
+   outside it; anything else moves to the place it was written at and back
+   again. See docs/DECISIONS.md, colour-on-a-page. */
+enum hstex_pdf_literal_place {
+    /* Inside the text object, as it stands. */
+    HSTEX_PDF_LITERAL_INLINE = 0,
+    /* Outside it, in the page's own coordinates. */
+    HSTEX_PDF_LITERAL_PLAIN,
+    /* Outside it, at the place it was written at. */
+    HSTEX_PDF_LITERAL_ORIGIN,
+};
+
+static int pdf_write_literal(struct hstex_engine *engine, const uint8_t *text,
+                             size_t length, int place, int32_t h, int32_t v,
+                             char *error, size_t error_capacity)
+{
+    bool direct = place == HSTEX_PDF_LITERAL_INLINE;
+    bool page = place == HSTEX_PDF_LITERAL_PLAIN;
+    if (direct) {
+        if (pdf_end_array(engine, error, error_capacity) != 0 ||
+            pdf_text(engine, "\n", error, error_capacity) != 0 ||
+            pdf_bytes(engine, (const char *)text, length, error,
+                      error_capacity) != 0 ||
+            pdf_text(engine, "\n", error, error_capacity) != 0) {
+            return -1;
+        }
+        return 0;
+    }
+    if (pdf_end_text(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (page) {
+        return pdf_bytes(engine, (const char *)text, length, error,
+                         error_capacity) != 0 ||
+                       pdf_text(engine, "\n", error, error_capacity) != 0
+                   ? -1
+                   : 0;
+    }
+    int32_t up = engine->pdf_height - v;
+    if (pdf_text(engine, "1 0 0 1 ", error, error_capacity) != 0 ||
+        pdf_number(engine, h, error, error_capacity) != 0 ||
+        pdf_text(engine, " ", error, error_capacity) != 0 ||
+        pdf_number(engine, up, error, error_capacity) != 0 ||
+        pdf_text(engine, " cm\n", error, error_capacity) != 0 ||
+        pdf_bytes(engine, (const char *)text, length, error, error_capacity) !=
+            0 ||
+        pdf_text(engine, "\n1 0 0 1 ", error, error_capacity) != 0 ||
+        pdf_number(engine, -h, error, error_capacity) != 0 ||
+        pdf_text(engine, " ", error, error_capacity) != 0 ||
+        pdf_number(engine, -up, error, error_capacity) != 0 ||
+        pdf_text(engine, " cm\n", error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* What a whatsit puts in the page: a colour, for now. */
+static int pdf_whatsit(struct hstex_engine *engine,
+                       const struct hstex_node *node, int32_t h, int32_t v,
+                       char *error, size_t error_capacity)
+{
+    if (node->value.whatsit.kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
+        uint8_t *text = NULL;
+        size_t length = 0U;
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &length, 0U, NULL, error,
+                                   error_capacity) != 0) {
+            free(text);
+            return -1;
+        }
+        uint8_t mode = node->value.whatsit.action;
+        int place = mode == (uint8_t)HSTEX_PDF_LITERAL_DIRECT
+                        ? HSTEX_PDF_LITERAL_INLINE
+                        : mode == (uint8_t)HSTEX_PDF_LITERAL_PAGE
+                              ? HSTEX_PDF_LITERAL_PLAIN
+                              : HSTEX_PDF_LITERAL_ORIGIN;
+        int status = pdf_write_literal(engine, text, length, place, h, v, error,
+                                       error_capacity);
+        free(text);
+        return status;
+    }
+    if (node->value.whatsit.kind != (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
+        return 0;
+    }
+    size_t number = node->value.whatsit.stream;
+    struct hstex_color_stack *state =
+        pdf_colour_state(engine, number, error, error_capacity);
+    if (state == NULL) {
+        return -1;
+    }
+    uint8_t action = node->value.whatsit.action;
+    uint8_t *text = NULL;
+    size_t length = 0U;
+    if (action == 0U || action == 2U) {
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &length, 0U, NULL, error,
+                                   error_capacity) != 0) {
+            free(text);
+            return -1;
+        }
+    }
+    int status = 0;
+    if (action == 0U) { /* push */
+        char *value = own_general_text(text, length);
+        if (value == NULL) {
+            free(text);
+            return set_error(error, error_capacity,
+                             "colour stack allocation failed");
+        }
+        status = pdf_colour_push(state, value, error, error_capacity);
+        free(value);
+    } else if (action == 2U) { /* set */
+        if (state->count == 0U) {
+            char *value = own_general_text(text, length);
+            if (value == NULL) {
+                free(text);
+                return set_error(error, error_capacity,
+                                 "colour stack allocation failed");
+            }
+            status = pdf_colour_push(state, value, error, error_capacity);
+            free(value);
+        } else {
+            char *value = own_general_text(text, length);
+            if (value == NULL) {
+                free(text);
+                return set_error(error, error_capacity,
+                                 "colour stack allocation failed");
+            }
+            free(state->values[state->count - 1U]);
+            state->values[state->count - 1U] = value;
+        }
+    } else if (action == 1U) { /* pop */
+        if (state->count != 0U) {
+            free(state->values[--state->count]);
+        }
+    }
+    if (status != 0) {
+        free(text);
+        return -1;
+    }
+    const char *current = NULL;
+    if (action == 1U || action == 3U) {
+        current = pdf_colour_current(engine, state, number);
+    }
+    const uint8_t *written = current != NULL ? (const uint8_t *)current : text;
+    size_t count = current != NULL ? strlen(current) : length;
+    status = pdf_write_literal(engine, written, count,
+                               engine->color_stacks[number].direct
+                                   ? HSTEX_PDF_LITERAL_INLINE
+                                   : HSTEX_PDF_LITERAL_ORIGIN,
+                               h, v, error, error_capacity);
+    free(text);
+    return status;
+}
+
+/* Before anything else on a page, every colour stack that asked for it says
+   what colour the page starts in. */
+static int pdf_page_colours(struct hstex_engine *engine, int32_t h, int32_t v,
+                            char *error, size_t error_capacity)
+{
+    for (size_t number = 0U; number < engine->color_stack_count; ++number) {
+        if (!engine->color_stacks[number].page) {
+            continue;
+        }
+        struct hstex_color_stack *state =
+            pdf_colour_state(engine, number, error, error_capacity);
+        if (state == NULL) {
+            return -1;
+        }
+        if (state->count == 0U) {
+            continue;
+        }
+        const char *current = pdf_colour_current(engine, state, number);
+        if (pdf_write_literal(engine, (const uint8_t *)current, strlen(current),
+                              engine->color_stacks[number].direct
+                                  ? HSTEX_PDF_LITERAL_PLAIN
+                                  : HSTEX_PDF_LITERAL_ORIGIN,
+                              h, v, error, error_capacity) != 0) {
+            return -1;
+        }
     }
     return 0;
 }
@@ -13662,6 +13966,11 @@ static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
             here += packed_dimen(node.width);
             break;
         case HSTEX_NODE_WHATSIT:
+            if (pdf_whatsit(engine, &node, here, base, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            break;
         case HSTEX_NODE_PENALTY:
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
@@ -13732,9 +14041,14 @@ static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_KERN:
             here += packed_dimen(node.width);
             break;
+        case HSTEX_NODE_WHATSIT:
+            if (pdf_whatsit(engine, &node, left, here, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            break;
         case HSTEX_NODE_CHARACTER:
         case HSTEX_NODE_LIGATURE:
-        case HSTEX_NODE_WHATSIT:
         case HSTEX_NODE_MATH:
         case HSTEX_NODE_PENALTY:
         case HSTEX_NODE_DISCRETIONARY:
@@ -13790,6 +14104,10 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
     /* The page's own coordinates run down from its top; the file's run up
        from its foot, and the walk turns them over as it writes. */
     engine->pdf_height = height;
+    if (pdf_page_colours(engine, horigin, height - vorigin, error,
+                         error_capacity) != 0) {
+        return -1;
+    }
     int status = box->kind == HSTEX_BOX_VLIST
                      ? pdf_vlist(engine, &outer, horigin, vorigin, error,
                                  error_capacity)
@@ -17337,7 +17655,20 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
                          "pdf literal allocation failed");
     }
     ++engine->pdf_literal_count;
-    return 0;
+    /* The literal stands in the list where it was written, so that the page
+       carries it at that place. See docs/DECISIONS.md, colour-on-a-page. */
+    uint32_t tokens = 0U;
+    if (store_text_as_token_list(engine, literal->content, &tokens, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_LITERAL,
+                          .action = (uint8_t)mode,
+                          .tokens = tokens},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 /* The node most recently contributed to the list being built, or NULL when
@@ -17855,6 +18186,33 @@ static int execute_pdf_annot(struct hstex_engine *engine, char *error,
 }
 
 static int reserve_color_stacks(struct hstex_engine *engine, size_t required,
+                                char *error, size_t error_capacity);
+
+/* Stack zero exists without being made: it starts in black, says so at the
+   top of a page once something has been pushed on it, and writes what it
+   says without leaving the text. See docs/DECISIONS.md, colour-on-a-page. */
+static int ensure_built_in_color_stack(struct hstex_engine *engine,
+                                       char *error, size_t error_capacity)
+{
+    if (engine->color_stack_count != 0U) {
+        return 0;
+    }
+    if (reserve_color_stacks(engine, 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->color_stack_count = 1U;
+    memset(&engine->color_stacks[0], 0, sizeof(engine->color_stacks[0]));
+    engine->color_stacks[0].page = true;
+    engine->color_stacks[0].direct = true;
+    engine->color_stacks[0].initial =
+        own_general_text((const uint8_t *)"0 g 0 G", 7U);
+    return engine->color_stacks[0].initial == NULL
+               ? set_error(error, error_capacity,
+                           "colour stack allocation failed")
+               : 0;
+}
+
+static int reserve_color_stacks(struct hstex_engine *engine, size_t required,
                                 char *error, size_t error_capacity)
 {
     if (required <= engine->color_stack_capacity) {
@@ -17899,12 +18257,10 @@ static int expand_pdf_color_stack_init(struct hstex_engine *engine,
         return -1;
     }
     /* The built-in page stack occupies slot zero. */
-    if (engine->color_stack_count == 0U) {
-        if (reserve_color_stacks(engine, 1U, error, error_capacity) != 0) {
-            free(bytes);
-            return -1;
-        }
-        engine->color_stack_count = 1U;
+    if (engine->color_stack_count == 0U &&
+        ensure_built_in_color_stack(engine, error, error_capacity) != 0) {
+        free(bytes);
+        return -1;
     }
     if (reserve_color_stacks(engine, engine->color_stack_count + 1U, error,
                              error_capacity) != 0) {
@@ -17916,6 +18272,7 @@ static int expand_pdf_color_stack_init(struct hstex_engine *engine,
     memset(stack, 0, sizeof(*stack));
     stack->page = page;
     stack->direct = direct;
+    stack->created = true;
     stack->initial = own_general_text(bytes, count);
     free(bytes);
     if (stack->initial == NULL) {
@@ -17940,13 +18297,11 @@ static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
                          number);
     }
     if ((size_t)number >= engine->color_stack_count) {
-        /* Stack zero exists without being made. */
         if (number != 0 ||
-            reserve_color_stacks(engine, 1U, error, error_capacity) != 0) {
+            ensure_built_in_color_stack(engine, error, error_capacity) != 0) {
             return set_error(error, error_capacity,
                              "colour stack %d does not exist", number);
         }
-        engine->color_stack_count = 1U;
     }
     struct hstex_color_stack *stack = &engine->color_stacks[(size_t)number];
     static const char *const actions[] = {"push", "pop", "set", "current"};
@@ -20625,6 +20980,7 @@ static bool command_ends_paragraph(const struct hstex_meaning *meaning)
     case HSTEX_COMMAND_HRULE:
     case HSTEX_COMMAND_VSKIP:
     case HSTEX_COMMAND_HALIGN:
+    case HSTEX_COMMAND_END:
         return true;
     case HSTEX_COMMAND_UNBOX:
         return meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL ||
@@ -28438,9 +28794,15 @@ handle_token:
             engine->building_paragraph && !engine->pending_global &&
             engine->pending_macro_flags == 0U &&
             command_ends_paragraph(meaning)) {
+            /* What goes in front of it is the \par token itself, so that
+               whatever \par means at this moment is what runs; see
+               docs/DECISIONS.md, ending-a-paragraph. */
+            hstex_token paragraph = hstex_token_control_sequence(
+                engine->lexical_state.paragraph_control_sequence);
             if (push_one(engine, *token, *location, error, error_capacity) !=
                     0 ||
-                finish_paragraph(engine, error, error_capacity) != 0) {
+                push_one(engine, paragraph, *location, error,
+                         error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
