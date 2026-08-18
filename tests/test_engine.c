@@ -2704,6 +2704,83 @@ static int test_a_mark_in_a_list(void)
 );
 }
 
+/* \vsplit takes the top of a vertical list at the best break for the
+   height it was given, packs it to that height with \splitmaxdepth, and
+   leaves the rest in the register with \splittopskip in front of its first
+   box. The marks in the part that came away are what \splitfirstmark and
+   \splitbotmark report. See docs/DECISIONS.md, what-a-split-leaves-behind. */
+static int test_what_a_split_leaves_behind(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=100 \\splittopskip=4pt"
+    " \\splitmaxdepth=2pt \\baselineskip=0pt \\lineskip"
+    "=0pt \\vbadness=10000 \\vfuzz=1000pt \\message{[to"
+    "p]}\\setbox0=\\vbox{\\hrule height10pt \\vskip3pt "
+    "\\hrule height10pt \\vskip3pt \\hrule height10pt "
+    "\\vskip3pt \\hrule height10pt}\\setbox1=\\vsplit0 "
+    "to 20pt \\showbox1 \\message{[rest]}\\showbox0 \\m"
+    "essage{[pen]}\\setbox0=\\vbox{\\hrule height10pt "
+    "\\penalty-200 \\vskip0pt \\hrule height10pt \\vski"
+    "p0pt \\hrule height10pt}\\setbox1=\\vsplit0 to 21p"
+    "t \\showbox1 \\message{[nobreak]}\\setbox0=\\vbox{"
+    "\\hrule height10pt \\hrule height10pt}\\setbox1=\\"
+    "vsplit0 to 5pt \\showbox1 \\message{[gone]}\\showb"
+    "ox0 \\message{[keep]}\\setbox0=\\vbox{\\hrule heig"
+    "ht10pt \\vskip3pt \\mark{m}\\special{s}\\vskip2pt "
+    "\\penalty5 \\hrule height4pt \\vskip1pt \\hrule he"
+    "ight10pt}\\setbox1=\\vsplit0 to 10pt \\showbox0 \\"
+    "message{[marks]}\\setbox0=\\vbox{\\mark{one}\\hbox"
+    "{a}\\mark{two}\\hbox{b}\\mark{three}\\hbox{c}\\mar"
+    "k{four}}\\setbox1=\\vsplit0 to 12pt \\setbox2=\\hb"
+    "ox{[\\splitfirstmark][\\splitbotmark]}\\showbox2 "
+    "\\message{[none]}\\setbox0=\\vbox{\\hbox{a}\\vskip"
+    "0pt \\hbox{b}}\\setbox1=\\vsplit0 to 5pt \\setbox2"
+    "=\\hbox{[\\splitfirstmark][\\splitbotmark]}\\showb"
+    "ox2%"
+,
+    "[top]> \\box1=\n\\vbox(20.0+0.0)x0.0\n.\\rule(10.0"
+    "+0.0)x*\n\n! OK.\n[rest]> \\box0=\n\\vbox(36.0+0.0"
+    ")x0.0\n.\\glue(\\splittopskip) 0.0\n.\\rule(10.0+0"
+    ".0)x*\n.\\glue 3.0\n.\\rule(10.0+0.0)x*\n.\\glue 3"
+    ".0\n.\\rule(10.0+0.0)x*\n\n! OK.\n[pen]> \\box1=\n"
+    "\\vbox(21.0+0.0)x0.0\n.\\rule(10.0+0.0)x*\n.\\pena"
+    "lty -200\n.\\glue 0.0\n.\\rule(10.0+0.0)x*\n\n! OK"
+    ".\n[nobreak]> \\box1=\n\\vbox(5.0+0.0)x0.0\n.\\rul"
+    "e(10.0+0.0)x*\n.\\rule(10.0+0.0)x*\n\n! OK.\n[gone"
+    "]> \\box0=void\n\n! OK.\n[keep]> \\box0=\n\\vbox(1"
+    "5.0+0.0)x0.0\n.\\mark{m}\n.\\special{s}\n.\\glue("
+    "\\splittopskip) 0.0\n.\\rule(4.0+0.0)x*\n.\\glue 1"
+    ".0\n.\\rule(10.0+0.0)x*\n\n! OK.\n[marks]> \\box2="
+    "\n\\hbox(7.5+2.5)x48.3612\n.\\tenrm [\n.\\tenrm o"
+    "\n.\\tenrm n\n.\\tenrm e\n.\\tenrm ]\n.\\tenrm [\n"
+    ".\\tenrm t\n.\\tenrm h\n.\\tenrm r\n.\\tenrm e\n."
+    "\\tenrm e\n.\\tenrm ]\n\n! OK.\n[none]> \\box2=\n"
+    "\\hbox(7.5+2.5)x11.11115\n.\\tenrm [\n.\\tenrm ]\n"
+    ".\\tenrm [\n.\\tenrm ]\n\n! OK.\n"
+);
+}
+
 /* An \insert holds a vertical list packed at its natural size, and
    remembers the \splittopskip, \splitmaxdepth and \floatingpenalty of
    where it was written. It takes up no room in the list it stands in, and
@@ -7669,6 +7746,7 @@ int main(void)
         test_a_limit_at_its_own_width() != 0 ||
         test_a_vcenter_in_braces() != 0 ||
         test_a_mark_in_a_list() != 0 ||
+        test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||
         test_marks_on_a_page() != 0 ||

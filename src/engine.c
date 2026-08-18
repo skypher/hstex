@@ -9872,18 +9872,43 @@ static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
                            size_t count, struct hstex_box *box, char *error,
                            size_t error_capacity)
 {
+    /* Glue, kerns and penalties at the top of what is left are thrown away;
+       marks, whatsits and insertions are kept where they stand, and the
+       \splittopskip glue goes in front of the first box or rule. See
+       docs/DECISIONS.md, what-a-split-leaves-behind. */
     size_t first = 0U;
+    size_t kept_capacity = 0U;
+    size_t kept_count = 0U;
+    uint32_t *kept = NULL;
     while (first < count) {
         enum hstex_node_kind kind = engine->nodes[items[first] - 1U].kind;
-        if (kind != HSTEX_NODE_GLUE && kind != HSTEX_NODE_KERN &&
-            kind != HSTEX_NODE_PENALTY) {
+        if (kind == HSTEX_NODE_GLUE || kind == HSTEX_NODE_KERN ||
+            kind == HSTEX_NODE_PENALTY) {
+            ++first;
+            continue;
+        }
+        if (kind != HSTEX_NODE_MARK && kind != HSTEX_NODE_WHATSIT &&
+            kind != HSTEX_NODE_INSERT) {
             break;
         }
+        if (kept_count == kept_capacity) {
+            size_t capacity = kept_capacity == 0U ? 8U : kept_capacity * 2U;
+            uint32_t *grown = realloc(kept, capacity * sizeof(*grown));
+            if (grown == NULL) {
+                free(kept);
+                return set_error(error, error_capacity,
+                                 "split allocation failed");
+            }
+            kept = grown;
+            kept_capacity = capacity;
+        }
+        kept[kept_count++] = items[first];
         ++first;
     }
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_VOID;
-    if (first == count) {
+    if (first == count && kept_count == 0U) {
+        free(kept);
         return 0;
     }
     struct hstex_vbox_builder builder = {0};
@@ -9894,24 +9919,32 @@ static int prune_split_top(struct hstex_engine *engine, const uint32_t *items,
     int32_t enclosing_depth = engine->prev_depth;
     engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->mode = HSTEX_MODE_VERTICAL;
-    struct hstex_glue top = engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
-    int32_t height = packed_dimen(engine->nodes[items[first] - 1U].height);
-    top.width = top.width > height ? top.width - height : 0;
-    struct hstex_node glue = {
-        .kind = HSTEX_NODE_GLUE,
-        .width = top.width,
-        .value.glue = {
-            .stretch = top.stretch,
-            .shrink = top.shrink,
-            .stretch_order = top.stretch_order,
-            .shrink_order = top.shrink_order,
-            .parameter = 1U + (uint8_t)HSTEX_GLUE_SPLIT_TOP_SKIP,
-        },
-    };
-    uint32_t placed = 0U;
-    int status = store_node(engine, &glue, &placed, error, error_capacity);
-    if (status == 0) {
-        status = append_vbox_item(engine, placed, error, error_capacity);
+    int status = 0;
+    for (size_t index = 0U; status == 0 && index < kept_count; ++index) {
+        status = append_vbox_item(engine, kept[index], error, error_capacity);
+    }
+    free(kept);
+    if (status == 0 && first < count) {
+        struct hstex_glue top =
+            engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
+        int32_t height = packed_dimen(engine->nodes[items[first] - 1U].height);
+        top.width = top.width > height ? top.width - height : 0;
+        struct hstex_node glue = {
+            .kind = HSTEX_NODE_GLUE,
+            .width = top.width,
+            .value.glue = {
+                .stretch = top.stretch,
+                .shrink = top.shrink,
+                .stretch_order = top.stretch_order,
+                .shrink_order = top.shrink_order,
+                .parameter = 1U + (uint8_t)HSTEX_GLUE_SPLIT_TOP_SKIP,
+            },
+        };
+        uint32_t placed = 0U;
+        status = store_node(engine, &glue, &placed, error, error_capacity);
+        if (status == 0) {
+            status = append_vbox_item(engine, placed, error, error_capacity);
+        }
     }
     for (size_t index = first; status == 0 && index < count; ++index) {
         status = append_vbox_item(engine, items[index], error, error_capacity);
@@ -9980,6 +10013,32 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
     }
     int32_t depth = engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
     size_t split = vertical_break(engine, items, count, height, depth);
+    /* The marks in the part that comes away are what \splitfirstmark and
+       \splitbotmark report; a split with no marks in it leaves both empty.
+       See docs/DECISIONS.md, what-a-split-leaves-behind. */
+    for (size_t entry = 0U; entry < engine->mark_class_count; ++entry) {
+        engine->mark_classes[entry].split_first = 0U;
+        engine->mark_classes[entry].split_bot = 0U;
+    }
+    for (size_t item = 0U; item < split; ++item) {
+        uint32_t held = items[item];
+        if (held == 0U || (size_t)held > engine->node_count ||
+            engine->nodes[held - 1U].kind != HSTEX_NODE_MARK) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[held - 1U];
+        struct hstex_mark_class *entry =
+            mark_class_of(engine, node->value.mark.class_number, true, error,
+                          error_capacity);
+        if (entry == NULL) {
+            free(items);
+            return -1;
+        }
+        if (entry->split_first == 0U) {
+            entry->split_first = node->value.mark.tokens;
+        }
+        entry->split_bot = node->value.mark.tokens;
+    }
 
     struct hstex_vbox_builder builder = {0};
     struct hstex_vbox_builder *previous = engine->active_vbox_builder;
@@ -10014,10 +10073,8 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
     if (status != 0) {
         return -1;
     }
-    box->width = source.width;
-    if (rest.kind != HSTEX_BOX_VOID) {
-        rest.width = source.width;
-    }
+    /* Both halves are as wide as what is in them, not as wide as the box
+       they came from. */
     return assign_box(engine, (uint32_t)index, rest, true, error,
                       error_capacity);
 }
