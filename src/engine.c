@@ -13756,11 +13756,18 @@ static int pdf_place_character(struct hstex_engine *engine,
                               (long long)offset) != 0) {
                 return -1;
             }
-            /* What the correction moves the file's idea by is the whole
-               scaled points it comes to, and no more. */
+            /* The correction moves the file's text by its own worth of
+               scaled points, and where that leaves it is taken towards the
+               engine's own place, the same way a step is. */
             int64_t amount = offset * unit;
-            engine->pdf_text_h -=
-                (int32_t)(amount / HSTEX_PDF_UNIT_DENOMINATOR);
+            int64_t exact =
+                (int64_t)engine->pdf_text_h * HSTEX_PDF_UNIT_DENOMINATOR -
+                amount;
+            int64_t whole =
+                pdf_floor_division(exact, HSTEX_PDF_UNIT_DENOMINATOR);
+            int64_t rest = exact - whole * HSTEX_PDF_UNIT_DENOMINATOR;
+            engine->pdf_text_h =
+                (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
         }
     }
     if (!engine->pdf_in_string) {
