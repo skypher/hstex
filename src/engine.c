@@ -4350,8 +4350,19 @@ static int dimen_from_meaning(struct hstex_engine *engine,
                 engine->list_item_count) {
             const uint32_t *items = engine->list_items + box->node_start;
             size_t at = left ? 0U : box->node_count - 1U;
-            if (!left) {
-                /* The glue that ends a line stands behind the kern. */
+            /* The glue at either end of a line -- \leftskip in front of the
+               kern, \rightskip and \parfillskip behind it -- stands
+               outside it. */
+            if (left) {
+                while (at + 1U < box->node_count) {
+                    uint32_t glue = items[at];
+                    if (glue == 0U || (size_t)glue > engine->node_count ||
+                        engine->nodes[glue - 1U].kind != HSTEX_NODE_GLUE) {
+                        break;
+                    }
+                    ++at;
+                }
+            } else {
                 while (at != 0U) {
                     uint32_t glue = items[at];
                     if (glue == 0U || (size_t)glue > engine->node_count ||
@@ -11869,15 +11880,31 @@ static int dvi_number(struct hstex_engine *engine, int64_t value, size_t width,
 
 /* How many bytes a movement needs: the smallest that holds it as a signed
    number. */
+/* How much of the page description the reference has already put out. It
+   keeps the bytes in a buffer of two halves and writes a half at a time, so
+   what it can still write over is the last one or two halves of what it has
+   made. See docs/DECISIONS.md, how-far-back-a-movement-reaches. */
+#define HSTEX_DVI_HALF_BUFFER 8192U
+
+static size_t dvi_gone(const struct hstex_engine *engine)
+{
+    size_t written = engine->dvi_written + engine->dvi_page_count;
+    size_t halves = written / HSTEX_DVI_HALF_BUFFER;
+    return halves < 2U ? 0U : (halves - 1U) * HSTEX_DVI_HALF_BUFFER;
+}
+
 static size_t dvi_movement_width(int32_t value)
 {
-    if (value >= -128 && value < 128) {
+    /* The reference chooses the width by magnitude, not by what the signed
+       range holds: -128 is written in two bytes and -32768 in three. */
+    int64_t size = value < 0 ? -(int64_t)value : (int64_t)value;
+    if (size < 128) {
         return 1U;
     }
-    if (value >= -32768 && value < 32768) {
+    if (size < 32768) {
         return 2U;
     }
-    if (value >= -8388608 && value < 8388608) {
+    if (size < 8388608) {
         return 3U;
     }
     return 4U;
@@ -11932,6 +11959,7 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
     bool held_first = true;
     bool held_second = true;
     uint8_t chosen = 0U;
+    size_t passed = 0U;
     for (size_t index = 0U; index < *count; ++index) {
         struct hstex_dvi_move *node = &(*moves)[*count - 1U - index];
         if (node->value == value) {
@@ -11940,6 +11968,7 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
                     return -1;
                 }
                 chosen = 1U;
+                passed = index;
                 break;
             }
             if (node->held == 2U && held_second) {
@@ -11948,10 +11977,22 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
                     return -1;
                 }
                 chosen = 2U;
+                passed = index;
                 break;
             }
-            if (node->held == 0U && (held_first || held_second)) {
-                chosen = held_first ? 1U : 2U;
+            /* A register another movement has taken since is no longer this
+               one's to use. */
+            bool first_ok = held_first && (node->taken & 1U) == 0U;
+            bool second_ok = held_second && (node->taken & 2U) == 0U;
+            if (node->held == 0U && (first_ok || second_ok) &&
+                engine->dvi_written + node->at < dvi_gone(engine)) {
+                /* Too far back to be written over: the reference has put
+                   those bytes out already. See docs/DECISIONS.md,
+                   how-far-back-a-movement-reaches. */
+                break;
+            }
+            if (node->held == 0U && (first_ok || second_ok)) {
+                chosen = first_ok ? 1U : 2U;
                 /* The earlier movement becomes the one that sets the
                    register, which is the same length as what it was. */
                 size_t width =
@@ -11959,6 +12000,7 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
                 engine->dvi_page[node->at] =
                     (uint8_t)((chosen == 1U ? first : second) + width - 1U);
                 node->held = chosen;
+                passed = index;
                 if (dvi_byte(engine,
                              chosen == 1U ? first_repeat : second_repeat, error,
                              error_capacity) != 0) {
@@ -11975,6 +12017,12 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
         if (!held_first && !held_second) {
             break;
         }
+    }
+    /* Everything between the movement that was repeated and this one has
+       lost the register the repeat uses: setting it earlier would change
+       what those movements would mean. */
+    for (size_t index = 0U; chosen != 0U && index < passed; ++index) {
+        (*moves)[*count - 1U - index].taken |= chosen == 1U ? 1U : 2U;
     }
     size_t at = engine->dvi_page_count;
     if (chosen == 0U) {
@@ -12000,6 +12048,7 @@ static int dvi_movement(struct hstex_engine *engine, int32_t value,
     node->value = value;
     node->at = at;
     node->held = chosen;
+    node->taken = 0U;
     node->level = engine->dvi_push_depth;
     return 0;
 }
@@ -12161,6 +12210,42 @@ static int dvi_select_font(struct hstex_engine *engine, uint32_t identifier,
 
 static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
                      char *error, size_t error_capacity);
+
+/* Where the boxes of a leader run stand. The reference lets a box overhang
+   the glue it fills by up to ten scaled points, and works the remainder out
+   from that same allowance; \leaders lines the boxes up with the edge of
+   the list they are in, \cleaders centres them and \xleaders spreads the
+   remainder between and around them. See docs/DECISIONS.md, leaders-on-a
+   -page. */
+struct hstex_leader_run {
+    int32_t at;
+    int32_t step;
+    int32_t limit;
+};
+
+static struct hstex_leader_run leader_run(uint8_t kind, int32_t here,
+                                          int32_t edge, int32_t amount,
+                                          int32_t leader)
+{
+    struct hstex_leader_run run = {here, leader, here + amount + 10};
+    int64_t room = (int64_t)amount + 10;
+    int64_t quotient = room / leader;
+    int64_t remainder = room % leader;
+    if (kind == 0U) {
+        run.at = edge + leader * ((here - edge) / leader);
+        if (run.at < here) {
+            run.at += leader;
+        }
+    } else if (kind == 1U) {
+        run.at = here + (int32_t)(remainder / 2);
+    } else {
+        int64_t spread = remainder / (quotient + 1);
+        run.at = here + (int32_t)((remainder - (quotient - 1) * spread) / 2);
+        run.step = leader + (int32_t)spread;
+    }
+    return run;
+}
+
 static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
                      char *error, size_t error_capacity);
 
@@ -12371,7 +12456,63 @@ static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
                                          node.value.glue.shrink,
                                          node.value.glue.shrink_order);
             int32_t amount = packed_dimen(node.width) + step;
-            engine->dvi_cur_h += amount;
+            int32_t after = engine->dvi_cur_h + amount;
+            uint32_t filling = node.value.glue.leader;
+            const struct hstex_node *leader =
+                filling != 0U && (size_t)filling <= engine->node_count
+                    ? &engine->nodes[filling - 1U]
+                    : NULL;
+            if (leader != NULL && leader->kind == HSTEX_NODE_RULE) {
+                /* A rule reaches across the whole of the glue. */
+                int32_t height =
+                    dvi_rule_dimen(leader->height, packed_dimen(box->height));
+                int32_t depth =
+                    dvi_rule_dimen(leader->depth, packed_dimen(box->depth));
+                if (height + depth > 0 && amount > 0) {
+                    engine->dvi_cur_v = base_v + depth;
+                    if (dvi_synch(engine, error, error_capacity) != 0 ||
+                        dvi_byte(engine, HSTEX_DVI_SET_RULE, error,
+                                 error_capacity) != 0 ||
+                        dvi_number(engine, height + depth, 4U, error,
+                                   error_capacity) != 0 ||
+                        dvi_number(engine, amount, 4U, error, error_capacity) !=
+                            0) {
+                        return -1;
+                    }
+                    engine->dvi_cur_v = base_v;
+                    engine->dvi_h += amount;
+                }
+            } else if (leader != NULL && leader->kind == HSTEX_NODE_LIST &&
+                       packed_dimen(leader->width) > 0 && amount > 0) {
+                struct hstex_leader_run run =
+                    leader_run(node.value.glue.leader_kind, engine->dvi_cur_h,
+                               left, amount, packed_dimen(leader->width));
+                struct hstex_node repeated = *leader;
+                for (int32_t at = run.at;
+                     at + packed_dimen(repeated.width) <= run.limit;
+                     at += run.step) {
+                    engine->dvi_cur_h = at;
+                    engine->dvi_cur_v = base_v + packed_dimen(repeated.shift);
+                    if (dvi_synch(engine, error, error_capacity) != 0) {
+                        return -1;
+                    }
+                    int32_t saved_h = engine->dvi_h;
+                    int32_t saved_v = engine->dvi_v;
+                    int status =
+                        repeated.value.list.box_kind == HSTEX_BOX_VLIST
+                            ? dvi_vlist(engine, &repeated, error,
+                                        error_capacity)
+                            : dvi_hlist(engine, &repeated, error,
+                                        error_capacity);
+                    if (status != 0) {
+                        return -1;
+                    }
+                    engine->dvi_h = saved_h;
+                    engine->dvi_v = saved_v;
+                    engine->dvi_cur_v = base_v;
+                }
+            }
+            engine->dvi_cur_h = after;
             break;
         }
         case HSTEX_NODE_KERN:
@@ -12432,6 +12573,7 @@ static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
     /* The list starts at the top of the box, which is its height above the
        place the box was put. */
     engine->dvi_cur_v -= packed_dimen(box->height);
+    int32_t top = engine->dvi_cur_v;
     for (uint32_t index = 0U; index < count; ++index) {
         if ((size_t)start + index >= engine->list_item_count) {
             break;
@@ -12488,14 +12630,74 @@ static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
             }
             break;
         }
-        case HSTEX_NODE_GLUE:
-            engine->dvi_cur_v +=
+        case HSTEX_NODE_GLUE: {
+            int32_t amount =
                 packed_dimen(node.width) +
                 set_glue_step(&set, &running, node.value.glue.stretch,
                               node.value.glue.stretch_order,
                               node.value.glue.shrink,
                               node.value.glue.shrink_order);
+            int32_t after = engine->dvi_cur_v + amount;
+            uint32_t filling = node.value.glue.leader;
+            const struct hstex_node *leader =
+                filling != 0U && (size_t)filling <= engine->node_count
+                    ? &engine->nodes[filling - 1U]
+                    : NULL;
+            if (leader != NULL && leader->kind == HSTEX_NODE_RULE) {
+                int32_t width =
+                    dvi_rule_dimen(leader->width, packed_dimen(box->width));
+                engine->dvi_cur_v = after;
+                if (amount > 0 && width > 0) {
+                    engine->dvi_cur_h = left;
+                    if (dvi_synch(engine, error, error_capacity) != 0 ||
+                        dvi_byte(engine, HSTEX_DVI_PUT_RULE, error,
+                                 error_capacity) != 0 ||
+                        dvi_number(engine, amount, 4U, error, error_capacity) !=
+                            0 ||
+                        dvi_number(engine, width, 4U, error, error_capacity) !=
+                            0) {
+                        return -1;
+                    }
+                }
+            } else if (leader != NULL && leader->kind == HSTEX_NODE_LIST &&
+                       packed_dimen(leader->height) +
+                               packed_dimen(leader->depth) >
+                           0 &&
+                       amount > 0) {
+                struct hstex_node repeated = *leader;
+                int32_t reach =
+                    packed_dimen(repeated.height) + packed_dimen(repeated.depth);
+                struct hstex_leader_run run =
+                    leader_run(node.value.glue.leader_kind, engine->dvi_cur_v,
+                               top, amount, reach);
+                for (int32_t at = run.at; at + reach <= run.limit;
+                     at += run.step) {
+                    engine->dvi_cur_v = at + packed_dimen(repeated.height);
+                    engine->dvi_cur_h = left + packed_dimen(repeated.shift);
+                    /* Both places are settled before the box is opened, not
+                       inside it as an ordinary box settles its own. */
+                    if (dvi_synch(engine, error, error_capacity) != 0) {
+                        return -1;
+                    }
+                    int32_t saved_h = engine->dvi_h;
+                    int32_t saved_v = engine->dvi_v;
+                    int status =
+                        repeated.value.list.box_kind == HSTEX_BOX_VLIST
+                            ? dvi_vlist(engine, &repeated, error,
+                                        error_capacity)
+                            : dvi_hlist(engine, &repeated, error,
+                                        error_capacity);
+                    if (status != 0) {
+                        return -1;
+                    }
+                    engine->dvi_h = saved_h;
+                    engine->dvi_v = saved_v;
+                    engine->dvi_cur_h = left;
+                }
+            }
+            engine->dvi_cur_v = after;
             break;
+        }
         case HSTEX_NODE_KERN:
             engine->dvi_cur_v += packed_dimen(node.width);
             break;
@@ -17190,8 +17392,14 @@ static bool protrusion_passes_over(const struct hstex_node *node)
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
     case HSTEX_NODE_INSERT:
-    case HSTEX_NODE_DISCRETIONARY:
         return true;
+    case HSTEX_NODE_DISCRETIONARY:
+        /* A discretionary with nothing of its own is stepped over; one that
+           carries text either way, or replaces what follows it, stops the
+           search. See docs/DECISIONS.md, a-box-at-the-edge. */
+        return node->value.disc.pre_count == 0U &&
+               node->value.disc.post_count == 0U &&
+               node->value.disc.replace_count == 0U;
     case HSTEX_NODE_GLUE:
         /* Glue of any width stops the search, but the \parfillskip a
            paragraph ends with is not part of the line's own text. */
@@ -17203,12 +17411,8 @@ static bool protrusion_passes_over(const struct hstex_node *node)
            it takes up no room. See docs/DECISIONS.md, protruding-past-a-kern. */
         return !node->explicit_kern || packed_dimen(node->width) == 0;
     case HSTEX_NODE_LIST:
-        /* A box is stepped over only when it is empty and takes up no room
-           at all. */
-        return node->value.list.node_count == 0U &&
-               packed_dimen(node->width) == 0 &&
-               packed_dimen(node->height) == 0 &&
-               packed_dimen(node->depth) == 0;
+        /* Boxes are settled by the search itself, which looks into them. */
+        return false;
     case HSTEX_NODE_RULE:
         return false;
     case HSTEX_NODE_MATH:
@@ -17218,37 +17422,65 @@ static bool protrusion_passes_over(const struct hstex_node *node)
 }
 
 /* The character at one end of a run of nodes, or zero when the run does not
-   offer one. A horizontal box is looked into; a vertical one is not. */
+   offer one. A horizontal box is looked into; a vertical one is not. A box
+   that offers nothing of its own is stepped over, so the search carries on
+   in front of it -- but only when nothing inside it stopped the search: that
+   is what `stopped' reports. See docs/DECISIONS.md, a-box-at-the-edge. */
 static uint32_t protruding_character(struct hstex_engine *engine,
                                      const uint32_t *items, size_t from,
-                                     size_t to, bool left)
+                                     size_t to, bool left, bool *stopped)
 {
+    *stopped = false;
     for (size_t step = 0U; step < to - from; ++step) {
         size_t index = left ? from + step : to - 1U - step;
         uint32_t identifier = items[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            *stopped = true;
             return 0U;
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
-        if (protrusion_passes_over(node)) {
-            continue;
-        }
         if (node->kind == HSTEX_NODE_CHARACTER ||
             node->kind == HSTEX_NODE_LIGATURE) {
             return identifier;
         }
-        if (node->kind == HSTEX_NODE_LIST &&
-            node->value.list.box_kind == HSTEX_BOX_HLIST &&
-            node->value.list.node_count != 0U &&
-            (size_t)node->value.list.node_start +
-                    node->value.list.node_count <=
-                engine->list_item_count) {
-            return protruding_character(
-                engine, engine->list_items, node->value.list.node_start,
+        if (node->kind == HSTEX_NODE_LIST) {
+            if (node->value.list.box_kind == HSTEX_BOX_HLIST &&
+                node->value.list.node_count != 0U &&
                 (size_t)node->value.list.node_start +
-                    node->value.list.node_count,
-                left);
+                        node->value.list.node_count <=
+                    engine->list_item_count) {
+                bool inside = false;
+                uint32_t found = protruding_character(
+                    engine, engine->list_items, node->value.list.node_start,
+                    (size_t)node->value.list.node_start +
+                        node->value.list.node_count,
+                    left, &inside);
+                if (found != 0U) {
+                    return found;
+                }
+                if (!inside) {
+                    continue;
+                }
+                *stopped = true;
+                return 0U;
+            }
+            /* A horizontal box with nothing in it is stepped over when it
+               takes up no room at all; a vertical box always stops the
+               search. */
+            if (node->value.list.box_kind != HSTEX_BOX_VLIST &&
+                node->value.list.node_count == 0U &&
+                packed_dimen(node->width) == 0 &&
+                packed_dimen(node->height) == 0 &&
+                packed_dimen(node->depth) == 0) {
+                continue;
+            }
+            *stopped = true;
+            return 0U;
         }
+        if (protrusion_passes_over(node)) {
+            continue;
+        }
+        *stopped = true;
         return 0U;
     }
     return 0U;
@@ -17368,13 +17600,11 @@ static int32_t line_badness(int64_t shortfall,
             return 0;
         }
         /* A line that would have to stretch further than the reference is
-           willing to measure is worse than infinitely bad -- which is what
-           takes the break it started from out of the running -- but it still
-           counts as decent, so that it costs no \adjdemerits against its
-           neighbours. See docs/DECISIONS.md, a-line-too-short-to-measure. */
+           willing to measure is infinitely bad, and as loose as a line can
+           be. See docs/DECISIONS.md, a-line-too-short-to-measure. */
         if (shortfall > INT64_C(7230584) &&
             totals->stretch[0] < INT64_C(1663497)) {
-            *fitness = (uint8_t)HSTEX_FIT_DECENT;
+            *fitness = (uint8_t)HSTEX_FIT_VERY_LOOSE;
             return HSTEX_INFINITE_BADNESS;
         }
         int32_t badness =
@@ -17405,15 +17635,17 @@ static int32_t line_left_kern(struct hstex_engine *engine,
                               const struct hstex_break_site *site)
 {
     uint32_t character = 0U;
+    bool stopped = false;
     if (site->entry_count != 0U &&
         (size_t)site->entry_start + site->entry_count <=
             engine->list_item_count) {
         character = protruding_character(
             engine, engine->list_items, site->entry_start,
-            (size_t)site->entry_start + site->entry_count, true);
+            (size_t)site->entry_start + site->entry_count, true, &stopped);
     }
-    if (character == 0U && start < count) {
-        character = protruding_character(engine, items, start, count, true);
+    if (character == 0U && !stopped && start < count) {
+        character = protruding_character(engine, items, start, count, true,
+                                         &stopped);
     }
     return protrusion_kern(engine, character, true);
 }
@@ -17425,6 +17657,7 @@ static int32_t line_right_kern(struct hstex_engine *engine,
                                size_t breakpoint)
 {
     uint32_t character = 0U;
+    bool stopped = false;
     const struct hstex_node *node =
         breakpoint < count && items[breakpoint] != 0U &&
                 (size_t)items[breakpoint] <= engine->node_count
@@ -17437,10 +17670,11 @@ static int32_t line_right_kern(struct hstex_engine *engine,
         character = protruding_character(
             engine, engine->list_items, node->value.disc.pre_start,
             (size_t)node->value.disc.pre_start + node->value.disc.pre_count,
-            false);
+            false, &stopped);
     }
-    if (character == 0U && breakpoint != 0U) {
-        character = protruding_character(engine, items, 0U, breakpoint, false);
+    if (character == 0U && !stopped && breakpoint != 0U) {
+        character = protruding_character(engine, items, 0U, breakpoint, false,
+                                         &stopped);
     }
     return protrusion_kern(engine, character, false);
 }
@@ -18603,6 +18837,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
     size_t written = 0U;
     size_t index = 0U;
     int status = 0;
+    /* Nothing between the two ends of a formula is hyphenated; see
+       docs/DECISIONS.md, no-hyphens-inside-a-formula. */
+    bool breaking = true;
     while (status == 0 && index < count) {
         if (reserve_hyphenated_items(&result, &capacity, written + 1U, error,
                                      error_capacity) != 0) {
@@ -18611,7 +18848,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         }
         uint32_t identifier = items[index];
         result[written++] = identifier;
-        if (identifier == 0U || (size_t)identifier > engine->node_count ||
+        if (identifier != 0U && (size_t)identifier <= engine->node_count &&
+            engine->nodes[identifier - 1U].kind == HSTEX_NODE_MATH) {
+            breaking = engine->nodes[identifier - 1U].value.math.after;
+        }
+        if (!breaking || identifier == 0U ||
+            (size_t)identifier > engine->node_count ||
             engine->nodes[identifier - 1U].kind != HSTEX_NODE_GLUE) {
             ++index;
             continue;

@@ -709,6 +709,10 @@ struct hstex_dvi_move {
     /* 0 for a plain down or right, 1 for the first register of the pair
        (y or w), 2 for the second (z or x). */
     uint8_t held;
+    /* Which registers this movement may no longer be rewritten to use: a
+       later movement between it and its own repeat has taken them. Bit one
+       for the first register, bit two for the second. */
+    uint8_t taken;
     uint32_t level;
 };
 

@@ -3044,6 +3044,459 @@ static int test_a_mark_in_a_list(void)
    leaves the rest in the register with \splittopskip in front of its first
    box. The marks in the part that came away are what \splitfirstmark and
    \splitbotmark report. See docs/DECISIONS.md, what-a-split-leaves-behind. */
+/* \leaders repeats its box on a grid measured from the edge of the list it
+   is in, \cleaders centres the repetitions in the glue and \xleaders
+   spreads what is left over between and around them; a rule fills the whole
+   of the glue instead. See docs/DECISIONS.md, leaders-on-a-page. */
+static int test_leaders_on_a_page(void)
+{
+    static const char *const source[] = {
+        "\\pdfoutput=0 \\year=2026 \\month=8 \\day=18 \\tim"
+        "e=1117 \\font\\tenrm=cmr10 \\tenrm \\hsize=200pt "
+        "\\vsize=200pt \\parindent=0pt \\baselineskip=0pt "
+        "\\lineskip=0pt \\boxmaxdepth=0pt \\hbadness=10000 "
+        "\\vbadness=10000 \\setbox9=\\hbox to 9pt{.\\hss}\\"
+        "shipout\\vbox{\\hbox{a\\leaders\\hbox to 10pt{.}\\"
+        "hskip 55pt b}\\hbox{a\\cleaders\\copy9\\hskip 55pt"
+        " b}\\hbox{a\\xleaders\\copy9\\hskip 55pt b}\\hbox{"
+        "\\kern 12345sp \\hbox{\\leaders\\copy9\\hskip 40pt"
+        "}}}\\shipout\\vbox{\\hbox{a\\leaders\\hrule height"
+        " 2pt\\hskip 30pt b}\\hbox{a\\leaders\\vrule width "
+        "3pt\\hskip 30pt b}\\leaders\\copy9\\vskip 3pt \\ke"
+        "rn 5pt \\cleaders\\vbox to 12pt{\\hbox{.}\\vss}\\v"
+        "skip 40pt \\xleaders\\vbox to 7pt{\\hbox{.}\\vss}"
+        "\\vskip 33pt \\leaders\\hrule height 2pt\\vskip 12"
+        "pt \\hbox{z}}",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "f702018392c01c3b0000000003e81b20546558206f75747075"
+        "7420323032362e30382e31383a313833378b00000000000000"
+        "00000000000000000000000000000000000000000000000000"
+        "0000000000000000ffffffffa406f1c78df3004bf16079000a"
+        "0000000a00000005636d723130ab619104ffff8d2e8e960a00"
+        "008d2e8e938d2e8e938d2e8e938d2e8e910a0001628ea18d61"
+        "910080058d2e8e960900008d2e8e938d2e8e938d2e8e938d2e"
+        "8e938d2e8e91097ffb628ea18d619024958d2e8e960924938d"
+        "2e8e938d2e8e938d2e8e938d2e8e938d2e8e9109248c628e9f"
+        "010e388d8d9030398d2e8e960900008d2e8e938d2e8e938d2e"
+        "8e8e8e8c8b0000000000000000000000000000000000000000"
+        "00000000000000000000000000000000000000000000002aa4"
+        "06f1c78dab618400020000001e0000628ea18d61840006f1c7"
+        "001e0000628e9f01f1ba8d2e8e9f010e388d2e8e9f1300138d"
+        "9ff50e388d2e8e8ea40c00008d9ff50e388d2e8e8ea18d9ff5"
+        "0e388d2e8e8e9f09fffd8d9ffa0e388d2e8e8ea40800028d9f"
+        "fa0e388d2e8e8ea18d9ffa0e388d2e8e8ea18d9ffa0e388d2e"
+        "8e8e9f0cfff889000c000000288e3b9f044e388d7a8e8cf800"
+        "0000fe018392c01c3b0000000003e8006f31c600418e3b0003"
+        "0002f3004bf16079000a0000000a00000005636d723130f900"
+        "0001c002dfdfdfdf",
+        NULL,
+    };
+    return run_document_dvi(source, expected);
+}
+
+/* What may stand between the edge of a line and the character that sticks
+   out past the margin: a box that offers nothing of its own is stepped over,
+   as is a discretionary with nothing of its own, but a box that stops the
+   search inside it stops it altogether. See docs/DECISIONS.md,
+   a-box-at-the-edge. */
+static int test_a_box_at_the_edge(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\lpcode\\tenrm`x=100 "
+        "\\rpcode\\tenrm`x=100 \\lpcode\\tenrm`y=50 \\rpcod"
+        "e\\tenrm`y=50 \\pdfprotrudechars=2 \\setbox0=\\vbo"
+        "x{\\noindent ax\\hbox{\\special{s}}\\par}\\showbox"
+        "0 \\setbox0=\\vbox{\\noindent ax\\hbox{y}\\par}\\s"
+        "howbox0 \\setbox0=\\vbox{\\noindent ax\\hbox to 5p"
+        "t{}\\par}\\showbox0 \\setbox0=\\vbox{\\noindent ax"
+        "\\vbox{}\\par}\\showbox0 \\setbox0=\\vbox{\\noinde"
+        "nt ax\\hbox{\\hskip0pt}\\par}\\showbox0 \\setbox0="
+        "\\vbox{\\noindent \\hbox{\\special{s}}xa\\par}\\sh"
+        "owbox0 \\setbox0=\\vbox{\\noindent \\discretionary"
+        "{}{}{}xa\\par}\\showbox0 \\setbox0=\\vbox{\\noinde"
+        "nt \\discretionary{a}{b}{}xa\\par}\\showbox0 \\set"
+        "box0=\\vbox{\\noindent ax\\discretionary{}{}{y}\\p"
+        "ar}\\showbox0 \\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n> \\box0=\n\\vbox(4.3055"
+        "4+0.0)x200.0\n.\\hbox(4.30554+0.0)x200.0, glue set"
+        " 190.72218fil\n..\\tenrm a\n..\\tenrm x\n..\\hbox("
+        "0.0+0.0)x0.0\n...\\special{s}\n..\\penalty 10000\n"
+        "..\\kern-1.0 (right margin)\n..\\glue(\\parfillski"
+        "p) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n!"
+        " OK.\n> \\box0=\n\\vbox(4.30554+1.94444)x200.0\n."
+        "\\hbox(4.30554+1.94444)x200.0, glue set 184.94438f"
+        "il\n..\\tenrm a\n..\\tenrm x\n..\\hbox(4.30554+1.9"
+        "4444)x5.2778\n...\\tenrm y\n..\\penalty 10000\n.."
+        "\\kern-0.5 (right margin)\n..\\glue(\\parfillskip)"
+        " 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! O"
+        "K.\n> \\box0=\n\\vbox(4.30554+0.0)x200.0\n.\\hbox("
+        "4.30554+0.0)x200.0, glue set 184.72218fil\n..\\ten"
+        "rm a\n..\\tenrm x\n..\\hbox(0.0+0.0)x5.0\n..\\pena"
+        "lty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil"
+        "\n..\\glue(\\rightskip) 0.0\n\n! OK.\n> \\box0=\n"
+        "\\vbox(4.30554+0.0)x200.0\n.\\hbox(4.30554+0.0)x20"
+        "0.0, glue set 189.72218fil\n..\\tenrm a\n..\\tenrm"
+        " x\n..\\vbox(0.0+0.0)x0.0\n..\\penalty 10000\n..\\"
+        "glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\ri"
+        "ghtskip) 0.0\n\n! OK.\n> \\box0=\n\\vbox(4.30554+0"
+        ".0)x200.0\n.\\hbox(4.30554+0.0)x200.0, glue set 18"
+        "9.72218fil\n..\\tenrm a\n..\\tenrm x\n..\\hbox(0.0"
+        "+0.0)x0.0\n...\\glue 0.0\n..\\penalty 10000\n..\\g"
+        "lue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\rig"
+        "htskip) 0.0\n\n! OK.\n> \\box0=\n\\vbox(4.30554+0."
+        "0)x200.0\n.\\hbox(4.30554+0.0)x200.0, glue set 190"
+        ".72218fil\n..\\kern-1.0 (left margin)\n..\\hbox(0."
+        "0+0.0)x0.0\n...\\special{s}\n..\\tenrm x\n..\\tenr"
+        "m a\n..\\penalty 10000\n..\\glue(\\parfillskip) 0."
+        "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n> \\box0=\n\\vbox(4.30554+0.0)x200.0\n.\\hbox(4."
+        "30554+0.0)x200.0, glue set 190.72218fil\n..\\kern-"
+        "1.0 (left margin)\n..\\discretionary\n..\\tenrm x"
+        "\n..\\tenrm a\n..\\penalty 10000\n..\\glue(\\parfi"
+        "llskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0"
+        "\n\n! OK.\n> \\box0=\n\\vbox(4.30554+0.0)x200.0\n."
+        "\\hbox(4.30554+0.0)x200.0, glue set 189.72218fil\n"
+        "..\\discretionary\n...\\tenrm a\n..|\\tenrm b\n.."
+        "\\tenrm x\n..\\tenrm a\n..\\penalty 10000\n..\\glu"
+        "e(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\right"
+        "skip) 0.0\n\n! OK.\n> \\box0=\n\\vbox(4.30554+1.94"
+        "444)x200.0\n.\\hbox(4.30554+1.94444)x200.0, glue s"
+        "et 184.94438fil\n..\\tenrm a\n..\\tenrm x\n..\\dis"
+        "cretionary replacing 1\n..\\tenrm y\n..\\penalty 1"
+        "0000\n..\\kern-0.5 (right margin)\n..\\glue(\\parf"
+        "illskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0."
+        "0\n\n! OK.\n> \\box254=void\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* Nothing between the two ends of a formula is hyphenated: the reference
+   only looks for a word to hyphenate after glue that a line may break at,
+   and glue inside a formula is not that. See docs/DECISIONS.md,
+   no-hyphens-inside-a-formula. */
+static int test_no_hyphens_inside_a_formula(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\hyphenchar\\tenrm=45 "
+        "\\hyphenchar\\teni=45 \\lccode`a=`a \\patterns{a1a"
+        "}\\hsize=40pt \\setbox0=\\vbox{\\noindent xx aaaa "
+        "xx\\par}\\showbox0 \\setbox0=\\vbox{\\noindent xx "
+        "$aaaa$ xx\\par}\\showbox0 \\setbox0=\\vbox{\\noind"
+        "ent xx $z$ aaaa xx\\par}\\showbox0 \\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n> \\box0=\n\\vbox(16.305"
+        "54+0.0)x40.0\n.\\hbox(4.30554+0.0)x40.0\n..\\tenrm"
+        " x\n..\\tenrm x\n..\\glue(\\spaceskip) 4.0\n..\\te"
+        "nrm a\n..\\discretionary\n...\\tenrm -\n..\\tenrm "
+        "a\n..\\discretionary\n...\\tenrm -\n..\\tenrm a\n."
+        ".\\discretionary\n...\\tenrm -\n..\\tenrm a\n..\\g"
+        "lue(\\rightskip) 0.0\n.\\glue(\\baselineskip) 7.69"
+        "446\n.\\hbox(4.30554+0.0)x40.0, glue set 29.4444fi"
+        "l\n..\\tenrm x\n..\\tenrm x\n..\\penalty 10000\n.."
+        "\\glue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\"
+        "rightskip) 0.0\n\n! OK.\n> \\box0=\n\\vbox(16.3055"
+        "4+0.0)x40.0\n.\\hbox(4.30554+0.0)x40.0\n..\\tenrm "
+        "x\n..\\tenrm x\n..\\glue(\\spaceskip) 4.0\n..\\mat"
+        "hon\n..\\teni a\n..\\teni a\n..\\teni a\n..\\teni "
+        "a\n..\\mathoff\n..\\glue(\\rightskip) 0.0\n.\\glue"
+        "(\\baselineskip) 7.69446\n.\\hbox(4.30554+0.0)x40."
+        "0, glue set 29.4444fil\n..\\tenrm x\n..\\tenrm x\n"
+        "..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 plu"
+        "s 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n> \\"
+        "box0=\n\\vbox(16.30554+0.0)x40.0\n.\\hbox(4.30554+"
+        "0.0)x40.0\n..\\tenrm x\n..\\tenrm x\n..\\glue(\\sp"
+        "aceskip) 4.0\n..\\mathon\n..\\teni z\n..\\kern0.43"
+        "98\n..\\mathoff\n..\\glue(\\spaceskip) 4.0\n..\\te"
+        "nrm a\n..\\discretionary\n...\\tenrm -\n..\\tenrm "
+        "a\n..\\discretionary\n..\\tenrm -\n..\\glue(\\righ"
+        "tskip) 0.0\n.\\glue(\\baselineskip) 7.69446\n.\\hb"
+        "ox(4.30554+0.0)x40.0, glue set 15.44437fil\n..\\te"
+        "nrm a\n..\\discretionary\n...\\tenrm -\n..\\tenrm "
+        "a\n..\\glue(\\spaceskip) 4.0\n..\\tenrm x\n..\\ten"
+        "rm x\n..\\penalty 10000\n..\\glue(\\parfillskip) 0"
+        ".0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+        "\n> \\box254=void\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* A line that would have to stretch further than the reference is willing
+   to measure is infinitely bad and as loose as a line can be, so it costs
+   \adjdemerits against a decent neighbour. See docs/DECISIONS.md,
+   a-line-too-short-to-measure. */
+static int test_a_line_too_short_to_measure(void)
+{
+    static const char *const source[] = {
+        "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+        "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+        "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+        "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+        "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+        "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+        " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+        "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+        "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+        "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+        "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+        "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+        "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+        "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+        "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+        "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+        "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+        "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+        "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+        "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+        "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\trac"
+        "ingparagraphs=1 \\adjdemerits=10000 \\setbox0=\\vb"
+        "ox{\\noindent a\\penalty0 \\kern0pt aaa aaa aaa aa"
+        "a aaa aaa aaa aaa aaa aaa aaa aaa aaa aaa aaa aaa"
+        "\\par}%",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "\\tenrm a\n@\\penalty via @@0 b=10000 p=0 d=100010"
+        "000\n@@1: line 1.0 t=100010000 -> @@0\naaa \n@ via"
+        " @@0 b=10000 p=0 d=100010000\n@ via @@1 b=10000 p="
+        "0 d=100000000\n@@2: line 1.0 t=100010000 -> @@0\na"
+        "aa \n@ via @@0 b=10000 p=0 d=100010000\n@ via @@1 "
+        "b=10000 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=1"
+        "00000000\n@@3: line 1.0 t=100010000 -> @@0\naaa \n"
+        "@ via @@0 b=10000 p=0 d=100010000\n@ via @@1 b=100"
+        "00 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=100000"
+        "000\n@ via @@3 b=10000 p=0 d=100000000\n@@4: line "
+        "1.0 t=100010000 -> @@0\naaa \n@ via @@0 b=10000 p="
+        "0 d=100010000\n@ via @@1 b=10000 p=0 d=100000000\n"
+        "@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=100"
+        "00 p=0 d=100000000\n@ via @@4 b=10000 p=0 d=100000"
+        "000\n@@5: line 1.0 t=100010000 -> @@0\naaa \n@ via"
+        " @@0 b=10000 p=0 d=100010000\n@ via @@1 b=10000 p="
+        "0 d=100000000\n@ via @@2 b=10000 p=0 d=100000000\n"
+        "@ via @@3 b=10000 p=0 d=100000000\n@ via @@4 b=100"
+        "00 p=0 d=100000000\n@ via @@5 b=10000 p=0 d=100000"
+        "000\n@@6: line 1.0 t=100010000 -> @@0\naaa \n@ via"
+        " @@0 b=10000 p=0 d=100010000\n@ via @@1 b=10000 p="
+        "0 d=100000000\n@ via @@2 b=10000 p=0 d=100000000\n"
+        "@ via @@3 b=10000 p=0 d=100000000\n@ via @@4 b=100"
+        "00 p=0 d=100000000\n@ via @@5 b=10000 p=0 d=100000"
+        "000\n@ via @@6 b=10000 p=0 d=100000000\n@@7: line "
+        "1.0 t=100010000 -> @@0\naaa \n@ via @@0 b=10000 p="
+        "0 d=100010000\n@ via @@1 b=10000 p=0 d=100000000\n"
+        "@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=100"
+        "00 p=0 d=100000000\n@ via @@4 b=10000 p=0 d=100000"
+        "000\n@ via @@5 b=10000 p=0 d=100000000\n@ via @@6 "
+        "b=10000 p=0 d=100000000\n@ via @@7 b=10000 p=0 d=1"
+        "00000000\n@@8: line 1.0 t=100010000 -> @@0\naaa \n"
+        "@ via @@0 b=10000 p=0 d=100010000\n@ via @@1 b=100"
+        "00 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=100000"
+        "000\n@ via @@3 b=10000 p=0 d=100000000\n@ via @@4 "
+        "b=10000 p=0 d=100000000\n@ via @@5 b=10000 p=0 d=1"
+        "00000000\n@ via @@6 b=10000 p=0 d=100000000\n@ via"
+        " @@7 b=10000 p=0 d=100000000\n@ via @@8 b=10000 p="
+        "0 d=100000000\n@@9: line 1.0 t=100010000 -> @@0\na"
+        "aa \n@ via @@0 b=10000 p=0 d=100010000\n@ via @@1 "
+        "b=10000 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=1"
+        "00000000\n@ via @@3 b=10000 p=0 d=100000000\n@ via"
+        " @@4 b=10000 p=0 d=100000000\n@ via @@5 b=10000 p="
+        "0 d=100000000\n@ via @@6 b=10000 p=0 d=100000000\n"
+        "@ via @@7 b=10000 p=0 d=100000000\n@ via @@8 b=100"
+        "00 p=0 d=100000000\n@ via @@9 b=10000 p=0 d=100000"
+        "000\n@@10: line 1.0 t=100010000 -> @@0\naaa \n@ vi"
+        "a @@0 b=10000 p=0 d=100010000\n@ via @@1 b=10000 p"
+        "=0 d=100000000\n@ via @@2 b=10000 p=0 d=100000000"
+        "\n@ via @@3 b=10000 p=0 d=100000000\n@ via @@4 b=1"
+        "0000 p=0 d=100000000\n@ via @@5 b=10000 p=0 d=1000"
+        "00000\n@ via @@6 b=10000 p=0 d=100000000\n@ via @@"
+        "7 b=10000 p=0 d=100000000\n@ via @@8 b=10000 p=0 d"
+        "=100000000\n@ via @@9 b=10000 p=0 d=100000000\n@ v"
+        "ia @@10 b=10000 p=0 d=100000000\n@@11: line 1.0 t="
+        "100010000 -> @@0\naaa \n@ via @@2 b=10000 p=0 d=10"
+        "0000000\n@ via @@3 b=10000 p=0 d=100000000\n@ via "
+        "@@4 b=10000 p=0 d=100000000\n@ via @@5 b=10000 p=0"
+        " d=100000000\n@ via @@6 b=10000 p=0 d=100000000\n@"
+        " via @@7 b=10000 p=0 d=100000000\n@ via @@8 b=1000",
+        "0 p=0 d=100000000\n@ via @@9 b=10000 p=0 d=1000000"
+        "00\n@ via @@10 b=10000 p=0 d=100000000\n@ via @@11"
+        " b=10000 p=0 d=100000000\n@@12: line 2.0 t=2000100"
+        "00 -> @@11\naaa \n@ via @@3 b=10000 p=0 d=10000000"
+        "0\n@ via @@4 b=10000 p=0 d=100000000\n@ via @@5 b="
+        "10000 p=0 d=100000000\n@ via @@6 b=10000 p=0 d=100"
+        "000000\n@ via @@7 b=10000 p=0 d=100000000\n@ via @"
+        "@8 b=10000 p=0 d=100000000\n@ via @@9 b=10000 p=0 "
+        "d=100000000\n@ via @@10 b=10000 p=0 d=100000000\n@"
+        " via @@11 b=10000 p=0 d=100000000\n@ via @@12 b=10"
+        "000 p=0 d=100000000\n@@13: line 2.0 t=200010000 ->"
+        " @@11\naaa \n@ via @@4 b=10000 p=0 d=100000000\n@ "
+        "via @@5 b=10000 p=0 d=100000000\n@ via @@6 b=10000"
+        " p=0 d=100000000\n@ via @@7 b=10000 p=0 d=10000000"
+        "0\n@ via @@8 b=10000 p=0 d=100000000\n@ via @@9 b="
+        "10000 p=0 d=100000000\n@ via @@10 b=10000 p=0 d=10"
+        "0000000\n@ via @@11 b=10000 p=0 d=100000000\n@ via"
+        " @@12 b=10000 p=0 d=100000000\n@ via @@13 b=10000 "
+        "p=0 d=100000000\n@@14: line 2.0 t=200010000 -> @@1"
+        "1\naaa \n@ via @@5 b=10000 p=0 d=100000000\n@ via "
+        "@@6 b=10000 p=0 d=100000000\n@ via @@7 b=10000 p=0"
+        " d=100000000\n@ via @@8 b=10000 p=0 d=100000000\n@"
+        " via @@9 b=10000 p=0 d=100000000\n@ via @@10 b=100"
+        "00 p=0 d=100000000\n@ via @@11 b=10000 p=0 d=10000"
+        "0000\n@ via @@12 b=10000 p=0 d=100000000\n@ via @@"
+        "13 b=10000 p=0 d=100000000\n@ via @@14 b=10000 p=0"
+        " d=100000000\n@@15: line 2.0 t=200010000 -> @@11\n"
+        "aaa \n@ via @@6 b=10000 p=0 d=100000000\n@ via @@7"
+        " b=10000 p=0 d=100000000\n@ via @@8 b=10000 p=0 d="
+        "100000000\n@ via @@9 b=10000 p=0 d=100000000\n@ vi"
+        "a @@10 b=10000 p=0 d=100000000\n@ via @@11 b=10000"
+        " p=0 d=100000000\n@ via @@12 b=10000 p=0 d=1000000"
+        "00\n@ via @@13 b=10000 p=0 d=100000000\n@ via @@14"
+        " b=10000 p=0 d=100000000\n@ via @@15 b=10000 p=0 d"
+        "=100000000\n@@16: line 2.0 t=200010000 -> @@11\naa"
+        "a \n@\\par via @@7 b=0 p=-10000 d=10000\n@\\par vi"
+        "a @@8 b=0 p=-10000 d=10000\n@\\par via @@9 b=0 p=-"
+        "10000 d=10000\n@\\par via @@10 b=0 p=-10000 d=1000"
+        "0\n@\\par via @@11 b=0 p=-10000 d=10000\n@\\par vi"
+        "a @@12 b=0 p=-10000 d=10000\n@\\par via @@13 b=0 p"
+        "=-10000 d=10000\n@\\par via @@14 b=0 p=-10000 d=10"
+        "000\n@\\par via @@15 b=0 p=-10000 d=10000\n@\\par "
+        "via @@16 b=0 p=-10000 d=10000\n@@17: line 2.2- t=1"
+        "00020000 -> @@11\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* How many bytes a movement is written in: the reference chooses by how
+   big the movement is, not by what the signed range holds, so -128 takes two
+   bytes and -32768 three. See docs/DECISIONS.md, the-page-description. */
+static int test_how_wide_a_movement_is(void)
+{
+    static const char *const source[] = {
+        "\\pdfoutput=0 \\year=2026 \\month=8 \\day=18 \\tim"
+        "e=1117 \\font\\tenrm=cmr10 \\tenrm \\hsize=400pt "
+        "\\vsize=200pt \\parindent=0pt \\hbadness=10000 \\h"
+        "fuzz=1000pt \\shipout\\hbox{a\\kern 127sp a\\kern "
+        "-128sp a\\kern 32767sp a\\kern -32768sp a\\kern 83"
+        "88607sp a\\kern -8388608sp a}\\shipout\\vbox{\\hbo"
+        "x{a}\\kern -128sp \\hbox{a}\\kern -32768sp \\hbox{"
+        "a}}",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "f702018392c01c3b0000000003e81b20546558206f75747075"
+        "7420323032362e30382e31383a313833378b00000000000000"
+        "00000000000000000000000000000000000000000000000000"
+        "0000000000000000ffffffff9f044e38f3004bf16079000a00"
+        "00000a00000005636d723130ab618f7f6190ff8061907fff61"
+        "91ff800061917fffff6192ff800000618c8b00000000000000"
+        "00000000000000000000000000000000000000000000000000"
+        "00000000000000000000002a9f044e388dab618e9f044db88d"
+        "618e9f03ce388d618e8cf80000008e018392c01c3b00000000"
+        "03e8000c6a280023000400010002f3004bf16079000a000000"
+        "0a00000005636d723130f9000000d202dfdfdfdfdfdf",
+        NULL,
+    };
+    return run_document_dvi(source, expected);
+}
+
+/* The glue at either end of a line stands outside its margin kern, so
+   \leftmarginkern looks past the \leftskip a table-of-contents entry sets.
+   See docs/DECISIONS.md, the-margin-kerns-of-a-line. */
+static int test_a_margin_kern_behind_the_leftskip(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\font\\f=cmr10 \\f \\h"
+        "size=100pt \\parindent=0pt \\parfillskip=0pt \\lpc"
+        "ode\\f`\\(=117 \\rpcode\\f`\\)=117 \\pdfprotrudech"
+        "ars=2 \\setbox1=\\vbox{\\leftskip=20pt \\noindent("
+        "1)\\par}\\setbox2=\\vbox{\\unvbox1 \\global\\setbo"
+        "x1=\\lastbox}\\dimen5=\\leftmarginkern1 \\dimen6="
+        "\\rightmarginkern1 \\message{<L=\\the\\dimen5><R="
+        "\\the\\dimen6>}\\showbox1 \\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n<L=-1.17pt><R=-1.17pt>\n"
+        "> \\box1=\n\\hbox(7.5+2.5)x100.0\n.\\glue(\\leftsk"
+        "ip) 20.0\n.\\kern-1.17 (left margin)\n.\\f (\n.\\f"
+        " 1\n.\\f )\n.\\penalty 10000\n.\\kern-1.17 (right "
+        "margin)\n.\\glue(\\parfillskip) 0.0\n.\\glue(\\rig"
+        "htskip) 0.0\n\n! OK.\n> \\box254=void\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 static int test_what_a_split_leaves_behind(void)
 {
     static const char *const source[] = {
@@ -8562,6 +9015,12 @@ int main(void)
         test_a_mark_in_a_list() != 0 ||
         test_a_definition_nothing_holds() != 0 ||
         test_the_page_description() != 0 ||
+        test_leaders_on_a_page() != 0 ||
+        test_how_wide_a_movement_is() != 0 ||
+        test_a_box_at_the_edge() != 0 ||
+        test_a_margin_kern_behind_the_leftskip() != 0 ||
+        test_no_hyphens_inside_a_formula() != 0 ||
+        test_a_line_too_short_to_measure() != 0 ||
         test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||

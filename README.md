@@ -149,19 +149,20 @@ paragraph, and the operator centring, limits, accents, superscript floors and
 display marks a formula needs. `\tracingparagraphs` writes the passes out the
 way the reference does, which is how the last few of those were found.
 
-`\shipout` writes a page description when `\pdfoutput` is not positive: a
-DVI file, byte for byte the reference's for the pages tested so far --
-places, fonts, rules, set glue, the movement registers, the preamble and the
-postamble. A PDF is still to come. Marks and insertions are both there, splitting and
+`\shipout` writes a page description when `\pdfoutput` is not positive, and
+the whole corpus in that mode -- 2,375 pages and 22 megabytes of DVI -- is
+byte for byte what `pdflatex` writes for the same source: places, fonts,
+rules, leaders, set glue, the movement registers, the preamble and the
+postamble, down to which of the two registers a repeated movement takes and
+how far back the reference can still reach to rewrite one. A PDF is still to
+come. Marks and insertions are both there, splitting and
 all: an insertion that will not fit is broken where `\vsplit` would break
 it, what fits goes into the box of its class, and the rest waits for the next
-page with `\splittopskip` in front of it. The corpus
-comes to 2,335 pages, which is `pdflatex`'s count, and every file it writes
-beside them is identical to the reference's: the table of contents, the
+page with `\splittopskip` in front of it. Every file the corpus writes
+beside its pages is identical to the reference's: the table of contents, the
 bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
-every page number, section number and cross-reference in a 2,335-page
-document, and every `\citation` in the order the reference wrote it. What is
-left is the page description itself.
+every page number, section number and cross-reference in a 2,375-page
+document, and every `\citation` in the order the reference wrote it.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
