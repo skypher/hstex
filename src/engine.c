@@ -13563,10 +13563,40 @@ static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
     return (int32_t)tenths;
 }
 
+/* One thousandth of the size the file states for the font, in scaled points
+   as a fraction: the size is printed in ten-thousandths of a big point, and
+   a big point is 1644544/25 scaled points. See docs/DECISIONS.md,
+   the-text-position-in-the-file. */
+#define HSTEX_PDF_UNIT_DENOMINATOR INT64_C(250000000)
+
+static int64_t pdf_unit_numerator(const struct hstex_font *font)
+{
+    int64_t stated = pdf_bp_units(font->size, 4);
+    return stated * INT64_C(1644544);
+}
+
+static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
+{
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator
+                          : -((-numerator + denominator / 2) / denominator);
+}
+
+/* How far the file thinks the text has moved when it has set this character:
+   the width it states for it, at the size it states for the font, taken
+   towards the width the engine itself has for it. See docs/DECISIONS.md,
+   the-text-position-in-the-file. */
 static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
 {
     int64_t tenths = pdf_glyph_units(font, code);
-    return (int32_t)(tenths * font->size / 10000);
+    int64_t numerator = tenths * pdf_unit_numerator(font);
+    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR * 10;
+    int64_t whole = numerator / denominator;
+    int64_t rest = numerator - whole * denominator;
+    int64_t width = packed_dimen(font->characters[code].width);
+    if (rest != 0 && whole < width) {
+        whole += 1;
+    }
+    return (int32_t)whole;
 }
 
 static int pdf_place_character(struct hstex_engine *engine,
@@ -13666,16 +13696,17 @@ static int pdf_place_character(struct hstex_engine *engine,
     }
     if (h != engine->pdf_text_h) {
         int64_t difference = (int64_t)engine->pdf_text_h - h;
-        int64_t size = font->size == 0 ? 1 : font->size;
-        int64_t offset = difference >= 0 ? (difference * 1000 + size / 2) / size
-                                         : -((-difference * 1000 + size / 2) / size);
+        int64_t unit = pdf_unit_numerator(font);
+        int64_t offset = pdf_round_division(
+            difference * HSTEX_PDF_UNIT_DENOMINATOR, unit);
         if (offset != 0) {
             if (pdf_end_string(engine, error, error_capacity) != 0 ||
                 pdf_formatted(engine, error, error_capacity, "%lld",
                               (long long)offset) != 0) {
                 return -1;
             }
-            engine->pdf_text_h -= (int32_t)(offset * size / 1000);
+            engine->pdf_text_h -= (int32_t)pdf_round_division(
+                offset * unit, HSTEX_PDF_UNIT_DENOMINATOR);
         }
     }
     if (!engine->pdf_in_string) {
@@ -14285,13 +14316,60 @@ static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
             here += width;
             break;
         }
-        case HSTEX_NODE_GLUE:
-            here += packed_dimen(node.width) +
-                    set_glue_step(&set, &running, node.value.glue.stretch,
-                                  node.value.glue.stretch_order,
-                                  node.value.glue.shrink,
-                                  node.value.glue.shrink_order);
+        case HSTEX_NODE_GLUE: {
+            int32_t amount = packed_dimen(node.width) +
+                             set_glue_step(&set, &running,
+                                           node.value.glue.stretch,
+                                           node.value.glue.stretch_order,
+                                           node.value.glue.shrink,
+                                           node.value.glue.shrink_order);
+            uint32_t filling = node.value.glue.leader;
+            const struct hstex_node *leader =
+                filling != 0U && (size_t)filling <= engine->node_count
+                    ? &engine->nodes[filling - 1U]
+                    : NULL;
+            if (leader != NULL && leader->kind == HSTEX_NODE_RULE) {
+                /* A rule reaches across the whole of the glue; see
+                   docs/DECISIONS.md, leaders-on-a-page. */
+                int32_t height =
+                    dvi_rule_dimen(leader->height, packed_dimen(box->height));
+                int32_t depth =
+                    dvi_rule_dimen(leader->depth, packed_dimen(box->depth));
+                if (height + depth > 0 && amount > 0 &&
+                    pdf_place_rule(engine, here, base + depth, amount,
+                                   height + depth, error, error_capacity) != 0) {
+                    return -1;
+                }
+            } else if (leader != NULL && leader->kind == HSTEX_NODE_LIST &&
+                       packed_dimen(leader->width) > 0 && amount > 0) {
+                struct hstex_leader_run run =
+                    leader_run(node.value.glue.leader_kind, here, left, amount,
+                               packed_dimen(leader->width));
+                struct hstex_node repeated = *leader;
+                for (int32_t at = run.at;
+                     at + packed_dimen(repeated.width) <= run.limit;
+                     at += run.step) {
+                    if (repeated.value.list.node_count == 0U) {
+                        continue;
+                    }
+                    int32_t shifted = base + packed_dimen(repeated.shift);
+                    engine->pdf_level += 1;
+                    int status =
+                        repeated.value.list.box_kind == HSTEX_BOX_VLIST
+                            ? pdf_vlist(engine, &repeated, at,
+                                        shifted - packed_dimen(repeated.height),
+                                        error, error_capacity)
+                            : pdf_hlist(engine, &repeated, at, shifted, error,
+                                        error_capacity);
+                    engine->pdf_level -= 1;
+                    if (status != 0) {
+                        return -1;
+                    }
+                }
+            }
+            here += amount;
             break;
+        }
         case HSTEX_NODE_KERN:
         case HSTEX_NODE_MATH:
             here += packed_dimen(node.width);
@@ -14387,13 +14465,60 @@ static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
             here += height + depth;
             break;
         }
-        case HSTEX_NODE_GLUE:
-            here += packed_dimen(node.width) +
-                    set_glue_step(&set, &running, node.value.glue.stretch,
-                                  node.value.glue.stretch_order,
-                                  node.value.glue.shrink,
-                                  node.value.glue.shrink_order);
+        case HSTEX_NODE_GLUE: {
+            int32_t amount = packed_dimen(node.width) +
+                             set_glue_step(&set, &running,
+                                           node.value.glue.stretch,
+                                           node.value.glue.stretch_order,
+                                           node.value.glue.shrink,
+                                           node.value.glue.shrink_order);
+            uint32_t filling = node.value.glue.leader;
+            const struct hstex_node *leader =
+                filling != 0U && (size_t)filling <= engine->node_count
+                    ? &engine->nodes[filling - 1U]
+                    : NULL;
+            if (leader != NULL && leader->kind == HSTEX_NODE_RULE) {
+                int32_t width =
+                    dvi_rule_dimen(leader->width, packed_dimen(box->width));
+                if (amount > 0 && width > 0 &&
+                    pdf_place_rule(engine, left, here + amount, width, amount,
+                                   error, error_capacity) != 0) {
+                    return -1;
+                }
+            } else if (leader != NULL && leader->kind == HSTEX_NODE_LIST &&
+                       packed_dimen(leader->height) +
+                               packed_dimen(leader->depth) >
+                           0 &&
+                       amount > 0) {
+                struct hstex_node repeated = *leader;
+                int32_t reach = packed_dimen(repeated.height) +
+                                packed_dimen(repeated.depth);
+                struct hstex_leader_run run =
+                    leader_run(node.value.glue.leader_kind, here, top, amount,
+                               reach);
+                for (int32_t at = run.at; at + reach <= run.limit;
+                     at += run.step) {
+                    if (repeated.value.list.node_count == 0U) {
+                        continue;
+                    }
+                    int32_t shifted = left + packed_dimen(repeated.shift);
+                    engine->pdf_level += 1;
+                    int status =
+                        repeated.value.list.box_kind == HSTEX_BOX_VLIST
+                            ? pdf_vlist(engine, &repeated, shifted, at, error,
+                                        error_capacity)
+                            : pdf_hlist(engine, &repeated, shifted,
+                                        at + packed_dimen(repeated.height),
+                                        error, error_capacity);
+                    engine->pdf_level -= 1;
+                    if (status != 0) {
+                        return -1;
+                    }
+                }
+            }
+            here += amount;
             break;
+        }
         case HSTEX_NODE_KERN:
             here += packed_dimen(node.width);
             break;
