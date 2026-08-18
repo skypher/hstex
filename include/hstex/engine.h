@@ -98,7 +98,6 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_CHAR_GIVEN,
     HSTEX_COMMAND_RADICAL,
     HSTEX_COMMAND_MATH_ACCENT,
-    HSTEX_COMMAND_MARKS,
     HSTEX_COMMAND_PATTERNS,
     HSTEX_COMMAND_HYPHENATION,
     HSTEX_COMMAND_DIMEN_DEF,
@@ -228,6 +227,9 @@ enum hstex_command {
     HSTEX_COMMAND_NON_SCRIPT,
     HSTEX_COMMAND_SHIP_OUT,
     HSTEX_COMMAND_SHOW_BOX,
+    /* \mark and \marks, and the five texts they leave behind. */
+    HSTEX_COMMAND_MARK,
+    HSTEX_COMMAND_MARK_TEXT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -935,6 +937,17 @@ struct hstex_noad {
     bool vcentered;
 };
 
+/* The three texts one class of marks leaves behind, and the two a \vsplit
+   leaves; see docs/DECISIONS.md, marks. */
+struct hstex_mark_class {
+    uint32_t number;
+    uint32_t top;
+    uint32_t first;
+    uint32_t bot;
+    uint32_t split_first;
+    uint32_t split_bot;
+};
+
 /* Which slot the next atom fills, when a script mark is waiting. */
 enum hstex_math_slot {
     HSTEX_MATH_SLOT_NONE = 0,
@@ -990,6 +1003,7 @@ enum hstex_node_kind {
     HSTEX_NODE_WHATSIT,
     HSTEX_NODE_DISCRETIONARY,
     HSTEX_NODE_MATH,
+    HSTEX_NODE_MARK,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
@@ -1074,6 +1088,13 @@ struct hstex_node {
                docs/DECISIONS.md, character-protrusion and accent-kerns. */
             uint8_t margin;
         } kern;
+        struct {
+            /* The token list \mark was given, already expanded once, and the
+               class \marks was given; zero for plain \mark. See
+               docs/DECISIONS.md, marks. */
+            uint32_t tokens;
+            uint16_t class_number;
+        } mark;
         struct {
             /* An enum hstex_whatsit_kind. */
             uint8_t kind;
@@ -1338,6 +1359,14 @@ struct hstex_engine {
        empty again; see docs/DECISIONS.md, the-last-node-of-a-page. */
     struct hstex_node page_last_node;
     bool page_last_taken;
+    /* The marks of the page being built and of the one before it, as stored
+       token lists: \topmark is what the page before ended with, \firstmark
+       and \botmark the first and last of this one. Zero is an empty text.
+       Class marks (\marks) keep the same three each. See
+       docs/DECISIONS.md, marks. */
+    struct hstex_mark_class *mark_classes;
+    size_t mark_class_count;
+    size_t mark_class_capacity;
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;

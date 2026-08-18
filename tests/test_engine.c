@@ -2645,6 +2645,124 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* A \mark leaves a node holding the text it was given, expanded once as
+   \edef expands one. It stays where it stands in a vertical list and in an
+   \hbox, and moves out of a paragraph line to the vertical list behind it.
+   See docs/DECISIONS.md, marks. */
+static int test_a_mark_in_a_list(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=4 \\showboxbreadth=100 \\def\\x{Q\\y}\\de"
+    "f\\y{R}\\message{[v]}\\setbox0=\\vbox{\\hrule\\mar"
+    "k{one}\\hrule\\mark{two}}\\showbox0 \\message{[h]}"
+    "\\setbox0=\\vbox{\\noindent aa\\mark{three}bb\\par"
+    "}\\showbox0 \\message{[i]}\\setbox0=\\hbox{aa\\mar"
+    "k{four}bb}\\showbox0 \\message{[e]}\\setbox0=\\vbo"
+    "x{\\hrule\\mark{\\x A}}\\showbox0 \\message{[p]}\\"
+    "setbox0=\\vbox{\\hrule\\mark{}}\\showbox0 \\messag"
+    "e{[n]}\\setbox0=\\vbox{\\hrule\\marks2{cls}\\xdef"
+    "\\t{\\the\\lastnodetype}}\\showbox0 \\message{[typ"
+    "e]}\\setbox0=\\hbox{\\t}\\showbox0%"
+,
+    "[v]> \\box0=\n\\vbox(0.79999+0.0)x0.0\n.\\rule(0.4"
+    "+0.0)x*\n.\\mark{one}\n.\\rule(0.4+0.0)x*\n.\\mark"
+    "{two}\n\n! OK.\n[h]> \\box0=\n\\vbox(6.94444+0.0)x"
+    "200.0\n.\\hbox(6.94444+0.0)x200.0, glue set 178.88"
+    "882fil\n..\\tenrm a\n..\\tenrm a\n..\\tenrm b\n.."
+    "\\tenrm b\n..\\penalty 10000\n..\\glue(\\parfillsk"
+    "ip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n."
+    "\\mark{three}\n\n! OK.\n[i]> \\box0=\n\\hbox(6.944"
+    "44+0.0)x21.11118\n.\\tenrm a\n.\\tenrm a\n.\\mark{"
+    "four}\n.\\tenrm b\n.\\tenrm b\n\n! OK.\n[e]> \\box"
+    "0=\n\\vbox(0.4+0.0)x0.0\n.\\rule(0.4+0.0)x*\n.\\ma"
+    "rk{QRA}\n\n! OK.\n[p]> \\box0=\n\\vbox(0.4+0.0)x0."
+    "0\n.\\rule(0.4+0.0)x*\n.\\mark{}\n\n! OK.\n[n]> \\"
+    "box0=\n\\vbox(0.4+0.0)x0.0\n.\\rule(0.4+0.0)x*\n."
+    "\\marks2{cls}\n\n! OK.\n[type]> \\box0=\n\\hbox(6."
+    "44444+0.0)x5.00002\n.\\tenrm 5\n\n! OK.\n"
+);
+}
+
+/* \topmark is what the page before ended with, \firstmark and \botmark the
+   first and last marks of the page in hand; a page with no marks of a class
+   keeps all three at what went before. \marks keeps a set of its own for
+   each class. See docs/DECISIONS.md, marks. */
+static int test_marks_on_a_page(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=2 \\showboxbreadth=100 \\baselineskip=12p"
+    "t \\vsize=24pt \\maxdepth=2pt \\topskip=10pt \\cou"
+    "nt0=1 \\hsize=100pt \\output={\\message{[page\\the"
+    "\\count0]}\\setbox0=\\hbox{\\topmark/\\firstmark/"
+    "\\botmark/\\botmarks3}\\showbox0 \\shipout\\box255"
+    " \\global\\advance\\count0 by 1 }\\mark{one}\\mark"
+    "s3{alpha}aaa\\par bbb \\mark{two}ccc\\par \\marks3"
+    "{beta}ddd\\par eee\\par \\mark{four}fff\\par ggg\\"
+    "par \\end%"
+,
+    "[page1]> \\box0=\n\\hbox(7.5+2.5)x64.72237\n.\\ten"
+    "rm /\n.\\tenrm o\n.\\tenrm n\n.\\tenrm e\n.\\tenrm"
+    " /\n.\\tenrm t\n.\\kern-0.27779\n.\\tenrm w\n.\\ke"
+    "rn-0.27779\n.\\tenrm o\n.\\tenrm /\n.\\tenrm b\n."
+    "\\kern0.27779\n.\\tenrm e\n.\\tenrm t\n.\\tenrm a"
+    "\n\n! OK.\n[page2]> \\box0=\n\\hbox(7.5+2.5)x84.77"
+    "8\n.\\tenrm t\n.\\kern-0.27779\n.\\tenrm w\n.\\ker"
+    "n-0.27779\n.\\tenrm o\n.\\tenrm /\n.\\tenrm f\n.\\"
+    "tenrm o\n.\\tenrm u\n.\\tenrm r\n.\\tenrm /\n.\\te"
+    "nrm f\n.\\tenrm o\n.\\tenrm u\n.\\tenrm r\n.\\tenr"
+    "m /\n.\\tenrm b\n.\\kern0.27779\n.\\tenrm e\n.\\te"
+    "nrm t\n.\\tenrm a\n\n! OK.\n[page3]> \\box0=\n\\hb"
+    "ox(7.5+2.5)x86.75026\n.\\tenrm f\n.\\tenrm o\n.\\t"
+    "enrm u\n.\\tenrm r\n.\\tenrm /\n.\\tenrm f\n.\\ten"
+    "rm o\n.\\tenrm u\n.\\tenrm r\n.\\tenrm /\n.\\tenrm"
+    " f\n.\\tenrm o\n.\\tenrm u\n.\\tenrm r\n.\\tenrm /"
+    "\n.\\tenrm b\n.\\kern0.27779\n.\\tenrm e\n.\\tenrm"
+    " t\n.\\tenrm a\n\n! OK.\n"
+);
+}
+
 /* Braces round a \vcenter package it, though braces round an \hbox give way
    to it: \vcenter makes an atom of its own kind, not an ordinary one. See
    docs/DECISIONS.md, a-vcenter-in-braces. */
@@ -7415,6 +7533,8 @@ int main(void)
         test_a_rule_between_rows() != 0 ||
         test_a_limit_at_its_own_width() != 0 ||
         test_a_vcenter_in_braces() != 0 ||
+        test_a_mark_in_a_list() != 0 ||
+        test_marks_on_a_page() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

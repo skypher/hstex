@@ -1189,6 +1189,43 @@ static int store_token_list(struct hstex_engine *engine,
     return 0;
 }
 
+/* The three texts one class of marks leaves behind. The table is made as
+   classes are used; class zero is plain \\mark. See docs/DECISIONS.md,
+   marks. */
+static struct hstex_mark_class *mark_class_of(struct hstex_engine *engine,
+                                              uint32_t number, bool make,
+                                              char *error,
+                                              size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->mark_class_count; ++index) {
+        if (engine->mark_classes[index].number == number) {
+            return &engine->mark_classes[index];
+        }
+    }
+    if (!make) {
+        return NULL;
+    }
+    if (engine->mark_class_count == engine->mark_class_capacity) {
+        size_t capacity = engine->mark_class_capacity == 0U
+                              ? 4U
+                              : engine->mark_class_capacity * 2U;
+        struct hstex_mark_class *grown =
+            realloc(engine->mark_classes, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "mark class table allocation failed");
+            return NULL;
+        }
+        engine->mark_classes = grown;
+        engine->mark_class_capacity = capacity;
+    }
+    struct hstex_mark_class *entry =
+        &engine->mark_classes[engine->mark_class_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->number = number;
+    return entry;
+}
+
 static const struct hstex_token_list *token_list_by_identifier(
     const struct hstex_engine *engine, uint32_t identifier)
 {
@@ -1822,7 +1859,6 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"mathchardef", HSTEX_COMMAND_MATH_CHAR_DEF},
         {"radical", HSTEX_COMMAND_RADICAL},
         {"mathaccent", HSTEX_COMMAND_MATH_ACCENT},
-        {"marks", HSTEX_COMMAND_MARKS},
         {"patterns", HSTEX_COMMAND_PATTERNS},
         {"hyphenation", HSTEX_COMMAND_HYPHENATION},
         {"dimendef", HSTEX_COMMAND_DIMEN_DEF},
@@ -1968,6 +2004,21 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"limits", HSTEX_COMMAND_MATH_LIMITS, 1},
         {"nolimits", HSTEX_COMMAND_MATH_LIMITS, 0},
         {"displaylimits", HSTEX_COMMAND_MATH_LIMITS, 2},
+        /* A mark, and the five texts one leaves behind. The value is the
+           class-reading flag for \mark, and which text for the rest; see
+           docs/DECISIONS.md, marks. */
+        {"mark", HSTEX_COMMAND_MARK, 0},
+        {"marks", HSTEX_COMMAND_MARK, 1},
+        {"topmark", HSTEX_COMMAND_MARK_TEXT, 0},
+        {"firstmark", HSTEX_COMMAND_MARK_TEXT, 1},
+        {"botmark", HSTEX_COMMAND_MARK_TEXT, 2},
+        {"splitfirstmark", HSTEX_COMMAND_MARK_TEXT, 3},
+        {"splitbotmark", HSTEX_COMMAND_MARK_TEXT, 4},
+        {"topmarks", HSTEX_COMMAND_MARK_TEXT, 8},
+        {"firstmarks", HSTEX_COMMAND_MARK_TEXT, 9},
+        {"botmarks", HSTEX_COMMAND_MARK_TEXT, 10},
+        {"splitfirstmarks", HSTEX_COMMAND_MARK_TEXT, 11},
+        {"splitbotmarks", HSTEX_COMMAND_MARK_TEXT, 12},
     };
     for (size_t index = 0U;
          index < sizeof(math_font_primitives) / sizeof(math_font_primitives[0]);
@@ -6448,6 +6499,56 @@ static int expand_unexpanded_text(struct hstex_engine *engine,
     return 0;
 }
 
+/* \topmark and its relatives put the text back into the input, to be read as
+   it stands; see docs/DECISIONS.md, marks. */
+static int expand_mark_text(struct hstex_engine *engine, int32_t which,
+                            struct hstex_source_location location, char *error,
+                            size_t error_capacity)
+{
+    uint32_t number = 0U;
+    if (which >= 8) {
+        int32_t scanned = 0;
+        if (scan_integer(engine, &scanned, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (scanned < 0 || scanned > 32767) {
+            return set_error(error, error_capacity,
+                             "mark class %d is outside 0..32767", scanned);
+        }
+        number = (uint32_t)scanned;
+        which -= 8;
+    }
+    const struct hstex_mark_class *entry =
+        mark_class_of(engine, number, false, error, error_capacity);
+    uint32_t identifier = 0U;
+    if (entry != NULL) {
+        switch (which) {
+        case 0:
+            identifier = entry->top;
+            break;
+        case 1:
+            identifier = entry->first;
+            break;
+        case 2:
+            identifier = entry->bot;
+            break;
+        case 3:
+            identifier = entry->split_first;
+            break;
+        default:
+            identifier = entry->split_bot;
+            break;
+        }
+    }
+    const struct hstex_token_list *list =
+        identifier == 0U ? NULL : token_list_by_identifier(engine, identifier);
+    if (list == NULL || list->count == 0U) {
+        return 0;
+    }
+    return hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                    location, error, error_capacity);
+}
+
 static int push_detokenized_character(struct token_vector *output,
                                       uint8_t character, char *error,
                                       size_t error_capacity)
@@ -7142,6 +7243,10 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_THE) {
         return expand_the_primitive(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_MARK_TEXT) {
+        return expand_mark_text(engine, meaning->value.integer, location, error,
+                                error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_NUMBER) {
         return expand_integer_primitive(engine, location, error, error_capacity);
     }
@@ -7416,6 +7521,13 @@ enum hstex_engine_result hstex_engine_next_expanded(
         if (meaning->command == HSTEX_COMMAND_THE) {
             if (expand_the_primitive(engine, *location, error,
                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_MARK_TEXT) {
+            if (expand_mark_text(engine, meaning->value.integer, *location,
+                                 error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -11320,6 +11432,26 @@ static void show_node(struct hstex_engine *engine, FILE *out,
     case HSTEX_NODE_WHATSIT:
         show_whatsit(engine, out, node);
         return;
+    case HSTEX_NODE_MARK: {
+        (void)fputs("\\mark", out);
+        if (node->value.mark.class_number != 0U) {
+            (void)fprintf(out, "s%u",
+                          (unsigned int)node->value.mark.class_number);
+        }
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        char ignored[256];
+        (void)fputc('{', out);
+        if (stored_token_list_text(engine, node->value.mark.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) == 0 &&
+            text_count != 0U) {
+            (void)fwrite(text, 1U, text_count, out);
+        }
+        free(text);
+        (void)fputc('}', out);
+        return;
+    }
     case HSTEX_NODE_MATH:
         (void)fputs(node->value.math.after ? "\\mathoff" : "\\mathon", out);
         if (packed_dimen(node->width) != 0) {
@@ -11634,6 +11766,41 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         return -1;
     }
 
+    /* The marks of the page just shipped: what it ended with becomes
+       \topmark for the next one, and the first and last marks in it are
+       \firstmark and \botmark. A page with no marks keeps all three at what
+       the page before ended with. See docs/DECISIONS.md, marks. */
+    for (size_t index = 0U; index < engine->mark_class_count; ++index) {
+        struct hstex_mark_class *entry = &engine->mark_classes[index];
+        if (entry->bot != 0U) {
+            entry->top = entry->bot;
+            entry->first = 0U;
+        }
+    }
+    for (size_t index = 0U; index < split; ++index) {
+        uint32_t held = page->node_identifiers[index];
+        if (held == 0U || (size_t)held > engine->node_count ||
+            engine->nodes[held - 1U].kind != HSTEX_NODE_MARK) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[held - 1U];
+        struct hstex_mark_class *entry =
+            mark_class_of(engine, node->value.mark.class_number, true, error,
+                          error_capacity);
+        if (entry == NULL) {
+            return -1;
+        }
+        if (entry->first == 0U) {
+            entry->first = node->value.mark.tokens;
+        }
+        entry->bot = node->value.mark.tokens;
+    }
+    for (size_t index = 0U; index < engine->mark_class_count; ++index) {
+        struct hstex_mark_class *entry = &engine->mark_classes[index];
+        if (entry->first == 0U) {
+            entry->first = entry->top;
+        }
+    }
     int32_t penalty = engine->best_page_penalty;
     engine->page_last_taken = false;
     page->count = 0U;
@@ -11756,10 +11923,11 @@ static int build_page(struct hstex_engine *engine, char *error,
             engine->page_last_taken = true;
             bool is_box =
                 node.kind == HSTEX_NODE_RULE || node.kind == HSTEX_NODE_LIST;
-            if (node.kind == HSTEX_NODE_WHATSIT) {
-                /* A whatsit joins the page wherever it stands and settles
-                   nothing; see docs/DECISIONS.md,
-                   whatsits-on-an-empty-page. */
+            if (node.kind == HSTEX_NODE_WHATSIT ||
+                node.kind == HSTEX_NODE_MARK) {
+                /* A whatsit or a mark joins the page wherever it stands and
+                   settles nothing; see docs/DECISIONS.md,
+                   whatsits-on-an-empty-page and marks. */
             } else if (page_is_empty(engine)) {
                 if (!is_box) {
                     continue;
@@ -13274,6 +13442,33 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
     return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
 
+/* The same expansion, gathering tokens rather than bytes: what \mark keeps,
+   so that \topmark and its relatives can put it back into the input. See
+   docs/DECISIONS.md, marks. */
+static int expand_to_tokens(struct hstex_engine *engine,
+                            struct token_vector *out, char *error,
+                            size_t error_capacity)
+{
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        bool previous_inhibition = engine->inhibit_protected_expansion;
+        engine->inhibit_protected_expansion = true;
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        engine->inhibit_protected_expansion = previous_inhibition;
+        if (result == HSTEX_ENGINE_EOF) {
+            return hstex_source_pop_boundary(&engine->sources, error,
+                                             error_capacity);
+        }
+        if (result != HSTEX_ENGINE_TOKEN ||
+            vector_push(out, token, error, error_capacity) != 0) {
+            (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+            return -1;
+        }
+    }
+}
+
 /* The text of a \write is kept as it was written, so it can be expanded when
    the page reaches the shipper. See docs/DECISIONS.md, whatsits. */
 static int scan_general_text(struct hstex_engine *engine,
@@ -14238,6 +14433,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 8;
     case HSTEX_NODE_MATH:
         return 10;
+    case HSTEX_NODE_MARK:
+        return 5;
     }
     return -1;
 }
@@ -15414,6 +15611,7 @@ static bool protrusion_passes_over(const struct hstex_node *node)
         return false;
     case HSTEX_NODE_PENALTY:
     case HSTEX_NODE_WHATSIT:
+    case HSTEX_NODE_MARK:
     case HSTEX_NODE_DISCRETIONARY:
         return true;
     case HSTEX_NODE_GLUE:
@@ -15516,6 +15714,7 @@ static bool precedes_glue_break(const struct hstex_node *node)
     case HSTEX_NODE_RULE:
     case HSTEX_NODE_DISCRETIONARY:
     case HSTEX_NODE_WHATSIT:
+    case HSTEX_NODE_MARK:
         return true;
     }
     return true;
@@ -16369,6 +16568,34 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             status = emit_parameter_glue(engine, right, HSTEX_GLUE_RIGHT_SKIP,
                                          error, error_capacity);
         }
+        /* A mark does not stay in the line it was written in: it moves to
+           the vertical list, behind the line's box. See docs/DECISIONS.md,
+           marks. */
+        uint32_t *migrated = NULL;
+        size_t migrated_count = 0U;
+        if (status == 0) {
+            size_t kept = 0U;
+            for (size_t item = 0U; item < builder.count; ++item) {
+                uint32_t held = builder.node_identifiers[item];
+                if (held != 0U && (size_t)held <= engine->node_count &&
+                    engine->nodes[held - 1U].kind == HSTEX_NODE_MARK) {
+                    uint32_t *grown = realloc(
+                        migrated, (migrated_count + 1U) * sizeof(*migrated));
+                    if (grown == NULL) {
+                        status = set_error(error, error_capacity,
+                                           "mark migration allocation failed");
+                        break;
+                    }
+                    migrated = grown;
+                    migrated[migrated_count++] = held;
+                    continue;
+                }
+                builder.node_identifiers[kept++] = held;
+            }
+            if (status == 0) {
+                builder.count = kept;
+            }
+        }
         struct hstex_box box = {0};
         if (status == 0) {
             status = finalize_hbox(engine, &builder, true, false,
@@ -16379,6 +16606,7 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
         engine->active_hbox_builder = previous;
         engine->mode = previous_mode;
         if (status != 0) {
+            free(migrated);
             break;
         }
         if (out_last != NULL) {
@@ -16398,6 +16626,11 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             },
         };
         status = append_vbox_node(engine, &line_node, error, error_capacity);
+        for (size_t item = 0U; status == 0 && item < migrated_count; ++item) {
+            status = append_vbox_item(engine, migrated[item], error,
+                                      error_capacity);
+        }
+        free(migrated);
         if (status == 0 && line != lines) {
             int32_t penalty = interline;
             if (line == 1U) {
@@ -20955,6 +21188,63 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
                                       error_capacity);
 }
 
+/* \mark and \marks leave a token list in the list being built, expanded once
+   as \edef expands one; see docs/DECISIONS.md, marks. */
+static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
+                        size_t error_capacity)
+{
+    int32_t class_number = 0;
+    if (classed &&
+        scan_integer(engine, &class_number, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (class_number < 0 || class_number > 32767) {
+        return set_error(error, error_capacity,
+                         "mark class %d is outside 0..32767", class_number);
+    }
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    if (expanded_next_non_space_unrestricted(engine, &opening, &location, error,
+                                             error_capacity) !=
+            HSTEX_ENGINE_TOKEN ||
+        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        return set_error(error, error_capacity,
+                         "\\mark requires a braced token list");
+    }
+    struct token_vector raw = {0};
+    if (scan_balanced_group(engine, &raw, true, error, error_capacity) != 0) {
+        vector_destroy(&raw);
+        return -1;
+    }
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        vector_destroy(&raw);
+        return -1;
+    }
+    if (push_owned_vector(engine, &raw, location, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(&raw);
+        return -1;
+    }
+    struct token_vector text = {0};
+    if (expand_to_tokens(engine, &text, error, error_capacity) != 0) {
+        vector_destroy(&text);
+        return -1;
+    }
+    uint32_t identifier = 0U;
+    if (store_token_list(engine, &text, &identifier, error, error_capacity) !=
+        0) {
+        vector_destroy(&text);
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_MARK,
+        .value.mark = {.tokens = identifier,
+                       .class_number = (uint16_t)class_number},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
 /* \parshape reads a count and that many indent and length pairs. A count of
    zero or less takes the shape away and reads nothing more. */
 static int execute_parshape(struct hstex_engine *engine, char *error,
@@ -25192,6 +25482,15 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_MARK:
+            if (execute_mark(engine, meaning->value.integer != 0, error,
+                             error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_MARK_TEXT:
+            /* Expandable: it should never reach the list builder. */
+            return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_EQUATION_NUMBER:
             if (execute_equation_number(engine, meaning->value.integer != 0,
                                         error, error_capacity) != 0) {
@@ -25975,7 +26274,6 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
-        case HSTEX_COMMAND_MARKS:
         case HSTEX_COMMAND_MATH_PRIMITIVE:
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_FONT_GIVEN:
