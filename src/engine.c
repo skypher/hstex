@@ -763,6 +763,16 @@ static int load_tfm_parameters(struct hstex_font *font, const char *name,
     uint16_t lh = fields[1];
     uint16_t bc = fields[2];
     uint16_t ec = fields[3];
+    /* The first word of the header is what the file says of itself; the page
+       description repeats it. */
+    font->checksum = lh >= 1U && input.length >= 7U * 4U
+                         ? (uint32_t)read_big_endian_i32(input.data + 6U * 4U)
+                         : 0U;
+    /* The size the metrics were designed for, which the page description
+       repeats beside the size the font is used at. */
+    font->design_size = lh >= 2U && input.length >= 8U * 4U
+                            ? read_big_endian_i32(input.data + 7U * 4U) / 16
+                            : 0;
     size_t character_count = bc <= ec ? (size_t)ec - (size_t)bc + 1U : 0U;
     uint64_t expected_words = UINT64_C(6) + (uint64_t)lh + character_count;
     for (size_t index = 4U; index < 12U; ++index) {
@@ -2665,6 +2675,14 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     if (engine == NULL) {
         return;
     }
+    if (engine->dvi_file != NULL) {
+        (void)fclose(engine->dvi_file);
+        engine->dvi_file = NULL;
+    }
+    free(engine->dvi_page);
+    free(engine->dvi_downs);
+    free(engine->dvi_rights);
+    free(engine->dvi_fonts);
     hstex_source_stack_destroy(&engine->sources);
     for (size_t index = 0U; index < engine->math_depth; ++index) {
         free(engine->math_stack[index].noads);
@@ -11795,6 +11813,933 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* The page description the reference writes when \pdfoutput is not positive:
+   a DVI file. See docs/DECISIONS.md, the-page-description. */
+static char *output_path(struct hstex_engine *engine, const char *filename);
+static int dvi_close(struct hstex_engine *engine, char *error,
+                     size_t error_capacity);
+
+static int dvi_reserve(struct hstex_engine *engine, size_t wanted, char *error,
+                       size_t error_capacity)
+{
+    if (wanted <= engine->dvi_page_capacity) {
+        return 0;
+    }
+    size_t capacity = engine->dvi_page_capacity == 0U ? 4096U
+                                                      : engine->dvi_page_capacity;
+    while (capacity < wanted) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity, "page description overflow");
+        }
+        capacity *= 2U;
+    }
+    uint8_t *grown = realloc(engine->dvi_page, capacity);
+    if (grown == NULL) {
+        return set_error(error, error_capacity,
+                         "page description allocation failed");
+    }
+    engine->dvi_page = grown;
+    engine->dvi_page_capacity = capacity;
+    return 0;
+}
+
+static int dvi_byte(struct hstex_engine *engine, uint8_t byte, char *error,
+                    size_t error_capacity)
+{
+    if (dvi_reserve(engine, engine->dvi_page_count + 1U, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    engine->dvi_page[engine->dvi_page_count++] = byte;
+    return 0;
+}
+
+/* A number of the given width, most significant byte first. */
+static int dvi_number(struct hstex_engine *engine, int64_t value, size_t width,
+                      char *error, size_t error_capacity)
+{
+    for (size_t index = width; index != 0U; --index) {
+        uint8_t byte = (uint8_t)((uint64_t)value >> ((index - 1U) * 8U));
+        if (dvi_byte(engine, byte, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* How many bytes a movement needs: the smallest that holds it as a signed
+   number. */
+static size_t dvi_movement_width(int32_t value)
+{
+    if (value >= -128 && value < 128) {
+        return 1U;
+    }
+    if (value >= -32768 && value < 32768) {
+        return 2U;
+    }
+    if (value >= -8388608 && value < 8388608) {
+        return 3U;
+    }
+    return 4U;
+}
+
+/* The commands, in the order the format numbers them. */
+#define HSTEX_DVI_SET_CHAR 0
+#define HSTEX_DVI_SET1 128
+#define HSTEX_DVI_SET_RULE 132
+#define HSTEX_DVI_PUT_RULE 137
+#define HSTEX_DVI_BOP 139
+#define HSTEX_DVI_EOP 140
+#define HSTEX_DVI_PUSH 141
+#define HSTEX_DVI_POP 142
+#define HSTEX_DVI_RIGHT1 143
+#define HSTEX_DVI_W0 147
+#define HSTEX_DVI_W1 148
+#define HSTEX_DVI_X0 152
+#define HSTEX_DVI_X1 153
+#define HSTEX_DVI_DOWN1 157
+#define HSTEX_DVI_Y0 161
+#define HSTEX_DVI_Y1 162
+#define HSTEX_DVI_Z0 166
+#define HSTEX_DVI_Z1 167
+#define HSTEX_DVI_FNT_NUM_0 171
+#define HSTEX_DVI_FNT1 235
+#define HSTEX_DVI_XXX1 239
+#define HSTEX_DVI_FNT_DEF1 243
+#define HSTEX_DVI_PRE 247
+#define HSTEX_DVI_POST 248
+#define HSTEX_DVI_POST_POST 249
+#define HSTEX_DVI_ID 2
+#define HSTEX_DVI_FILL 223
+
+/* A movement of the given size, written as a repeat of an earlier one of the
+   same size where the registers allow it. See docs/DECISIONS.md,
+   the-page-description. */
+static int dvi_movement(struct hstex_engine *engine, int32_t value,
+                        bool vertical, char *error, size_t error_capacity)
+{
+    struct hstex_dvi_move **moves =
+        vertical ? &engine->dvi_downs : &engine->dvi_rights;
+    size_t *count = vertical ? &engine->dvi_down_count
+                             : &engine->dvi_right_count;
+    size_t *capacity = vertical ? &engine->dvi_down_capacity
+                                : &engine->dvi_right_capacity;
+    uint8_t base = vertical ? HSTEX_DVI_DOWN1 : HSTEX_DVI_RIGHT1;
+    uint8_t first = vertical ? HSTEX_DVI_Y1 : HSTEX_DVI_W1;
+    uint8_t second = vertical ? HSTEX_DVI_Z1 : HSTEX_DVI_X1;
+    uint8_t first_repeat = vertical ? HSTEX_DVI_Y0 : HSTEX_DVI_W0;
+    uint8_t second_repeat = vertical ? HSTEX_DVI_Z0 : HSTEX_DVI_X0;
+    bool held_first = true;
+    bool held_second = true;
+    uint8_t chosen = 0U;
+    for (size_t index = 0U; index < *count; ++index) {
+        struct hstex_dvi_move *node = &(*moves)[*count - 1U - index];
+        if (node->value == value) {
+            if (node->held == 1U && held_first) {
+                if (dvi_byte(engine, first_repeat, error, error_capacity) != 0) {
+                    return -1;
+                }
+                chosen = 1U;
+                break;
+            }
+            if (node->held == 2U && held_second) {
+                if (dvi_byte(engine, second_repeat, error, error_capacity) !=
+                    0) {
+                    return -1;
+                }
+                chosen = 2U;
+                break;
+            }
+            if (node->held == 0U && (held_first || held_second)) {
+                chosen = held_first ? 1U : 2U;
+                /* The earlier movement becomes the one that sets the
+                   register, which is the same length as what it was. */
+                size_t width =
+                    (size_t)(engine->dvi_page[node->at] - base) + 1U;
+                engine->dvi_page[node->at] =
+                    (uint8_t)((chosen == 1U ? first : second) + width - 1U);
+                node->held = chosen;
+                if (dvi_byte(engine,
+                             chosen == 1U ? first_repeat : second_repeat, error,
+                             error_capacity) != 0) {
+                    return -1;
+                }
+                break;
+            }
+        }
+        if (node->held == 1U) {
+            held_first = false;
+        } else if (node->held == 2U) {
+            held_second = false;
+        }
+        if (!held_first && !held_second) {
+            break;
+        }
+    }
+    size_t at = engine->dvi_page_count;
+    if (chosen == 0U) {
+        size_t width = dvi_movement_width(value);
+        if (dvi_byte(engine, (uint8_t)(base + width - 1U), error,
+                     error_capacity) != 0 ||
+            dvi_number(engine, value, width, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (*count == *capacity) {
+        size_t grown_capacity = *capacity == 0U ? 16U : *capacity * 2U;
+        struct hstex_dvi_move *grown =
+            realloc(*moves, grown_capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "page description allocation failed");
+        }
+        *moves = grown;
+        *capacity = grown_capacity;
+    }
+    struct hstex_dvi_move *node = &(*moves)[(*count)++];
+    node->value = value;
+    node->at = at;
+    node->held = chosen;
+    node->level = engine->dvi_push_depth;
+    return 0;
+}
+
+/* What a box leaves behind is forgotten when the box ends. */
+static void dvi_prune_movements(struct hstex_engine *engine, uint32_t level)
+{
+    while (engine->dvi_down_count != 0U &&
+           engine->dvi_downs[engine->dvi_down_count - 1U].level > level) {
+        --engine->dvi_down_count;
+    }
+    while (engine->dvi_right_count != 0U &&
+           engine->dvi_rights[engine->dvi_right_count - 1U].level > level) {
+        --engine->dvi_right_count;
+    }
+}
+
+/* The font's number in the page description, defining it there the first
+   time it is used. */
+/* The number a font has in the page description is the number it has in the
+   engine, counting from the first one loaded after \nullfont, which the
+   reference numbers zero. The list here is only of the ones already defined
+   in the file. */
+static int dvi_font_number(struct hstex_engine *engine, uint32_t identifier,
+                           int32_t *number, char *error, size_t error_capacity)
+{
+    *number = (int32_t)identifier - 2;
+    for (size_t index = 0U; index < engine->dvi_font_count; ++index) {
+        if (engine->dvi_fonts[index] == identifier) {
+            return 0;
+        }
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity,
+                         "a page names a font that is not loaded");
+    }
+    if (engine->dvi_font_count == engine->dvi_font_capacity) {
+        size_t capacity = engine->dvi_font_capacity == 0U
+                              ? 8U
+                              : engine->dvi_font_capacity * 2U;
+        uint32_t *grown =
+            realloc(engine->dvi_fonts, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "page description allocation failed");
+        }
+        engine->dvi_fonts = grown;
+        engine->dvi_font_capacity = capacity;
+    }
+    engine->dvi_fonts[engine->dvi_font_count++] = identifier;
+    return 0;
+}
+
+/* The definition of a font: what it is called, how big it is and what its
+   metrics said of themselves. */
+static int dvi_font_definition(struct hstex_engine *engine,
+                               uint32_t identifier, char *error,
+                               size_t error_capacity)
+{
+    int32_t number = (int32_t)identifier - 2;
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity,
+                         "a page names a font that is not loaded");
+    }
+    size_t length = strlen(font->name);
+    if (length > 255U) {
+        return set_error(error, error_capacity, "font name is too long");
+    }
+    if (dvi_byte(engine, HSTEX_DVI_FNT_DEF1, error, error_capacity) != 0 ||
+        dvi_byte(engine, (uint8_t)number, error, error_capacity) != 0 ||
+        dvi_number(engine, font->checksum, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, font->size, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, font->design_size, 4U, error, error_capacity) != 0 ||
+        dvi_byte(engine, 0U, error, error_capacity) != 0 ||
+        dvi_byte(engine, (uint8_t)length, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < length; ++index) {
+        if (dvi_byte(engine, (uint8_t)font->name[index], error,
+                     error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* The page description only moves when something is about to be put down. */
+static int dvi_synch_h(struct hstex_engine *engine, char *error,
+                       size_t error_capacity)
+{
+    if (engine->dvi_h == engine->dvi_cur_h) {
+        return 0;
+    }
+    if (dvi_movement(engine, engine->dvi_cur_h - engine->dvi_h, false, error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    engine->dvi_h = engine->dvi_cur_h;
+    return 0;
+}
+
+static int dvi_synch_v(struct hstex_engine *engine, char *error,
+                       size_t error_capacity)
+{
+    if (engine->dvi_v == engine->dvi_cur_v) {
+        return 0;
+    }
+    if (dvi_movement(engine, engine->dvi_cur_v - engine->dvi_v, true, error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    engine->dvi_v = engine->dvi_cur_v;
+    return 0;
+}
+
+static int dvi_synch(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    return dvi_synch_h(engine, error, error_capacity) != 0 ||
+                   dvi_synch_v(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int dvi_select_font(struct hstex_engine *engine, uint32_t identifier,
+                           char *error, size_t error_capacity)
+{
+    int32_t number = 0;
+    bool known = false;
+    for (size_t index = 0U; index < engine->dvi_font_count; ++index) {
+        if (engine->dvi_fonts[index] == identifier) {
+            known = true;
+            break;
+        }
+    }
+    if (dvi_font_number(engine, identifier, &number, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (!known &&
+        dvi_font_definition(engine, identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->dvi_font == number) {
+        return 0;
+    }
+    engine->dvi_font = number;
+    if (number < 64) {
+        return dvi_byte(engine, (uint8_t)(HSTEX_DVI_FNT_NUM_0 + number), error,
+                        error_capacity);
+    }
+    return dvi_byte(engine, HSTEX_DVI_FNT1, error, error_capacity) != 0 ||
+                   dvi_byte(engine, (uint8_t)number, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     char *error, size_t error_capacity);
+static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     char *error, size_t error_capacity);
+
+/* A rule with a running dimension takes it from the box it is in. */
+static int32_t dvi_rule_dimen(int32_t value, int32_t running)
+{
+    return value == HSTEX_RUNNING_DIMEN ? running : value;
+}
+
+/* The reference rounds a real to the nearest whole number, halves away from
+   zero, and holds it inside the range a dimension has. */
+static int32_t rounded_amount(double value)
+{
+    if (value > 2147483647.0) {
+        return 2147483647;
+    }
+    if (value < -2147483647.0) {
+        return -2147483647;
+    }
+    return (int32_t)(value >= 0.0 ? (int64_t)(value + 0.5)
+                                  : (int64_t)(value - 0.5));
+}
+
+/* How much a glue node takes up in a box that has been set. The reference
+   keeps a running total of the glue it has passed and of what that total has
+   come to when it is set, and gives each node the difference: so two glue
+   nodes of the same size can take up amounts that differ by one scaled
+   point. This is the one place the reference works in floating point. See
+   docs/DECISIONS.md, the-page-description. */
+struct hstex_set_glue {
+    int64_t passed;
+    int32_t given;
+};
+
+static int32_t set_glue_step(const struct hstex_glue_set *set,
+                             struct hstex_set_glue *running, int32_t stretch,
+                             uint8_t stretch_order, int32_t shrink,
+                             uint8_t shrink_order)
+{
+    if (set->sign == (uint8_t)HSTEX_GLUE_SIGN_NORMAL || set->total == 0) {
+        return 0;
+    }
+    int32_t before = running->given;
+    if (set->sign == (uint8_t)HSTEX_GLUE_SIGN_STRETCHING) {
+        if (stretch_order != set->order) {
+            return 0;
+        }
+        running->passed += stretch;
+    } else {
+        if (shrink_order != set->order) {
+            return 0;
+        }
+        running->passed -= shrink;
+    }
+    double ratio = (double)set->needed / (double)set->total;
+    running->given = rounded_amount(ratio * (double)running->passed);
+    return running->given - before;
+}
+
+/* A \special goes into the page description where it stands, as the bytes it
+   was given. */
+static int dvi_special(struct hstex_engine *engine,
+                       const struct hstex_node *node, char *error,
+                       size_t error_capacity)
+{
+    if (node->value.whatsit.kind != (uint8_t)HSTEX_WHATSIT_SPECIAL) {
+        return 0;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (stored_token_list_text(engine, node->value.whatsit.tokens, &bytes,
+                               &count, 0U, NULL, error, error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    int status = dvi_synch(engine, error, error_capacity);
+    if (status == 0) {
+        if (count < 256U) {
+            status = dvi_byte(engine, HSTEX_DVI_XXX1, error, error_capacity) !=
+                                     0 ||
+                             dvi_byte(engine, (uint8_t)count, error,
+                                      error_capacity) != 0
+                         ? -1
+                         : 0;
+        } else {
+            status = dvi_byte(engine, (uint8_t)(HSTEX_DVI_XXX1 + 3), error,
+                              error_capacity) != 0 ||
+                             dvi_number(engine, (int64_t)count, 4U, error,
+                                        error_capacity) != 0
+                         ? -1
+                         : 0;
+        }
+    }
+    for (size_t index = 0U; status == 0 && index < count; ++index) {
+        status = dvi_byte(engine, bytes[index], error, error_capacity);
+    }
+    free(bytes);
+    return status;
+}
+
+/* The horizontal list of a box, put down from left to right. The box was
+   placed where the description now stands; what it holds is measured from
+   there. See docs/DECISIONS.md, the-page-description. */
+static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     char *error, size_t error_capacity)
+{
+    ++engine->dvi_push_depth;
+    /* The place the box's own material would start at: a box that writes
+       nothing there has its push taken away again rather than closed. See
+       docs/DECISIONS.md, the-page-description. */
+    size_t opened = engine->dvi_page_count;
+    if (engine->dvi_push_depth > 0U) {
+        if (dvi_byte(engine, HSTEX_DVI_PUSH, error, error_capacity) != 0) {
+            return -1;
+        }
+        opened = engine->dvi_page_count;
+        if (engine->dvi_push_depth > engine->dvi_max_push) {
+            engine->dvi_max_push = engine->dvi_push_depth;
+        }
+    }
+    uint32_t level = engine->dvi_push_depth;
+    int32_t base_v = engine->dvi_cur_v;
+    int32_t left = engine->dvi_cur_h;
+    uint32_t start = box->value.list.node_start;
+    uint32_t count = box->value.list.node_count;
+    struct hstex_glue_set set = box->value.list.glue;
+    struct hstex_set_glue running = {0, 0};
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        struct hstex_node node = engine->nodes[identifier - 1U];
+        switch (node.kind) {
+        case HSTEX_NODE_CHARACTER:
+        case HSTEX_NODE_LIGATURE: {
+            /* The place comes first, then the font, then the character. */
+            if (dvi_synch(engine, error, error_capacity) != 0 ||
+                dvi_select_font(engine, node.value.character.font, error,
+                                error_capacity) != 0) {
+                return -1;
+            }
+            uint32_t code = node.value.character.character;
+            if (code < 128U) {
+                if (dvi_byte(engine, (uint8_t)code, error, error_capacity) !=
+                    0) {
+                    return -1;
+                }
+            } else if (dvi_byte(engine, HSTEX_DVI_SET1, error,
+                                error_capacity) != 0 ||
+                       dvi_byte(engine, (uint8_t)code, error, error_capacity) !=
+                           0) {
+                return -1;
+            }
+            engine->dvi_cur_h += packed_dimen(node.width);
+            engine->dvi_h = engine->dvi_cur_h;
+            break;
+        }
+        case HSTEX_NODE_LIST: {
+            if (node.value.list.node_count == 0U) {
+                engine->dvi_cur_h += packed_dimen(node.width);
+                break;
+            }
+            int32_t saved_h = engine->dvi_h;
+            int32_t saved_v = engine->dvi_v;
+            int32_t edge = engine->dvi_cur_h;
+            engine->dvi_cur_v = base_v + packed_dimen(node.shift);
+            int status = node.value.list.box_kind == HSTEX_BOX_VLIST
+                             ? dvi_vlist(engine, &node, error, error_capacity)
+                             : dvi_hlist(engine, &node, error, error_capacity);
+            if (status != 0) {
+                return -1;
+            }
+            engine->dvi_h = saved_h;
+            engine->dvi_v = saved_v;
+            engine->dvi_cur_h = edge + packed_dimen(node.width);
+            engine->dvi_cur_v = base_v;
+            break;
+        }
+        case HSTEX_NODE_RULE: {
+            int32_t height =
+                dvi_rule_dimen(node.height, packed_dimen(box->height));
+            int32_t depth =
+                dvi_rule_dimen(node.depth, packed_dimen(box->depth));
+            int32_t width = packed_dimen(node.width);
+            if (height + depth > 0 && width > 0) {
+                engine->dvi_cur_v = base_v + depth;
+                if (dvi_synch(engine, error, error_capacity) != 0 ||
+                    dvi_byte(engine, HSTEX_DVI_SET_RULE, error,
+                             error_capacity) != 0 ||
+                    dvi_number(engine, height + depth, 4U, error,
+                               error_capacity) != 0 ||
+                    dvi_number(engine, width, 4U, error, error_capacity) != 0) {
+                    return -1;
+                }
+                engine->dvi_cur_v = base_v;
+                engine->dvi_h += width;
+            }
+            engine->dvi_cur_h += width;
+            break;
+        }
+        case HSTEX_NODE_GLUE: {
+            int32_t step = set_glue_step(&set, &running, node.value.glue.stretch,
+                                         node.value.glue.stretch_order,
+                                         node.value.glue.shrink,
+                                         node.value.glue.shrink_order);
+            int32_t amount = packed_dimen(node.width) + step;
+            engine->dvi_cur_h += amount;
+            break;
+        }
+        case HSTEX_NODE_KERN:
+        case HSTEX_NODE_MATH:
+            engine->dvi_cur_h += packed_dimen(node.width);
+            break;
+        case HSTEX_NODE_WHATSIT:
+            if (dvi_special(engine, &node, error, error_capacity) != 0) {
+                return -1;
+            }
+            break;
+        case HSTEX_NODE_PENALTY:
+        case HSTEX_NODE_DISCRETIONARY:
+        case HSTEX_NODE_MARK:
+        case HSTEX_NODE_INSERT:
+            break;
+        }
+    }
+    if (engine->dvi_push_depth > 0U) {
+        if (engine->dvi_page_count == opened) {
+            --engine->dvi_page_count;
+        } else if (dvi_byte(engine, HSTEX_DVI_POP, error, error_capacity) !=
+                   0) {
+            return -1;
+        }
+    }
+    --engine->dvi_push_depth;
+    dvi_prune_movements(engine, engine->dvi_push_depth);
+    (void)level;
+    engine->dvi_cur_h = left;
+    engine->dvi_cur_v = base_v;
+    return 0;
+}
+
+/* The vertical list of a box, put down from top to bottom. */
+static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     char *error, size_t error_capacity)
+{
+    ++engine->dvi_push_depth;
+    /* The place the box's own material would start at: a box that writes
+       nothing there has its push taken away again rather than closed. See
+       docs/DECISIONS.md, the-page-description. */
+    size_t opened = engine->dvi_page_count;
+    if (engine->dvi_push_depth > 0U) {
+        if (dvi_byte(engine, HSTEX_DVI_PUSH, error, error_capacity) != 0) {
+            return -1;
+        }
+        opened = engine->dvi_page_count;
+        if (engine->dvi_push_depth > engine->dvi_max_push) {
+            engine->dvi_max_push = engine->dvi_push_depth;
+        }
+    }
+    int32_t left = engine->dvi_cur_h;
+    uint32_t start = box->value.list.node_start;
+    uint32_t count = box->value.list.node_count;
+    struct hstex_glue_set set = box->value.list.glue;
+    struct hstex_set_glue running = {0, 0};
+    /* The list starts at the top of the box, which is its height above the
+       place the box was put. */
+    engine->dvi_cur_v -= packed_dimen(box->height);
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        struct hstex_node node = engine->nodes[identifier - 1U];
+        switch (node.kind) {
+        case HSTEX_NODE_LIST: {
+            if (node.value.list.node_count == 0U) {
+                engine->dvi_cur_v +=
+                    packed_dimen(node.height) + packed_dimen(node.depth);
+                break;
+            }
+            engine->dvi_cur_v += packed_dimen(node.height);
+            /* Only the vertical place is settled here; what is in the box
+               settles its own horizontal one. */
+            if (dvi_synch_v(engine, error, error_capacity) != 0) {
+                return -1;
+            }
+            int32_t saved_h = engine->dvi_h;
+            int32_t saved_v = engine->dvi_v;
+            engine->dvi_cur_h = left + packed_dimen(node.shift);
+            int status = node.value.list.box_kind == HSTEX_BOX_VLIST
+                             ? dvi_vlist(engine, &node, error, error_capacity)
+                             : dvi_hlist(engine, &node, error, error_capacity);
+            if (status != 0) {
+                return -1;
+            }
+            engine->dvi_h = saved_h;
+            engine->dvi_v = saved_v;
+            engine->dvi_cur_v = saved_v + packed_dimen(node.depth);
+            engine->dvi_cur_h = left;
+            break;
+        }
+        case HSTEX_NODE_RULE: {
+            int32_t height = dvi_rule_dimen(node.height, 0);
+            int32_t depth = dvi_rule_dimen(node.depth, 0);
+            int32_t width =
+                dvi_rule_dimen(node.width, packed_dimen(box->width));
+            engine->dvi_cur_v += height + depth;
+            if (height + depth > 0 && width > 0) {
+                engine->dvi_cur_h = left;
+                if (dvi_synch(engine, error, error_capacity) != 0 ||
+                    dvi_byte(engine, HSTEX_DVI_PUT_RULE, error,
+                             error_capacity) != 0 ||
+                    dvi_number(engine, height + depth, 4U, error,
+                               error_capacity) != 0 ||
+                    dvi_number(engine, width, 4U, error, error_capacity) != 0) {
+                    return -1;
+                }
+            }
+            break;
+        }
+        case HSTEX_NODE_GLUE:
+            engine->dvi_cur_v +=
+                packed_dimen(node.width) +
+                set_glue_step(&set, &running, node.value.glue.stretch,
+                              node.value.glue.stretch_order,
+                              node.value.glue.shrink,
+                              node.value.glue.shrink_order);
+            break;
+        case HSTEX_NODE_KERN:
+            engine->dvi_cur_v += packed_dimen(node.width);
+            break;
+        case HSTEX_NODE_CHARACTER:
+        case HSTEX_NODE_LIGATURE:
+        case HSTEX_NODE_WHATSIT:
+            if (dvi_special(engine, &node, error, error_capacity) != 0) {
+                return -1;
+            }
+            break;
+        case HSTEX_NODE_MATH:
+        case HSTEX_NODE_PENALTY:
+        case HSTEX_NODE_DISCRETIONARY:
+        case HSTEX_NODE_MARK:
+        case HSTEX_NODE_INSERT:
+            break;
+        }
+    }
+    if (engine->dvi_push_depth > 0U) {
+        if (engine->dvi_page_count == opened) {
+            --engine->dvi_page_count;
+        } else if (dvi_byte(engine, HSTEX_DVI_POP, error, error_capacity) !=
+                   0) {
+            return -1;
+        }
+    }
+    --engine->dvi_push_depth;
+    dvi_prune_movements(engine, engine->dvi_push_depth);
+    engine->dvi_cur_h = left;
+    return 0;
+}
+
+/* Everything the page description has for this page goes to the file at
+   once, so that a movement can still be rewritten while the page is being
+   built. */
+static int dvi_flush(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    if (engine->dvi_page_count != 0U &&
+        fwrite(engine->dvi_page, 1U, engine->dvi_page_count,
+               engine->dvi_file) != engine->dvi_page_count) {
+        return set_error(error, error_capacity, "page description write failed");
+    }
+    engine->dvi_written += engine->dvi_page_count;
+    engine->dvi_page_count = 0U;
+    return 0;
+}
+
+/* The file is opened when the first page reaches it, and starts with what the
+   reference calls the preamble. */
+static int dvi_open(struct hstex_engine *engine, char *error,
+                    size_t error_capacity)
+{
+    if (engine->dvi_file != NULL) {
+        return 0;
+    }
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    size_t length = strlen(job);
+    char *filename = malloc(length + 5U);
+    if (filename == NULL) {
+        return set_error(error, error_capacity,
+                         "page description allocation failed");
+    }
+    memcpy(filename, job, length);
+    memcpy(filename + length, ".dvi", 5U);
+    char *path = output_path(engine, filename);
+    free(filename);
+    if (path == NULL) {
+        return set_error(error, error_capacity,
+                         "page description allocation failed");
+    }
+    engine->dvi_file = fopen(path, "wb");
+    free(path);
+    if (engine->dvi_file == NULL) {
+        return set_error(error, error_capacity,
+                         "cannot write the page description");
+    }
+    engine->dvi_last_bop = -1;
+    engine->dvi_font = -1;
+    char comment[64];
+    int written = snprintf(
+        comment, sizeof(comment), " TeX output %04d.%02d.%02d:%02d%02d",
+        engine->integer_parameters[HSTEX_INTEGER_YEAR],
+        engine->integer_parameters[HSTEX_INTEGER_MONTH],
+        engine->integer_parameters[HSTEX_INTEGER_DAY],
+        engine->integer_parameters[HSTEX_INTEGER_TIME] / 60,
+        engine->integer_parameters[HSTEX_INTEGER_TIME] % 60);
+    if (written < 0 || (size_t)written >= sizeof(comment)) {
+        return set_error(error, error_capacity, "page description comment");
+    }
+    if (dvi_byte(engine, HSTEX_DVI_PRE, error, error_capacity) != 0 ||
+        dvi_byte(engine, HSTEX_DVI_ID, error, error_capacity) != 0 ||
+        dvi_number(engine, 25400000, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, 473628672, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION], 4U,
+                   error, error_capacity) != 0 ||
+        dvi_byte(engine, (uint8_t)written, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (int index = 0; index < written; ++index) {
+        if (dvi_byte(engine, (uint8_t)comment[index], error, error_capacity) !=
+            0) {
+            return -1;
+        }
+    }
+    return dvi_flush(engine, error, error_capacity);
+}
+
+/* One page: what its counts are, what is on it, and where the page before it
+   started. */
+static int dvi_ship(struct hstex_engine *engine, const struct hstex_box *box,
+                    char *error, size_t error_capacity)
+{
+    if (dvi_open(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t here = (int32_t)engine->dvi_written;
+    if (dvi_byte(engine, HSTEX_DVI_BOP, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < 10U; ++index) {
+        if (dvi_number(engine, engine->counts[index], 4U, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (dvi_number(engine, engine->dvi_last_bop, 4U, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    engine->dvi_last_bop = here;
+    /* The page's own corner: \hoffset and \voffset move everything on it. */
+    int32_t across = engine->dimen_parameters[HSTEX_DIMEN_HOFFSET];
+    int32_t down = engine->dimen_parameters[HSTEX_DIMEN_VOFFSET];
+    engine->dvi_h = 0;
+    engine->dvi_v = 0;
+    engine->dvi_cur_h = across;
+    engine->dvi_cur_v = 0;
+    engine->dvi_font = -1;
+    /* The outermost list is not pushed: the depth counts the boxes inside
+       it. */
+    engine->dvi_push_depth = UINT32_MAX;
+    engine->dvi_down_count = 0U;
+    engine->dvi_right_count = 0U;
+    int32_t reach_v = packed_dimen(box->height) + packed_dimen(box->depth) + down;
+    int32_t reach_h = packed_dimen(box->width) + across;
+    if (reach_v > engine->dvi_max_v) {
+        engine->dvi_max_v = reach_v;
+    }
+    if (reach_h > engine->dvi_max_h) {
+        engine->dvi_max_h = reach_h;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {
+            .node_start = box->node_start,
+            .node_count = box->node_count,
+            .box_kind = box->kind,
+            .glue = box->glue,
+        },
+    };
+    int status;
+    engine->dvi_cur_v = packed_dimen(box->height) + down;
+    status = box->kind == HSTEX_BOX_VLIST
+                 ? dvi_vlist(engine, &node, error, error_capacity)
+                 : dvi_hlist(engine, &node, error, error_capacity);
+    if (status != 0) {
+        return -1;
+    }
+    if (dvi_byte(engine, HSTEX_DVI_EOP, error, error_capacity) != 0) {
+        return -1;
+    }
+    ++engine->dvi_pages;
+    return dvi_flush(engine, error, error_capacity);
+}
+
+/* What the reference writes after the last page: where everything is, how
+   large the pages were, and the fonts again. */
+static int dvi_close(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    if (engine->dvi_file == NULL) {
+        return 0;
+    }
+    int32_t post = (int32_t)engine->dvi_written;
+    if (dvi_byte(engine, HSTEX_DVI_POST, error, error_capacity) != 0 ||
+        dvi_number(engine, engine->dvi_last_bop, 4U, error, error_capacity) !=
+            0 ||
+        dvi_number(engine, 25400000, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, 473628672, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION], 4U,
+                   error, error_capacity) != 0 ||
+        dvi_number(engine, engine->dvi_max_v, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, engine->dvi_max_h, 4U, error, error_capacity) != 0 ||
+        dvi_number(engine, (int64_t)engine->dvi_max_push, 2U, error,
+                   error_capacity) != 0 ||
+        dvi_number(engine, (int64_t)engine->dvi_pages, 2U, error,
+                   error_capacity) != 0) {
+        return -1;
+    }
+    /* The fonts are named again at the end, from the last one the engine
+       loaded down to the first, whichever pages used them. */
+    for (size_t index = 0U; index < engine->dvi_font_count; ++index) {
+        for (size_t other = index + 1U; other < engine->dvi_font_count;
+             ++other) {
+            if (engine->dvi_fonts[other] > engine->dvi_fonts[index]) {
+                uint32_t swapped = engine->dvi_fonts[index];
+                engine->dvi_fonts[index] = engine->dvi_fonts[other];
+                engine->dvi_fonts[other] = swapped;
+            }
+        }
+    }
+    for (size_t index = 0U; index < engine->dvi_font_count; ++index) {
+        if (dvi_font_definition(engine, engine->dvi_fonts[index], error,
+                                error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (dvi_byte(engine, HSTEX_DVI_POST_POST, error, error_capacity) != 0 ||
+        dvi_number(engine, post, 4U, error, error_capacity) != 0 ||
+        dvi_byte(engine, HSTEX_DVI_ID, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t total = engine->dvi_written + engine->dvi_page_count;
+    size_t fill = 4U;
+    while ((total + fill) % 4U != 0U) {
+        ++fill;
+    }
+    for (size_t index = 0U; index < fill; ++index) {
+        if (dvi_byte(engine, HSTEX_DVI_FILL, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (dvi_flush(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    (void)fclose(engine->dvi_file);
+    engine->dvi_file = NULL;
+    return 0;
+}
+
 /* \shipout takes a page: the box is emptied and the count of dead cycles
    starts again. Nothing is written yet. */
 static int perform_shipout_whatsits(struct hstex_engine *engine,
@@ -11827,6 +12772,13 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
     /* Whatever the page was carrying is done now, in the order it was
        written; see docs/DECISIONS.md, whatsits. */
     if (perform_shipout_whatsits(engine, box, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* \pdfoutput decides what is written: nothing positive means the page
+       description the reference calls a DVI. See docs/DECISIONS.md,
+       the-page-description. */
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0 &&
+        dvi_ship(engine, box, error, error_capacity) != 0) {
         return -1;
     }
     print_byte(engine, ']');
@@ -25680,8 +26632,9 @@ int hstex_engine_run(struct hstex_engine *engine,
     }
     /* The reference stops where the input stops: a paragraph still being
        filled is not ended, and no page is sent off, because neither \end nor
-       \par was ever read. */
-    return 0;
+       \par was ever read. What has been written of the page description is
+       finished off. */
+    return dvi_close(engine, error, error_capacity);
 }
 
 enum hstex_engine_result hstex_engine_next_output(

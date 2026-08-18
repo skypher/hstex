@@ -695,6 +695,21 @@ struct hstex_font {
     size_t dimen_capacity;
     int32_t hyphen_character;
     int32_t skew_character;
+    /* What the metrics file says of itself, which the page description
+       repeats so that the two can be checked against each other. */
+    uint32_t checksum;
+};
+
+/* One movement the page description has already written, so that a movement
+   of the same size can be written as a repeat; see docs/DECISIONS.md,
+   the-page-description. */
+struct hstex_dvi_move {
+    int32_t value;
+    size_t at;
+    /* 0 for a plain down or right, 1 for the first register of the pair
+       (y or w), 2 for the second (z or x). */
+    uint8_t held;
+    uint32_t level;
 };
 
 struct hstex_hyphen_trie_node {
@@ -1307,6 +1322,33 @@ struct hstex_engine {
     FILE *read_streams[16];
     char *output_directory;
     char *job_name;
+    /* The page description being written, when \pdfoutput asks for one; see
+       docs/DECISIONS.md, the-page-description. */
+    FILE *dvi_file;
+    uint8_t *dvi_page;
+    size_t dvi_page_count;
+    size_t dvi_page_capacity;
+    size_t dvi_written;
+    int32_t dvi_last_bop;
+    int32_t dvi_max_v;
+    int32_t dvi_max_h;
+    uint32_t dvi_max_push;
+    uint32_t dvi_push_depth;
+    uint32_t dvi_pages;
+    struct hstex_dvi_move *dvi_downs;
+    size_t dvi_down_count;
+    size_t dvi_down_capacity;
+    struct hstex_dvi_move *dvi_rights;
+    size_t dvi_right_count;
+    size_t dvi_right_capacity;
+    uint32_t *dvi_fonts;
+    size_t dvi_font_count;
+    size_t dvi_font_capacity;
+    int32_t dvi_font;
+    int32_t dvi_h;
+    int32_t dvi_v;
+    int32_t dvi_cur_h;
+    int32_t dvi_cur_v;
     enum hstex_mode mode;
     int32_t prev_depth;
     /* The space factor of the horizontal list being built. */

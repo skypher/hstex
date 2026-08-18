@@ -149,8 +149,10 @@ paragraph, and the operator centring, limits, accents, superscript floors and
 display marks a formula needs. `\tracingparagraphs` writes the passes out the
 way the reference does, which is how the last few of those were found.
 
-What `\shipout` does not do yet is write anything: there is no page
-description, so no PDF. Marks and insertions are both there, splitting and
+`\shipout` writes a page description when `\pdfoutput` is not positive: a
+DVI file, byte for byte the reference's for the pages tested so far --
+places, fonts, rules, set glue, the movement registers, the preamble and the
+postamble. A PDF is still to come. Marks and insertions are both there, splitting and
 all: an insertion that will not fit is broken where `\vsplit` would break
 it, what fits goes into the box of its class, and the rest waits for the next
 page with `\splittopskip` in front of it. The corpus

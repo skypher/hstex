@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static bool test_token_is_category(hstex_token token,
@@ -81,6 +83,13 @@ static int prepare_engine(struct hstex_engine *engine, const char *path,
 
 /* Run a snippet the way the driver runs a document -- the engine builds the
    main vertical list itself -- and compare what \message wrote. */
+/* Run a document and compare the page description it writes with the one the
+   reference wrote for the same source. The bytes are given as a list of
+   pieces, like the diagnostic stream. See docs/DECISIONS.md,
+   the-page-description. */
+static int run_document_dvi(const char *const *source,
+                            const char *const *expected);
+
 /* The joined text of a list of pieces, which is how the long probes are
    stored: one string literal each would be longer than a C compiler has to
    support. */
@@ -167,6 +176,111 @@ static int run_document(const char *source, const char *expected)
     free(captured);
     hstex_engine_destroy(&engine);
     (void)unlink(path);
+    return status;
+}
+
+static int run_document_dvi(const char *const *source,
+                            const char *const *expected)
+{
+    char *document = joined_text(source);
+    char *wanted = joined_text(expected);
+    if (document == NULL || wanted == NULL) {
+        free(document);
+        free(wanted);
+        return 1;
+    }
+    char path[64];
+    if (open_snippet(document, path) != 0) {
+        free(document);
+        free(wanted);
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    int status = 0;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "prepare failed: %s\n", error);
+        free(document);
+        free(wanted);
+        (void)unlink(path);
+        return 1;
+    }
+    char directory[80];
+    (void)snprintf(directory, sizeof(directory), "%s-dvi", path);
+    if (mkdir(directory, 0700) != 0 ||
+        hstex_engine_set_output_directory(&engine, directory, error,
+                                          sizeof(error)) != 0) {
+        (void)fprintf(stderr, "cannot make %s\n", directory);
+        status = 1;
+    }
+    FILE *sink = status == 0 ? tmpfile() : NULL;
+    if (sink != NULL) {
+        hstex_engine_set_message_stream(&engine, sink);
+    }
+    struct hstex_source_location last = {0};
+    if (status == 0 &&
+        hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "engine failed: %s\n", error);
+        status = 1;
+    }
+    if (sink != NULL) {
+        (void)fclose(sink);
+    }
+    hstex_engine_destroy(&engine);
+    char written[256];
+    const char *name = strrchr(path, '/');
+    (void)snprintf(written, sizeof(written), "%s%s.dvi", directory,
+                   name == NULL ? path : name);
+    if (status == 0) {
+        FILE *file = fopen(written, "rb");
+        if (file == NULL) {
+            (void)fprintf(stderr, "no page description at %s\n", written);
+            status = 1;
+        } else {
+            char bytes[65536];
+            size_t count = fread(bytes, 1U, sizeof(bytes), file);
+            (void)fclose(file);
+            /* The expectation is written as hexadecimal, since a page
+               description has bytes of every value in it. */
+            size_t length = strlen(wanted) / 2U;
+            char *decoded = malloc(length + 1U);
+            if (decoded == NULL) {
+                free(document);
+                free(wanted);
+                return 1;
+            }
+            for (size_t index = 0U; index < length; ++index) {
+                unsigned value = 0U;
+                (void)sscanf(wanted + index * 2U, "%2x", &value);
+                decoded[index] = (char)value;
+            }
+            free(wanted);
+            wanted = decoded;
+            if (count != length || memcmp(bytes, wanted, length) != 0) {
+                (void)fprintf(stderr,
+                              "page description mismatch: got %zu bytes, "
+                              "expected %zu\n",
+                              count, length);
+                for (size_t index = 0U; index < count && index < length;
+                     ++index) {
+                    if (bytes[index] != wanted[index]) {
+                        (void)fprintf(stderr,
+                                      "first difference at byte %zu: %02x "
+                                      "against %02x\n",
+                                      index, (unsigned char)bytes[index],
+                                      (unsigned char)wanted[index]);
+                        break;
+                    }
+                }
+                status = 1;
+            }
+        }
+    }
+    (void)unlink(written);
+    (void)rmdir(directory);
+    (void)unlink(path);
+    free(document);
+    free(wanted);
     return status;
 }
 
@@ -3043,6 +3157,64 @@ static int test_a_definition_nothing_holds(void)
         NULL,
     };
     return run_document_parts(source, expected);;
+}
+
+/* The page description the reference writes when \pdfoutput is not
+   positive, byte for byte: the places, the fonts, the rules, the glue it
+   had to set, the movements it writes as repeats, and what it says of
+   itself at both ends. See docs/DECISIONS.md, the-page-description. */
+static int test_the_page_description(void)
+{
+    static const char *const source[] = {
+        "\\pdfoutput=0 \\year=2026 \\month=8 \\day=18 \\tim"
+        "e=1117 \\font\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\"
+        "tenrm \\hsize=100pt \\vsize=200pt \\parindent=0pt "
+        "\\baselineskip=12pt \\lineskip=0pt \\hbadness=1000"
+        "0 \\vbadness=10000 \\hfuzz=1000pt \\shipout\\vbox{"
+        "\\hbox{ab}\\hbox{cd}\\hbox{ef}\\hbox{\\sevenrm g\\"
+        "tenrm h}}\\shipout\\vbox{\\hrule height2pt \\hbox "
+        "to 80pt{a\\hfil b}\\vskip 3pt \\hbox{\\vrule width"
+        "3pt height4pt depth1pt x}\\hrule}\\hoffset=13pt \\"
+        "voffset=7pt \\count0=3 \\count1=4 \\shipout\\vbox{"
+        "\\hbox{ab}\\vskip3pt \\hbox{cd}\\vskip3pt \\hbox{e"
+        "f}}\\hoffset=0pt \\voffset=0pt \\count1=0 \\shipou"
+        "t\\hbox to 300pt{a\\hskip 3.65pt plus 1.82501pt a"
+        "\\hskip 3.65pt plus 1.82501pt a\\hskip 3.65pt plus"
+        " 1.82501pt a\\hskip 3.65pt plus 1.82501pt a\\hskip"
+        " 3.65pt plus 1.82501pt a\\hskip 3.65pt plus 1.8250"
+        "1pt a\\hskip 3.65pt plus 1.82501pt a\\hskip 3.65pt"
+        " plus 1.82501pt a}\\shipout\\vbox{\\vbox to 12pt{"
+        "\\vfil\\hbox to 40pt{}}\\vskip 25pt \\hbox{ab}\\sp"
+        "ecial{a special}}",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "f702018392c01c3b0000000003e81b20546558206f75747075"
+        "7420323032362e30382e31383a313833378b00000000000000"
+        "00000000000000000000000000000000000000000000000000"
+        "0000000000000000ffffffff9f06f1c78df3004bf16079000a"
+        "0000000a00000005636d723130ab61628ea40c00008d63648e"
+        "a18d65668ea18df301d993a05200070000000700000004636d"
+        "7237ac67ab688e8c8b00000000000000000000000000000000"
+        "00000000000000000000000000000000000000000000000000"
+        "00002a9f0200008900020000005000009f06f1c78dab619145"
+        "71c5628e9f0f00008d9f0100008400050000000300009fff00"
+        "00788e9f0166668900006666005000008c8b00000003000000"
+        "04000000000000000000000000000000000000000000000000"
+        "00000000000000000000009e9f0df1c78d910d0000ab61628e"
+        "a40f00008d910d000063648ea18d910d000065668e8c8b0000"
+        "00030000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000010b9f044e38ab61961f"
+        "dfff61936193619361911fdffe619361936193618c8b000000"
+        "03000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000015b9f0c00009f2500008d"
+        "ab61628eef0961207370656369616c8cf8000001a5018392c0"
+        "1c3b0000000003e800310000012c000000010005f301d993a0"
+        "5200070000000700000004636d7237f3004bf16079000a0000"
+        "000a00000005636d723130f9000001eb02dfdfdfdfdf",
+        NULL,
+    };
+    return run_document_dvi(source, expected);
 }
 
 /* An \insert holds a vertical list packed at its natural size, and
@@ -8375,6 +8547,7 @@ int main(void)
         test_a_vcenter_in_braces() != 0 ||
         test_a_mark_in_a_list() != 0 ||
         test_a_definition_nothing_holds() != 0 ||
+        test_the_page_description() != 0 ||
         test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||
