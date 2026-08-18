@@ -9771,9 +9771,10 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
 /* Where a vertical list would best be broken to come to `height`, taking
    `depth` as the most any box may hang below the break. Returns how many
    items go above it. See docs/DECISIONS.md, vsplit. */
-static size_t vertical_break(struct hstex_engine *engine,
-                             const uint32_t *items, size_t count,
-                             int32_t height, int32_t depth)
+static size_t vertical_break_measured(struct hstex_engine *engine,
+                                      const uint32_t *items, size_t count,
+                                      int32_t height, int32_t depth,
+                                      int32_t *reached)
 {
     int64_t total = 0;
     int64_t stretch[4] = {0, 0, 0, 0};
@@ -9835,6 +9836,9 @@ static size_t vertical_break(struct hstex_engine *engine,
             if (cost <= least) {
                 best = index;
                 least = cost;
+                if (reached != NULL) {
+                    *reached = (int32_t)(total + previous_depth);
+                }
             }
             if (cost == HSTEX_AWFUL_BADNESS ||
                 penalty <= -HSTEX_INFINITE_PENALTY) {
@@ -9864,6 +9868,13 @@ static size_t vertical_break(struct hstex_engine *engine,
         }
     }
     return best;
+}
+
+static size_t vertical_break(struct hstex_engine *engine,
+                             const uint32_t *items, size_t count,
+                             int32_t height, int32_t depth)
+{
+    return vertical_break_measured(engine, items, count, height, depth, NULL);
 }
 
 /* What is left after a split starts again with \splittopskip, and whatever
@@ -11495,7 +11506,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
                       (unsigned int)node->value.insert.number);
         show_scaled(out, packed_dimen(node->height));
         (void)fputs("; split(", out);
-        show_scaled(out, node->value.insert.split_top_skip);
+        show_scaled(out, node->value.insert.split_top_skip.width);
         (void)fputc(',', out);
         show_scaled(out, node->value.insert.split_max_depth);
         (void)fprintf(out, "); float cost %d", node->value.insert.float_cost);
@@ -11768,6 +11779,50 @@ static int64_t page_break_cost(const struct hstex_engine *engine,
     return cost;
 }
 
+/* One record for each class of insertions that has reached the page being
+   built; see docs/DECISIONS.md, an-insertion-that-does-not-fit. */
+static struct hstex_page_insert *page_insert_of(struct hstex_engine *engine,
+                                                uint16_t number, bool make,
+                                                char *error,
+                                                size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->page_insert_count; ++index) {
+        if (engine->page_inserts[index].number == number) {
+            return &engine->page_inserts[index];
+        }
+    }
+    if (!make) {
+        return NULL;
+    }
+    if (engine->page_insert_count == engine->page_insert_capacity) {
+        size_t capacity = engine->page_insert_capacity == 0U
+                              ? 4U
+                              : engine->page_insert_capacity * 2U;
+        struct hstex_page_insert *grown =
+            realloc(engine->page_inserts, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "page insertion table allocation failed");
+            return NULL;
+        }
+        engine->page_inserts = grown;
+        engine->page_insert_capacity = capacity;
+    }
+    struct hstex_page_insert *entry =
+        &engine->page_inserts[engine->page_insert_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->number = number;
+    return entry;
+}
+
+/* A size scaled by the count of an insertion class: a thousand takes it as
+   it stands, and any other count divides by a thousand first, throwing the
+   remainder away, and multiplies after. */
+static int64_t insertion_size(int32_t size, int32_t factor)
+{
+    return factor == 1000 ? (int64_t)size : (int64_t)(size / 1000) * factor;
+}
+
 /* The best break is forgotten when a page is sent off or a new one starts;
    the totals themselves are left alone, because the output routine still
    reads them. */
@@ -11778,6 +11833,8 @@ static void forget_page_break(struct hstex_engine *engine)
     engine->best_page_penalty = HSTEX_INFINITE_PENALTY;
     engine->best_page_size = 0;
     engine->page_has_box = false;
+    engine->page_frozen = false;
+    engine->page_insert_count = 0U;
 }
 
 static void reset_page_state(struct hstex_engine *engine)
@@ -11834,6 +11891,9 @@ static int collect_page_insertions(struct hstex_engine *engine,
                     error, error_capacity);
             }
         }
+        const struct hstex_page_insert *record =
+            page_insert_of(engine, number, false, error, error_capacity);
+        bool past_split = false;
         for (size_t at = index; status == 0 && at < count; ++at) {
             uint32_t other = items[at];
             if (other == 0U || (size_t)other > engine->node_count ||
@@ -11841,9 +11901,20 @@ static int collect_page_insertions(struct hstex_engine *engine,
                 engine->nodes[other - 1U].value.insert.number != number) {
                 continue;
             }
+            if (past_split) {
+                /* Nothing of this class fitted after the one that had to be
+                   split, so this insertion waits for the next page. */
+                continue;
+            }
             uint32_t start = engine->nodes[other - 1U].value.insert.node_start;
             uint32_t held_count =
                 engine->nodes[other - 1U].value.insert.node_count;
+            if (record != NULL && record->split && record->broken == other) {
+                held_count = (uint32_t)record->break_at < held_count
+                                 ? (uint32_t)record->break_at
+                                 : held_count;
+                past_split = true;
+            }
             for (uint32_t item = 0U; status == 0 && item < held_count; ++item) {
                 if ((size_t)start + item >= engine->list_item_count) {
                     break;
@@ -11868,6 +11939,105 @@ static int collect_page_insertions(struct hstex_engine *engine,
             0) {
             return -1;
         }
+    }
+    return 0;
+}
+
+/* What the page could not take of its insertions: the remainder of one that
+   had to be split, pruned and packed again, and any insertion of that class
+   that came after it. They go back to the front of the contribution list, and
+   how many there are is what \insertpenalties reports to the output routine.
+   See docs/DECISIONS.md, an-insertion-that-does-not-fit. */
+static int hold_over_insertions(struct hstex_engine *engine,
+                                const uint32_t *items, size_t count,
+                                uint32_t **held, size_t *held_count,
+                                char *error, size_t error_capacity)
+{
+    size_t capacity = 0U;
+    *held = NULL;
+    *held_count = 0U;
+    for (size_t index = 0U; index < count; ++index) {
+        uint32_t identifier = items[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count ||
+            engine->nodes[identifier - 1U].kind != HSTEX_NODE_INSERT) {
+            continue;
+        }
+        uint16_t number = engine->nodes[identifier - 1U].value.insert.number;
+        const struct hstex_page_insert *record =
+            page_insert_of(engine, number, false, error, error_capacity);
+        if (record == NULL || !record->split) {
+            continue;
+        }
+        uint32_t waiting = 0U;
+        if (record->broken == identifier) {
+            struct hstex_node broken = engine->nodes[identifier - 1U];
+            size_t at = record->break_at;
+            if (at >= broken.value.insert.node_count) {
+                continue;
+            }
+            size_t rest_count = broken.value.insert.node_count - at;
+            uint32_t *rest = calloc(rest_count, sizeof(*rest));
+            if (rest == NULL) {
+                free(*held);
+                *held = NULL;
+                return set_error(error, error_capacity,
+                                 "insertion allocation failed");
+            }
+            memcpy(rest,
+                   engine->list_items + broken.value.insert.node_start + at,
+                   rest_count * sizeof(*rest));
+            struct hstex_glue standing =
+                engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
+            engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP] =
+                broken.value.insert.split_top_skip;
+            struct hstex_box packed = {0};
+            int status = prune_split_top(engine, rest, rest_count, &packed,
+                                         error, error_capacity);
+            engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP] = standing;
+            free(rest);
+            if (status != 0) {
+                free(*held);
+                *held = NULL;
+                return -1;
+            }
+            if (packed.kind == HSTEX_BOX_VOID) {
+                continue;
+            }
+            struct hstex_node node = broken;
+            node.height = packed.height + packed.depth;
+            node.value.insert.node_start = packed.node_start;
+            node.value.insert.node_count = packed.node_count;
+            if (store_node(engine, &node, &waiting, error, error_capacity) !=
+                0) {
+                free(*held);
+                *held = NULL;
+                return -1;
+            }
+        } else {
+            /* One that came after the split: it waits as it stands. */
+            bool after = false;
+            for (size_t earlier = 0U; !after && earlier < index; ++earlier) {
+                after = items[earlier] == record->broken;
+            }
+            if (!after) {
+                continue;
+            }
+            waiting = identifier;
+        }
+        if (*held_count == capacity) {
+            size_t grown_capacity = capacity == 0U ? 4U : capacity * 2U;
+            uint32_t *grown =
+                realloc(*held, grown_capacity * sizeof(*grown));
+            if (grown == NULL) {
+                free(*held);
+                *held = NULL;
+                return set_error(error, error_capacity,
+                                 "insertion allocation failed");
+            }
+            *held = grown;
+            capacity = grown_capacity;
+        }
+        (*held)[(*held_count)++] = waiting;
     }
     return 0;
 }
@@ -11907,20 +12077,32 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     int32_t enclosing_depth = engine->prev_depth;
     engine->prev_depth = HSTEX_IGNORE_DEPTH;
     int status = 0;
+    /* \holdinginserts leaves the insertions where they are, nodes and all,
+       for the output routine to deal with; see docs/DECISIONS.md,
+       an-insertion-that-does-not-fit. */
+    bool holding =
+        engine->integer_parameters[HSTEX_INTEGER_HOLDING_INSERTS] > 0;
     for (size_t index = 0U; status == 0 && index < split; ++index) {
         uint32_t held = page->node_identifiers[index];
         /* An insertion is not part of the page: its list goes into the box
            of its class, and the node itself is left out. See
            docs/DECISIONS.md, insertions. */
-        if (held != 0U && (size_t)held <= engine->node_count &&
+        if (!holding && held != 0U && (size_t)held <= engine->node_count &&
             engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT) {
             continue;
         }
         status = append_vbox_item(engine, held, error, error_capacity);
     }
-    if (status == 0) {
+    uint32_t *unplaced = NULL;
+    size_t unplaced_count = 0U;
+    if (status == 0 && !holding) {
         status = collect_page_insertions(engine, page->node_identifiers, split,
                                          error, error_capacity);
+    }
+    if (status == 0 && !holding) {
+        status = hold_over_insertions(engine, page->node_identifiers, split,
+                                      &unplaced, &unplaced_count, error,
+                                      error_capacity);
     }
     struct hstex_box packed = {0};
     if (status == 0) {
@@ -11937,8 +12119,32 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     engine->prev_depth = enclosing_depth;
     if (status != 0) {
         free(returned);
+        free(unplaced);
         return -1;
     }
+    /* What the page could not take of its insertions goes back to the front
+       of the contribution list, and is counted for the output routine. */
+    engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] =
+        (int32_t)unplaced_count;
+    if (unplaced_count != 0U) {
+        uint32_t *joined =
+            calloc(unplaced_count + returned_count, sizeof(*joined));
+        if (joined == NULL) {
+            free(returned);
+            free(unplaced);
+            return set_error(error, error_capacity,
+                             "page break allocation failed");
+        }
+        memcpy(joined, unplaced, unplaced_count * sizeof(*joined));
+        if (returned_count != 0U) {
+            memcpy(joined + unplaced_count, returned,
+                   returned_count * sizeof(*joined));
+        }
+        free(returned);
+        returned = joined;
+        returned_count += unplaced_count;
+    }
+    free(unplaced);
 
     /* The marks of the page just shipped: what it ended with becomes
        \topmark for the next one, and the first and last marks in it are
@@ -12104,54 +12310,102 @@ static int build_page(struct hstex_engine *engine, char *error,
                    whatsits-on-an-empty-page and marks. */
             } else if (node.kind == HSTEX_NODE_INSERT) {
                 /* An insertion joins the page too, and takes room away from
-                   what the page has left for the text: the glue of its class
-                   the first time one of that class arrives, and its own size
-                   scaled by the class's count. See docs/DECISIONS.md,
-                   insertions. */
-                uint16_t number = node.value.insert.number;
-                bool first = true;
-                for (size_t seen = 0U; first && seen < page->count; ++seen) {
-                    uint32_t held = page->node_identifiers[seen];
-                    if (held != 0U && (size_t)held <= engine->node_count &&
-                        engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT &&
-                        engine->nodes[held - 1U].value.insert.number ==
-                            number) {
-                        first = false;
-                    }
+                   what the page has left for its text. See
+                   docs/DECISIONS.md, insertions and
+                   an-insertion-that-does-not-fit. */
+                if (!engine->page_frozen) {
+                    reset_page_state(engine);
+                    engine->page_dimens[HSTEX_PAGE_GOAL] =
+                        engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
+                    engine->page_frozen = true;
                 }
-                /* A thousand takes a size as it stands; any other count
-                   divides first and multiplies after, which is not the same
-                   rounding. */
+                uint16_t number = node.value.insert.number;
                 int32_t factor = engine->counts[number];
-                int64_t taken = 0;
-                if (first) {
+                struct hstex_page_insert *record =
+                    page_insert_of(engine, number, false, error,
+                                   error_capacity);
+                if (record == NULL) {
+                    record = page_insert_of(engine, number, true, error,
+                                            error_capacity);
+                    if (record == NULL) {
+                        return -1;
+                    }
                     /* The glue of the class, and room for whatever the box
                        of the class already holds: the page has to carry that
                        too. */
-                    taken += engine->glues[number].width;
                     const struct hstex_box *standing = &engine->boxes[number];
-                    int32_t held = standing->kind == HSTEX_BOX_VOID
+                    record->held = standing->kind == HSTEX_BOX_VOID
                                        ? 0
                                        : standing->height + standing->depth;
-                    taken += factor == 1000 ? (int64_t)held
-                                            : (int64_t)(held / 1000) * factor;
+                    engine->page_dimens[HSTEX_PAGE_GOAL] -=
+                        (int32_t)(insertion_size(record->held, factor) +
+                                  engine->glues[number].width);
                 }
                 int32_t size = packed_dimen(node.height);
-                taken += factor == 1000 ? (int64_t)size
-                                        : (int64_t)(size / 1000) * factor;
-                if (!page_is_empty(engine)) {
-                    engine->page_dimens[HSTEX_PAGE_GOAL] -= (int32_t)taken;
+                int64_t wanted = insertion_size(size, factor);
+                int64_t room = (int64_t)engine->page_dimens[HSTEX_PAGE_GOAL] -
+                               engine->page_dimens[HSTEX_PAGE_TOTAL] -
+                               engine->page_dimens[HSTEX_PAGE_DEPTH] +
+                               engine->page_dimens[HSTEX_PAGE_SHRINK];
+                if (record->split) {
+                    /* This class has already had to be split on this page,
+                       so nothing more of it can go here. */
+                    engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] +=
+                        node.value.insert.float_cost;
+                } else if ((wanted <= 0 || wanted <= room) &&
+                           (int64_t)size + record->held <=
+                               engine->dimens[number]) {
+                    engine->page_dimens[HSTEX_PAGE_GOAL] -= (int32_t)wanted;
+                    record->held += size;
+                } else {
+                    /* Only part of it can stay: find how much room there is
+                       for the class and break the list there. */
+                    int64_t allowed = INT64_MAX;
+                    if (factor > 0) {
+                        allowed = (int64_t)engine->page_dimens[HSTEX_PAGE_GOAL] -
+                                  engine->page_dimens[HSTEX_PAGE_TOTAL] -
+                                  engine->page_dimens[HSTEX_PAGE_DEPTH];
+                        if (factor != 1000) {
+                            allowed = allowed * 1000 / factor;
+                        }
+                    }
+                    int64_t limit = (int64_t)engine->dimens[number] -
+                                    record->held;
+                    if (allowed > limit) {
+                        allowed = limit;
+                    }
+                    if (allowed < -INT64_C(1073741823)) {
+                        allowed = -INT64_C(1073741823);
+                    }
+                    if (allowed > INT64_C(1073741823)) {
+                        allowed = INT64_C(1073741823);
+                    }
+                    int32_t reached = 0;
+                    size_t at = vertical_break_measured(
+                        engine, engine->list_items + node.value.insert.node_start,
+                        node.value.insert.node_count, (int32_t)allowed,
+                        node.value.insert.split_max_depth, &reached);
+                    record->split = true;
+                    record->broken = identifier;
+                    record->break_at = (uint32_t)at;
+                    record->held += reached;
+                    engine->page_dimens[HSTEX_PAGE_GOAL] -=
+                        (int32_t)insertion_size(reached, factor);
                 }
             } else if (page_is_empty(engine)) {
                 if (!is_box) {
                     continue;
                 }
-                /* The first box settles the page's goal and gets \topskip
-                   glue in front of it, shortened by however tall it is. */
-                reset_page_state(engine);
+                /* The first box settles the page's goal, unless an
+                   insertion has settled it already, and gets \topskip glue
+                   in front of it, shortened by however tall it is. */
+                if (!engine->page_frozen) {
+                    reset_page_state(engine);
+                    engine->page_dimens[HSTEX_PAGE_GOAL] =
+                        engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
+                    engine->page_frozen = true;
+                }
                 engine->page_has_box = true;
-                engine->page_dimens[HSTEX_PAGE_GOAL] =
-                    engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
                 struct hstex_glue top =
                     engine->glue_parameters[HSTEX_GLUE_TOP_SKIP];
                 int32_t height = packed_dimen(node.height);
@@ -21430,8 +21684,8 @@ static int execute_insert(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "\\insert requires a braced vertical list");
     }
-    int32_t split_top_skip =
-        engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP].width;
+    struct hstex_glue split_top_skip =
+        engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
     int32_t split_max_depth =
         engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
     int32_t float_cost =

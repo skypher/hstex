@@ -2848,6 +2848,83 @@ static int test_an_insertion_in_a_list(void)
 );
 }
 
+/* An insertion that does not fit is split: what fits goes into the class's
+   box, the rest waits for the next page with \splittopskip in front of it,
+   and nothing more of that class stays on the page. \insertpenalties counts
+   what waits. See docs/DECISIONS.md, an-insertion-that-does-not-fit. */
+static int test_an_insertion_that_does_not_fit(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=100 \\baselineskip=12p"
+    "t \\vsize=50pt \\maxdepth=2pt \\topskip=0pt \\coun"
+    "t0=1 \\hsize=100pt \\splitmaxdepth=2pt \\splittops"
+    "kip=1pt \\dimen100=8pt \\count100=1000 \\skip100=0"
+    "pt \\floatingpenalty=77 \\output={\\message{[page]"
+    "}\\setbox1=\\hbox{\\the\\pagegoal|\\the\\pagetotal"
+    "|\\the\\insertpenalties}\\showbox1 \\message{[ins]"
+    "}\\showbox100 \\global\\setbox100=\\box100 \\shipo"
+    "ut\\box255 \\global\\advance\\count0 by 1 }\\hrule"
+    " height10pt \\vskip0pt \\insert100{\\hrule height5"
+    "pt\\vskip1pt\\hrule height5pt\\vskip1pt\\hrule hei"
+    "ght5pt}\\hrule height10pt \\vskip0pt \\insert100{"
+    "\\hrule height4pt}\\hrule height10pt \\vskip0pt \\"
+    "hrule height10pt \\vskip0pt \\hrule height10pt \\v"
+    "skip0pt \\hrule height10pt \\end%"
+,
+    "[page]> \\box1=\n\\hbox(6.44444+1.94444)x79.44466"
+    "\n.\\tenrm 4\n.\\tenrm 5\n.\\tenrm .\n.\\tenrm 0\n"
+    ".\\tenrm p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 5\n."
+    "\\tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm p\n.\\"
+    "tenrm t\n.\\tenrm |\n.\\tenrm 2\n\n! OK.\n[ins]> "
+    "\\box100=\n\\vbox(5.0+0.0)x0.0\n.\\rule(5.0+0.0)x*"
+    "\n\n! OK.\n[page]> \\box1=\n\\hbox(6.44444+1.94444"
+    ")x79.44466\n.\\tenrm 4\n.\\tenrm 0\n.\\tenrm .\n."
+    "\\tenrm 0\n.\\tenrm p\n.\\tenrm t\n.\\tenrm |\n.\\"
+    "tenrm 2\n.\\tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\te"
+    "nrm p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 2\n\n! OK."
+    "\n[ins]> \\box100=\n\\vbox(10.0+0.0)x0.0\n.\\rule("
+    "5.0+0.0)x*\n.\\glue(\\splittopskip) 0.0\n.\\rule(5"
+    ".0+0.0)x*\n\n! OK.\n[page]> \\box1=\n\\hbox(6.4444"
+    "4+1.94444)x74.44464\n.\\tenrm 3\n.\\tenrm 5\n.\\te"
+    "nrm .\n.\\tenrm 0\n.\\tenrm p\n.\\tenrm t\n.\\tenr"
+    "m |\n.\\tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm "
+    "p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 1\n\n! OK.\n[i"
+    "ns]> \\box100=\n\\vbox(15.0+0.0)x0.0\n.\\rule(5.0+"
+    "0.0)x*\n.\\glue(\\splittopskip) 0.0\n.\\rule(5.0+0"
+    ".0)x*\n.\\glue(\\splittopskip) 0.0\n.\\rule(5.0+0."
+    "0)x*\n\n! OK.\n[page]> \\box1=\n\\hbox(6.44444+1.9"
+    "4444)x74.44464\n.\\tenrm 3\n.\\tenrm 1\n.\\tenrm ."
+    "\n.\\tenrm 0\n.\\tenrm p\n.\\tenrm t\n.\\tenrm |\n"
+    ".\\tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm p\n."
+    "\\tenrm t\n.\\tenrm |\n.\\tenrm 0\n\n! OK.\n[ins]>"
+    " \\box100=\n\\vbox(19.0+0.0)x0.0\n.\\rule(5.0+0.0)"
+    "x*\n.\\glue(\\splittopskip) 0.0\n.\\rule(5.0+0.0)x"
+    "*\n.\\glue(\\splittopskip) 0.0\n.\\rule(5.0+0.0)x*"
+    "\n.\\rule(4.0+0.0)x*\n\n! OK.\n"
+);
+}
+
 /* What an insertion takes from the page: the glue of its class and room
    for what the class's box already holds, once, and its own size scaled by
    the class's count. The page's insertions are added to that box at
@@ -7749,6 +7826,7 @@ int main(void)
         test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||
+        test_an_insertion_that_does_not_fit() != 0 ||
         test_marks_on_a_page() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||

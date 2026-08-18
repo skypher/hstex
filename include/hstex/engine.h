@@ -938,6 +938,17 @@ struct hstex_noad {
     bool vcentered;
 };
 
+/* What one class of insertions has done to the page being built: how much of
+   the class's material stands on it, whether one of its insertions had to be
+   split, and where. See docs/DECISIONS.md, an-insertion-that-does-not-fit. */
+struct hstex_page_insert {
+    uint16_t number;
+    int32_t held;
+    bool split;
+    uint32_t broken;
+    uint32_t break_at;
+};
+
 /* The three texts one class of marks leaves behind, and the two a \vsplit
    leaves; see docs/DECISIONS.md, marks. */
 struct hstex_mark_class {
@@ -1104,7 +1115,7 @@ struct hstex_node {
             uint32_t node_start;
             uint32_t node_count;
             uint16_t number;
-            int32_t split_top_skip;
+            struct hstex_glue split_top_skip;
             int32_t split_max_depth;
             int32_t float_cost;
         } insert;
@@ -1380,6 +1391,15 @@ struct hstex_engine {
     struct hstex_mark_class *mark_classes;
     size_t mark_class_count;
     size_t mark_class_capacity;
+    /* The page's goal has been settled: the first box or insertion has
+       reached it, and \vsize is not read again until it is shipped. See
+       docs/DECISIONS.md, an-insertion-that-does-not-fit. */
+    bool page_frozen;
+    /* One record for each class of insertions that has reached the page
+       being built. */
+    struct hstex_page_insert *page_inserts;
+    size_t page_insert_count;
+    size_t page_insert_capacity;
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
