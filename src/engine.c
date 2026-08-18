@@ -13588,10 +13588,16 @@ static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
 static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
 {
     int64_t tenths = pdf_glyph_units(font, code);
-    /* The size the file states, in whole scaled points: the printed size is
-       in ten-thousandths of a big point. */
-    int64_t stated =
-        pdf_unit_numerator(font) / (HSTEX_PDF_UNIT_DENOMINATOR / 1000);
+    /* The size the file states, in whole scaled points, taken towards the
+       size the engine has: the printed size is in ten-thousandths of a big
+       point, and the whole scaled points it means are what the advance is
+       worked out from. */
+    int64_t numerator = pdf_unit_numerator(font);
+    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR / 1000;
+    int64_t stated = numerator / denominator;
+    if (stated * denominator != numerator && stated < font->size) {
+        stated += 1;
+    }
     int64_t whole = tenths * stated / 10000;
     int64_t rest = tenths * stated - whole * 10000;
     int64_t width = packed_dimen(font->characters[code].width);
@@ -13743,13 +13749,36 @@ static int pdf_place_rule(struct hstex_engine *engine, int32_t left,
     if (width <= 0 || height <= 0) {
         return 0;
     }
+    /* A rule no thicker than a point is drawn as a line of that thickness
+       rather than filled, and the line runs down its middle; see
+       docs/DECISIONS.md, thin-rules. */
+    bool flat = height <= INT32_C(65536);
+    bool upright = !flat && width <= INT32_C(65536);
+    int32_t x = flat ? left : upright ? left + width / 2 : left;
+    int32_t y = flat ? engine->pdf_height - bottom + height / 2
+                     : engine->pdf_height - bottom;
     if (pdf_end_text(engine, error, error_capacity) != 0 ||
         pdf_text(engine, "q\n1 0 0 1 ", error, error_capacity) != 0 ||
-        pdf_number(engine, left, error, error_capacity) != 0 ||
+        pdf_number(engine, x, error, error_capacity) != 0 ||
         pdf_text(engine, " ", error, error_capacity) != 0 ||
-        pdf_number(engine, engine->pdf_height - bottom, error,
-                   error_capacity) != 0 ||
-        pdf_text(engine, " cm\n0 0 ", error, error_capacity) != 0 ||
+        pdf_number(engine, y, error, error_capacity) != 0 ||
+        pdf_text(engine, " cm\n", error, error_capacity) != 0) {
+        return -1;
+    }
+    if (flat || upright) {
+        if (pdf_text(engine, "[]0 d 0 J ", error, error_capacity) != 0 ||
+            pdf_number(engine, flat ? height : width, error, error_capacity) !=
+                0 ||
+            pdf_text(engine, " w 0 0 m ", error, error_capacity) != 0 ||
+            pdf_number(engine, flat ? width : 0, error, error_capacity) != 0 ||
+            pdf_text(engine, " ", error, error_capacity) != 0 ||
+            pdf_number(engine, flat ? 0 : height, error, error_capacity) != 0 ||
+            pdf_text(engine, " l S\nQ\n", error, error_capacity) != 0) {
+            return -1;
+        }
+        return 0;
+    }
+    if (pdf_text(engine, "0 0 ", error, error_capacity) != 0 ||
         pdf_number(engine, width, error, error_capacity) != 0 ||
         pdf_text(engine, " ", error, error_capacity) != 0 ||
         pdf_number(engine, height, error, error_capacity) != 0 ||
