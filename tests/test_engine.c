@@ -2645,6 +2645,75 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* A rule \noalign leaves in an alignment, with no width of its own, is as
+   wide as the alignment; and the alignment's own list is what a paragraph
+   started in \noalign sees, so it takes \parskip when rows have gone before
+   it. See docs/DECISIONS.md, a-rule-between-rows. */
+static int test_a_rule_between_rows(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+    "ode`\\#=6 \\catcode`\\&=4 \\showboxdepth=3 \\showb"
+    "oxbreadth=100 \\parskip=7pt \\tabskip=2pt \\parind"
+    "ent=0pt \\message{[rules]}\\setbox0=\\vbox{\\halig"
+    "n{#\\hfil&#\\hfil\\cr\\noalign{\\hrule}aa&bb\\cr\\"
+    "noalign{\\hrule height2pt}\\noalign{\\hrule width5"
+    "pt}\\noalign{\\vrule width3pt height1pt}cc&dd\\cr}"
+    "}\\showbox0 \\message{[first]}\\setbox0=\\vbox{\\h"
+    "align{#\\hfil\\cr\\noalign{\\vrule width3pt height"
+    "1pt}aa\\cr}}\\showbox0%"
+,
+    "[rules]> \\box0=\n\\vbox(29.74443+0.0)x200.0\n.\\r"
+    "ule(0.4+0.0)x27.11118\n.\\hbox(6.94444+0.0)x27.111"
+    "18\n..\\glue(\\tabskip) 2.0\n..\\hbox(6.94444+0.0)"
+    "x10.00003\n...\\tenrm a\n...\\tenrm a\n...\\glue 0"
+    ".0 plus 1.0fil\n..\\glue(\\tabskip) 2.0\n..\\hbox("
+    "6.94444+0.0)x11.11115\n...\\tenrm b\n...\\tenrm b"
+    "\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\tabskip) 2"
+    ".0\n.\\rule(2.0+0.0)x27.11118\n.\\rule(0.4+0.0)x5."
+    "0\n.\\glue(\\parskip) 7.0\n.\\hbox(1.0+0.0)x200.0,"
+    " glue set 197.0fil\n..\\hbox(0.0+0.0)x0.0\n..\\rul"
+    "e(1.0+*)x3.0\n..\\penalty 10000\n..\\glue(\\parfil"
+    "lskip) 0.0 plus 1.0fil\n..\\glue(\\rightskip) 0.0"
+    "\n.\\glue(\\baselineskip) 5.05556\n.\\hbox(6.94444"
+    "+0.0)x27.11118\n..\\glue(\\tabskip) 2.0\n..\\hbox("
+    "6.94444+0.0)x10.00003, glue set 1.11115fil\n...\\t"
+    "enrm c\n...\\tenrm c\n...\\glue 0.0 plus 1.0fil\n."
+    ".\\glue(\\tabskip) 2.0\n..\\hbox(6.94444+0.0)x11.1"
+    "1115\n...\\tenrm d\n...\\tenrm d\n...\\glue 0.0 pl"
+    "us 1.0fil\n..\\glue(\\tabskip) 2.0\n\n! OK.\n[firs"
+    "t]> \\box0=\n\\vbox(13.0+0.0)x200.0\n.\\hbox(1.0+0"
+    ".0)x200.0, glue set 197.0fil\n..\\hbox(0.0+0.0)x0."
+    "0\n..\\rule(1.0+*)x3.0\n..\\penalty 10000\n..\\glu"
+    "e(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\right"
+    "skip) 0.0\n.\\glue(\\baselineskip) 7.69446\n.\\hbo"
+    "x(4.30554+0.0)x14.00003\n..\\glue(\\tabskip) 2.0\n"
+    "..\\hbox(4.30554+0.0)x10.00003\n...\\tenrm a\n..."
+    "\\tenrm a\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\t"
+    "abskip) 2.0\n\n! OK.\n"
+);
+}
+
 /* A row with fewer entries than the alignment has columns ends with the
    glue that follows its own last column, and carries nothing of the
    columns it never reached; see docs/DECISIONS.md, a-row-that-stops-early. */
@@ -7223,6 +7292,7 @@ int main(void)
         test_a_space_leaves_the_factor_alone() != 0 ||
         test_protruding_past_a_kern() != 0 ||
         test_a_row_that_stops_early() != 0 ||
+        test_a_rule_between_rows() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

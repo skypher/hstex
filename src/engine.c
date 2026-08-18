@@ -69,6 +69,10 @@ struct hstex_vbox_builder {
     int64_t extent;
     int32_t trailing_depth;
     int32_t width;
+    /* \noalign material is part of the alignment's own vertical list, which
+       may already hold rows: an empty builder is not an empty list. See
+       docs/DECISIONS.md, a-rule-between-rows. */
+    bool continues;
 };
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
@@ -15191,7 +15195,8 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
        empty. See docs/DECISIONS.md, parskip-in-the-outermost-list. */
     if (engine->active_vbox_builder != NULL &&
         (engine->active_vbox_builder == engine->contribution_builder ||
-         engine->active_vbox_builder->count != 0U)) {
+         engine->active_vbox_builder->count != 0U ||
+         engine->active_vbox_builder->continues)) {
         struct hstex_glue skip = engine->glue_parameters[HSTEX_GLUE_PAR_SKIP];
         struct hstex_node node = {
             .kind = HSTEX_NODE_GLUE,
@@ -22503,6 +22508,15 @@ static int finish_alignment(struct hstex_engine *engine,
     for (size_t index = 0U; index < row_count; ++index) {
         if (rows[index].noalign) {
             for (size_t item = 0U; item < rows[index].item_count; ++item) {
+                /* A rule \noalign left in the alignment's own list, with no
+                   width of its own, is as wide as the alignment; see
+                   docs/DECISIONS.md, a-rule-between-rows. */
+                uint32_t held = rows[index].items[item];
+                if (held != 0U && (size_t)held <= engine->node_count &&
+                    engine->nodes[held - 1U].kind == HSTEX_NODE_RULE &&
+                    engine->nodes[held - 1U].width == HSTEX_RUNNING_DIMEN) {
+                    engine->nodes[held - 1U].width = (int32_t)final_width;
+                }
                 if (append_vbox_item(engine, rows[index].items[item], error,
                                      error_capacity) != 0) {
                     return -1;
@@ -22812,6 +22826,10 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                     break;
                 }
                 struct hstex_vbox_builder between = {0};
+                /* The alignment's list already holds the rows before this
+                   one, so a paragraph starting here is not the first thing
+                   in it. */
+                between.continues = row_count != 0U;
                 /* \noalign material sits in the alignment's own vertical
                    list, so \prevdepth is the depth of the row before it;
                    see docs/DECISIONS.md, prevdepth-inside-noalign. */
