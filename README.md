@@ -157,11 +157,16 @@ the whole corpus in that mode -- 2,375 pages and 22 megabytes of DVI -- is
 byte for byte what `pdflatex` writes for the same source: places, fonts,
 rules, leaders, set glue, the movement registers, the preamble and the
 postamble, down to which of the two registers a repeated movement takes and
-how far back the reference can still reach to rewrite one. A PDF is written when `\pdfoutput` is positive: the pages, their
-streams of text and rules, the objects they need and the measurements of
-every font, byte for byte the reference's for thirty-nine of forty randomly
-nested probes -- but the fonts are not carried in the file yet and nothing is
-compressed, so it is not yet the reference's file for a real document. Marks and insertions are both there, splitting and
+how far back the reference can still reach to rewrite one. A PDF is written when `\pdfoutput` is positive: the pages
+and their streams of text, rules, colour and literals; the links,
+annotations and destinations they carry, with the rectangles each covers and
+the sorted tree of names the catalog points at; the tree of pages; and the
+measurements of every font, named and ordered the way the reference names and
+orders them. It is byte for byte the reference's file for the probes in
+`scratchpad/pdf` and for randomly nested ones -- but the fonts are not
+carried in the file yet, nothing is compressed, and one rounding rule in the
+text machinery is still being worked out, so it is not yet the reference's
+file for a real document. Marks and insertions are both there, splitting and
 all: an insertion that will not fit is broken where `\vsplit` would break
 it, what fits goes into the box of its class, and the rest waits for the next
 page with `\splittopskip` in front of it. Every file the corpus writes
