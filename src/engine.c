@@ -8188,6 +8188,11 @@ static int math_append_box_field(struct hstex_engine *engine,
                                  bool single_character, uint32_t sublist,
                                  uint8_t list_style, char *error,
                                  size_t error_capacity);
+static int math_append_box_field_kind(struct hstex_engine *engine,
+                                      const struct hstex_box *box,
+                                      bool single_character, uint32_t sublist,
+                                      uint8_t list_style, bool vcentered,
+                                      char *error, size_t error_capacity);
 static void pop_math_list(struct hstex_engine *engine);
 
 static int32_t packed_dimen(int32_t value)
@@ -17654,6 +17659,17 @@ static int math_append_box_field(struct hstex_engine *engine,
                                  uint8_t list_style, char *error,
                                  size_t error_capacity)
 {
+    return math_append_box_field_kind(engine, box, single_character, sublist,
+                                      list_style, false, error,
+                                      error_capacity);
+}
+
+static int math_append_box_field_kind(struct hstex_engine *engine,
+                                      const struct hstex_box *box,
+                                      bool single_character, uint32_t sublist,
+                                      uint8_t list_style, bool vcentered,
+                                      char *error, size_t error_capacity)
+{
     struct hstex_node node = {
         .kind = HSTEX_NODE_LIST,
         .width = box->width,
@@ -17678,6 +17694,7 @@ static int math_append_box_field(struct hstex_engine *engine,
                     .node = identifier,
                     .sublist = sublist,
                     .list_style = list_style},
+        .vcentered = vcentered,
     };
     return math_append_atom(engine, &noad, error, error_capacity);
 }
@@ -20932,7 +20949,10 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
     int64_t total = (int64_t)box.height + box.depth;
     box.height = axis + half_of(total);
     box.depth = (int32_t)(total - box.height);
-    return math_append_box(engine, &box, error, error_capacity);
+    /* Marked as \vcenter's, so that braces round it package it; see
+       docs/DECISIONS.md, a-vcenter-in-braces. */
+    return math_append_box_field_kind(engine, &box, false, 0U, 0U, true, error,
+                                      error_capacity);
 }
 
 /* \parshape reads a count and that many indent and length pairs. A count of
@@ -21663,6 +21683,7 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
     if (inner->count == 1U &&
         inner->noads[0].kind == (uint8_t)HSTEX_NOAD_ATOM &&
         inner->noads[0].atom_class == (uint8_t)HSTEX_ATOM_ORD &&
+        !inner->noads[0].vcentered &&
         inner->noads[0].superscript.kind ==
             (uint8_t)HSTEX_MATH_FIELD_EMPTY &&
         inner->noads[0].subscript.kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY &&

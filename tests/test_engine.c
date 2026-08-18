@@ -2645,6 +2645,67 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* Braces round a \vcenter package it, though braces round an \hbox give way
+   to it: \vcenter makes an atom of its own kind, not an ordinary one. See
+   docs/DECISIONS.md, a-vcenter-in-braces. */
+static int test_a_vcenter_in_braces(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=4 \\showboxbreadth=100 \\message{[vc]}\\s"
+    "etbox0=\\hbox{$x{\\vcenter{\\hbox{a}}}y$}\\showbox"
+    "0 \\message{[hb]}\\setbox0=\\hbox{$x{\\hbox{a}}y$}"
+    "\\showbox0 \\message{[bare]}\\setbox0=\\hbox{$x\\v"
+    "center{\\hbox{a}}y$}\\showbox0 \\message{[sup]}\\s"
+    "etbox0=\\hbox{$x^{\\vcenter{\\hbox{a}}}y$}\\showbo"
+    "x0 \\message{[two]}\\setbox0=\\hbox{$x{\\vcenter{"
+    "\\hbox{a}}b}y$}\\showbox0%"
+,
+    "[vc]> \\box0=\n\\hbox(4.65277+1.94444)x15.97688\n."
+    "\\mathon\n.\\teni x\n.\\hbox(4.65277+0.0)x5.00002"
+    "\n..\\vbox(4.65277+-0.34723)x5.00002\n...\\hbox(4."
+    "30554+0.0)x5.00002\n....\\tenrm a\n.\\teni y\n.\\k"
+    "ern0.35878\n.\\mathoff\n\n! OK.\n[hb]> \\box0=\n\\"
+    "hbox(4.30554+1.94444)x15.97688\n.\\mathon\n.\\teni"
+    " x\n.\\hbox(4.30554+0.0)x5.00002\n..\\tenrm a\n.\\"
+    "teni y\n.\\kern0.35878\n.\\mathoff\n\n! OK.\n[bare"
+    "]> \\box0=\n\\hbox(4.65277+1.94444)x15.97688\n.\\m"
+    "athon\n.\\teni x\n.\\vbox(4.65277+-0.34723)x5.0000"
+    "2\n..\\hbox(4.30554+0.0)x5.00002\n...\\tenrm a\n."
+    "\\teni y\n.\\kern0.35878\n.\\mathoff\n\n! OK.\n[su"
+    "p]> \\box0=\n\\hbox(7.5317+1.94444)x15.97688\n.\\m"
+    "athon\n.\\teni x\n.\\vbox(3.90277+0.40277)x5.00002"
+    ", shifted -3.62892\n..\\hbox(4.30554+0.0)x5.00002"
+    "\n...\\tenrm a\n.\\teni y\n.\\kern0.35878\n.\\math"
+    "off\n\n! OK.\n[two]> \\box0=\n\\hbox(6.94444+1.944"
+    "44)x20.26854\n.\\mathon\n.\\teni x\n.\\hbox(6.9444"
+    "4+0.0)x9.29167\n..\\vbox(4.65277+-0.34723)x5.00002"
+    "\n...\\hbox(4.30554+0.0)x5.00002\n....\\tenrm a\n."
+    ".\\teni b\n.\\teni y\n.\\kern0.35878\n.\\mathoff\n"
+    "\n! OK.\n"
+);
+}
+
 /* A limit widened to match the operator keeps the italic correction it ends
    with; one left at its own width loses it, exactly as a fraction's sides
    do. See docs/DECISIONS.md, a-clean-box-of-one-character. */
@@ -7353,6 +7414,7 @@ int main(void)
         test_a_row_that_stops_early() != 0 ||
         test_a_rule_between_rows() != 0 ||
         test_a_limit_at_its_own_width() != 0 ||
+        test_a_vcenter_in_braces() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

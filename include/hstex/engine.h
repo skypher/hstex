@@ -929,6 +929,10 @@ struct hstex_noad {
        the limits above and below in display style; 1 for \limits; 2 for
        \nolimits. See docs/DECISIONS.md, large-operators. */
     uint8_t limits;
+    /* \vcenter made this atom. It is set and spaced as an ordinary one, but
+       it is not an ordinary atom: braces round it package it rather than
+       give way to it. See docs/DECISIONS.md, a-vcenter-in-braces. */
+    bool vcentered;
 };
 
 /* Which slot the next atom fills, when a script mark is waiting. */
