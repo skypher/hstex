@@ -2645,6 +2645,145 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* Looking back for the character to protrude past the right margin, a kern
+   the font supplied is stepped over and one the document asked for is not,
+   unless it takes up no room; see docs/DECISIONS.md, protruding-past-a-kern. */
+static int test_protruding_past_a_kern(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=200 \\pdfprotrudechars"
+    "=2 \\rpcode\\teni`Y=200 \\rpcode\\tenrm`Y=200 \\sp"
+    "aceskip=0pt \\message{[m]}\\setbox0=\\vbox{\\noind"
+    "ent aaa the $XY$\\special{x}\\penalty-10000 ccc\\p"
+    "ar}\\showbox0 \\message{[k]}\\setbox0=\\vbox{\\noi"
+    "ndent aaa the $XY\\kern2pt$\\special{x}\\penalty-1"
+    "0000 ccc\\par}\\showbox0 \\message{[z]}\\setbox0="
+    "\\vbox{\\noindent aaa the Y\\kern0pt\\special{x}\\"
+    "penalty-10000 ccc\\par}\\showbox0 \\message{[e]}\\"
+    "setbox0=\\vbox{\\noindent aaa the Y\\kern2pt\\spec"
+    "ial{x}\\penalty-10000 ccc\\par}\\showbox0%"
+,
+    "[m]> \\box0=\n\\vbox(18.94444+0.0)x200.0\n.\\hbox("
+    "6.94444+0.0)x200.0, glue set 44.80443\n..\\tenrm a"
+    "\n..\\tenrm a\n..\\tenrm a\n..\\glue 3.33333 plus "
+    "1.66666 minus 1.11111\n..\\tenrm t\n..\\tenrm h\n."
+    ".\\tenrm e\n..\\glue 3.33333 plus 1.66666 minus 1."
+    "11111\n..\\mathon\n..\\teni X\n..\\kern0.7847\n.."
+    "\\teni Y\n..\\kern2.22223\n..\\mathoff\n..\\specia"
+    "l{x}\n..\\kern-2.0 (right margin)\n..\\penalty -10"
+    "000\n..\\glue(\\rightskip) 0.0\n.\\glue(\\baseline"
+    "skip) 7.69446\n.\\hbox(4.30554+0.0)x200.0, glue se"
+    "t 186.66667fil\n..\\tenrm c\n..\\tenrm c\n..\\tenr"
+    "m c\n..\\penalty 10000\n..\\glue(\\parfillskip) 0."
+    "0 plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK."
+    "\n[k]> \\box0=\n\\vbox(18.94444+0.0)x200.0\n.\\hbo"
+    "x(6.94444+0.0)x200.0, glue set 43.60442\n..\\tenrm"
+    " a\n..\\tenrm a\n..\\tenrm a\n..\\glue 3.33333 plu"
+    "s 1.66666 minus 1.11111\n..\\tenrm t\n..\\tenrm h"
+    "\n..\\tenrm e\n..\\glue 3.33333 plus 1.66666 minus"
+    " 1.11111\n..\\mathon\n..\\teni X\n..\\kern0.7847\n"
+    "..\\teni Y\n..\\kern2.22223\n..\\kern 2.0\n..\\mat"
+    "hoff\n..\\special{x}\n..\\penalty -10000\n..\\glue"
+    "(\\rightskip) 0.0\n.\\glue(\\baselineskip) 7.69446"
+    "\n.\\hbox(4.30554+0.0)x200.0, glue set 186.66667fi"
+    "l\n..\\tenrm c\n..\\tenrm c\n..\\tenrm c\n..\\pena"
+    "lty 10000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil"
+    "\n..\\glue(\\rightskip) 0.0\n\n! OK.\n[z]> \\box0="
+    "\n\\vbox(18.94444+0.0)x200.0\n.\\hbox(6.94444+0.0)"
+    "x200.0, glue set 47.6836\n..\\tenrm a\n..\\tenrm a"
+    "\n..\\tenrm a\n..\\glue 3.33333 plus 1.66666 minus"
+    " 1.11111\n..\\tenrm t\n..\\tenrm h\n..\\tenrm e\n."
+    ".\\glue 3.33333 plus 1.66666 minus 1.11111\n..\\te"
+    "nrm Y\n..\\kern 0.0\n..\\special{x}\n..\\kern-2.0 "
+    "(right margin)\n..\\penalty -10000\n..\\glue(\\rig"
+    "htskip) 0.0\n.\\glue(\\baselineskip) 7.69446\n.\\h"
+    "box(4.30554+0.0)x200.0, glue set 186.66667fil\n.."
+    "\\tenrm c\n..\\tenrm c\n..\\tenrm c\n..\\penalty 1"
+    "0000\n..\\glue(\\parfillskip) 0.0 plus 1.0fil\n.."
+    "\\glue(\\rightskip) 0.0\n\n! OK.\n[e]> \\box0=\n\\"
+    "vbox(18.94444+0.0)x200.0\n.\\hbox(6.94444+0.0)x200"
+    ".0, glue set 46.4836\n..\\tenrm a\n..\\tenrm a\n.."
+    "\\tenrm a\n..\\glue 3.33333 plus 1.66666 minus 1.1"
+    "1111\n..\\tenrm t\n..\\tenrm h\n..\\tenrm e\n..\\g"
+    "lue 3.33333 plus 1.66666 minus 1.11111\n..\\tenrm "
+    "Y\n..\\kern 2.0\n..\\special{x}\n..\\penalty -1000"
+    "0\n..\\glue(\\rightskip) 0.0\n.\\glue(\\baselinesk"
+    "ip) 7.69446\n.\\hbox(4.30554+0.0)x200.0, glue set "
+    "186.66667fil\n..\\tenrm c\n..\\tenrm c\n..\\tenrm "
+    "c\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0 "
+    "plus 1.0fil\n..\\glue(\\rightskip) 0.0\n\n! OK.\n"
+);
+}
+
+/* A space, a kern, a penalty and glue all leave the space factor where the
+   characters put it; only a box or a rule sets it back. Two spaces in a row
+   -- which happens where one file's last line ends a sentence and the line
+   that read it ends too -- are therefore both wide. See docs/DECISIONS.md,
+   what-resets-the-space-factor. */
+static int test_a_space_leaves_the_factor_alone(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=100 \\sfcode`\\.=3000 "
+    "\\spaceskip=0pt \\message{[sf]}\\setbox0=\\hbox{ab"
+    "c. \\hskip3pt x. \\kern2pt y. \\penalty5 z.\\lower"
+    "1pt\\hbox{} w. q}\\showbox0%"
+,
+    "[sf]> \\box0=\n\\hbox(6.94444+1.94444)x81.94456\n."
+    "\\tenrm a\n.\\tenrm b\n.\\kern0.27779\n.\\tenrm c"
+    "\n.\\tenrm .\n.\\glue 4.44444 plus 4.99997 minus 0"
+    ".37036\n.\\glue 3.0\n.\\tenrm x\n.\\tenrm .\n.\\gl"
+    "ue 4.44444 plus 4.99997 minus 0.37036\n.\\kern 2.0"
+    "\n.\\tenrm y\n.\\kern-0.83334\n.\\tenrm .\n.\\glue"
+    " 4.44444 plus 4.99997 minus 0.37036\n.\\penalty 5"
+    "\n.\\tenrm z\n.\\tenrm .\n.\\hbox(0.0+0.0)x0.0, sh"
+    "ifted 1.0\n.\\glue 3.33333 plus 1.66666 minus 1.11"
+    "111\n.\\tenrm w\n.\\tenrm .\n.\\glue 4.44444 plus "
+    "4.99997 minus 0.37036\n.\\tenrm q\n\n! OK.\n"
+);
+}
+
 /* The look TeX takes at the first token of an alignment entry, to see
    whether it is \omit, expands what it finds -- but not a \protected
    macro, which is put back and expanded inside the entry, after the
@@ -7007,6 +7146,8 @@ int main(void)
         test_a_page_that_breaks_at_a_display() != 0 ||
         test_a_kern_in_mu() != 0 ||
         test_the_look_before_an_entry() != 0 ||
+        test_a_space_leaves_the_factor_alone() != 0 ||
+        test_protruding_past_a_kern() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

@@ -8968,6 +8968,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
             break;
         }
         if (token_is_space(token)) {
+            /* A space leaves the space factor where the characters put it;
+               see docs/DECISIONS.md, what-resets-the-space-factor. */
             status = flush_pending_character(engine, error, error_capacity);
             if (status == 0) {
                 status = append_interword_glue(engine, error, error_capacity);
@@ -8975,7 +8977,6 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
             if (status != 0) {
                 break;
             }
-            engine->space_factor = 1000;
             continue;
         }
         if (!hstex_token_is_character(token)) {
@@ -9294,7 +9295,6 @@ static int handle_vertical_list_token(struct hstex_engine *engine,
                 append_interword_glue(engine, error, error_capacity) != 0) {
                 return -1;
             }
-            engine->space_factor = 1000;
             return 0;
         }
         if (hstex_token_is_character(token)) {
@@ -15412,7 +15412,10 @@ static bool protrusion_passes_over(const struct hstex_node *node)
         return node->value.glue.parameter ==
                1U + (uint8_t)HSTEX_GLUE_PAR_FILL_SKIP;
     case HSTEX_NODE_KERN:
-        return packed_dimen(node->width) == 0;
+        /* A kern the font supplied -- an italic correction, for one -- is
+           stepped over; one the document asked for stops the search unless
+           it takes up no room. See docs/DECISIONS.md, protruding-past-a-kern. */
+        return !node->explicit_kern || packed_dimen(node->width) == 0;
     case HSTEX_NODE_LIST:
         /* A box is stepped over only when it is empty and takes up no room
            at all. */
@@ -22362,7 +22365,6 @@ static int evaluate_align_cell(struct hstex_engine *engine,
             if (status == 0) {
                 status = append_interword_glue(engine, error, error_capacity);
             }
-            engine->space_factor = 1000;
             continue;
         }
         if (!hstex_token_is_character(token)) {
