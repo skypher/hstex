@@ -1540,6 +1540,10 @@ struct hstex_engine {
     bool pdf_placed;
     int64_t pdf_origin_h;
     int64_t pdf_origin_v;
+    /* Where the file's text stands after the place it last named, in scaled
+       points: the printed place, taken towards the engine's own. */
+    int32_t pdf_line_h;
+    int32_t pdf_line_v;
     int32_t pdf_origin_line;
     int32_t pdf_text_h;
     int32_t pdf_text_v;

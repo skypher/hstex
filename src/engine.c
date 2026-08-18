@@ -13546,6 +13546,8 @@ static int pdf_end_text(struct hstex_engine *engine, char *error,
     engine->pdf_font_chosen = false;
     engine->pdf_origin_h = 0;
     engine->pdf_origin_v = 0;
+    engine->pdf_line_h = 0;
+    engine->pdf_line_v = 0;
     return pdf_fresh_line(engine, error, error_capacity) != 0 ||
                    pdf_text(engine, "ET\n", error, error_capacity) != 0
                ? -1
@@ -13676,9 +13678,15 @@ static int pdf_place_character(struct hstex_engine *engine,
         /* The places the file names are rounded ones, and the next place is
            named as the step from the last rounded one. */
         int32_t digits = pdf_digits(engine);
-        int64_t across = pdf_bp_units(h, digits) - engine->pdf_origin_h;
-        int64_t down =
-            pdf_bp_units(engine->pdf_height - v, digits) - engine->pdf_origin_v;
+        /* The step is measured from the place the file's text stands at, not
+           from the engine's own place; see docs/DECISIONS.md,
+           the-text-position-in-the-file. */
+        /* The step is measured from the place the file's text stands at, not
+           from the engine's own place; see docs/DECISIONS.md,
+           the-text-position-in-the-file. */
+        int64_t across = pdf_bp_units(h - engine->pdf_line_h, digits);
+        int64_t down = pdf_bp_units(
+            (engine->pdf_height - v) - engine->pdf_line_v, digits);
         char text[64];
         pdf_format_units(text, sizeof(text), across, digits);
         if (pdf_text(engine, text, error, error_capacity) != 0 ||
@@ -13694,17 +13702,22 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_origin_v += down;
         engine->pdf_origin_line = v;
         /* The file's text stands where the place it named puts it, which is
-           the rounded place, not the engine's own. */
+           the rounded place taken towards the engine's own. */
         int64_t scale = 1;
         for (int32_t index = 0; index < digits; ++index) {
             scale *= 10;
         }
-        int64_t exact = engine->pdf_origin_h * INT64_C(473628672);
         int64_t den = 7200 * scale;
+        int64_t exact = engine->pdf_origin_h * INT64_C(473628672);
         int64_t whole = exact / den;
         int64_t rest = exact - whole * den;
-        engine->pdf_text_h =
-            (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
+        engine->pdf_line_h = (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
+        exact = engine->pdf_origin_v * INT64_C(473628672);
+        whole = exact / den;
+        rest = exact - whole * den;
+        int32_t up = engine->pdf_height - v;
+        engine->pdf_line_v = (int32_t)(whole + (rest != 0 && whole < up ? 1 : 0));
+        engine->pdf_text_h = engine->pdf_line_h;
         engine->pdf_placed = true;
     }
     if (!engine->pdf_in_array) {
@@ -14894,6 +14907,8 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
     engine->pdf_font_chosen = false;
     engine->pdf_origin_h = 0;
     engine->pdf_origin_v = 0;
+    engine->pdf_line_h = 0;
+    engine->pdf_line_v = 0;
     int32_t horigin = engine->dimen_parameters[HSTEX_DIMEN_PDF_HORIGIN];
     int32_t vorigin = engine->dimen_parameters[HSTEX_DIMEN_PDF_VORIGIN];
     int32_t width = engine->dimen_parameters[HSTEX_DIMEN_PDF_PAGE_WIDTH];
