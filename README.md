@@ -39,7 +39,10 @@ in place, so the engine now runs a `\documentclass{article}` document from
 The format is built from `pdftexconfig.tex` and the given source, the way
 `pdflatex.ini` does, and the engine reports pdfTeX's version, so `expl3`
 selects its pdfTeX backend. The resulting message stream is a subsequence of
-the `pdflatex` log for the same document; what is missing is the file-open
+the `pdflatex` log for the same document, printed through the same
+seventy-nine-column printer -- a `\message` keeps its distance from what is
+already on the line, a `\showbox` starts one of its own, a shipped page
+announces itself by its counts -- and what is missing is the file-open
 notation and everything downstream of the page builder.
 
 The benchmark corpus loads its full package stack — `geometry`, `amsmath`,

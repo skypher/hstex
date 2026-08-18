@@ -1446,10 +1446,11 @@ struct hstex_engine {
        gathered, which is what follows them; see docs/DECISIONS.md,
        prevdepth-inside-noalign. */
     int32_t display_prev_depth;
-    /* Whether the diagnostic stream stands part-way through a line, so
-       that the next \message is separated from what is already there;
-       see docs/DECISIONS.md, a-message-keeps-its-distance. */
-    bool message_column;
+    /* How far along the line the diagnostic stream stands, so that it can
+       be broken where the reference breaks it and a message can keep its
+       distance from what is already there; see docs/DECISIONS.md,
+       the-print-line. */
+    int32_t message_column;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;

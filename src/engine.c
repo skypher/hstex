@@ -11151,70 +11151,143 @@ static const char *glue_parameter_name(uint8_t parameter)
     return names[parameter - 1U];
 }
 
-static void show_scaled(FILE *out, int32_t value)
+/* Everything the reference prints as a diagnostic goes through one printer
+   that knows how far along the line it stands: the line is broken after the
+   seventy-ninth character, and a diagnostic that must start on a line of its
+   own asks for one. See docs/DECISIONS.md, the-print-line. */
+static FILE *diagnostic_stream(struct hstex_engine *engine)
+{
+    return engine->message_stream == NULL ? stdout : engine->message_stream;
+}
+
+static void print_bytes(struct hstex_engine *engine, const char *text,
+                        size_t length)
+{
+    FILE *out = diagnostic_stream(engine);
+    for (size_t index = 0U; index < length; ++index) {
+        char byte = text[index];
+        (void)fputc(byte, out);
+        if (byte == '\n') {
+            engine->message_column = 0;
+            continue;
+        }
+        ++engine->message_column;
+        if (engine->message_column == HSTEX_PRINT_LINE) {
+            (void)fputc('\n', out);
+            engine->message_column = 0;
+        }
+    }
+}
+
+static void print_text(struct hstex_engine *engine, const char *text)
+{
+    print_bytes(engine, text, strlen(text));
+}
+
+static void print_byte(struct hstex_engine *engine, char byte)
+{
+    print_bytes(engine, &byte, 1U);
+}
+
+static void print_formatted(struct hstex_engine *engine, const char *format,
+                            ...) HSTEX_PRINTF_FORMAT(2, 3);
+
+static void print_formatted(struct hstex_engine *engine, const char *format,
+                            ...)
+{
+    char buffer[512];
+    va_list arguments;
+    va_start(arguments, format);
+    int written = vsnprintf(buffer, sizeof(buffer), format, arguments);
+    va_end(arguments);
+    if (written > 0) {
+        size_t length = (size_t)written;
+        if (length >= sizeof(buffer)) {
+            length = sizeof(buffer) - 1U;
+        }
+        print_bytes(engine, buffer, length);
+    }
+}
+
+/* print_ln: a line ends here whatever stands on it. */
+static void print_line(struct hstex_engine *engine)
+{
+    print_byte(engine, '\n');
+}
+
+/* print_nl: what follows starts a line of its own. */
+static void print_fresh_line(struct hstex_engine *engine)
+{
+    if (engine->message_column > 0) {
+        print_byte(engine, '\n');
+    }
+}
+
+static void show_scaled(struct hstex_engine *engine, int32_t value)
 {
     char digits[64];
     int length = format_scaled_value(value, "", digits, sizeof(digits));
     if (length > 0) {
-        (void)fwrite(digits, 1U, (size_t)length, out);
+        print_bytes(engine, digits, (size_t)length);
     }
 }
 
 /* A dimension with an order after it: 1.0fil, 1.0fill and so on. */
-static void show_glue_amount(FILE *out, int32_t value, uint8_t order)
+static void show_glue_amount(struct hstex_engine *engine, int32_t value, uint8_t order)
 {
-    show_scaled(out, value);
+    show_scaled(engine, value);
     if (order == 0U || order > 3U) {
         return;
     }
-    (void)fputs("fil", out);
+    print_text(engine, "fil");
     for (uint8_t remaining = order; remaining > 1U; --remaining) {
-        (void)fputc('l', out);
+        print_byte(engine, 'l');
     }
 }
 
-static void show_glue_spec(FILE *out, const struct hstex_node *node)
+static void show_glue_spec(struct hstex_engine *engine, const struct hstex_node *node)
 {
-    show_scaled(out, packed_dimen(node->width));
+    show_scaled(engine, packed_dimen(node->width));
     if (node->value.glue.stretch != 0) {
-        (void)fputs(" plus ", out);
-        show_glue_amount(out, node->value.glue.stretch,
+        print_text(engine, " plus ");
+        show_glue_amount(engine, node->value.glue.stretch,
                          node->value.glue.stretch_order);
     }
     if (node->value.glue.shrink != 0) {
-        (void)fputs(" minus ", out);
-        show_glue_amount(out, node->value.glue.shrink,
+        print_text(engine, " minus ");
+        show_glue_amount(engine, node->value.glue.shrink,
                          node->value.glue.shrink_order);
     }
 }
 
 /* A rule's dimension is written as a star where the enclosing box supplies
    it. */
-static void show_rule_dimen(FILE *out, int32_t value)
+static void show_rule_dimen(struct hstex_engine *engine, int32_t value)
 {
     if (value == HSTEX_RUNNING_DIMEN) {
-        (void)fputc('*', out);
+        print_byte(engine, '*');
         return;
     }
-    show_scaled(out, value);
+    show_scaled(engine, value);
 }
 
 /* The reference writes an unprintable character in ^^ notation. */
-static void show_ascii(FILE *out, uint8_t code)
+static void show_ascii(struct hstex_engine *engine, uint8_t code)
 {
     if (code < 32U || code == 127U) {
-        (void)fputs("^^", out);
-        (void)fputc(code < 64U ? (int)(code + 64U) : (int)(code - 64U), out);
+        print_text(engine, "^^");
+        print_byte(engine,
+                   (char)(code < 64U ? code + 64U : code - 64U));
         return;
     }
     if (code >= 128U) {
         static const char hexadecimal[] = "0123456789abcdef";
-        (void)fputs("^^", out);
-        (void)fputc(hexadecimal[code >> 4U], out);
-        (void)fputc(hexadecimal[code & 0x0fU], out);
+        print_text(engine, "^^");
+        print_byte(engine, hexadecimal[code >> 4U]);
+        print_byte(engine, hexadecimal[code & 0x0fU]);
         return;
     }
-    (void)fputc((int)code, out);
+    print_byte(engine, (char)code);
 }
 
 static int stored_token_list_text(struct hstex_engine *engine,
@@ -11225,7 +11298,7 @@ static int stored_token_list_text(struct hstex_engine *engine,
 
 /* A whatsit is shown as the command that left it there, with the text it is
    still holding; see docs/DECISIONS.md, whatsits. */
-static void show_whatsit(struct hstex_engine *engine, FILE *out,
+static void show_whatsit(struct hstex_engine *engine,
                          const struct hstex_node *node)
 {
     uint8_t kind = node->value.whatsit.kind;
@@ -11233,7 +11306,7 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
         static const char *const actions[4] = {"push", "pop", "set",
                                                "current"};
         uint8_t action = node->value.whatsit.action;
-        (void)fprintf(out, "\\pdfcolorstack %u %s",
+        print_formatted(engine, "\\pdfcolorstack %u %s",
                       (unsigned int)node->value.whatsit.stream,
                       actions[action > 3U ? 0U : action]);
         if (action == 1U || action == 3U) {
@@ -11248,16 +11321,16 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
             free(text);
             return;
         }
-        (void)fputs(" {", out);
+        print_text(engine, " {");
         if (text_count != 0U) {
-            (void)fwrite(text, 1U, text_count, out);
+            print_bytes(engine, (const char *)text, text_count);
         }
-        (void)fputc('}', out);
+        print_byte(engine, '}');
         free(text);
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
-        (void)fputs("\\pdfdest ", out);
+        print_text(engine, "\\pdfdest ");
         if (node->value.whatsit.stream != 0U) {
             uint8_t *text = NULL;
             size_t text_count = 0U;
@@ -11270,17 +11343,17 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
                 free(text);
                 return;
             }
-            (void)fputs("name{", out);
+            print_text(engine, "name{");
             if (text_count != 0U) {
-                (void)fwrite(text, 1U, text_count, out);
+                print_bytes(engine, (const char *)text, text_count);
             }
             if (cut) {
-                (void)fputs("\\ETC.", out);
+                print_text(engine, "\\ETC.");
             }
-            (void)fputc('}', out);
+            print_byte(engine, '}');
             free(text);
         } else {
-            (void)fprintf(out, "num%d", node->value.whatsit.number);
+            print_formatted(engine, "num%d", node->value.whatsit.number);
         }
         uint8_t *type = NULL;
         size_t type_count = 0U;
@@ -11291,23 +11364,23 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
             free(type);
             return;
         }
-        (void)fputc(' ', out);
+        print_byte(engine, ' ');
         if (type_count != 0U) {
-            (void)fwrite(type, 1U, type_count, out);
+            print_bytes(engine, (const char *)type, type_count);
         }
         free(type);
         return;
     }
     static const char *const names[4] = {"write", "openout", "closeout",
                                          "special"};
-    (void)fputc('\\', out);
-    (void)fputs(names[kind > 3U ? 0U : kind], out);
+    print_byte(engine, '\\');
+    print_text(engine, names[kind > 3U ? 0U : kind]);
     if (kind != (uint8_t)HSTEX_WHATSIT_SPECIAL) {
         uint8_t stream = node->value.whatsit.stream;
         if (stream < 16U) {
-            (void)fprintf(out, "%u", (unsigned int)stream);
+            print_formatted(engine, "%u", (unsigned int)stream);
         } else {
-            (void)fputc(stream == 16U ? '*' : '-', out);
+            print_byte(engine, stream == 16U ? '*' : '-');
         }
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_CLOSE_OUT) {
@@ -11328,25 +11401,25 @@ static void show_whatsit(struct hstex_engine *engine, FILE *out,
         free(bytes);
         return;
     }
-    (void)fputc(kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT ? '=' : '{', out);
+    print_byte(engine, kind == (uint8_t)HSTEX_WHATSIT_OPEN_OUT ? '=' : '{');
     if (byte_count != 0U) {
-        (void)fwrite(bytes, 1U, byte_count, out);
+        print_bytes(engine, (const char *)bytes, byte_count);
     }
     if (truncated) {
-        (void)fputs("\\ETC.", out);
+        print_text(engine, "\\ETC.");
     }
     if (kind != (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
-        (void)fputc('}', out);
+        print_byte(engine, '}');
     }
     free(bytes);
 }
 
-static void show_character(struct hstex_engine *engine, FILE *out,
+static void show_character(struct hstex_engine *engine,
                            const struct hstex_node *node)
 {
     const struct hstex_font *font =
         font_by_identifier(engine, node->value.character.font);
-    (void)fputc('\\', out);
+    print_byte(engine, '\\');
     size_t length = 0U;
     const uint8_t *name = NULL;
     enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
@@ -11354,39 +11427,37 @@ static void show_character(struct hstex_engine *engine, FILE *out,
         hstex_symbol_name(&engine->lexical_state.symbols,
                           font->identifier_cs, &kind, &name, &length) == 0 &&
         name != NULL) {
-        (void)fwrite(name, 1U, length, out);
+        print_bytes(engine, (const char *)name, length);
     } else if (font != NULL && font->name != NULL) {
-        (void)fputs(font->name, out);
+        print_text(engine, font->name);
     }
-    (void)fputc(' ', out);
-    show_ascii(out, (uint8_t)node->value.character.character);
+    print_byte(engine, ' ');
+    show_ascii(engine, (uint8_t)node->value.character.character);
 }
 
-static void show_node_list(struct hstex_engine *engine, FILE *out,
+static void show_node_list(struct hstex_engine *engine,
                            const uint32_t *items, size_t count, char *prefix,
                            size_t depth, size_t threshold, size_t breadth,
                            char mark);
 
 /* One box, rule, glue, kern, penalty or character of a list. */
-static void show_node(struct hstex_engine *engine, FILE *out,
+static void show_node(struct hstex_engine *engine,
                       const struct hstex_node *node, char *prefix,
                       size_t depth, size_t threshold, size_t breadth)
 {
     switch (node->kind) {
     case HSTEX_NODE_LIST: {
-        (void)fputs(node->value.list.box_kind == HSTEX_BOX_VLIST ? "\\vbox("
-                                                                 : "\\hbox(",
-                    out);
-        show_scaled(out, packed_dimen(node->height));
-        (void)fputc('+', out);
-        show_scaled(out, packed_dimen(node->depth));
-        (void)fputs(")x", out);
-        show_scaled(out, packed_dimen(node->width));
+        print_text(engine, node->value.list.box_kind == HSTEX_BOX_VLIST ? "\\vbox(" : "\\hbox(");
+        show_scaled(engine, packed_dimen(node->height));
+        print_byte(engine, '+');
+        show_scaled(engine, packed_dimen(node->depth));
+        print_text(engine, ")x");
+        show_scaled(engine, packed_dimen(node->width));
         const struct hstex_glue_set set = node->value.list.glue;
         if (set.sign != (uint8_t)HSTEX_GLUE_SIGN_NORMAL && set.total != 0) {
-            (void)fputs(", glue set ", out);
+            print_text(engine, ", glue set ");
             if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING) {
-                (void)fputs("- ", out);
+                print_text(engine, "- ");
             }
             /* The ratio is kept as the two numbers it came from, so the
                figure the reference prints is exactly this rounding. */
@@ -11394,34 +11465,31 @@ static void show_node(struct hstex_engine *engine, FILE *out,
                               (int64_t)set.total / 2) /
                              set.total;
             if (scaled > INT64_C(20000) * 65536) {
-                (void)fputc(set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING
-                                ? '<'
-                                : '>',
-                            out);
-                (void)fputc(' ', out);
-                show_glue_amount(out, 20000 * 65536, set.order);
+                print_byte(engine, set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING ? '<' : '>');
+                print_byte(engine, ' ');
+                show_glue_amount(engine, 20000 * 65536, set.order);
             } else {
-                show_glue_amount(out, (int32_t)scaled, set.order);
+                show_glue_amount(engine, (int32_t)scaled, set.order);
             }
         }
         if (node->shift != 0) {
-            (void)fputs(", shifted ", out);
-            show_scaled(out, node->shift);
+            print_text(engine, ", shifted ");
+            show_scaled(engine, node->shift);
         }
         if (node->value.list.display) {
-            (void)fputs(", display", out);
+            print_text(engine, ", display");
         }
         if (node->value.list.node_count == 0U) {
             return;
         }
         if (depth + 1U > threshold) {
-            (void)fputs(" []", out);
+            print_text(engine, " []");
             return;
         }
         if ((size_t)node->value.list.node_start +
                 node->value.list.node_count <=
             engine->list_item_count) {
-            show_node_list(engine, out,
+            show_node_list(engine,
                            engine->list_items + node->value.list.node_start,
                            node->value.list.node_count, prefix, depth + 1U,
                            threshold, breadth, '.');
@@ -11429,12 +11497,12 @@ static void show_node(struct hstex_engine *engine, FILE *out,
         return;
     }
     case HSTEX_NODE_RULE:
-        (void)fputs("\\rule(", out);
-        show_rule_dimen(out, node->height);
-        (void)fputc('+', out);
-        show_rule_dimen(out, node->depth);
-        (void)fputs(")x", out);
-        show_rule_dimen(out, node->width);
+        print_text(engine, "\\rule(");
+        show_rule_dimen(engine, node->height);
+        print_byte(engine, '+');
+        show_rule_dimen(engine, node->depth);
+        print_text(engine, ")x");
+        show_rule_dimen(engine, node->width);
         return;
     case HSTEX_NODE_GLUE: {
         uint32_t leader = node->value.glue.leader;
@@ -11442,79 +11510,79 @@ static void show_node(struct hstex_engine *engine, FILE *out,
             static const char *const kinds[3] = {"\\leaders ", "\\cleaders ",
                                                  "\\xleaders "};
             uint8_t which = node->value.glue.leader_kind;
-            (void)fputs(kinds[which > 2U ? 0U : which], out);
-            show_glue_spec(out, node);
+            print_text(engine, kinds[which > 2U ? 0U : which]);
+            show_glue_spec(engine, node);
             if (depth + 1U > threshold) {
-                (void)fputs(" []", out);
+                print_text(engine, " []");
                 return;
             }
-            show_node_list(engine, out, &leader, 1U, prefix, depth + 1U,
+            show_node_list(engine, &leader, 1U, prefix, depth + 1U,
                            threshold, breadth, '.');
             return;
         }
         const char *name = glue_parameter_name(node->value.glue.parameter);
-        (void)fputs("\\glue", out);
+        print_text(engine, "\\glue");
         if (name != NULL) {
-            (void)fputs("(\\", out);
-            (void)fputs(name, out);
-            (void)fputc(')', out);
+            print_text(engine, "(\\");
+            print_text(engine, name);
+            print_byte(engine, ')');
         }
         /* The marker \nonscript leaves has no size to show. */
         if (node->value.glue.parameter == HSTEX_GLUE_NONSCRIPT) {
             return;
         }
-        (void)fputc(' ', out);
-        show_glue_spec(out, node);
+        print_byte(engine, ' ');
+        show_glue_spec(engine, node);
         return;
     }
     case HSTEX_NODE_KERN:
-        (void)fputs("\\kern", out);
+        print_text(engine, "\\kern");
         if (node->explicit_kern || node->value.kern.margin == 3U) {
-            (void)fputc(' ', out);
+            print_byte(engine, ' ');
         }
-        show_scaled(out, packed_dimen(node->width));
+        show_scaled(engine, packed_dimen(node->width));
         if (node->value.kern.margin == 1U) {
-            (void)fputs(" (left margin)", out);
+            print_text(engine, " (left margin)");
         } else if (node->value.kern.margin == 2U) {
-            (void)fputs(" (right margin)", out);
+            print_text(engine, " (right margin)");
         } else if (node->value.kern.margin == 3U) {
-            (void)fputs(" (for accent)", out);
+            print_text(engine, " (for accent)");
         }
         return;
     case HSTEX_NODE_PENALTY:
-        (void)fprintf(out, "\\penalty %d", node->value.penalty);
+        print_formatted(engine, "\\penalty %d", node->value.penalty);
         return;
     case HSTEX_NODE_CHARACTER:
-        show_character(engine, out, node);
+        show_character(engine, node);
         return;
     case HSTEX_NODE_LIGATURE:
-        show_character(engine, out, node);
-        (void)fputs(" (ligature ", out);
+        show_character(engine, node);
+        print_text(engine, " (ligature ");
         for (uint8_t index = 0U;
              index < node->value.character.original_count &&
              index < sizeof(node->value.character.originals);
              ++index) {
-            show_ascii(out, node->value.character.originals[index]);
+            show_ascii(engine, node->value.character.originals[index]);
         }
-        (void)fputc(')', out);
+        print_byte(engine, ')');
         return;
     case HSTEX_NODE_WHATSIT:
-        show_whatsit(engine, out, node);
+        show_whatsit(engine, node);
         return;
     case HSTEX_NODE_INSERT: {
-        (void)fprintf(out, "\\insert%u, natural size ",
+        print_formatted(engine, "\\insert%u, natural size ",
                       (unsigned int)node->value.insert.number);
-        show_scaled(out, packed_dimen(node->height));
-        (void)fputs("; split(", out);
-        show_scaled(out, node->value.insert.split_top_skip.width);
-        (void)fputc(',', out);
-        show_scaled(out, node->value.insert.split_max_depth);
-        (void)fprintf(out, "); float cost %d", node->value.insert.float_cost);
+        show_scaled(engine, packed_dimen(node->height));
+        print_text(engine, "; split(");
+        show_scaled(engine, node->value.insert.split_top_skip.width);
+        print_byte(engine, ',');
+        show_scaled(engine, node->value.insert.split_max_depth);
+        print_formatted(engine, "); float cost %d", node->value.insert.float_cost);
         if (node->value.insert.node_count != 0U &&
             (size_t)node->value.insert.node_start +
                     node->value.insert.node_count <=
                 engine->list_item_count) {
-            show_node_list(engine, out,
+            show_node_list(engine,
                            engine->list_items + node->value.insert.node_start,
                            node->value.insert.node_count, prefix, depth + 1U,
                            threshold, breadth, '.');
@@ -11522,43 +11590,43 @@ static void show_node(struct hstex_engine *engine, FILE *out,
         return;
     }
     case HSTEX_NODE_MARK: {
-        (void)fputs("\\mark", out);
+        print_text(engine, "\\mark");
         if (node->value.mark.class_number != 0U) {
-            (void)fprintf(out, "s%u",
+            print_formatted(engine, "s%u",
                           (unsigned int)node->value.mark.class_number);
         }
         uint8_t *text = NULL;
         size_t text_count = 0U;
         char ignored[256];
-        (void)fputc('{', out);
+        print_byte(engine, '{');
         if (stored_token_list_text(engine, node->value.mark.tokens, &text,
                                    &text_count, 0U, NULL, ignored,
                                    sizeof(ignored)) == 0 &&
             text_count != 0U) {
-            (void)fwrite(text, 1U, text_count, out);
+            print_bytes(engine, (const char *)text, text_count);
         }
         free(text);
-        (void)fputc('}', out);
+        print_byte(engine, '}');
         return;
     }
     case HSTEX_NODE_MATH:
-        (void)fputs(node->value.math.after ? "\\mathoff" : "\\mathon", out);
+        print_text(engine, node->value.math.after ? "\\mathoff" : "\\mathon");
         if (packed_dimen(node->width) != 0) {
-            (void)fputs(", surrounded ", out);
-            show_scaled(out, packed_dimen(node->width));
+            print_text(engine, ", surrounded ");
+            show_scaled(engine, packed_dimen(node->width));
         }
         return;
     case HSTEX_NODE_DISCRETIONARY: {
-        (void)fputs("\\discretionary", out);
+        print_text(engine, "\\discretionary");
         if (node->value.disc.replace_count != 0U) {
-            (void)fprintf(out, " replacing %u",
+            print_formatted(engine, " replacing %u",
                           (unsigned int)node->value.disc.replace_count);
         }
         /* Each of the two lists says for itself that it was cut. */
         if (node->value.disc.pre_count != 0U &&
             (size_t)node->value.disc.pre_start + node->value.disc.pre_count <=
                 engine->list_item_count) {
-            show_node_list(engine, out,
+            show_node_list(engine,
                            engine->list_items + node->value.disc.pre_start,
                            node->value.disc.pre_count, prefix, depth + 1U,
                            threshold, breadth, '.');
@@ -11568,7 +11636,7 @@ static void show_node(struct hstex_engine *engine, FILE *out,
                 engine->list_item_count) {
             /* The reference marks the list that starts the next line with a
                bar in place of the last dot. */
-            show_node_list(engine, out,
+            show_node_list(engine,
                            engine->list_items + node->value.disc.post_start,
                            node->value.disc.post_count, prefix, depth + 1U,
                            threshold, breadth, '|');
@@ -11578,14 +11646,14 @@ static void show_node(struct hstex_engine *engine, FILE *out,
     }
 }
 
-static void show_node_list(struct hstex_engine *engine, FILE *out,
+static void show_node_list(struct hstex_engine *engine,
                            const uint32_t *items, size_t count, char *prefix,
                            size_t depth, size_t threshold, size_t breadth,
                            char mark)
 {
     if (depth > threshold) {
         if (count != 0U) {
-            (void)fputs(" []", out);
+            print_text(engine, " []");
         }
         return;
     }
@@ -11593,17 +11661,17 @@ static void show_node_list(struct hstex_engine *engine, FILE *out,
         prefix[depth - 1U] = mark;
     }
     for (size_t index = 0U; index < count; ++index) {
-        (void)fputc('\n', out);
-        (void)fwrite(prefix, 1U, depth, out);
+        print_byte(engine, '\n');
+        print_bytes(engine, (const char *)prefix, depth);
         if (index >= breadth) {
-            (void)fputs("etc.", out);
+            print_text(engine, "etc.");
             return;
         }
         uint32_t identifier = items[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
-        show_node(engine, out, &engine->nodes[identifier - 1U], prefix, depth,
+        show_node(engine, &engine->nodes[identifier - 1U], prefix, depth,
                   threshold, breadth);
     }
 }
@@ -11627,14 +11695,14 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
         /* There is no log to write to, so nothing is shown. */
         return 0;
     }
-    FILE *out = engine->message_stream == NULL ? stdout
-                                               : engine->message_stream;
     struct hstex_box box = engine->boxes[(size_t)index];
-    (void)fprintf(out, "> \\box%d=", index);
+    /* The diagnostic starts a line of its own; see docs/DECISIONS.md,
+       the-print-line. */
+    print_fresh_line(engine);
+    print_formatted(engine, "> \\box%d=", index);
     if (box.kind == HSTEX_BOX_VOID) {
-        (void)fputs("void\n\n! OK.\n", out);
-        (void)fflush(out);
-        engine->message_column = false;
+        print_text(engine, "void\n\n! OK.\n");
+        (void)fflush(diagnostic_stream(engine));
         return 0;
     }
     int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
@@ -11662,12 +11730,11 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
             .glue = box.glue,
         },
     };
-    (void)fputc('\n', out);
-    show_node(engine, out, &node, prefix, 0U, (size_t)threshold,
+    print_byte(engine, '\n');
+    show_node(engine, &node, prefix, 0U, (size_t)threshold,
               (size_t)breadth);
-    (void)fputs("\n\n! OK.\n", out);
-    (void)fflush(out);
-    engine->message_column = false;
+    print_text(engine, "\n\n! OK.\n");
+    (void)fflush(diagnostic_stream(engine));
     return 0;
 }
 
@@ -11682,11 +11749,31 @@ static int perform_shipout_whatsits(struct hstex_engine *engine,
 static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
                     char *error, size_t error_capacity)
 {
+    /* The reference names the page it is shipping by its counts, up to the
+       last one that is not zero; see docs/DECISIONS.md, the-print-line. */
+    size_t last = 9U;
+    while (last > 0U && engine->counts[last] == 0) {
+        --last;
+    }
+    if (engine->message_column > HSTEX_PRINT_LINE - 9) {
+        print_line(engine);
+    } else if (engine->message_column > 0) {
+        print_byte(engine, ' ');
+    }
+    print_byte(engine, '[');
+    for (size_t index = 0U; index <= last; ++index) {
+        print_formatted(engine, "%d", engine->counts[index]);
+        if (index < last) {
+            print_byte(engine, '.');
+        }
+    }
     /* Whatever the page was carrying is done now, in the order it was
        written; see docs/DECISIONS.md, whatsits. */
     if (perform_shipout_whatsits(engine, box, error, error_capacity) != 0) {
         return -1;
     }
+    print_byte(engine, ']');
+    (void)fflush(diagnostic_stream(engine));
     engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
     engine->shipped_pages += 1;
     return 0;
@@ -13271,8 +13358,9 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
         return 0;
     }
     char *path = output_path(engine, filename);
-    free(filename);
+    char *name = filename;
     if (path == NULL) {
+        free(name);
         return set_error(error, error_capacity,
                          "output path allocation failed");
     }
@@ -13282,13 +13370,21 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
         int status = set_error(error, error_capacity, "cannot open %s: %s", path,
                                strerror(saved_errno));
         free(path);
+        free(name);
         return status;
     }
-    free(path);
     if (engine->write_streams[(size_t)stream] != NULL) {
         (void)fclose(engine->write_streams[(size_t)stream]);
     }
     engine->write_streams[(size_t)stream] = file;
+    /* The reference notes an opened stream in its log; see
+       docs/DECISIONS.md, the-print-line. */
+    print_fresh_line(engine);
+    print_formatted(engine, "\\openout%d = `%s'.", stream, name);
+    print_line(engine);
+    print_line(engine);
+    free(path);
+    free(name);
     return 0;
 }
 
@@ -15986,7 +16082,9 @@ struct hstex_break_site {
 /* What \tracingparagraphs is in the middle of writing; see
    docs/DECISIONS.md, tracing-paragraphs. */
 struct hstex_break_trace {
-    FILE *out;
+    /* Whether \tracingparagraphs is writing at all; the writing itself goes
+       through the engine's printer. */
+    bool active;
     /* The first node of the paragraph that has not been shown yet. */
     size_t printed;
     /* The font the short display is in, so that a change is announced. */
@@ -16339,10 +16437,11 @@ static int32_t line_right_kern(struct hstex_engine *engine,
 }
 
 /* print_nl: a newline first unless the output already stands at one. */
-static void trace_newline(struct hstex_break_trace *trace)
+static void trace_newline(struct hstex_engine *engine,
+                          struct hstex_break_trace *trace)
 {
-    if (trace->column) {
-        (void)fputc('\n', trace->out);
+    if (engine->message_column > 0) {
+        print_line(engine);
         trace->column = false;
     }
 }
@@ -16356,7 +16455,7 @@ static void trace_font(struct hstex_engine *engine,
     trace->font = font;
     trace->font_known = true;
     const struct hstex_font *metrics = font_by_identifier(engine, font);
-    (void)fputc('\\', trace->out);
+    print_byte(engine, '\\');
     size_t length = 0U;
     const uint8_t *name = NULL;
     enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
@@ -16364,11 +16463,11 @@ static void trace_font(struct hstex_engine *engine,
         hstex_symbol_name(&engine->lexical_state.symbols,
                           metrics->identifier_cs, &kind, &name, &length) == 0 &&
         name != NULL) {
-        (void)fwrite(name, 1U, length, trace->out);
+        print_bytes(engine, (const char *)name, length);
     } else if (metrics != NULL && metrics->name != NULL) {
-        (void)fputs(metrics->name, trace->out);
+        print_text(engine, metrics->name);
     }
-    (void)fputc(' ', trace->out);
+    print_byte(engine, ' ');
     trace->column = true;
 }
 
@@ -16387,40 +16486,40 @@ static void trace_short_display(struct hstex_engine *engine,
         switch (node->kind) {
         case HSTEX_NODE_CHARACTER:
             trace_font(engine, trace, node->value.character.font);
-            show_ascii(trace->out, (uint8_t)node->value.character.character);
+            show_ascii(engine, (uint8_t)node->value.character.character);
             trace->column = true;
             break;
         case HSTEX_NODE_LIGATURE: {
             trace_font(engine, trace, node->value.character.font);
             uint8_t count = node->value.character.original_count;
             if (count == 0U) {
-                show_ascii(trace->out,
+                show_ascii(engine,
                            (uint8_t)node->value.character.character);
             }
             for (uint8_t item = 0U; item < count; ++item) {
-                show_ascii(trace->out, node->value.character.originals[item]);
+                show_ascii(engine, node->value.character.originals[item]);
             }
             trace->column = true;
             break;
         }
         case HSTEX_NODE_LIST:
         case HSTEX_NODE_WHATSIT:
-            (void)fputs("[]", trace->out);
+            print_text(engine, "[]");
             trace->column = true;
             break;
         case HSTEX_NODE_RULE:
-            (void)fputc('|', trace->out);
+            print_byte(engine, '|');
             trace->column = true;
             break;
         case HSTEX_NODE_GLUE:
             if (node->width != 0 || node->value.glue.stretch != 0 ||
                 node->value.glue.shrink != 0) {
-                (void)fputc(' ', trace->out);
+                print_byte(engine, ' ');
                 trace->column = true;
             }
             break;
         case HSTEX_NODE_MATH:
-            (void)fputc('$', trace->out);
+            print_byte(engine, '$');
             trace->column = true;
             break;
         case HSTEX_NODE_DISCRETIONARY: {
@@ -16574,8 +16673,8 @@ static int try_break_at(struct hstex_engine *engine,
                                       [HSTEX_INTEGER_DOUBLE_HYPHEN_DEMERITS];
             }
         }
-        if (state->trace.out != NULL) {
-            trace_newline(&state->trace);
+        if (state->trace.active) {
+            trace_newline(engine, &state->trace);
             /* The text runs to the breakpoint and takes it in, so that the
                glue a line breaks at shows as the space it is. */
             if (state->trace.printed <= breakpoint) {
@@ -16583,23 +16682,23 @@ static int try_break_at(struct hstex_engine *engine,
                 trace_short_display(engine, &state->trace, items,
                                     state->trace.printed, end);
                 state->trace.printed = end;
-                trace_newline(&state->trace);
+                trace_newline(engine, &state->trace);
             }
-            (void)fprintf(state->trace.out, "@%s via @@%zu b=",
+            print_formatted(engine, "@%s via @@%zu b=",
                           trace_break_name(engine, items, count, breakpoint),
                           index);
             if (badness > HSTEX_INFINITE_BADNESS) {
-                (void)fputc('*', state->trace.out);
+                print_byte(engine, '*');
             } else {
-                (void)fprintf(state->trace.out, "%d", badness);
+                print_formatted(engine, "%d", badness);
             }
-            (void)fprintf(state->trace.out, " p=%d d=", penalty);
+            print_formatted(engine, " p=%d d=", penalty);
             if (artificial) {
-                (void)fputc('*', state->trace.out);
+                print_byte(engine, '*');
             } else {
-                (void)fprintf(state->trace.out, "%lld", (long long)demerits);
+                print_formatted(engine, "%lld", (long long)demerits);
             }
-            (void)fputc('\n', state->trace.out);
+            print_line(engine);
             state->trace.column = false;
         }
         demerits += record->demerits;
@@ -16646,9 +16745,9 @@ static int try_break_at(struct hstex_engine *engine,
         record->hyphenated = site->hyphenated;
         record->left_kern =
             protruding ? line_left_kern(engine, items, count, start, site) : 0;
-        if (state->trace.out != NULL) {
-            trace_newline(&state->trace);
-            (void)fprintf(state->trace.out, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
+        if (state->trace.active) {
+            trace_newline(engine, &state->trace);
+            print_formatted(engine, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
                           state->record_count, record->line, fit,
                           site->hyphenated ? "-" : "",
                           (long long)record->demerits,
@@ -17782,16 +17881,14 @@ static int break_paragraph(struct hstex_engine *engine,
        docs/DECISIONS.md, tracing-paragraphs. */
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0 &&
         engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] > 0) {
-        state.trace.out = engine->message_stream == NULL
-                              ? stdout
-                              : engine->message_stream;
+        state.trace.active = true;
     }
     int32_t emergency =
         engine->dimen_parameters[HSTEX_DIMEN_EMERGENCY_STRETCH];
     int32_t pretolerance = engine->integer_parameters[HSTEX_INTEGER_PRETOLERANCE];
     if (pretolerance >= 0) {
-        if (state.trace.out != NULL) {
-            (void)fputs("@firstpass\n", state.trace.out);
+        if (state.trace.active) {
+            print_text(engine, "@firstpass\n");
         }
         found = find_paragraph_breaks(engine, &state, items, count, &background,
                                       pretolerance, false, &best, error,
@@ -17823,9 +17920,9 @@ static int break_paragraph(struct hstex_engine *engine,
            emergency-stretch. */
         /* The second pass announces itself only when the first one ran and
            came to nothing; see docs/DECISIONS.md, tracing-paragraphs. */
-        if (state.trace.out != NULL && pretolerance >= 0) {
-            trace_newline(&state.trace);
-            (void)fputs("@secondpass\n", state.trace.out);
+        if (state.trace.active && pretolerance >= 0) {
+            trace_newline(engine, &state.trace);
+            print_text(engine, "@secondpass\n");
             state.trace.printed = 0U;
             state.trace.font_known = false;
         }
@@ -17836,9 +17933,9 @@ static int break_paragraph(struct hstex_engine *engine,
     }
     if (found == 0 && emergency > 0) {
         /* One more pass, with that much more stretch behind every line. */
-        if (state.trace.out != NULL) {
-            trace_newline(&state.trace);
-            (void)fputs("@emergencypass\n", state.trace.out);
+        if (state.trace.active) {
+            trace_newline(engine, &state.trace);
+            print_text(engine, "@emergencypass\n");
             state.trace.printed = 0U;
             state.trace.font_known = false;
         }
@@ -17853,11 +17950,10 @@ static int break_paragraph(struct hstex_engine *engine,
         status = set_error(error, error_capacity,
                            "no way to break this paragraph into lines");
     }
-    if (state.trace.out != NULL) {
-        trace_newline(&state.trace);
-        (void)fputc('\n', state.trace.out);
-        (void)fflush(state.trace.out);
-        engine->message_column = false;
+    if (state.trace.active) {
+        trace_newline(engine, &state.trace);
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
     }
     if (status == 0) {
         status = emit_paragraph_lines(engine, &state, items, count, best,
@@ -24038,17 +24134,22 @@ static int write_stream_bytes(struct hstex_engine *engine, int32_t stream,
                               const uint8_t *bytes, size_t byte_count,
                               char *error, size_t error_capacity)
 {
-    FILE *destination = engine->message_stream == NULL ? stdout
-                                                       : engine->message_stream;
     if (stream >= 0 && stream < 16 &&
         engine->write_streams[(size_t)stream] != NULL) {
-        destination = engine->write_streams[(size_t)stream];
-    } else if (stream < 0) {
+        FILE *destination = engine->write_streams[(size_t)stream];
+        if ((byte_count != 0U &&
+             fwrite(bytes, 1U, byte_count, destination) != byte_count) ||
+            fputc('\n', destination) == EOF || fflush(destination) != 0) {
+            return set_error(error, error_capacity, "write stream failed");
+        }
         return 0;
     }
-    if ((byte_count != 0U &&
-         fwrite(bytes, 1U, byte_count, destination) != byte_count) ||
-        fputc('\n', destination) == EOF || fflush(destination) != 0) {
+    /* A stream that was never opened writes where the diagnostics go, on a
+       line of its own; see docs/DECISIONS.md, the-print-line. */
+    print_fresh_line(engine);
+    print_bytes(engine, (const char *)bytes, byte_count);
+    print_line(engine);
+    if (fflush(diagnostic_stream(engine)) != 0) {
         return set_error(error, error_capacity, "write stream failed");
     }
     return 0;
@@ -24254,15 +24355,20 @@ static int execute_message(struct hstex_engine *engine, char *error,
         free(bytes);
         return -1;
     }
-    FILE *stream = engine->message_stream == NULL ? stdout
-                                                 : engine->message_stream;
+    /* A message that will not fit on the line starts a new one; one that
+       fits keeps its distance from what is already there. See
+       docs/DECISIONS.md, the-print-line. */
+    if ((int64_t)engine->message_column + (int64_t)byte_count >
+        HSTEX_PRINT_LINE - 2) {
+        print_line(engine);
+    } else if (engine->message_column > 0) {
+        print_byte(engine, ' ');
+    }
+    print_bytes(engine, (const char *)bytes, byte_count);
     int status = 0;
-    if ((byte_count != 0U &&
-         fwrite(bytes, 1U, byte_count, stream) != byte_count) ||
-        fflush(stream) != 0) {
+    if (fflush(diagnostic_stream(engine)) != 0) {
         status = set_error(error, error_capacity, "message output failed");
     }
-    engine->message_column = true;
     free(bytes);
     return status;
 }
@@ -25509,11 +25615,9 @@ int hstex_engine_run(struct hstex_engine *engine,
             return -1;
         }
     }
-    /* Whatever paragraph was still being filled ends the way \end ends it. */
-    if (engine->building_paragraph &&
-        finish_paragraph(engine, error, error_capacity) != 0) {
-        return -1;
-    }
+    /* The reference stops where the input stops: a paragraph still being
+       filled is not ended, and no page is sent off, because neither \end nor
+       \par was ever read. */
     return 0;
 }
 
