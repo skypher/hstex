@@ -13569,6 +13569,17 @@ static int64_t pdf_unit_numerator(const struct hstex_font *font)
     return stated * INT64_C(1644544);
 }
 
+/* The quotient taken downwards, so that a step worked out in scaled points
+   loses nothing on the way past zero. */
+static int64_t pdf_floor_division(int64_t numerator, int64_t denominator)
+{
+    int64_t quotient = numerator / denominator;
+    if (numerator % denominator != 0 && (numerator < 0) != (denominator < 0)) {
+        quotient -= 1;
+    }
+    return quotient;
+}
+
 static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
 {
     return numerator >= 0 ? (numerator + denominator / 2) / denominator
@@ -13685,8 +13696,8 @@ static int pdf_place_character(struct hstex_engine *engine,
            from the engine's own place; see docs/DECISIONS.md,
            the-text-position-in-the-file. */
         int64_t across = pdf_bp_units(h - engine->pdf_line_h, digits);
-        int64_t down = pdf_bp_units(
-            (engine->pdf_height - v) - engine->pdf_line_v, digits);
+        int64_t down =
+            pdf_bp_units((engine->pdf_height - v) - engine->pdf_line_v, digits);
         char text[64];
         pdf_format_units(text, sizeof(text), across, digits);
         if (pdf_text(engine, text, error, error_capacity) != 0 ||
@@ -13701,20 +13712,22 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_origin_h += across;
         engine->pdf_origin_v += down;
         engine->pdf_origin_line = v;
-        /* The file's text stands where the place it named puts it, which is
-           the rounded place taken towards the engine's own. */
+        /* The file's text moves by the step it was told to move by, worked out
+           in scaled points from where the file's text stood, and the place it
+           lands on is taken towards the engine's own; see docs/DECISIONS.md,
+           the-text-position-in-the-file. */
         int64_t scale = 1;
         for (int32_t index = 0; index < digits; ++index) {
             scale *= 10;
         }
         int64_t den = 7200 * scale;
-        int64_t exact = engine->pdf_origin_h * INT64_C(473628672);
-        int64_t whole = exact / den;
-        int64_t rest = exact - whole * den;
+        int64_t whole = pdf_floor_division(across * INT64_C(473628672), den);
+        int64_t rest = across * INT64_C(473628672) - whole * den;
+        whole += engine->pdf_line_h;
         engine->pdf_line_h = (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
-        exact = engine->pdf_origin_v * INT64_C(473628672);
-        whole = exact / den;
-        rest = exact - whole * den;
+        whole = pdf_floor_division(down * INT64_C(473628672), den);
+        rest = down * INT64_C(473628672) - whole * den;
+        whole += engine->pdf_line_v;
         int32_t up = engine->pdf_height - v;
         engine->pdf_line_v = (int32_t)(whole + (rest != 0 && whole < up ? 1 : 0));
         engine->pdf_text_h = engine->pdf_line_h;
