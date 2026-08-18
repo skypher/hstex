@@ -13644,6 +13644,22 @@ static int64_t pdf_text_offset(const struct hstex_font *font, int32_t text_h,
     return pdf_round_division(difference * 1000, pdf_stated_size(font));
 }
 
+/* Whether a step is long enough for the file to name at all: the file
+   prints so many decimals of a big point, and a step that comes to less
+   than one of those in the last place it prints is no step. See
+   docs/DECISIONS.md, a-step-too-short-to-name. */
+static bool pdf_step_names_a_place(const struct hstex_engine *engine,
+                                   int32_t step)
+{
+    int64_t scale = 1;
+    int32_t digits = pdf_digits(engine);
+    for (int32_t index = 0; index < digits; ++index) {
+        scale *= 10;
+    }
+    int64_t amount = (int64_t)step * 7200 * scale;
+    return (amount < 0 ? -amount : amount) >= INT64_C(473628672);
+}
+
 static int pdf_place_character(struct hstex_engine *engine,
                                const struct hstex_node *node, int32_t h,
                                int32_t v, char *error, size_t error_capacity)
@@ -13675,7 +13691,14 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_placed = false;
         engine->pdf_font_chosen = false;
     }
-    bool moved = !engine->pdf_placed || v != engine->pdf_origin_line;
+    /* A glyph the file cannot tell from the line it is already on stays on
+       it: a step shorter than the last place the file prints would come to
+       nothing, and the file has no way to move by less. See
+       docs/DECISIONS.md, a-step-too-short-to-name. */
+    bool moved =
+        !engine->pdf_placed ||
+        pdf_step_names_a_place(
+            engine, (engine->pdf_height - v) - engine->pdf_line_v);
     if (!engine->pdf_font_chosen || engine->pdf_text_font != identifier) {
         if (pdf_end_array(engine, error, error_capacity) != 0 ||
             pdf_formatted(engine, error, error_capacity, "/F%u ",
@@ -13738,7 +13761,6 @@ static int pdf_place_character(struct hstex_engine *engine,
         }
         engine->pdf_origin_h += across;
         engine->pdf_origin_v += down;
-        engine->pdf_origin_line = v;
         /* The file's text moves by the step it was told to move by, worked out
            in scaled points from where the file's text stood, and the place it
            lands on is taken towards the engine's own; see docs/DECISIONS.md,

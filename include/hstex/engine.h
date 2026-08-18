@@ -1544,7 +1544,6 @@ struct hstex_engine {
        points: the printed place, taken towards the engine's own. */
     int32_t pdf_line_h;
     int32_t pdf_line_v;
-    int32_t pdf_origin_line;
     int32_t pdf_text_h;
     int32_t pdf_text_v;
     uint32_t pdf_text_font;
