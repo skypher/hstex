@@ -1764,10 +1764,17 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     /* The non-zero defaults the reference starts an INITEX run with. */
     engine->integer_parameters[HSTEX_INTEGER_TOLERANCE] = 10000;
     engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER] = 1;
-    /* pdfTeX defaults that are not zero: one big point of pixel size and a
-       72 dpi image resolution. */
+    /* pdfTeX defaults that are not zero: one big point of pixel size, a
+       72 dpi image resolution, an inch of offset either way, three decimals
+       in the numbers it writes, the fullest compression and PDF 1.4. See
+       docs/DECISIONS.md, the-pdf-file. */
     engine->integer_parameters[HSTEX_INTEGER_PDF_IMAGE_RESOLUTION] = 72;
     engine->dimen_parameters[HSTEX_DIMEN_PDF_PX_DIMEN] = 65782;
+    engine->dimen_parameters[HSTEX_DIMEN_PDF_HORIGIN] = 4736287;
+    engine->dimen_parameters[HSTEX_DIMEN_PDF_VORIGIN] = 4736287;
+    engine->integer_parameters[HSTEX_INTEGER_PDF_DECIMAL_DIGITS] = 3;
+    engine->integer_parameters[HSTEX_INTEGER_PDF_COMPRESS_LEVEL] = 9;
+    engine->integer_parameters[HSTEX_INTEGER_PDF_MINOR_VERSION] = 4;
     engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES] = 25;
     engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
     engine->active_vbox_builder = engine->contribution_builder;
@@ -12955,6 +12962,1036 @@ static int dvi_close(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+
+/* ---------------------------------------------------------------------- */
+/* The PDF file the reference writes when \pdfoutput is positive. Places
+   are big points, written with \pdfdecimaldigits decimals; the text is a
+   run of BT ... ET with the characters in strings and what stands between
+   them as offsets in thousandths of the font size. See docs/DECISIONS.md,
+   the-pdf-file. */
+
+static int pdf_reserve(struct hstex_engine *engine, size_t wanted, char *error,
+                       size_t error_capacity)
+{
+    if (wanted <= engine->pdf_page_capacity) {
+        return 0;
+    }
+    size_t capacity =
+        engine->pdf_page_capacity == 0U ? 4096U : engine->pdf_page_capacity;
+    while (capacity < wanted) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity, "page description overflow");
+        }
+        capacity *= 2U;
+    }
+    uint8_t *grown = realloc(engine->pdf_page, capacity);
+    if (grown == NULL) {
+        return set_error(error, error_capacity,
+                         "page description allocation failed");
+    }
+    engine->pdf_page = grown;
+    engine->pdf_page_capacity = capacity;
+    return 0;
+}
+
+static int pdf_bytes(struct hstex_engine *engine, const char *text,
+                     size_t length, char *error, size_t error_capacity)
+{
+    if (pdf_reserve(engine, engine->pdf_page_count + length, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    memcpy(engine->pdf_page + engine->pdf_page_count, text, length);
+    engine->pdf_page_count += length;
+    return 0;
+}
+
+static int pdf_text(struct hstex_engine *engine, const char *text, char *error,
+                    size_t error_capacity)
+{
+    return pdf_bytes(engine, text, strlen(text), error, error_capacity);
+}
+
+static int pdf_formatted(struct hstex_engine *engine, char *error,
+                         size_t error_capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(4, 5);
+
+static int pdf_formatted(struct hstex_engine *engine, char *error,
+                         size_t error_capacity, const char *format, ...)
+{
+    char buffer[512];
+    va_list arguments;
+    va_start(arguments, format);
+    int written = vsnprintf(buffer, sizeof(buffer), format, arguments);
+    va_end(arguments);
+    if (written < 0 || (size_t)written >= sizeof(buffer)) {
+        return set_error(error, error_capacity, "page description overflow");
+    }
+    return pdf_bytes(engine, buffer, (size_t)written, error, error_capacity);
+}
+
+/* Straight to the file, counting the bytes so that the table at the end can
+   say where everything is. */
+static int pdf_out(struct hstex_engine *engine, const char *text, size_t length,
+                   char *error, size_t error_capacity)
+{
+    if (fwrite(text, 1U, length, engine->pdf_file) != length) {
+        return set_error(error, error_capacity, "cannot write the PDF file");
+    }
+    engine->pdf_written += length;
+    return 0;
+}
+
+static int pdf_out_text(struct hstex_engine *engine, const char *text,
+                        char *error, size_t error_capacity)
+{
+    return pdf_out(engine, text, strlen(text), error, error_capacity);
+}
+
+static int pdf_out_formatted(struct hstex_engine *engine, char *error,
+                             size_t error_capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(4, 5);
+
+static int pdf_out_formatted(struct hstex_engine *engine, char *error,
+                             size_t error_capacity, const char *format, ...)
+{
+    char buffer[512];
+    va_list arguments;
+    va_start(arguments, format);
+    int written = vsnprintf(buffer, sizeof(buffer), format, arguments);
+    va_end(arguments);
+    if (written < 0 || (size_t)written >= sizeof(buffer)) {
+        return set_error(error, error_capacity, "PDF output overflow");
+    }
+    return pdf_out(engine, buffer, (size_t)written, error, error_capacity);
+}
+
+/* What a dimension comes to in big points, in units of ten to the minus
+   `digits'. */
+static int64_t pdf_bp_units(int32_t value, int32_t digits)
+{
+    int64_t scale = 1;
+    for (int32_t index = 0; index < digits; ++index) {
+        scale *= 10;
+    }
+    int64_t numerator = (int64_t)value * 7200 * scale;
+    int64_t denominator = 473628672;
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator
+                          : -((-numerator + denominator / 2) / denominator);
+}
+
+/* A number with that many decimals, with the trailing zeros -- and the point
+   with them -- left off. */
+static void pdf_format_units(char *out, size_t capacity, int64_t units,
+                             int32_t digits)
+{
+    int64_t scale = 1;
+    for (int32_t index = 0; index < digits; ++index) {
+        scale *= 10;
+    }
+    bool negative = units < 0;
+    int64_t magnitude = negative ? -units : units;
+    int64_t whole = magnitude / scale;
+    int64_t fraction = magnitude % scale;
+    char digits_text[24];
+    size_t length = 0U;
+    while (fraction != 0 && length < sizeof(digits_text)) {
+        scale /= 10;
+        digits_text[length++] = (char)('0' + (char)(fraction / scale));
+        fraction %= scale;
+    }
+    while (length != 0U && digits_text[length - 1U] == '0') {
+        --length;
+    }
+    if (length == 0U) {
+        (void)snprintf(out, capacity, "%s%lld", negative ? "-" : "",
+                       (long long)whole);
+        return;
+    }
+    digits_text[length] = '\0';
+    (void)snprintf(out, capacity, "%s%lld.%s", negative ? "-" : "",
+                   (long long)whole, digits_text);
+}
+
+/* How many decimals the file's places are written with: the reference keeps
+   \pdfdecimaldigits inside four. */
+static int32_t pdf_digits(const struct hstex_engine *engine)
+{
+    int32_t digits =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_DECIMAL_DIGITS];
+    if (digits < 0) {
+        digits = 0;
+    }
+    return digits > 4 ? 4 : digits;
+}
+
+static int pdf_number(struct hstex_engine *engine, int32_t value, char *error,
+                      size_t error_capacity)
+{
+    char text[64];
+    int32_t digits = pdf_digits(engine);
+    pdf_format_units(text, sizeof(text), pdf_bp_units(value, digits), digits);
+    return pdf_text(engine, text, error, error_capacity);
+}
+
+static size_t pdf_new_object(struct hstex_engine *engine)
+{
+    return ++engine->pdf_numbered;
+}
+
+static int pdf_begin_object(struct hstex_engine *engine, size_t number,
+                            char *error, size_t error_capacity)
+{
+    if (number > engine->pdf_offset_capacity) {
+        size_t capacity =
+            engine->pdf_offset_capacity == 0U ? 32U : engine->pdf_offset_capacity;
+        while (capacity < number) {
+            capacity *= 2U;
+        }
+        size_t *grown =
+            realloc(engine->pdf_offsets, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity, "PDF object allocation failed");
+        }
+        memset(grown + engine->pdf_offset_capacity, 0,
+               (capacity - engine->pdf_offset_capacity) * sizeof(*grown));
+        engine->pdf_offsets = grown;
+        engine->pdf_offset_capacity = capacity;
+    }
+    engine->pdf_offsets[number - 1U] = engine->pdf_written;
+    return pdf_out_formatted(engine, error, error_capacity, "%zu 0 obj\n",
+                             number);
+}
+
+static int pdf_end_object(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    return pdf_out_text(engine, "endobj\n", error, error_capacity);
+}
+
+static int pdf_open(struct hstex_engine *engine, char *error,
+                    size_t error_capacity)
+{
+    if (engine->pdf_file != NULL) {
+        return 0;
+    }
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    size_t length = strlen(job);
+    char *filename = malloc(length + 5U);
+    if (filename == NULL) {
+        return set_error(error, error_capacity, "PDF allocation failed");
+    }
+    memcpy(filename, job, length);
+    memcpy(filename + length, ".pdf", 5U);
+    char *path = output_path(engine, filename);
+    free(filename);
+    if (path == NULL) {
+        return set_error(error, error_capacity, "PDF allocation failed");
+    }
+    engine->pdf_file = fopen(path, "wb");
+    free(path);
+    if (engine->pdf_file == NULL) {
+        return set_error(error, error_capacity, "cannot write the PDF file");
+    }
+    /* The four bytes after the version keep the file from being taken for
+       text. */
+    static const char header[] = "%PDF-1.4\n%\xD0\xD4\xC5\xD8\n";
+    return pdf_out(engine, header, sizeof(header) - 1U, error, error_capacity);
+}
+
+/* The font's place among the ones the file names, adding it if it is new. */
+static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
+                                             uint32_t identifier, char *error,
+                                             size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->pdf_font_count; ++index) {
+        if (engine->pdf_fonts[index].identifier == identifier) {
+            return &engine->pdf_fonts[index];
+        }
+    }
+    if (engine->pdf_font_count == engine->pdf_font_capacity) {
+        size_t capacity =
+            engine->pdf_font_capacity == 0U ? 8U : engine->pdf_font_capacity * 2U;
+        struct hstex_pdf_font *grown =
+            realloc(engine->pdf_fonts, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity, "PDF font allocation failed");
+            return NULL;
+        }
+        engine->pdf_fonts = grown;
+        engine->pdf_font_capacity = capacity;
+    }
+    struct hstex_pdf_font *entry = &engine->pdf_fonts[engine->pdf_font_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->identifier = identifier;
+    entry->object = pdf_new_object(engine);
+    entry->number = (uint32_t)engine->pdf_font_count;
+    entry->first = 256U;
+    entry->last = 0U;
+    return entry;
+}
+
+static int pdf_page_font(struct hstex_engine *engine, uint32_t identifier,
+                         char *error, size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->pdf_page_font_count; ++index) {
+        if (engine->pdf_page_fonts[index] == identifier) {
+            return 0;
+        }
+    }
+    if (engine->pdf_page_font_count == engine->pdf_page_font_capacity) {
+        size_t capacity = engine->pdf_page_font_capacity == 0U
+                              ? 8U
+                              : engine->pdf_page_font_capacity * 2U;
+        uint32_t *grown =
+            realloc(engine->pdf_page_fonts, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity, "PDF font allocation failed");
+        }
+        engine->pdf_page_fonts = grown;
+        engine->pdf_page_font_capacity = capacity;
+    }
+    engine->pdf_page_fonts[engine->pdf_page_font_count++] = identifier;
+    return 0;
+}
+
+
+/* The size a font is used at, in big points with four decimals, which is how
+   the reference writes it. */
+static int pdf_font_size(struct hstex_engine *engine, int32_t size, char *error,
+                         size_t error_capacity)
+{
+    char text[64];
+    pdf_format_units(text, sizeof(text), pdf_bp_units(size, 4), 4);
+    return pdf_text(engine, text, error, error_capacity);
+}
+
+static int pdf_end_string(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    if (!engine->pdf_in_string) {
+        return 0;
+    }
+    engine->pdf_in_string = false;
+    return pdf_text(engine, ")", error, error_capacity);
+}
+
+static int pdf_end_array(struct hstex_engine *engine, char *error,
+                         size_t error_capacity)
+{
+    if (pdf_end_string(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!engine->pdf_in_array) {
+        return 0;
+    }
+    engine->pdf_in_array = false;
+    return pdf_text(engine, "]TJ", error, error_capacity);
+}
+
+static int pdf_end_text(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    if (pdf_end_array(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!engine->pdf_in_text) {
+        return 0;
+    }
+    engine->pdf_in_text = false;
+    engine->pdf_placed = false;
+    engine->pdf_font_chosen = false;
+    engine->pdf_origin_h = 0;
+    engine->pdf_origin_v = 0;
+    return pdf_text(engine, "\nET\n", error, error_capacity);
+}
+
+/* What one character of a font moves the file's own idea of where the text
+   stands: the width the file states for it, which is not quite the width the
+   metrics gave. See docs/DECISIONS.md, the-pdf-file. */
+static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
+{
+    int64_t width = (int64_t)packed_dimen(font->characters[code].width);
+    int64_t size = font->size == 0 ? 1 : font->size;
+    int64_t tenths = (width * 10000 + size / 2) / size;
+    return (int32_t)tenths;
+}
+
+static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
+{
+    int64_t tenths = pdf_glyph_units(font, code);
+    return (int32_t)(tenths * font->size / 10000);
+}
+
+static int pdf_place_character(struct hstex_engine *engine,
+                               const struct hstex_node *node, int32_t h,
+                               int32_t v, char *error, size_t error_capacity)
+{
+    uint32_t identifier = node->value.character.font;
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid font in a page");
+    }
+    struct hstex_pdf_font *entry =
+        pdf_font_entry(engine, identifier, error, error_capacity);
+    if (entry == NULL || pdf_page_font(engine, identifier, error,
+                                       error_capacity) != 0) {
+        return -1;
+    }
+    uint32_t code = node->value.character.character & 0xFFU;
+    if (code < entry->first) {
+        entry->first = code;
+    }
+    if (code > entry->last) {
+        entry->last = code;
+    }
+    entry->used[code / 8U] |= (uint8_t)(1U << (code % 8U));
+    if (!engine->pdf_in_text) {
+        if (pdf_text(engine, "BT\n", error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pdf_in_text = true;
+        engine->pdf_placed = false;
+        engine->pdf_font_chosen = false;
+    }
+    bool moved = !engine->pdf_placed || v != engine->pdf_origin_line;
+    if (!engine->pdf_font_chosen || engine->pdf_text_font != identifier) {
+        if (pdf_end_array(engine, error, error_capacity) != 0 ||
+            pdf_formatted(engine, error, error_capacity, "/F%u ",
+                          (unsigned int)entry->number) != 0 ||
+            pdf_font_size(engine, font->size, error, error_capacity) != 0 ||
+            pdf_text(engine, " Tf ", error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pdf_text_font = identifier;
+        engine->pdf_font_chosen = true;
+        moved = true;
+    }
+    if (moved) {
+        if (pdf_end_array(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        /* A number needs a space in front of it when a bracket does not
+           already stand there. */
+        if (engine->pdf_page_count != 0U) {
+            uint8_t last = engine->pdf_page[engine->pdf_page_count - 1U];
+            if (last != ' ' && last != '\n' &&
+                pdf_text(engine, " ", error, error_capacity) != 0) {
+                return -1;
+            }
+        }
+        /* The first place in a text object is measured from the page's own
+           corner; the ones after it from the place before, and the
+           difference is worked out before it is rounded. */
+        /* The places the file names are rounded ones, and the next place is
+           named as the step from the last rounded one. */
+        int32_t digits = pdf_digits(engine);
+        int64_t across = pdf_bp_units(h, digits) - engine->pdf_origin_h;
+        int64_t down =
+            pdf_bp_units(engine->pdf_height - v, digits) - engine->pdf_origin_v;
+        char text[64];
+        pdf_format_units(text, sizeof(text), across, digits);
+        if (pdf_text(engine, text, error, error_capacity) != 0 ||
+            pdf_text(engine, " ", error, error_capacity) != 0) {
+            return -1;
+        }
+        pdf_format_units(text, sizeof(text), down, digits);
+        if (pdf_text(engine, text, error, error_capacity) != 0 ||
+            pdf_text(engine, " Td ", error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pdf_origin_h += across;
+        engine->pdf_origin_v += down;
+        engine->pdf_origin_line = v;
+        engine->pdf_text_h = h;
+        engine->pdf_placed = true;
+    }
+    if (!engine->pdf_in_array) {
+        if (pdf_text(engine, "[", error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pdf_in_array = true;
+    }
+    if (h != engine->pdf_text_h) {
+        int64_t difference = (int64_t)engine->pdf_text_h - h;
+        int64_t size = font->size == 0 ? 1 : font->size;
+        int64_t offset = difference >= 0 ? (difference * 1000 + size / 2) / size
+                                         : -((-difference * 1000 + size / 2) / size);
+        if (offset != 0) {
+            if (pdf_end_string(engine, error, error_capacity) != 0 ||
+                pdf_formatted(engine, error, error_capacity, "%lld",
+                              (long long)offset) != 0) {
+                return -1;
+            }
+            engine->pdf_text_h -= (int32_t)(offset * size / 1000);
+        }
+    }
+    if (!engine->pdf_in_string) {
+        if (pdf_text(engine, "(", error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->pdf_in_string = true;
+    }
+    char glyph[8];
+    size_t length = 0U;
+    if (code == '(' || code == ')' || code == '\\') {
+        glyph[length++] = '\\';
+        glyph[length++] = (char)code;
+    } else if (code < 32U || code > 126U) {
+        length = (size_t)snprintf(glyph, sizeof(glyph), "\\%03o",
+                                  (unsigned int)code);
+    } else {
+        glyph[length++] = (char)code;
+    }
+    if (pdf_bytes(engine, glyph, length, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pdf_text_h += pdf_glyph_advance(font, code);
+    return 0;
+}
+
+/* A rule is painted rather than set: the file moves to its corner and fills
+   a rectangle. */
+static int pdf_place_rule(struct hstex_engine *engine, int32_t left,
+                          int32_t bottom, int32_t width, int32_t height,
+                          char *error, size_t error_capacity)
+{
+    if (width <= 0 || height <= 0) {
+        return 0;
+    }
+    if (pdf_end_text(engine, error, error_capacity) != 0 ||
+        pdf_text(engine, "q\n1 0 0 1 ", error, error_capacity) != 0 ||
+        pdf_number(engine, left, error, error_capacity) != 0 ||
+        pdf_text(engine, " ", error, error_capacity) != 0 ||
+        pdf_number(engine, engine->pdf_height - bottom, error,
+                   error_capacity) != 0 ||
+        pdf_text(engine, " cm\n0 0 ", error, error_capacity) != 0 ||
+        pdf_number(engine, width, error, error_capacity) != 0 ||
+        pdf_text(engine, " ", error, error_capacity) != 0 ||
+        pdf_number(engine, height, error, error_capacity) != 0 ||
+        pdf_text(engine, " re f\nQ\n", error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     int32_t left, int32_t base, char *error,
+                     size_t error_capacity);
+static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     int32_t left, int32_t top, char *error,
+                     size_t error_capacity);
+
+/* The horizontal list of a box, left to right; `base' is where its baseline
+   stands, measured down from the top of the page. */
+static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     int32_t left, int32_t base, char *error,
+                     size_t error_capacity)
+{
+    uint32_t start = box->value.list.node_start;
+    uint32_t count = box->value.list.node_count;
+    struct hstex_glue_set set = box->value.list.glue;
+    struct hstex_set_glue running = {0, 0};
+    int32_t here = left;
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        struct hstex_node node = engine->nodes[identifier - 1U];
+        switch (node.kind) {
+        case HSTEX_NODE_CHARACTER:
+        case HSTEX_NODE_LIGATURE:
+            if (pdf_place_character(engine, &node, here, base, error,
+                                    error_capacity) != 0) {
+                return -1;
+            }
+            here += packed_dimen(node.width);
+            break;
+        case HSTEX_NODE_LIST: {
+            int32_t shifted = base - packed_dimen(node.shift);
+            if (node.value.list.node_count != 0U) {
+                int status =
+                    node.value.list.box_kind == HSTEX_BOX_VLIST
+                        ? pdf_vlist(engine, &node, here,
+                                    shifted - packed_dimen(node.height), error,
+                                    error_capacity)
+                        : pdf_hlist(engine, &node, here, shifted, error,
+                                    error_capacity);
+                if (status != 0) {
+                    return -1;
+                }
+            }
+            here += packed_dimen(node.width);
+            break;
+        }
+        case HSTEX_NODE_RULE: {
+            int32_t height =
+                dvi_rule_dimen(node.height, packed_dimen(box->height));
+            int32_t depth =
+                dvi_rule_dimen(node.depth, packed_dimen(box->depth));
+            int32_t width = packed_dimen(node.width);
+            if (pdf_place_rule(engine, here, base + depth, width,
+                               height + depth, error, error_capacity) != 0) {
+                return -1;
+            }
+            here += width;
+            break;
+        }
+        case HSTEX_NODE_GLUE:
+            here += packed_dimen(node.width) +
+                    set_glue_step(&set, &running, node.value.glue.stretch,
+                                  node.value.glue.stretch_order,
+                                  node.value.glue.shrink,
+                                  node.value.glue.shrink_order);
+            break;
+        case HSTEX_NODE_KERN:
+        case HSTEX_NODE_MATH:
+            here += packed_dimen(node.width);
+            break;
+        case HSTEX_NODE_WHATSIT:
+        case HSTEX_NODE_PENALTY:
+        case HSTEX_NODE_DISCRETIONARY:
+        case HSTEX_NODE_MARK:
+        case HSTEX_NODE_INSERT:
+            break;
+        }
+    }
+    return 0;
+}
+
+/* The vertical list of a box, top to bottom; `top' is its top edge measured
+   down from the top of the page. */
+static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
+                     int32_t left, int32_t top, char *error,
+                     size_t error_capacity)
+{
+    uint32_t start = box->value.list.node_start;
+    uint32_t count = box->value.list.node_count;
+    struct hstex_glue_set set = box->value.list.glue;
+    struct hstex_set_glue running = {0, 0};
+    int32_t here = top;
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        struct hstex_node node = engine->nodes[identifier - 1U];
+        switch (node.kind) {
+        case HSTEX_NODE_LIST: {
+            int32_t shifted = left + packed_dimen(node.shift);
+            if (node.value.list.node_count != 0U) {
+                int status =
+                    node.value.list.box_kind == HSTEX_BOX_VLIST
+                        ? pdf_vlist(engine, &node, shifted, here, error,
+                                    error_capacity)
+                        : pdf_hlist(engine, &node, shifted,
+                                    here + packed_dimen(node.height), error,
+                                    error_capacity);
+                if (status != 0) {
+                    return -1;
+                }
+            }
+            here += packed_dimen(node.height) + packed_dimen(node.depth);
+            break;
+        }
+        case HSTEX_NODE_RULE: {
+            int32_t height = dvi_rule_dimen(node.height, 0);
+            int32_t depth = dvi_rule_dimen(node.depth, 0);
+            int32_t width =
+                dvi_rule_dimen(node.width, packed_dimen(box->width));
+            if (pdf_place_rule(engine, left, here + height + depth, width,
+                               height + depth, error, error_capacity) != 0) {
+                return -1;
+            }
+            here += height + depth;
+            break;
+        }
+        case HSTEX_NODE_GLUE:
+            here += packed_dimen(node.width) +
+                    set_glue_step(&set, &running, node.value.glue.stretch,
+                                  node.value.glue.stretch_order,
+                                  node.value.glue.shrink,
+                                  node.value.glue.shrink_order);
+            break;
+        case HSTEX_NODE_KERN:
+            here += packed_dimen(node.width);
+            break;
+        case HSTEX_NODE_CHARACTER:
+        case HSTEX_NODE_LIGATURE:
+        case HSTEX_NODE_WHATSIT:
+        case HSTEX_NODE_MATH:
+        case HSTEX_NODE_PENALTY:
+        case HSTEX_NODE_DISCRETIONARY:
+        case HSTEX_NODE_MARK:
+        case HSTEX_NODE_INSERT:
+            break;
+        }
+    }
+    return 0;
+}
+
+
+/* One page: the box is walked into a stream of its own, and the three
+   objects the page needs are written. */
+static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
+                    char *error, size_t error_capacity)
+{
+    if (pdf_open(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t resources = pdf_new_object(engine);
+    size_t page = pdf_new_object(engine);
+    size_t contents = pdf_new_object(engine);
+    engine->pdf_page_count = 0U;
+    engine->pdf_page_font_count = 0U;
+    engine->pdf_in_text = false;
+    engine->pdf_in_array = false;
+    engine->pdf_in_string = false;
+    engine->pdf_placed = false;
+    engine->pdf_font_chosen = false;
+    engine->pdf_origin_h = 0;
+    engine->pdf_origin_v = 0;
+    int32_t horigin = engine->dimen_parameters[HSTEX_DIMEN_PDF_HORIGIN];
+    int32_t vorigin = engine->dimen_parameters[HSTEX_DIMEN_PDF_VORIGIN];
+    int32_t width = engine->dimen_parameters[HSTEX_DIMEN_PDF_PAGE_WIDTH];
+    int32_t height = engine->dimen_parameters[HSTEX_DIMEN_PDF_PAGE_HEIGHT];
+    if (width <= 0) {
+        width = box->width + 2 * horigin;
+    }
+    if (height <= 0) {
+        height = box->height + box->depth + 2 * vorigin;
+    }
+    struct hstex_node outer = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {.node_start = box->node_start,
+                       .node_count = box->node_count,
+                       .box_kind = (uint8_t)box->kind,
+                       .glue = box->glue},
+    };
+    /* The page's own coordinates run down from its top; the file's run up
+       from its foot, and the walk turns them over as it writes. */
+    engine->pdf_height = height;
+    int status = box->kind == HSTEX_BOX_VLIST
+                     ? pdf_vlist(engine, &outer, horigin, vorigin, error,
+                                 error_capacity)
+                     : pdf_hlist(engine, &outer, horigin,
+                                 vorigin + box->height, error, error_capacity);
+    if (status != 0 || pdf_end_text(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (pdf_begin_object(engine, contents, error, error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Length %-10zu\n>>\nstream\n",
+                          engine->pdf_page_count) != 0 ||
+        pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
+                error, error_capacity) != 0 ||
+        pdf_out_text(engine, "\nendstream\n", error, error_capacity) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->pdf_pages_object == 0U) {
+        engine->pdf_pages_object = pdf_new_object(engine);
+    }
+    engine->pdf_page_count = 0U;
+    if (pdf_begin_object(engine, page, error, error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /Page\n/Contents %zu 0 R\n"
+                          "/Resources %zu 0 R\n/MediaBox [0 0 ",
+                          contents, resources) != 0 ||
+        pdf_number(engine, width, error, error_capacity) != 0 ||
+        pdf_text(engine, " ", error, error_capacity) != 0 ||
+        pdf_number(engine, height, error, error_capacity) != 0 ||
+        pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
+                error, error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "]\n/Parent %zu 0 R\n>>\n",
+                          engine->pdf_pages_object) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (pdf_begin_object(engine, resources, error, error_capacity) != 0 ||
+        pdf_out_text(engine, "<<\n", error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->pdf_page_font_count != 0U) {
+        if (pdf_out_text(engine, "/Font <<", error, error_capacity) != 0) {
+            return -1;
+        }
+        for (size_t index = 0U; index < engine->pdf_page_font_count; ++index) {
+            struct hstex_pdf_font *entry = pdf_font_entry(
+                engine, engine->pdf_page_fonts[index], error, error_capacity);
+            if (entry == NULL ||
+                pdf_out_formatted(engine, error, error_capacity, " /F%u %zu 0 R",
+                                  (unsigned int)entry->number,
+                                  entry->object) != 0) {
+                return -1;
+            }
+        }
+        if (pdf_out_text(engine, " >>\n", error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (pdf_out_text(engine,
+                     engine->pdf_page_font_count != 0U
+                         ? "/ProcSet [ /PDF /Text ]\n>>\n"
+                         : "/ProcSet [ /PDF ]\n>>\n",
+                     error, error_capacity) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->pdf_page_object_count == engine->pdf_page_object_capacity) {
+        size_t capacity = engine->pdf_page_object_capacity == 0U
+                              ? 16U
+                              : engine->pdf_page_object_capacity * 2U;
+        size_t *grown =
+            realloc(engine->pdf_page_objects, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity, "PDF page allocation failed");
+        }
+        engine->pdf_page_objects = grown;
+        engine->pdf_page_object_capacity = capacity;
+    }
+    engine->pdf_page_objects[engine->pdf_page_object_count++] = page;
+    return 0;
+}
+
+/* A number in the thousandths of the design size that a font's own
+   measurements are written in. */
+static int pdf_font_units(struct hstex_engine *engine,
+                          const struct hstex_font *font, int32_t value,
+                          char *error, size_t error_capacity)
+{
+    int64_t size = font->size == 0 ? 1 : font->size;
+    int64_t units = ((int64_t)value * 10000 + size / 2) / size;
+    char text[64];
+    pdf_format_units(text, sizeof(text), units, 1);
+    return pdf_text(engine, text, error, error_capacity);
+}
+
+static int32_t pdf_font_measure(const struct hstex_font *font, int32_t value)
+{
+    int64_t size = font->size == 0 ? 1 : font->size;
+    int64_t units = (int64_t)value * 1000;
+    return (int32_t)(units >= 0 ? (units + size / 2) / size
+                                : -((-units + size / 2) / size));
+}
+
+/* The stem width the reference guesses: a third of the width of the full
+   stop. */
+static int32_t pdf_font_stem(const struct hstex_font *font)
+{
+    int64_t size = (font->size == 0 ? 1 : font->size) * 3;
+    int64_t units = (int64_t)packed_dimen(font->characters['.'].width) * 1000;
+    return (int32_t)((units + size / 2) / size);
+}
+
+/* The name the file gives a font: what the metrics file is called, in
+   capitals. */
+static const char *pdf_font_name(const struct hstex_font *font)
+{
+    static char name[128];
+    size_t length = 0U;
+    for (const char *at = font->name; *at != '\0' && length + 1U < sizeof(name);
+         ++at) {
+        name[length++] = *at >= 'a' && *at <= 'z' ? (char)(*at - 'a' + 'A') : *at;
+    }
+    name[length] = '\0';
+    return name;
+}
+
+/* What the file says of a font it does not carry: how far it reaches above
+   and below the line, how wide its widest character is, and a stem width
+   guessed from its full stop. */
+static int pdf_write_font(struct hstex_engine *engine,
+                          struct hstex_pdf_font *entry, bool dictionary,
+                          char *error, size_t error_capacity)
+{
+    const struct hstex_font *font =
+        font_by_identifier(engine, entry->identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid font in the PDF file");
+    }
+    if (dictionary) {
+        engine->pdf_page_count = 0U;
+        return pdf_begin_object(engine, entry->object, error, error_capacity) !=
+                           0 ||
+                       pdf_out_formatted(
+                           engine, error, error_capacity,
+                           "<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /%s\n"
+                           "/FontDescriptor %zu 0 R\n/FirstChar %u\n"
+                           "/LastChar %u\n/Widths %zu 0 R\n>>\n",
+                           pdf_font_name(font), entry->descriptor,
+                           (unsigned int)entry->first, (unsigned int)entry->last,
+                           entry->widths) != 0 ||
+                       pdf_end_object(engine, error, error_capacity) != 0
+                   ? -1
+                   : 0;
+    }
+    size_t widths = pdf_new_object(engine);
+    size_t descriptor = pdf_new_object(engine);
+    entry->widths = widths;
+    entry->descriptor = descriptor;
+    engine->pdf_page_count = 0U;
+    for (uint32_t code = entry->first; code <= entry->last; ++code) {
+        if (code != entry->first &&
+            pdf_text(engine, " ", error, error_capacity) != 0) {
+            return -1;
+        }
+        int32_t width = packed_dimen(font->characters[code].width);
+        if (pdf_font_units(engine, font, width, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (pdf_begin_object(engine, widths, error, error_capacity) != 0 ||
+        pdf_out_text(engine, "[", error, error_capacity) != 0 ||
+        pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
+                error, error_capacity) != 0 ||
+        pdf_out_text(engine, "]\n", error, error_capacity) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    int32_t ascent = pdf_font_measure(
+        font, packed_dimen(font->characters['h'].height));
+    int32_t capheight = pdf_font_measure(
+        font, packed_dimen(font->characters['H'].height));
+    int32_t descent = -pdf_font_measure(
+        font, packed_dimen(font->characters['y'].depth));
+    int32_t xheight =
+        pdf_font_measure(font, font->dimen_count > 4U ? font->dimens[4] : 0);
+    int32_t quad =
+        pdf_font_measure(font, font->dimen_count > 5U ? font->dimens[5] : 0);
+    int32_t stem = pdf_font_stem(font);
+    const char *name = pdf_font_name(font);
+    if (pdf_begin_object(engine, descriptor, error, error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /FontDescriptor\n/FontName /%s\n"
+                          "/Flags 34\n/FontBBox [0 %d %d %d]\n/Ascent %d\n"
+                          "/CapHeight %d\n/Descent %d\n/ItalicAngle 0\n"
+                          "/StemV %d\n/XHeight %d\n>>\n",
+                          name, descent, quad, ascent, ascent, capheight,
+                          descent, stem, xheight) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* What the reference writes after the last page: the fonts, the tree of
+   pages, what the file is about, and the table of where everything is. */
+static int pdf_close(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    if (engine->pdf_file == NULL) {
+        return 0;
+    }
+    /* The fonts are finished from the last one the engine loaded down to the
+       first, their measurements before their dictionaries. */
+    size_t count = engine->pdf_font_count;
+    size_t *order = malloc(count == 0U ? 1U : count * sizeof(*order));
+    if (order == NULL) {
+        return set_error(error, error_capacity, "PDF font allocation failed");
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        order[index] = index;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        for (size_t other = index + 1U; other < count; ++other) {
+            if (engine->pdf_fonts[order[other]].identifier >
+                engine->pdf_fonts[order[index]].identifier) {
+                size_t swapped = order[index];
+                order[index] = order[other];
+                order[other] = swapped;
+            }
+        }
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        if (pdf_write_font(engine, &engine->pdf_fonts[order[index]], false,
+                           error, error_capacity) != 0) {
+            free(order);
+            return -1;
+        }
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        if (pdf_write_font(engine, &engine->pdf_fonts[order[index]], true,
+                           error, error_capacity) != 0) {
+            free(order);
+            return -1;
+        }
+    }
+    free(order);
+    if (engine->pdf_pages_object == 0U) {
+        engine->pdf_pages_object = pdf_new_object(engine);
+    }
+    if (pdf_begin_object(engine, engine->pdf_pages_object, error,
+                         error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /Pages\n/Count %zu\n/Kids [",
+                          engine->pdf_page_object_count) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < engine->pdf_page_object_count; ++index) {
+        if (pdf_out_formatted(engine, error, error_capacity, "%s%zu 0 R",
+                              index == 0U ? "" : " ",
+                              engine->pdf_page_objects[index]) != 0) {
+            return -1;
+        }
+    }
+    if (pdf_out_text(engine, "]\n>>\n", error, error_capacity) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t catalog = pdf_new_object(engine);
+    size_t info = pdf_new_object(engine);
+    if (pdf_begin_object(engine, catalog, error, error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /Catalog\n/Pages %zu 0 R\n>>\n",
+                          engine->pdf_pages_object) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0 ||
+        pdf_begin_object(engine, info, error, error_capacity) != 0 ||
+        pdf_out_text(engine,
+                     "<<\n/Producer (pdfTeX-1.40.25)\n/Creator (TeX)\n"
+                     "/Trapped /False\n>>\n",
+                     error, error_capacity) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t table = engine->pdf_written;
+    if (pdf_out_formatted(engine, error, error_capacity, "xref\n0 %zu\n",
+                          engine->pdf_numbered + 1U) != 0 ||
+        pdf_out_text(engine, "0000000000 65535 f \n", error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < engine->pdf_numbered; ++index) {
+        size_t offset =
+            index < engine->pdf_offset_capacity ? engine->pdf_offsets[index] : 0U;
+        if (pdf_out_formatted(engine, error, error_capacity, "%010zu 00000 n \n",
+                              offset) != 0) {
+            return -1;
+        }
+    }
+    if (pdf_out_formatted(engine, error, error_capacity,
+                          "trailer\n<< /Size %zu\n/Root %zu 0 R\n"
+                          "/Info %zu 0 R\n >>\nstartxref\n%zu\n%%%%EOF\n",
+                          engine->pdf_numbered + 1U, catalog, info,
+                          table) != 0) {
+        return -1;
+    }
+    (void)fclose(engine->pdf_file);
+    engine->pdf_file = NULL;
+    return 0;
+}
+
 /* \shipout takes a page: the box is emptied and the count of dead cycles
    starts again. Nothing is written yet. */
 static int perform_shipout_whatsits(struct hstex_engine *engine,
@@ -12992,8 +14029,9 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
     /* \pdfoutput decides what is written: nothing positive means the page
        description the reference calls a DVI. See docs/DECISIONS.md,
        the-page-description. */
-    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0 &&
-        dvi_ship(engine, box, error, error_capacity) != 0) {
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0
+            ? dvi_ship(engine, box, error, error_capacity) != 0
+            : pdf_ship(engine, box, error, error_capacity) != 0) {
         return -1;
     }
     print_byte(engine, ']');
@@ -26890,7 +27928,10 @@ int hstex_engine_run(struct hstex_engine *engine,
        filled is not ended, and no page is sent off, because neither \end nor
        \par was ever read. What has been written of the page description is
        finished off. */
-    return dvi_close(engine, error, error_capacity);
+    if (dvi_close(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    return pdf_close(engine, error, error_capacity);
 }
 
 enum hstex_engine_result hstex_engine_next_output(

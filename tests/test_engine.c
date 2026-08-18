@@ -89,6 +89,8 @@ static int prepare_engine(struct hstex_engine *engine, const char *path,
    the-page-description. */
 static int run_document_dvi(const char *const *source,
                             const char *const *expected);
+static int run_document_pdf(const char *const *source,
+                            const char *const *expected);
 
 /* The joined text of a list of pieces, which is how the long probes are
    stored: one string literal each would be longer than a C compiler has to
@@ -188,13 +190,31 @@ static int run_document(const char *source, const char *expected)
     (void)snprintf(written, sizeof(written), "%s%s.dvi", directory,
                    name == NULL ? path : name);
     (void)unlink(written);
+    (void)snprintf(written, sizeof(written), "%s%s.pdf", directory,
+                   name == NULL ? path : name);
+    (void)unlink(written);
     (void)rmdir(directory);
     (void)unlink(path);
     return status;
 }
 
+static int run_document_page(const char *const *source,
+                             const char *const *expected, const char *kind);
+
 static int run_document_dvi(const char *const *source,
                             const char *const *expected)
+{
+    return run_document_page(source, expected, "dvi");
+}
+
+static int run_document_pdf(const char *const *source,
+                            const char *const *expected)
+{
+    return run_document_page(source, expected, "pdf");
+}
+
+static int run_document_page(const char *const *source,
+                             const char *const *expected, const char *kind)
 {
     char *document = joined_text(source);
     char *wanted = joined_text(expected);
@@ -220,7 +240,7 @@ static int run_document_dvi(const char *const *source,
         return 1;
     }
     char directory[80];
-    (void)snprintf(directory, sizeof(directory), "%s-dvi", path);
+    (void)snprintf(directory, sizeof(directory), "%s-%s", path, kind);
     if (mkdir(directory, 0700) != 0 ||
         hstex_engine_set_output_directory(&engine, directory, error,
                                           sizeof(error)) != 0) {
@@ -243,8 +263,8 @@ static int run_document_dvi(const char *const *source,
     hstex_engine_destroy(&engine);
     char written[256];
     const char *name = strrchr(path, '/');
-    (void)snprintf(written, sizeof(written), "%s%s.dvi", directory,
-                   name == NULL ? path : name);
+    (void)snprintf(written, sizeof(written), "%s%s.%s", directory,
+                   name == NULL ? path : name, kind);
     if (status == 0) {
         FILE *file = fopen(written, "rb");
         if (file == NULL) {
@@ -3557,6 +3577,127 @@ static int test_a_paragraph_a_brace_ends(void)
         NULL,
     };
     return run_document_parts(source, expected);
+}
+
+/* The PDF file the reference writes when \pdfoutput is positive: the page's
+   own stream of text and rules, the objects it needs, the measurements of
+   every font it names, and the table of where all of them are. See
+   docs/DECISIONS.md, the-pdf-file. */
+static int test_the_pdf_file(void)
+{
+    static const char *const source[] = {
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\catcode`\\#=6 \\"
+        "catcode`\\^=7 \\catcode`\\_=8 \\nonstopmode\\pdfou"
+        "tput=1 \\pdfcompresslevel=0 \\pdfobjcompresslevel="
+        "0 \\font\\tenrm=cmr10 \\font\\tenbf=cmbx10 \\tenrm"
+        " \\hsize=200pt \\vsize=300pt \\parindent=0pt \\bas"
+        "elineskip=12pt \\boxmaxdepth=0pt \\hbadness=10000 "
+        "\\shipout\\vbox{\\hbox{ab \\tenbf cd \\tenrm ef}\\"
+        "hbox{a\\kern 3pt b\\hskip 5pt c}\\hrule height 2pt"
+        " \\hbox to 150pt{x\\hfil y}\\hbox{\\vrule width 3p"
+        "t height 4pt depth 1pt z}}\\shipout\\hbox{\\tenbf "
+        "q}",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "255044462d312e340a25d0d4c5d80a332030206f626a0a3c3c"
+        "0a2f4c656e67746820333336202020202020200a3e3e0a7374"
+        "7265616d0a42540a2f463120392e3936323620546620373220"
+        "3130332e313839205464205b286162295d544a2f463220392e"
+        "393632362054662031332e3833372030205464205b28636429"
+        "5d544a2f463120392e393632362054662031352e3237362030"
+        "205464205b286566295d544a202d32392e313133202d31312e"
+        "393536205464205b2861292d3330302862292d353030286329"
+        "5d544a0a45540a710a312030203020312037322038392e3234"
+        "3120636d0a302030203134392e343420312e39393320726520"
+        "660a510a42540a2f463120392e393632362054662037322038"
+        "342e393531205464205b2878292d31333934342879295d544a"
+        "0a45540a710a3120302030203120373220373220636d0a3020"
+        "3020322e39383920342e39383120726520660a510a42540a2f"
+        "463120392e393632362054662037342e3938392037322e3939"
+        "36205464205b287a295d544a0a45540a0a656e647374726561"
+        "6d0a656e646f626a0a322030206f626a0a3c3c0a2f54797065"
+        "202f506167650a2f436f6e74656e74732033203020520a2f52"
+        "65736f75726365732031203020520a2f4d65646961426f7820"
+        "5b302030203239332e3434203138322e3130375d0a2f506172"
+        "656e742036203020520a3e3e0a656e646f626a0a312030206f"
+        "626a0a3c3c0a2f466f6e74203c3c202f463120342030205220"
+        "2f4632203520302052203e3e0a2f50726f63536574205b202f"
+        "504446202f54657874205d0a3e3e0a656e646f626a0a392030"
+        "206f626a0a3c3c0a2f4c656e67746820343120202020202020"
+        "200a3e3e0a73747265616d0a42540a2f463220392e39363236"
+        "2054662037322037332e393337205464205b2871295d544a0a"
+        "45540a0a656e6473747265616d0a656e646f626a0a38203020"
+        "6f626a0a3c3c0a2f54797065202f506167650a2f436f6e7465"
+        "6e74732039203020520a2f5265736f75726365732037203020"
+        "520a2f4d65646961426f78205b302030203135302e30343720"
+        "3135302e3336355d0a2f506172656e742036203020520a3e3e"
+        "0a656e646f626a0a372030206f626a0a3c3c0a2f466f6e7420"
+        "3c3c202f4632203520302052203e3e0a2f50726f6353657420"
+        "5b202f504446202f54657874205d0a3e3e0a656e646f626a0a"
+        "31302030206f626a0a5b3531312e31203633382e3920353237"
+        "2e31203335312e3420353735203633382e39203331392e3420"
+        "3335312e34203630362e39203331392e34203935382e332036"
+        "33382e3920353735203633382e39203630362e395d0a656e64"
+        "6f626a0a31312030206f626a0a3c3c0a2f54797065202f466f"
+        "6e7444657363726970746f720a2f466f6e744e616d65202f43"
+        "4d425831300a2f466c6167732033340a2f466f6e7442426f78"
+        "205b30202d3139342031313530203639345d0a2f417363656e"
+        "74203639340a2f436170486569676874203638360a2f446573"
+        "63656e74202d3139340a2f4974616c6963416e676c6520300a"
+        "2f5374656d56203130360a2f58486569676874203434340a3e"
+        "3e0a656e646f626a0a31322030206f626a0a5b353030203535"
+        "352e36203434342e34203535352e36203434342e3420333035"
+        "2e3620353030203535352e36203237372e38203330352e3620"
+        "3532372e38203237372e38203833332e33203535352e362035"
+        "3030203535352e36203532372e38203339312e37203339342e"
+        "34203338382e39203535352e36203532372e38203732322e32"
+        "203532372e38203532372e38203434342e345d0a656e646f62"
+        "6a0a31332030206f626a0a3c3c0a2f54797065202f466f6e74"
+        "44657363726970746f720a2f466f6e744e616d65202f434d52"
+        "31300a2f466c6167732033340a2f466f6e7442426f78205b30"
+        "202d3139342031303030203639345d0a2f417363656e742036"
+        "39340a2f436170486569676874203638330a2f44657363656e"
+        "74202d3139340a2f4974616c6963416e676c6520300a2f5374"
+        "656d562039330a2f58486569676874203433310a3e3e0a656e",
+        "646f626a0a352030206f626a0a3c3c0a2f54797065202f466f"
+        "6e740a2f53756274797065202f54797065310a2f4261736546"
+        "6f6e74202f434d425831300a2f466f6e744465736372697074"
+        "6f72203131203020520a2f4669727374436861722039390a2f"
+        "4c61737443686172203131330a2f5769647468732031302030"
+        "20520a3e3e0a656e646f626a0a342030206f626a0a3c3c0a2f"
+        "54797065202f466f6e740a2f53756274797065202f54797065"
+        "310a2f42617365466f6e74202f434d5231300a2f466f6e7444"
+        "657363726970746f72203133203020520a2f46697273744368"
+        "61722039370a2f4c61737443686172203132320a2f57696474"
+        "6873203132203020520a3e3e0a656e646f626a0a362030206f"
+        "626a0a3c3c0a2f54797065202f50616765730a2f436f756e74"
+        "20320a2f4b696473205b32203020522038203020525d0a3e3e"
+        "0a656e646f626a0a31342030206f626a0a3c3c0a2f54797065"
+        "202f436174616c6f670a2f50616765732036203020520a3e3e"
+        "0a656e646f626a0a31352030206f626a0a3c3c0a2f50726f64"
+        "7563657220287064665465582d312e34302e3235290a2f4372"
+        "6561746f722028546558290a2f54726170706564202f46616c"
+        "73650a3e3e0a656e646f626a0a787265660a302031360a3030"
+        "30303030303030302036353533352066200a30303030303030"
+        "353230203030303030206e200a303030303030303430392030"
+        "30303030206e200a3030303030303030313520303030303020"
+        "6e200a30303030303031363338203030303030206e200a3030"
+        "3030303031353035203030303030206e200a30303030303031"
+        "373730203030303030206e200a303030303030303830382030"
+        "30303030206e200a3030303030303036393620303030303020"
+        "6e200a30303030303030353937203030303030206e200a3030"
+        "3030303030383735203030303030206e200a30303030303030"
+        "393739203030303030206e200a303030303030313135392030"
+        "30303030206e200a3030303030303133323720303030303020"
+        "6e200a30303030303031383333203030303030206e200a3030"
+        "3030303031383833203030303030206e200a747261696c6572"
+        "0a3c3c202f53697a652031360a2f526f6f7420313420302052"
+        "0a2f496e666f203135203020520a203e3e0a73746172747872"
+        "65660a313936330a2525454f460a",
+        NULL,
+    };
+    return run_document_pdf(source, expected);
 }
 
 static int test_what_a_split_leaves_behind(void)
@@ -9078,6 +9219,7 @@ int main(void)
         test_a_definition_nothing_holds() != 0 ||
         test_the_page_description() != 0 ||
         test_leaders_on_a_page() != 0 ||
+        test_the_pdf_file() != 0 ||
         test_how_wide_a_movement_is() != 0 ||
         test_a_box_at_the_edge() != 0 ||
         test_a_margin_kern_behind_the_leftskip() != 0 ||

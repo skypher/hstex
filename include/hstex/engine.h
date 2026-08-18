@@ -704,6 +704,20 @@ struct hstex_font {
 /* One movement the page description has already written, so that a movement
    of the same size can be written as a repeat; see docs/DECISIONS.md,
    the-page-description. */
+/* A font the PDF file names, and the characters of it that were used. */
+struct hstex_pdf_font {
+    uint32_t identifier;
+    /* The object the font dictionary will be, and the resource number it is
+       named by. */
+    size_t object;
+    size_t widths;
+    size_t descriptor;
+    uint32_t number;
+    uint32_t first;
+    uint32_t last;
+    uint8_t used[32];
+};
+
 struct hstex_dvi_move {
     int32_t value;
     size_t at;
@@ -1354,6 +1368,41 @@ struct hstex_engine {
     int32_t dvi_v;
     int32_t dvi_cur_h;
     int32_t dvi_cur_v;
+    /* The PDF file, when \pdfoutput is positive. See docs/DECISIONS.md,
+       the-pdf-file. */
+    FILE *pdf_file;
+    size_t pdf_written;
+    /* Where each object was written, by number; zero until it is. */
+    size_t *pdf_offsets;
+    size_t pdf_numbered;
+    size_t pdf_offset_capacity;
+    /* The page description being built. */
+    uint8_t *pdf_page;
+    size_t pdf_page_count;
+    size_t pdf_page_capacity;
+    size_t pdf_pages_object;
+    size_t *pdf_page_objects;
+    size_t pdf_page_object_count;
+    size_t pdf_page_object_capacity;
+    struct hstex_pdf_font *pdf_fonts;
+    size_t pdf_font_count;
+    size_t pdf_font_capacity;
+    uint32_t *pdf_page_fonts;
+    size_t pdf_page_font_count;
+    size_t pdf_page_font_capacity;
+    /* Where the text the page has so far reaches, and what is open. */
+    bool pdf_in_text;
+    bool pdf_in_array;
+    bool pdf_in_string;
+    bool pdf_placed;
+    int64_t pdf_origin_h;
+    int64_t pdf_origin_v;
+    int32_t pdf_origin_line;
+    int32_t pdf_text_h;
+    int32_t pdf_text_v;
+    uint32_t pdf_text_font;
+    bool pdf_font_chosen;
+    int32_t pdf_height;
     enum hstex_mode mode;
     int32_t prev_depth;
     /* The space factor of the horizontal list being built. */
