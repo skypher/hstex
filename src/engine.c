@@ -13588,10 +13588,12 @@ static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
 static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
 {
     int64_t tenths = pdf_glyph_units(font, code);
-    int64_t numerator = tenths * pdf_unit_numerator(font);
-    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR * 10;
-    int64_t whole = numerator / denominator;
-    int64_t rest = numerator - whole * denominator;
+    /* The size the file states, in whole scaled points: the printed size is
+       in ten-thousandths of a big point. */
+    int64_t stated =
+        pdf_unit_numerator(font) / (HSTEX_PDF_UNIT_DENOMINATOR / 1000);
+    int64_t whole = tenths * stated / 10000;
+    int64_t rest = tenths * stated - whole * 10000;
     int64_t width = packed_dimen(font->characters[code].width);
     if (rest != 0 && whole < width) {
         whole += 1;
@@ -13647,14 +13649,13 @@ static int pdf_place_character(struct hstex_engine *engine,
         if (pdf_end_array(engine, error, error_capacity) != 0) {
             return -1;
         }
-        /* A number needs a space in front of it when a bracket does not
-           already stand there. */
-        if (engine->pdf_page_count != 0U) {
-            uint8_t last = engine->pdf_page[engine->pdf_page_count - 1U];
-            if (last != ' ' && last != '\n' &&
-                pdf_text(engine, " ", error, error_capacity) != 0) {
-                return -1;
-            }
+        /* The place is set off from whatever stands before it, even from
+           the end of a line: a literal that ended one still leaves the
+           reference wanting a space here. */
+        if (engine->pdf_page_count != 0U &&
+            engine->pdf_page[engine->pdf_page_count - 1U] != ' ' &&
+            pdf_text(engine, " ", error, error_capacity) != 0) {
+            return -1;
         }
         /* The first place in a text object is measured from the page's own
            corner; the ones after it from the place before, and the
