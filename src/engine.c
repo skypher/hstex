@@ -13627,6 +13627,18 @@ static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
     return (int32_t)whole;
 }
 
+/* The correction the file writes to bring its own idea of where the text
+   stands to the engine's place: the difference between them in thousandths
+   of the size the file states for the font -- the whole scaled points that
+   size means, which is what its widths are worked out from as well. See
+   docs/DECISIONS.md, the-text-position-in-the-file. */
+static int64_t pdf_text_offset(const struct hstex_font *font, int32_t text_h,
+                               int32_t h)
+{
+    int64_t difference = (int64_t)text_h - h;
+    return pdf_round_division(difference * 1000, pdf_stated_size(font));
+}
+
 static int pdf_place_character(struct hstex_engine *engine,
                                const struct hstex_node *node, int32_t h,
                                int32_t v, char *error, size_t error_capacity)
@@ -13746,10 +13758,7 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_in_array = true;
     }
     if (h != engine->pdf_text_h) {
-        int64_t difference = (int64_t)engine->pdf_text_h - h;
-        int64_t unit = pdf_unit_numerator(font);
-        int64_t offset = pdf_round_division(
-            difference * HSTEX_PDF_UNIT_DENOMINATOR, unit);
+        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h);
         if (offset != 0) {
             if (pdf_end_string(engine, error, error_capacity) != 0 ||
                 pdf_formatted(engine, error, error_capacity, "%lld",
@@ -13759,13 +13768,10 @@ static int pdf_place_character(struct hstex_engine *engine,
             /* The correction moves the file's text by its own worth of
                scaled points, and where that leaves it is taken towards the
                engine's own place, the same way a step is. */
-            int64_t amount = offset * unit;
-            int64_t exact =
-                (int64_t)engine->pdf_text_h * HSTEX_PDF_UNIT_DENOMINATOR -
-                amount;
-            int64_t whole =
-                pdf_floor_division(exact, HSTEX_PDF_UNIT_DENOMINATOR);
-            int64_t rest = exact - whole * HSTEX_PDF_UNIT_DENOMINATOR;
+            int64_t amount = offset * pdf_stated_size(font);
+            int64_t exact = (int64_t)engine->pdf_text_h * 1000 - amount;
+            int64_t whole = pdf_floor_division(exact, 1000);
+            int64_t rest = exact - whole * 1000;
             engine->pdf_text_h =
                 (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
         }
