@@ -162,11 +162,15 @@ and their streams of text, rules, colour and literals; the links,
 annotations and destinations they carry, with the rectangles each covers and
 the sorted tree of names the catalog points at; the tree of pages; and the
 measurements of every font, named and ordered the way the reference names and
-orders them. It is byte for byte the reference's file for the probes in
-`scratchpad/pdf` and for randomly nested ones -- but the fonts are not
-carried in the file yet, nothing is compressed, and one rounding rule in the
-text machinery is still being worked out, so it is not yet the reference's
-file for a real document. Marks and insertions are both there, splitting and
+orders them; the outline the document builds with `\pdfoutline`, the action
+the file opens on, and what `\pdfinfo` and `\pdfcatalog` say about it. The
+whole corpus is now that file: all 2,375 pages and 49,786,244 bytes of it,
+byte for byte what `pdflatex` writes for the same source with the fonts left
+uncarried and nothing compressed -- every glyph placed, every correction
+counted, every rule, link, destination, bookmark, font measurement and
+cross-reference entry in the same order and to the same scaled point. The
+fonts themselves are still not carried in the file, because subsetting a
+Type 1 font is to come, and nothing is compressed. Marks and insertions are both there, splitting and
 all: an insertion that will not fit is broken where `\vsplit` would break
 it, what fits goes into the box of its class, and the rest waits for the next
 page with `\splittopskip` in front of it. Every file the corpus writes
