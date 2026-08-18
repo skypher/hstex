@@ -133,8 +133,10 @@ with math nodes carrying `\mathsurround`, and a binary operator or a relation
 leaves `\binoppenalty` or `\relpenalty` behind it.
 
 Together these are enough for the whole corpus to match `pdflatex` node for
-node: every page of it, dumped with `\showbox` as the output routine sees it,
-comes to 6,449,072 lines, and not one of them is different.
+node: every page of it, dumped with `\showbox` as the output routine sees it
+and shown nine levels deep, comes to 8,174,373 lines, and the only six that
+differ are one character of a text-companion font that `pdflatex` prints as a
+raw byte because it is built with `cp227.tcx`.
 
 Everything a line is made of is pinned the same way: protrusion kerns that
 look inside boxes and are dropped again when the paragraph's last line is
