@@ -13829,8 +13829,11 @@ static int pdf_place_rule(struct hstex_engine *engine, int32_t left,
        docs/DECISIONS.md, thin-rules. */
     bool flat = height <= INT32_C(65536);
     bool upright = !flat && width <= INT32_C(65536);
-    int32_t x = flat ? left : upright ? left + width / 2 : left;
-    int32_t y = flat ? engine->pdf_height - bottom + height / 2
+    /* The middle of an upright rule's width is the larger half of it; the
+       middle of a flat one's thickness is the smaller half and a scaled
+       point over. See docs/DECISIONS.md, thin-rules. */
+    int32_t x = flat ? left : upright ? left + (width + 1) / 2 : left;
+    int32_t y = flat ? engine->pdf_height - bottom + height / 2 + 1
                      : engine->pdf_height - bottom;
     if (pdf_end_text(engine, error, error_capacity) != 0 ||
         pdf_text(engine, "q\n1 0 0 1 ", error, error_capacity) != 0 ||
