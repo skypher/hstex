@@ -3700,6 +3700,92 @@ static int test_the_pdf_file(void)
     return run_document_pdf(source, expected);
 }
 
+/* A link and an annotation stand in the list where they were written, and
+   the reference shows them with their size, what they carry and where they
+   lead. See docs/DECISIONS.md, pdf-links. */
+static int test_a_link_in_a_list(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\pdfoutput=1 \\setbox0"
+        "=\\hbox{\\pdfstartlink attr{/A}goto name{n1}a\\pdf"
+        "endlink}\\showbox0 \\setbox0=\\hbox{\\pdfstartlink"
+        " height 5pt depth 1pt width 10pt attr{/A}goto num "
+        "7 a\\pdfendlink}\\showbox0 \\setbox0=\\hbox{\\pdfs"
+        "tartlink user{/Subtype/Link}a\\pdfendlink}\\showbo"
+        "x0 \\setbox0=\\hbox{\\pdfstartlink goto file{f.pdf"
+        "}name{n2}a\\pdfendlink}\\showbox0 \\setbox0=\\hbox"
+        "{\\pdfstartlink goto file{f.pdf}page 3 {/Fit}a\\pd"
+        "fendlink}\\showbox0 \\setbox0=\\hbox{\\pdfstartlin"
+        "k thread name{t1}a\\pdfendlink}\\showbox0 \\setbox"
+        "0=\\hbox{\\pdfstartlink goto page 3 {/Fit}a\\pdfen"
+        "dlink}\\showbox0 \\setbox0=\\hbox{\\pdfstartlink t"
+        "hread num 3 a\\pdfendlink}\\showbox0 \\setbox0=\\h"
+        "box{a\\pdfannot height 5pt depth 1pt width 10pt {/"
+        "Subtype/Text}b}\\showbox0 \\setbox0=\\hbox{a\\pdfa"
+        "nnot{/Subtype/Text}b}\\showbox0 \\setbox0=\\hbox{a"
+        "\\pdfdest name{d} fitr width 3pt height 4pt b}\\sh"
+        "owbox0 \\setbox0=\\hbox{a\\pdfdest name{d} xyz zoo"
+        "m 1000 b}\\showbox0 \\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n> \\box0=\n\\hbox(4.3055"
+        "4+0.0)x5.00002\n.\\pdfstartlink(*+*)x* attr{/A} ac"
+        "tion goto name{n1}\n.\\tenrm a\n.\\pdfendlink\n\n!"
+        " OK.\n> \\box0=\n\\hbox(4.30554+0.0)x5.00002\n.\\p"
+        "dfstartlink(5.0+1.0)x10.0 attr{/A} action goto num"
+        "7\n.\\tenrm a\n.\\pdfendlink\n\n! OK.\n> \\box0=\n"
+        "\\hbox(4.30554+0.0)x5.00002\n.\\pdfstartlink(*+*)x"
+        "* action user{/Subtype/Link}\n.\\tenrm a\n.\\pdfen"
+        "dlink\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0.0)x5.0"
+        "0002\n.\\pdfstartlink(*+*)x* action file{f.pdf} go"
+        "to name{n2}\n.\\tenrm a\n.\\pdfendlink\n\n! OK.\n>"
+        " \\box0=\n\\hbox(4.30554+0.0)x5.00002\n.\\pdfstart"
+        "link(*+*)x* action file{f.pdf} page3{/Fit}\n.\\ten"
+        "rm a\n.\\pdfendlink\n\n! OK.\n> \\box0=\n\\hbox(4."
+        "30554+0.0)x5.00002\n.\\pdfstartlink(*+*)x* action "
+        "thread name{t1}\n.\\tenrm a\n.\\pdfendlink\n\n! OK"
+        ".\n> \\box0=\n\\hbox(4.30554+0.0)x5.00002\n.\\pdfs"
+        "tartlink(*+*)x* action page3{/Fit}\n.\\tenrm a\n."
+        "\\pdfendlink\n\n! OK.\n> \\box0=\n\\hbox(4.30554+0"
+        ".0)x5.00002\n.\\pdfstartlink(*+*)x* action thread "
+        "num3\n.\\tenrm a\n.\\pdfendlink\n\n! OK.\n> \\box0"
+        "=\n\\hbox(6.94444+0.0)x10.55559\n.\\tenrm a\n.\\pd"
+        "fannot(5.0+1.0)x10.0{/Subtype/Text}\n.\\tenrm b\n"
+        "\n! OK.\n> \\box0=\n\\hbox(6.94444+0.0)x10.55559\n"
+        ".\\tenrm a\n.\\pdfannot(*+*)x*{/Subtype/Text}\n.\\"
+        "tenrm b\n\n! OK.\n> \\box0=\n\\hbox(6.94444+0.0)x1"
+        "0.55559\n.\\tenrm a\n.\\pdfdest name{d} fitr(4.0+*"
+        ")x3.0\n.\\tenrm b\n\n! OK.\n> \\box0=\n\\hbox(6.94"
+        "444+0.0)x10.55559\n.\\tenrm a\n.\\pdfdest name{d} "
+        "xyz zoom1000\n.\\tenrm b\n\n! OK.\n> \\box254=void"
+        "\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 static int test_what_a_split_leaves_behind(void)
 {
     static const char *const source[] = {
@@ -9220,6 +9306,7 @@ int main(void)
         test_the_page_description() != 0 ||
         test_leaders_on_a_page() != 0 ||
         test_the_pdf_file() != 0 ||
+        test_a_link_in_a_list() != 0 ||
         test_how_wide_a_movement_is() != 0 ||
         test_a_box_at_the_edge() != 0 ||
         test_a_margin_kern_behind_the_leftskip() != 0 ||

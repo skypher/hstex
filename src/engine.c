@@ -8606,11 +8606,15 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
                          "horizontal node used outside an hbox");
     }
     const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    /* Whatever a whatsit measures is for whoever reads it -- the rectangle a
+       link covers, for one -- and not for the list it stands in. See
+       docs/DECISIONS.md, pdf-links. */
+    bool sizeless = node->kind == HSTEX_NODE_WHATSIT;
     /* A horizontal list that has not been packed yet has no width of its
        own -- a paragraph runs to whatever length it runs to, and only the
        lines it is broken into have to fit a dimension. See
        docs/DECISIONS.md, the-main-vertical-list. */
-    int64_t width = builder->width + packed_dimen(node->width);
+    int64_t width = builder->width + (sizeless ? 0 : packed_dimen(node->width));
     if (width < INT64_MIN / 2 || width > INT64_MAX / 2) {
         return set_error(error, error_capacity,
                          "horizontal list width overflow");
@@ -8621,6 +8625,9 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
     }
     builder->node_identifiers[builder->count++] = identifier;
     builder->width = width;
+    if (sizeless) {
+        return 0;
+    }
     /* A box shifted down reaches lower and rises less. */
     int32_t raised = packed_dimen(node->height) - node->shift;
     int32_t dropped = packed_dimen(node->depth) + node->shift;
@@ -11404,6 +11411,75 @@ static int stored_token_list_text(struct hstex_engine *engine,
 
 /* A whatsit is shown as the command that left it there, with the text it is
    still holding; see docs/DECISIONS.md, whatsits. */
+/* What a link's action says, in the words the reference shows it in. */
+static void show_pdf_action(struct hstex_engine *engine, uint32_t index)
+{
+    if (index == 0U || index > engine->pdf_action_count) {
+        return;
+    }
+    const struct hstex_pdf_action *action = &engine->pdf_actions[index - 1U];
+    char ignored[256];
+    print_text(engine, " action ");
+    if (action->file != 0U) {
+        uint8_t *text = NULL;
+        size_t count = 0U;
+        if (stored_token_list_text(engine, action->file, &text, &count, 0U,
+                                   NULL, ignored, sizeof(ignored)) == 0) {
+            print_text(engine, "file{");
+            if (count != 0U) {
+                print_bytes(engine, (const char *)text, count);
+            }
+            print_text(engine, "} ");
+        }
+        free(text);
+    }
+    if (action->kind == (uint8_t)HSTEX_PDF_ACTION_USER) {
+        uint8_t *text = NULL;
+        size_t count = 0U;
+        if (stored_token_list_text(engine, action->text, &text, &count, 0U,
+                                   NULL, ignored, sizeof(ignored)) == 0) {
+            print_text(engine, "user{");
+            if (count != 0U) {
+                print_bytes(engine, (const char *)text, count);
+            }
+            print_byte(engine, '}');
+        }
+        free(text);
+        return;
+    }
+    if (action->paged) {
+        uint8_t *text = NULL;
+        size_t count = 0U;
+        print_formatted(engine, "page%d{", action->number);
+        if (stored_token_list_text(engine, action->text, &text, &count, 0U,
+                                   NULL, ignored, sizeof(ignored)) == 0 &&
+            count != 0U) {
+            print_bytes(engine, (const char *)text, count);
+        }
+        free(text);
+        print_byte(engine, '}');
+        return;
+    }
+    print_text(engine, action->kind == (uint8_t)HSTEX_PDF_ACTION_THREAD
+                           ? "thread "
+                           : "goto ");
+    if (action->numbered) {
+        print_formatted(engine, "num%d", action->number);
+        return;
+    }
+    uint8_t *text = NULL;
+    size_t count = 0U;
+    if (stored_token_list_text(engine, action->name, &text, &count, 0U, NULL,
+                               ignored, sizeof(ignored)) == 0) {
+        print_text(engine, "name{");
+        if (count != 0U) {
+            print_bytes(engine, (const char *)text, count);
+        }
+        print_byte(engine, '}');
+    }
+    free(text);
+}
+
 static void show_whatsit(struct hstex_engine *engine,
                          const struct hstex_node *node)
 {
@@ -11475,6 +11551,39 @@ static void show_whatsit(struct hstex_engine *engine,
             print_bytes(engine, (const char *)type, type_count);
         }
         free(type);
+        return;
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_END_LINK) {
+        print_text(engine, "\\pdfendlink");
+        return;
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_START_LINK ||
+        kind == (uint8_t)HSTEX_WHATSIT_ANNOT) {
+        bool link = kind == (uint8_t)HSTEX_WHATSIT_START_LINK;
+        print_text(engine, link ? "\\pdfstartlink(" : "\\pdfannot(");
+        show_rule_dimen(engine, node->height);
+        print_byte(engine, '+');
+        show_rule_dimen(engine, node->depth);
+        print_text(engine, ")x");
+        show_rule_dimen(engine, node->width);
+        char ignored[256];
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        if (node->value.whatsit.stream != 0U &&
+            stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) == 0) {
+            print_text(engine, link ? " attr{" : "{");
+            if (text_count != 0U) {
+                print_bytes(engine, (const char *)text, text_count);
+            }
+            print_byte(engine, '}');
+        }
+        free(text);
+        if (!link) {
+            return;
+        }
+        show_pdf_action(engine, node->value.whatsit.detail);
         return;
     }
     static const char *const names[4] = {"write", "openout", "closeout",
@@ -16828,20 +16937,45 @@ static int expand_pdf_string_compare(
 /* An action spec, as \pdfcatalog's openaction and the link and outline
    primitives take it. Nothing acts on it yet; it is scanned so that the
    tokens it covers are consumed exactly, and no more. */
-static int scan_pdf_action(struct hstex_engine *engine, char *error,
+static char *own_general_text(const uint8_t *bytes, size_t count);
+
+static int store_expanded_text(struct hstex_engine *engine, uint32_t *tokens,
+                               char *error, size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    char *text = own_general_text(bytes, count);
+    free(bytes);
+    if (text == NULL) {
+        return set_error(error, error_capacity, "pdf text allocation failed");
+    }
+    int status = store_text_as_token_list(engine, text, tokens, error,
+                                          error_capacity);
+    free(text);
+    return status;
+}
+
+/* What a link is to do when it is followed: go to a place in this document
+   or another, take up a thread, or whatever the document itself says. See
+   docs/DECISIONS.md, pdf-links. */
+static int scan_pdf_action(struct hstex_engine *engine,
+                           struct hstex_pdf_action *action, char *error,
                            size_t error_capacity)
 {
+    memset(action, 0, sizeof(*action));
     bool matched = false;
     if (try_keyword(engine, "user", &matched, error, error_capacity) != 0) {
         return -1;
     }
     if (matched) {
-        uint8_t *bytes = NULL;
-        size_t count = 0U;
-        int status = scan_expanded_general_text(engine, &bytes, &count, error,
-                                                error_capacity);
-        free(bytes);
-        return status;
+        action->kind = (uint8_t)HSTEX_PDF_ACTION_USER;
+        return store_expanded_text(engine, &action->text, error,
+                                   error_capacity);
     }
     bool thread = false;
     if (try_keyword(engine, "goto", &matched, error, error_capacity) != 0) {
@@ -16857,31 +16991,24 @@ static int scan_pdf_action(struct hstex_engine *engine, char *error,
                              "an action specification was expected here");
         }
     }
+    action->kind = thread ? (uint8_t)HSTEX_PDF_ACTION_THREAD
+                          : (uint8_t)HSTEX_PDF_ACTION_GOTO;
     bool file = false;
     if (try_keyword(engine, "file", &file, error, error_capacity) != 0) {
         return -1;
     }
-    if (file) {
-        uint8_t *bytes = NULL;
-        size_t count = 0U;
-        int status = scan_expanded_general_text(engine, &bytes, &count, error,
-                                                error_capacity);
-        free(bytes);
-        if (status != 0) {
-            return -1;
-        }
+    if (file &&
+        store_expanded_text(engine, &action->file, error, error_capacity) !=
+            0) {
+        return -1;
     }
     bool named = false;
     if (try_keyword(engine, "name", &named, error, error_capacity) != 0) {
         return -1;
     }
     if (named) {
-        uint8_t *bytes = NULL;
-        size_t count = 0U;
-        int status = scan_expanded_general_text(engine, &bytes, &count, error,
-                                                error_capacity);
-        free(bytes);
-        if (status != 0) {
+        if (store_expanded_text(engine, &action->name, error, error_capacity) !=
+            0) {
             return -1;
         }
     } else {
@@ -16890,8 +17017,9 @@ static int scan_pdf_action(struct hstex_engine *engine, char *error,
             return -1;
         }
         if (numbered) {
-            int32_t number = 0;
-            if (scan_integer(engine, &number, error, error_capacity) != 0) {
+            action->numbered = true;
+            if (scan_integer(engine, &action->number, error, error_capacity) !=
+                0) {
                 return -1;
             }
         } else if (!thread) {
@@ -16905,16 +17033,14 @@ static int scan_pdf_action(struct hstex_engine *engine, char *error,
                 return set_error(error, error_capacity,
                                  "a destination was expected here");
             }
-            int32_t number = 0;
-            uint8_t *bytes = NULL;
-            size_t count = 0U;
-            if (scan_integer(engine, &number, error, error_capacity) != 0 ||
-                scan_expanded_general_text(engine, &bytes, &count, error,
-                                           error_capacity) != 0) {
-                free(bytes);
+            action->numbered = true;
+            action->paged = true;
+            if (scan_integer(engine, &action->number, error, error_capacity) !=
+                    0 ||
+                store_expanded_text(engine, &action->text, error,
+                                    error_capacity) != 0) {
                 return -1;
             }
-            free(bytes);
         }
     }
     bool window = false;
@@ -16926,6 +17052,31 @@ static int scan_pdf_action(struct hstex_engine *engine, char *error,
             0) {
         return -1;
     }
+    return 0;
+}
+
+/* Keep the action, so that the link that carries it can name it again when
+   the page is written. */
+static int add_pdf_action(struct hstex_engine *engine,
+                          const struct hstex_pdf_action *action,
+                          uint32_t *index, char *error, size_t error_capacity)
+{
+    if (engine->pdf_action_count == engine->pdf_action_capacity) {
+        size_t capacity = engine->pdf_action_capacity == 0U
+                              ? 16U
+                              : engine->pdf_action_capacity * 2U;
+        struct hstex_pdf_action *grown =
+            realloc(engine->pdf_actions, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "pdf action allocation failed");
+        }
+        engine->pdf_actions = grown;
+        engine->pdf_action_capacity = capacity;
+    }
+    engine->pdf_actions[engine->pdf_action_count] = *action;
+    *index = (uint32_t)(engine->pdf_action_count + 1U);
+    ++engine->pdf_action_count;
     return 0;
 }
 
@@ -16981,7 +17132,9 @@ static int execute_pdf_dictionary(struct hstex_engine *engine, bool catalog,
         free(bytes);
         return -1;
     }
-    if (matched && scan_pdf_action(engine, error, error_capacity) != 0) {
+    struct hstex_pdf_action opened = {0};
+    if (matched &&
+        scan_pdf_action(engine, &opened, error, error_capacity) != 0) {
         free(bytes);
         return -1;
     }
@@ -17492,15 +17645,39 @@ static int execute_pdf_dest(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* \pdfstartlink leaves a whatsit where it stands, so that the page can put
+   an annotation over the material that follows it, and \pdfendlink another
+   where that material ends. The size is what the box the link covers
+   measures unless the link says otherwise. See docs/DECISIONS.md,
+   pdf-links. */
 static int execute_pdf_start_link(struct hstex_engine *engine, char *error,
                                   size_t error_capacity)
 {
+    struct hstex_node rule = {.width = HSTEX_RUNNING_DIMEN,
+                              .height = HSTEX_RUNNING_DIMEN,
+                              .depth = HSTEX_RUNNING_DIMEN};
+    if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
+        return -1;
+    }
     char *attributes = NULL;
     if (scan_optional_pdf_text(engine, "attr", &attributes, error,
                                error_capacity) != 0) {
         return -1;
     }
-    if (scan_pdf_action(engine, error, error_capacity) != 0) {
+    struct hstex_pdf_action action = {0};
+    if (scan_pdf_action(engine, &action, error, error_capacity) != 0) {
+        free(attributes);
+        return -1;
+    }
+    uint32_t attribute_tokens = 0U;
+    if (attributes != NULL &&
+        store_text_as_token_list(engine, attributes, &attribute_tokens, error,
+                                 error_capacity) != 0) {
+        free(attributes);
+        return -1;
+    }
+    uint32_t index = 0U;
+    if (add_pdf_action(engine, &action, &index, error, error_capacity) != 0) {
         free(attributes);
         return -1;
     }
@@ -17513,7 +17690,28 @@ static int execute_pdf_start_link(struct hstex_engine *engine, char *error,
     record->number = ++engine->pdf_object_counter;
     engine->pdf_last[HSTEX_PDF_LAST_LINK] = record->number;
     record->content = attributes;
-    return 0;
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .width = rule.width,
+        .height = rule.height,
+        .depth = rule.depth,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_START_LINK,
+                          .stream = attributes != NULL ? 1U : 0U,
+                          .tokens = attribute_tokens,
+                          .detail = index,
+                          .number = record->number},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+static int execute_pdf_end_link(struct hstex_engine *engine, char *error,
+                                size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_END_LINK},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 static int execute_pdf_outline(struct hstex_engine *engine, char *error,
@@ -17524,7 +17722,8 @@ static int execute_pdf_outline(struct hstex_engine *engine, char *error,
                                error_capacity) != 0) {
         return -1;
     }
-    if (scan_pdf_action(engine, error, error_capacity) != 0) {
+    struct hstex_pdf_action action = {0};
+    if (scan_pdf_action(engine, &action, error, error_capacity) != 0) {
         free(attributes);
         return -1;
     }
@@ -17600,7 +17799,9 @@ static int execute_pdf_xform(struct hstex_engine *engine, char *error,
 static int execute_pdf_annot(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
-    struct hstex_node rule = {0};
+    struct hstex_node rule = {.width = HSTEX_RUNNING_DIMEN,
+                              .height = HSTEX_RUNNING_DIMEN,
+                              .depth = HSTEX_RUNNING_DIMEN};
     if (scan_rule_dimensions(engine, &rule, error, error_capacity) != 0) {
         return -1;
     }
@@ -17630,7 +17831,27 @@ static int execute_pdf_annot(struct hstex_engine *engine, char *error,
     engine->pdf_last[HSTEX_PDF_LAST_ANNOTATION] = record->number;
     record->content = own_general_text(bytes, count);
     free(bytes);
-    return 0;
+    if (record->content == NULL) {
+        return set_error(error, error_capacity, "pdf annotation allocation failed");
+    }
+    /* The annotation stands in the list where it was written, so that the
+       page can put it at that place. See docs/DECISIONS.md, pdf-links. */
+    uint32_t tokens = 0U;
+    if (store_text_as_token_list(engine, record->content, &tokens, error,
+                                 error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .width = rule.width,
+        .height = rule.height,
+        .depth = rule.depth,
+        .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_ANNOT,
+                          .stream = 1U,
+                          .tokens = tokens,
+                          .number = record->number},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
 }
 
 static int reserve_color_stacks(struct hstex_engine *engine, size_t required,
@@ -26593,9 +26814,12 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL ||
         kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK ||
-        kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
-        /* Nothing carries a \special or a colour yet: there is no page
-           description to put it in. See docs/DECISIONS.md, whatsits. */
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST ||
+        kind == (uint8_t)HSTEX_WHATSIT_START_LINK ||
+        kind == (uint8_t)HSTEX_WHATSIT_END_LINK ||
+        kind == (uint8_t)HSTEX_WHATSIT_ANNOT) {
+        /* What these carry belongs in the page description, not in a
+           stream. See docs/DECISIONS.md, whatsits. */
         return 0;
     }
     uint8_t *bytes = NULL;
@@ -28813,7 +29037,9 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_PDF_END_LINK:
-            /* The link's extent is the backend's concern; nothing to do. */
+            if (execute_pdf_end_link(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
             continue;
         case HSTEX_COMMAND_PDF_OUTLINE:
             if (execute_pdf_outline(engine, error, error_capacity) != 0) {

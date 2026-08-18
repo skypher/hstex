@@ -1069,6 +1069,32 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_SPECIAL,
     HSTEX_WHATSIT_COLOR_STACK,
     HSTEX_WHATSIT_PDF_DEST,
+    HSTEX_WHATSIT_START_LINK,
+    HSTEX_WHATSIT_END_LINK,
+    HSTEX_WHATSIT_ANNOT,
+};
+
+/* What a link or an outline entry does when it is followed. See
+   docs/DECISIONS.md, pdf-links. */
+enum hstex_pdf_action_kind {
+    HSTEX_PDF_ACTION_GOTO = 0,
+    HSTEX_PDF_ACTION_THREAD,
+    HSTEX_PDF_ACTION_USER,
+};
+
+struct hstex_pdf_action {
+    uint8_t kind;
+    /* The file another document is in, the name of what is aimed at, and
+       either the text of a user action or the one that follows a page
+       number: token lists, or zero when they were not given. */
+    uint32_t file;
+    uint32_t name;
+    uint32_t text;
+    int32_t number;
+    /* Whether a number was given rather than a name, and whether it was a
+       page number rather than an object number. */
+    bool numbered;
+    bool paged;
 };
 
 struct hstex_node {
@@ -1320,6 +1346,10 @@ struct hstex_engine {
     struct hstex_pdf_object *pdf_objects;
     size_t pdf_object_count;
     size_t pdf_object_capacity;
+    /* What the links and outlines of the document aim at. */
+    struct hstex_pdf_action *pdf_actions;
+    size_t pdf_action_count;
+    size_t pdf_action_capacity;
     struct hstex_pdf_literal *pdf_literals;
     size_t pdf_literal_count;
     size_t pdf_literal_capacity;

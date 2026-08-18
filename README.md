@@ -137,9 +137,9 @@ leaves `\binoppenalty` or `\relpenalty` behind it.
 
 Together these are enough for the whole corpus to match `pdflatex` node for
 node: every page of it, dumped with `\showbox` as the output routine sees it
-and shown nine levels deep, comes to 8,174,373 lines, and the only six that
-differ are one character of a text-companion font that `pdflatex` prints as a
-raw byte because it is built with `cp227.tcx`.
+and shown nine levels deep, comes to 8,473,729 lines with the
+cross-references resolved -- `hyperref`'s links and all -- and not one of
+them differs.
 
 Everything a line is made of is pinned the same way: protrusion kerns that
 look inside boxes and are dropped again when the paragraph's last line is
