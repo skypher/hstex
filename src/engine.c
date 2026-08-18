@@ -13563,6 +13563,11 @@ static int pdf_end_text(struct hstex_engine *engine, char *error,
    the-text-position-in-the-file. */
 #define HSTEX_PDF_UNIT_DENOMINATOR INT64_C(250000000)
 
+/* The largest correction the file will write inside an array; a larger one
+   ends the run and is named as a place instead. See docs/DECISIONS.md,
+   the-correction-an-array-cannot-carry. */
+#define HSTEX_PDF_OFFSET_LIMIT INT64_C(32767)
+
 static int64_t pdf_unit_numerator(const struct hstex_font *font)
 {
     int64_t stated = pdf_bp_units(font->size, 4);
@@ -13682,6 +13687,16 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_text_font = identifier;
         engine->pdf_font_chosen = true;
         moved = true;
+    }
+    /* A correction the array cannot carry ends the run instead: past 32767
+       thousandths of the stated size the file names the place afresh. See
+       docs/DECISIONS.md, the-correction-an-array-cannot-carry. */
+    if (!moved && h != engine->pdf_text_h) {
+        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h);
+        if (offset > HSTEX_PDF_OFFSET_LIMIT ||
+            offset < -HSTEX_PDF_OFFSET_LIMIT) {
+            moved = true;
+        }
     }
     if (moved) {
         if (pdf_end_array(engine, error, error_capacity) != 0) {
