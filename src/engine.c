@@ -1645,6 +1645,16 @@ static int assign_integer_parameter(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "invalid integer parameter assignment");
     }
+    /* The version the file states is written at its head, so it cannot be
+       changed once anything has been written; the reference stops there. See
+       docs/DECISIONS.md, the-version-a-file-states. */
+    if (index == (uint32_t)HSTEX_INTEGER_PDF_MINOR_VERSION &&
+        engine->pdf_file != NULL &&
+        value != engine->integer_parameters[index]) {
+        return set_error(error, error_capacity,
+                         "PDF version cannot be changed after data is written "
+                         "to the PDF file");
+    }
     bool global = assignment_is_global(engine, requested_global);
     if (!global && engine->group_level != 0U) {
         if (save_value(engine, HSTEX_SAVE_INTEGER_PARAMETER, index,
@@ -13328,10 +13338,17 @@ static int pdf_open(struct hstex_engine *engine, char *error,
     if (engine->pdf_file == NULL) {
         return set_error(error, error_capacity, "cannot write the PDF file");
     }
-    /* The four bytes after the version keep the file from being taken for
-       text. */
-    static const char header[] = "%PDF-1.4\n%\xD0\xD4\xC5\xD8\n";
-    return pdf_out(engine, header, sizeof(header) - 1U, error, error_capacity);
+    /* The file states the version the document asked for, and the four bytes
+       after it keep the file from being taken for text. See
+       docs/DECISIONS.md, the-version-a-file-states. */
+    char header[32];
+    int written = snprintf(
+        header, sizeof(header), "%%PDF-1.%d\n%%\xD0\xD4\xC5\xD8\n",
+        engine->integer_parameters[HSTEX_INTEGER_PDF_MINOR_VERSION]);
+    return written < 0
+               ? set_error(error, error_capacity, "cannot write the PDF file")
+               : pdf_out(engine, header, (size_t)written, error,
+                         error_capacity);
 }
 
 /* The font's place among the ones the file names, adding it if it is new. */
