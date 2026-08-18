@@ -15275,6 +15275,10 @@ static int pdf_write_font(struct hstex_engine *engine,
     int32_t quad =
         pdf_font_measure(font, font->dimen_count > 5U ? font->dimens[5] : 0);
     int32_t stem = pdf_font_stem(font);
+    /* The box reaches as far up as the font does: the ascent, or the cap
+       height where the capitals stand higher than the letter the ascent is
+       measured on. See docs/DECISIONS.md, the-pdf-file. */
+    int32_t top = ascent > capheight ? ascent : capheight;
     const char *name = pdf_font_name(font);
     if (pdf_begin_object(engine, descriptor, error, error_capacity) != 0 ||
         pdf_out_formatted(engine, error, error_capacity,
@@ -15282,7 +15286,7 @@ static int pdf_write_font(struct hstex_engine *engine,
                           "/Flags 34\n/FontBBox [0 %d %d %d]\n/Ascent %d\n"
                           "/CapHeight %d\n/Descent %d\n/ItalicAngle 0\n"
                           "/StemV %d\n/XHeight %d\n>>\n",
-                          name, descent, quad, ascent, ascent, capheight,
+                          name, descent, quad, top, ascent, capheight,
                           descent, stem, xheight) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0) {
         return -1;
