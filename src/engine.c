@@ -2787,6 +2787,10 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_records[index].content);
     }
     free(engine->pdf_records);
+    for (size_t index = 0U; index < engine->pdf_outline_count; ++index) {
+        free(engine->pdf_outlines[index].attributes);
+    }
+    free(engine->pdf_outlines);
     for (size_t index = 0U; index < engine->color_stack_count; ++index) {
         struct hstex_color_stack *stack = &engine->color_stacks[index];
         for (size_t depth = 0U; depth < stack->count; ++depth) {
@@ -15296,6 +15300,146 @@ static int pdf_write_font(struct hstex_engine *engine,
     return 0;
 }
 
+/* While the outline is built, the entry whose children are being collected,
+   how many of them the document said were still to come, and the last one
+   met. */
+struct hstex_pdf_outline_frame {
+    size_t owner;
+    int32_t remaining;
+    size_t last;
+};
+
+/* The outline the document built: the entries are linked into a tree by the
+   number of children each of them declared, and written from the last back
+   to the first under a root of their own. See docs/DECISIONS.md,
+   the-outline-of-a-document. */
+static int pdf_write_outlines(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    size_t count = engine->pdf_outline_count;
+    if (count == 0U) {
+        return 0;
+    }
+    struct hstex_pdf_outline *entries = engine->pdf_outlines;
+    struct hstex_pdf_outline_frame *stack =
+        malloc((count + 1U) * sizeof(*stack));
+    if (stack == NULL) {
+        return set_error(error, error_capacity,
+                         "PDF outline allocation failed");
+    }
+    size_t depth = 1U;
+    stack[0].owner = HSTEX_PDF_OUTLINE_NONE;
+    stack[0].remaining = -1;
+    stack[0].last = HSTEX_PDF_OUTLINE_NONE;
+    size_t first = HSTEX_PDF_OUTLINE_NONE;
+    for (size_t index = 0U; index < count; ++index) {
+        struct hstex_pdf_outline_frame *frame = &stack[depth - 1U];
+        entries[index].parent = frame->owner;
+        if (frame->last == HSTEX_PDF_OUTLINE_NONE) {
+            if (frame->owner == HSTEX_PDF_OUTLINE_NONE) {
+                first = index;
+            } else {
+                entries[frame->owner].first = index;
+            }
+        } else {
+            entries[frame->last].next = index;
+            entries[index].previous = frame->last;
+        }
+        frame->last = index;
+        if (frame->owner != HSTEX_PDF_OUTLINE_NONE) {
+            entries[frame->owner].last = index;
+        }
+        if (frame->remaining > 0) {
+            frame->remaining -= 1;
+        }
+        int32_t children = entries[index].count;
+        if (children < 0) {
+            children = -children;
+        }
+        if (children > 0) {
+            stack[depth].owner = index;
+            stack[depth].remaining = children;
+            stack[depth].last = HSTEX_PDF_OUTLINE_NONE;
+            depth += 1U;
+        } else {
+            while (depth > 1U && stack[depth - 1U].remaining == 0) {
+                depth -= 1U;
+            }
+        }
+    }
+    /* The entry the root calls its last is the last one of whatever list was
+       still open when the document ended, which is not the last of its own
+       where a count was left unsatisfied -- and nothing at all where that
+       list had not begun. */
+    size_t ending = stack[depth - 1U].last;
+    free(stack);
+    /* How many entries show under each one: its own children, and the
+       children of every one of those that is open. What stands under an
+       entry always comes after it, so counting backwards settles them all. */
+    int32_t showing = 0;
+    for (size_t index = count; index > 0U; --index) {
+        const struct hstex_pdf_outline *entry = &entries[index - 1U];
+        int32_t shows = 1 + (entry->count > 0 ? entry->visible : 0);
+        if (entry->parent == HSTEX_PDF_OUTLINE_NONE) {
+            showing += shows;
+        } else {
+            entries[entry->parent].visible += shows;
+        }
+    }
+    engine->pdf_outline_object = pdf_new_object(engine);
+    if (pdf_begin_object(engine, engine->pdf_outline_object, error,
+                         error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /Outlines\n/First %zu 0 R\n"
+                          "/Last %zu 0 R\n/Count %d\n>>\n",
+                          entries[first].object,
+                          ending == HSTEX_PDF_OUTLINE_NONE
+                              ? (size_t)0
+                              : entries[ending].object,
+                          showing) != 0 ||
+        pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = count; index > 0U; --index) {
+        const struct hstex_pdf_outline *entry = &entries[index - 1U];
+        size_t parent = entry->parent == HSTEX_PDF_OUTLINE_NONE
+                            ? engine->pdf_outline_object
+                            : entries[entry->parent].object;
+        if (pdf_begin_object(engine, entry->object, error, error_capacity) !=
+                0 ||
+            pdf_out_formatted(engine, error, error_capacity,
+                              "<<\n/Title %zu 0 R\n/A %zu 0 R\n"
+                              "/Parent %zu 0 R\n",
+                              entry->title, entry->action, parent) != 0 ||
+            (entry->previous != HSTEX_PDF_OUTLINE_NONE &&
+             pdf_out_formatted(engine, error, error_capacity, "/Prev %zu 0 R\n",
+                               entries[entry->previous].object) != 0) ||
+            (entry->next != HSTEX_PDF_OUTLINE_NONE &&
+             pdf_out_formatted(engine, error, error_capacity, "/Next %zu 0 R\n",
+                               entries[entry->next].object) != 0) ||
+            (entry->first != HSTEX_PDF_OUTLINE_NONE &&
+             pdf_out_formatted(engine, error, error_capacity,
+                               "/First %zu 0 R\n",
+                               entries[entry->first].object) != 0) ||
+            (entry->last != HSTEX_PDF_OUTLINE_NONE &&
+             pdf_out_formatted(engine, error, error_capacity, "/Last %zu 0 R\n",
+                               entries[entry->last].object) != 0) ||
+            (entry->visible != 0 &&
+             pdf_out_formatted(engine, error, error_capacity, "/Count %d\n",
+                               entry->count < 0 ? -entry->visible
+                                                : entry->visible) != 0) ||
+            (entry->attributes != NULL &&
+             (pdf_out_text(engine, entry->attributes, error, error_capacity) !=
+                  0 ||
+              pdf_out_text(engine, "\n", error, error_capacity) != 0)) ||
+            pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
+            pdf_end_object(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Whether what the document wrote for a dictionary names an entry of its
    own: the reference looks for the name anywhere in that text, inside a
    string or at the head of a longer name as readily as on its own. See
@@ -15500,6 +15644,9 @@ static int pdf_close(struct hstex_engine *engine, char *error,
             return set_error(error, error_capacity, "PDF page allocation failed");
         }
     }
+    if (pdf_write_outlines(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     /* The names the file knows stand in a tree of their own, sorted, six to
        a node at every level, and each node says what it spans. See
        docs/DECISIONS.md, destinations-in-the-file. */
@@ -15634,6 +15781,9 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         pdf_out_formatted(engine, error, error_capacity,
                           "<<\n/Type /Catalog\n/Pages %zu 0 R\n",
                           engine->pdf_pages_object) != 0 ||
+        (engine->pdf_outline_object != 0U &&
+         pdf_out_formatted(engine, error, error_capacity, "/Outlines %zu 0 R\n",
+                           engine->pdf_outline_object) != 0) ||
         (names != 0U &&
          pdf_out_formatted(engine, error, error_capacity, "/Names %zu 0 R\n",
                            names) != 0) ||
@@ -19392,6 +19542,36 @@ static int execute_pdf_end_link(struct hstex_engine *engine, char *error,
     return append_current_list_node(engine, &node, error, error_capacity);
 }
 
+/* Room for one more entry of the outline. */
+static struct hstex_pdf_outline *add_pdf_outline(struct hstex_engine *engine,
+                                                 char *error,
+                                                 size_t error_capacity)
+{
+    if (engine->pdf_outline_count == engine->pdf_outline_capacity) {
+        size_t capacity = engine->pdf_outline_capacity == 0U
+                              ? 8U
+                              : engine->pdf_outline_capacity * 2U;
+        struct hstex_pdf_outline *grown =
+            realloc(engine->pdf_outlines, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "PDF outline allocation failed");
+            return NULL;
+        }
+        engine->pdf_outlines = grown;
+        engine->pdf_outline_capacity = capacity;
+    }
+    struct hstex_pdf_outline *entry =
+        &engine->pdf_outlines[engine->pdf_outline_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->parent = HSTEX_PDF_OUTLINE_NONE;
+    entry->previous = HSTEX_PDF_OUTLINE_NONE;
+    entry->next = HSTEX_PDF_OUTLINE_NONE;
+    entry->first = HSTEX_PDF_OUTLINE_NONE;
+    entry->last = HSTEX_PDF_OUTLINE_NONE;
+    return entry;
+}
+
 static int execute_pdf_outline(struct hstex_engine *engine, char *error,
                                size_t error_capacity)
 {
@@ -19420,18 +19600,45 @@ static int execute_pdf_outline(struct hstex_engine *engine, char *error,
         free(title);
         return -1;
     }
-    struct hstex_pdf_record *record =
-        add_pdf_record(engine, HSTEX_PDF_RECORD_OUTLINE, error, error_capacity);
-    if (record == NULL) {
+    /* The entry's own object is numbered here and written when the tree is
+       finished, but what it does and what it shows are written as they are
+       met: the action first, then the entry's number, then the title. See
+       docs/DECISIONS.md, the-outline-of-a-document. */
+    struct hstex_pdf_outline *entry =
+        add_pdf_outline(engine, error, error_capacity);
+    if (entry == NULL) {
         free(attributes);
         free(title);
         return -1;
     }
-    record->value = count;
-    record->name = attributes;
-    record->content = own_general_text(title, title_count);
+    entry->attributes = attributes;
+    entry->count = count;
+    entry->action = pdf_new_object(engine);
+    int status =
+        pdf_open(engine, error, error_capacity) != 0 ||
+                pdf_begin_object(engine, entry->action, error,
+                                 error_capacity) != 0 ||
+                pdf_write_action(engine, &action, false, error,
+                                 error_capacity) != 0 ||
+                pdf_end_object(engine, error, error_capacity) != 0
+            ? -1
+            : 0;
+    entry->object = pdf_new_object(engine);
+    entry->title = pdf_new_object(engine);
+    if (status == 0) {
+        status = pdf_begin_object(engine, entry->title, error,
+                                  error_capacity) != 0 ||
+                         pdf_out_text(engine, "(", error, error_capacity) != 0 ||
+                         pdf_out(engine, (const char *)title, title_count,
+                                 error, error_capacity) != 0 ||
+                         pdf_out_text(engine, ")\n", error, error_capacity) !=
+                             0 ||
+                         pdf_end_object(engine, error, error_capacity) != 0
+                     ? -1
+                     : 0;
+    }
     free(title);
-    return 0;
+    return status;
 }
 
 static int execute_pdf_xform(struct hstex_engine *engine, char *error,

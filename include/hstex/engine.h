@@ -279,6 +279,27 @@ struct hstex_pdf_record {
     char *content;
 };
 
+/* One entry of the outline the document builds with \pdfoutline: the
+   objects it was given as it was written, what the document declared about
+   its children, and where the finished tree puts it. The five links hold the
+   place of another entry in the list, or HSTEX_PDF_OUTLINE_NONE. See
+   docs/DECISIONS.md, the-outline-of-a-document. */
+#define HSTEX_PDF_OUTLINE_NONE ((size_t)-1)
+
+struct hstex_pdf_outline {
+    size_t object;
+    size_t title;
+    size_t action;
+    char *attributes;
+    int32_t count;
+    int32_t visible;
+    size_t parent;
+    size_t previous;
+    size_t next;
+    size_t first;
+    size_t last;
+};
+
 /* What \lastpenalty, \lastkern, \lastskip and \lastnodetype report about the
    node most recently contributed to the current list. */
 enum hstex_last_item {
@@ -1523,6 +1544,12 @@ struct hstex_engine {
     size_t pdf_pages_object;
     /* What the file does when it is opened, if the document named it. */
     size_t pdf_open_action;
+    /* The outline the document builds, in the order it was written, and the
+       root the catalogue points at once it is finished. */
+    size_t pdf_outline_object;
+    struct hstex_pdf_outline *pdf_outlines;
+    size_t pdf_outline_count;
+    size_t pdf_outline_capacity;
     struct hstex_pdf_page_node *pdf_page_nodes;
     size_t pdf_page_node_count;
     size_t pdf_page_node_capacity;
