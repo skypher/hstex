@@ -2645,6 +2645,59 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* The look TeX takes at the first token of an alignment entry, to see
+   whether it is \omit, expands what it finds -- but not a \protected
+   macro, which is put back and expanded inside the entry, after the
+   template has run. See docs/DECISIONS.md, the-look-before-an-entry. */
+static int test_the_look_before_an_entry(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+    "ode`\\#=6 \\catcode`\\&=4 \\showboxdepth=6 \\showb"
+    "oxbreadth=100 \\protected\\def\\pb{\\ifmmode M\\el"
+    "se T\\fi}\\def\\ub{\\ifmmode M\\else T\\fi}\\tabsk"
+    "ip=0pt \\message{[peek]}\\setbox0=\\vbox{\\halign{"
+    "$#$\\hfil&$#$\\hfil\\cr\\pb&\\ub\\cr\\omit\\pb&x\\"
+    "pb\\cr}}\\showbox0%"
+,
+    "[peek]> \\box0=\n\\vbox(18.83331+0.0)x27.29858\n."
+    "\\hbox(6.83331+0.0)x27.29858\n..\\glue(\\tabskip) "
+    "0.0\n..\\hbox(6.83331+0.0)x10.79166\n...\\mathon\n"
+    "...\\teni M\n...\\kern1.09026\n...\\mathoff\n...\\"
+    "glue 0.0 plus 1.0fil\n..\\glue(\\tabskip) 0.0\n.."
+    "\\hbox(6.83331+0.0)x16.50693, glue set 9.27428fil"
+    "\n...\\mathon\n...\\teni T\n...\\kern1.3889\n...\\"
+    "mathoff\n...\\glue 0.0 plus 1.0fil\n..\\glue(\\tab"
+    "skip) 0.0\n.\\glue(\\baselineskip) 5.16669\n.\\hbo"
+    "x(6.83331+0.0)x27.29858\n..\\glue(\\tabskip) 0.0\n"
+    "..\\hbox(6.83331+0.0)x10.79166\n...\\tenrm T\n..\\"
+    "glue(\\tabskip) 0.0\n..\\hbox(6.83331+0.0)x16.5069"
+    "3\n...\\mathon\n...\\teni x\n...\\teni M\n...\\ker"
+    "n1.09026\n...\\mathoff\n...\\glue 0.0 plus 1.0fil"
+    "\n..\\glue(\\tabskip) 0.0\n\n! OK.\n"
+);
+}
+
 /* A kern \mkern asked for stays an explicit one once its mu have been
    turned into points, which is what \showbox shows by leaving a space after
    the name; the italic correction a character carries does not. \nonscript
@@ -6953,6 +7006,7 @@ int main(void)
         test_an_accent_alone_in_braces() != 0 ||
         test_a_page_that_breaks_at_a_display() != 0 ||
         test_a_kern_in_mu() != 0 ||
+        test_the_look_before_an_entry() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

@@ -3307,6 +3307,22 @@ static enum hstex_engine_result expanded_next_non_space_unrestricted(
     return result;
 }
 
+/* Looking at the first token of an alignment entry, to see whether it is
+   \omit. The look expands, but not a \protected macro: that one is put back
+   and expanded later, inside the entry, where the templates around it have
+   already run. See docs/DECISIONS.md, the-look-before-an-entry. */
+static enum hstex_engine_result align_peek_token(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity)
+{
+    bool previous_inhibition = engine->inhibit_protected_expansion;
+    engine->inhibit_protected_expansion = true;
+    enum hstex_engine_result result = expanded_next_non_space(
+        engine, token, location, error, error_capacity);
+    engine->inhibit_protected_expansion = previous_inhibition;
+    return result;
+}
+
 static int token_character_constant(struct hstex_engine *engine,
                                     hstex_token token, int32_t *value)
 {
@@ -22313,8 +22329,7 @@ static int evaluate_align_cell(struct hstex_engine *engine,
             hstex_token next = 0U;
             struct hstex_source_location where;
             enum hstex_engine_result got =
-                expanded_next_non_space_unrestricted(engine, &next, &where,
-                                                     error, error_capacity);
+                align_peek_token(engine, &next, &where, error, error_capacity);
             if (got == HSTEX_ENGINE_ERROR) {
                 status = -1;
                 break;
@@ -22745,8 +22760,8 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     while (status == 0) {
         hstex_token token = 0U;
         struct hstex_source_location peek;
-        enum hstex_engine_result peeked = expanded_next_non_space_unrestricted(
-            engine, &token, &peek, error, error_capacity);
+        enum hstex_engine_result peeked =
+            align_peek_token(engine, &token, &peek, error, error_capacity);
         if (peeked == HSTEX_ENGINE_ERROR) {
             status = -1;
             break;
@@ -22823,7 +22838,7 @@ static int execute_halign(struct hstex_engine *engine, char *error,
         for (;;) {
             hstex_token first = 0U;
             struct hstex_source_location start;
-            enum hstex_engine_result got = expanded_next_non_space_unrestricted(
+            enum hstex_engine_result got = align_peek_token(
                 engine, &first, &start, error, error_capacity);
             if (got != HSTEX_ENGINE_TOKEN) {
                 status = set_error(error, error_capacity,
