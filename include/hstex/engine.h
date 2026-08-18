@@ -1100,6 +1100,90 @@ struct hstex_pdf_action {
        page number rather than an object number. */
     bool numbered;
     bool paged;
+    /* Whether the link said what window the file is to open in, and which
+       it said. */
+    bool windowed;
+    bool new_window;
+};
+
+/* Where a destination takes the reader; the reference writes each of these
+   as its own kind of array. See docs/DECISIONS.md, destinations-in-the-file. */
+enum hstex_pdf_dest_kind {
+    HSTEX_PDF_DEST_XYZ = 0,
+    HSTEX_PDF_DEST_XYZ_ZOOM,
+    HSTEX_PDF_DEST_FIT,
+    HSTEX_PDF_DEST_FITH,
+    HSTEX_PDF_DEST_FITV,
+    HSTEX_PDF_DEST_FITB,
+    HSTEX_PDF_DEST_FITBH,
+    HSTEX_PDF_DEST_FITBV,
+    HSTEX_PDF_DEST_FITR,
+};
+
+/* A destination the file knows by name or by number, and the object that
+   holds it. */
+struct hstex_pdf_dest {
+    char *name;
+    size_t length;
+    int32_t number;
+    size_t object;
+    bool named;
+    bool placed;
+};
+
+/* A destination on the page being shipped: where it stands, in scaled
+   points measured the way the page is written. */
+struct hstex_pdf_placement {
+    size_t object;
+    bool named;
+    uint8_t kind;
+    int32_t zoom;
+    int32_t left;
+    int32_t bottom;
+    int32_t right;
+    int32_t top;
+};
+
+/* One node of the tree the file lists its pages in: six pages to a node, and
+   six nodes to the node above. See docs/DECISIONS.md, the-tree-of-pages. */
+struct hstex_pdf_page_node {
+    size_t object;
+    size_t first;
+    size_t pages;
+};
+
+/* An annotation the page carries: where it stands on the page and what it
+   says. See docs/DECISIONS.md, annotations-on-a-page. */
+struct hstex_pdf_annotation {
+    size_t object;
+    /* The corners, in scaled points, x from the left edge of the page and y
+       up from its foot. */
+    int32_t left;
+    int32_t bottom;
+    int32_t right;
+    int32_t top;
+    /* The text in front of the rectangle and the action behind it. */
+    uint32_t attributes;
+    uint32_t action;
+    bool link;
+    bool has_action;
+};
+
+/* The link a page is in the middle of: which object its next rectangle is
+   to be, where that rectangle starts, and the list it belongs to. */
+struct hstex_pdf_open_link {
+    bool open;
+    bool measuring;
+    size_t object;
+    uint32_t attributes;
+    uint32_t action;
+    int32_t level;
+    int32_t start;
+    int32_t base;
+    int32_t height;
+    int32_t depth;
+    int32_t width;
+    bool running_width;
 };
 
 struct hstex_node {
@@ -1413,13 +1497,33 @@ struct hstex_engine {
     size_t pdf_written;
     /* Where each object was written, by number; zero until it is. */
     size_t *pdf_offsets;
-    size_t pdf_numbered;
     size_t pdf_offset_capacity;
+    /* What the page being shipped is to carry, and the link it is in the
+       middle of. */
+    struct hstex_pdf_annotation *pdf_annots;
+    size_t pdf_annot_count;
+    size_t pdf_annot_capacity;
+    struct hstex_pdf_placement *pdf_places;
+    size_t pdf_place_count;
+    size_t pdf_place_capacity;
+    struct hstex_pdf_dest *pdf_dests;
+    size_t pdf_dest_count;
+    size_t pdf_dest_capacity;
+    /* Objects kept for pages a link aims at before they are shipped. */
+    size_t *pdf_future_pages;
+    size_t pdf_future_page_count;
+    size_t pdf_future_page_capacity;
+    size_t pdf_first_page;
+    struct hstex_pdf_open_link pdf_link;
+    int32_t pdf_level;
     /* The page description being built. */
     uint8_t *pdf_page;
     size_t pdf_page_count;
     size_t pdf_page_capacity;
     size_t pdf_pages_object;
+    struct hstex_pdf_page_node *pdf_page_nodes;
+    size_t pdf_page_node_count;
+    size_t pdf_page_node_capacity;
     size_t *pdf_page_objects;
     size_t pdf_page_object_count;
     size_t pdf_page_object_capacity;
