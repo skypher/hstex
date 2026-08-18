@@ -13819,12 +13819,14 @@ static int pdf_place_character(struct hstex_engine *engine,
         }
         engine->pdf_in_string = true;
     }
-    /* A string escapes what would end it or be read as an escape, and every
-       code up to and including the space; the rest it writes as it is. See
+    /* A string escapes what would end it or be read as an escape, every
+       code up to and including the space, and every code past the ASCII
+       range -- but not the delete at 127; the rest it writes as it is. See
        docs/DECISIONS.md, the-pdf-file. */
     char glyph[8];
     size_t length = 0U;
-    if (code <= 32U || code == '(' || code == ')' || code == '\\') {
+    if (code <= 32U || code >= 128U || code == '(' || code == ')' ||
+        code == '\\') {
         length = (size_t)snprintf(glyph, sizeof(glyph), "\\%03o",
                                   (unsigned int)code);
     } else {
