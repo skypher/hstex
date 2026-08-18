@@ -1521,6 +1521,8 @@ struct hstex_engine {
     size_t pdf_page_count;
     size_t pdf_page_capacity;
     size_t pdf_pages_object;
+    /* What the file does when it is opened, if the document named it. */
+    size_t pdf_open_action;
     struct hstex_pdf_page_node *pdf_page_nodes;
     size_t pdf_page_node_count;
     size_t pdf_page_node_capacity;

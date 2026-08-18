@@ -14762,11 +14762,12 @@ static int pdf_write_placement(struct hstex_engine *engine,
     return pdf_end_object(engine, error, error_capacity);
 }
 
-/* What a link does when it is followed, written as the annotation's action.
-   See docs/DECISIONS.md, annotations-on-a-page. */
+/* What a link does when it is followed, written as the annotation's action
+   -- or, with `tagged` false, as the bare dictionary an object of its own
+   holds. See docs/DECISIONS.md, annotations-on-a-page. */
 static int pdf_write_action(struct hstex_engine *engine,
-                            const struct hstex_pdf_action *action, char *error,
-                            size_t error_capacity)
+                            const struct hstex_pdf_action *action, bool tagged,
+                            char *error, size_t error_capacity)
 {
     uint8_t *text = NULL;
     size_t length = 0U;
@@ -14783,7 +14784,8 @@ static int pdf_write_action(struct hstex_engine *engine,
                            : -1;
     }
 
-    if (pdf_out_text(engine, "/A << ", error, error_capacity) != 0) {
+    if (pdf_out_text(engine, tagged ? "/A << " : "<< ", error,
+                     error_capacity) != 0) {
         return -1;
     }
     bool away = action->file != 0U;
@@ -14937,7 +14939,7 @@ static int pdf_write_annotation(struct hstex_engine *engine,
     }
     engine->pdf_page_count = 0U;
     if (action != NULL &&
-        pdf_write_action(engine, action, error, error_capacity) != 0) {
+        pdf_write_action(engine, action, true, error, error_capacity) != 0) {
         return -1;
     }
     return pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
@@ -15638,6 +15640,10 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         pdf_dictionary_text(engine, engine->pdf_catalog,
                             engine->pdf_catalog_length, error,
                             error_capacity) != 0 ||
+        (engine->pdf_open_action != 0U &&
+         pdf_out_formatted(engine, error, error_capacity,
+                           "/OpenAction %zu 0 R\n",
+                           engine->pdf_open_action) != 0) ||
         pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0 ||
         pdf_begin_object(engine, info, error, error_capacity) != 0 ||
@@ -18758,6 +18764,26 @@ static int execute_pdf_dictionary(struct hstex_engine *engine, bool catalog,
         scan_pdf_action(engine, &opened, error, error_capacity) != 0) {
         free(bytes);
         return -1;
+    }
+    /* The action goes into an object of its own where it is written, and the
+       catalogue points at it. A second one is an error the reference stops
+       on. See docs/DECISIONS.md, what-the-document-says-about-itself. */
+    if (matched) {
+        if (engine->pdf_open_action != 0U) {
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "duplicate of openaction");
+        }
+        size_t object = pdf_new_object(engine);
+        if (pdf_open(engine, error, error_capacity) != 0 ||
+            pdf_begin_object(engine, object, error, error_capacity) != 0 ||
+            pdf_write_action(engine, &opened, false, error, error_capacity) !=
+                0 ||
+            pdf_end_object(engine, error, error_capacity) != 0) {
+            free(bytes);
+            return -1;
+        }
+        engine->pdf_open_action = object;
     }
     int status = append_pdf_dictionary(
         catalog ? &engine->pdf_catalog : &engine->pdf_info,
