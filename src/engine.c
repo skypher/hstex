@@ -2007,6 +2007,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         /* A mark, and the five texts one leaves behind. The value is the
            class-reading flag for \mark, and which text for the rest; see
            docs/DECISIONS.md, marks. */
+        {"insert", HSTEX_COMMAND_INSERT, 0},
         {"mark", HSTEX_COMMAND_MARK, 0},
         {"marks", HSTEX_COMMAND_MARK, 1},
         {"topmark", HSTEX_COMMAND_MARK_TEXT, 0},
@@ -11432,6 +11433,26 @@ static void show_node(struct hstex_engine *engine, FILE *out,
     case HSTEX_NODE_WHATSIT:
         show_whatsit(engine, out, node);
         return;
+    case HSTEX_NODE_INSERT: {
+        (void)fprintf(out, "\\insert%u, natural size ",
+                      (unsigned int)node->value.insert.number);
+        show_scaled(out, packed_dimen(node->height));
+        (void)fputs("; split(", out);
+        show_scaled(out, node->value.insert.split_top_skip);
+        (void)fputc(',', out);
+        show_scaled(out, node->value.insert.split_max_depth);
+        (void)fprintf(out, "); float cost %d", node->value.insert.float_cost);
+        if (node->value.insert.node_count != 0U &&
+            (size_t)node->value.insert.node_start +
+                    node->value.insert.node_count <=
+                engine->list_item_count) {
+            show_node_list(engine, out,
+                           engine->list_items + node->value.insert.node_start,
+                           node->value.insert.node_count, prefix, depth + 1U,
+                           threshold, breadth, '.');
+        }
+        return;
+    }
     case HSTEX_NODE_MARK: {
         (void)fputs("\\mark", out);
         if (node->value.mark.class_number != 0U) {
@@ -11709,6 +11730,91 @@ static void reset_page_state(struct hstex_engine *engine)
 }
 
 /* Send the best part of the page to \box255 and run \output over it. */
+/* The insertions the page carries, gathered into the box of each class. The
+   lists are set one after another, in the order they were written, and the
+   box is packed at its natural size. See docs/DECISIONS.md, insertions. */
+static int collect_page_insertions(struct hstex_engine *engine,
+                                   const uint32_t *items, size_t count,
+                                   char *error, size_t error_capacity)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        uint32_t held = items[index];
+        if (held == 0U || (size_t)held > engine->node_count ||
+            engine->nodes[held - 1U].kind != HSTEX_NODE_INSERT) {
+            continue;
+        }
+        uint16_t number = engine->nodes[held - 1U].value.insert.number;
+        bool done = false;
+        for (size_t earlier = 0U; !done && earlier < index; ++earlier) {
+            uint32_t before = items[earlier];
+            done = before != 0U && (size_t)before <= engine->node_count &&
+                   engine->nodes[before - 1U].kind == HSTEX_NODE_INSERT &&
+                   engine->nodes[before - 1U].value.insert.number == number;
+        }
+        if (done) {
+            continue;
+        }
+        struct hstex_vbox_builder builder = {0};
+        struct hstex_vbox_builder *previous = engine->active_vbox_builder;
+        enum hstex_mode previous_mode = engine->mode;
+        int32_t enclosing_depth = engine->prev_depth;
+        engine->active_vbox_builder = &builder;
+        engine->mode = HSTEX_MODE_VERTICAL;
+        engine->prev_depth = HSTEX_IGNORE_DEPTH;
+        int status = 0;
+        /* The page's insertions are added to whatever the box of the class
+           already holds: the output routine is expected to empty it. */
+        const struct hstex_box *standing = &engine->boxes[number];
+        if (standing->kind == HSTEX_BOX_VLIST) {
+            for (uint32_t item = 0U; status == 0 && item < standing->node_count;
+                 ++item) {
+                if ((size_t)standing->node_start + item >=
+                    engine->list_item_count) {
+                    break;
+                }
+                status = append_vbox_item(
+                    engine, engine->list_items[standing->node_start + item],
+                    error, error_capacity);
+            }
+        }
+        for (size_t at = index; status == 0 && at < count; ++at) {
+            uint32_t other = items[at];
+            if (other == 0U || (size_t)other > engine->node_count ||
+                engine->nodes[other - 1U].kind != HSTEX_NODE_INSERT ||
+                engine->nodes[other - 1U].value.insert.number != number) {
+                continue;
+            }
+            uint32_t start = engine->nodes[other - 1U].value.insert.node_start;
+            uint32_t held_count =
+                engine->nodes[other - 1U].value.insert.node_count;
+            for (uint32_t item = 0U; status == 0 && item < held_count; ++item) {
+                if ((size_t)start + item >= engine->list_item_count) {
+                    break;
+                }
+                status = append_vbox_item(engine, engine->list_items[start + item],
+                                          error, error_capacity);
+            }
+        }
+        struct hstex_box packed = {0};
+        if (status == 0) {
+            status = finalize_vbox(engine, &builder, false, false, 0, &packed,
+                                   error, error_capacity);
+        }
+        free(builder.node_identifiers);
+        engine->active_vbox_builder = previous;
+        engine->mode = previous_mode;
+        engine->prev_depth = enclosing_depth;
+        if (status != 0) {
+            return -1;
+        }
+        if (assign_box(engine, number, packed, true, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int fire_up(struct hstex_engine *engine, size_t from, char *error,
                    size_t error_capacity)
 {
@@ -11745,8 +11851,19 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     engine->prev_depth = HSTEX_IGNORE_DEPTH;
     int status = 0;
     for (size_t index = 0U; status == 0 && index < split; ++index) {
-        status = append_vbox_item(engine, page->node_identifiers[index], error,
-                                  error_capacity);
+        uint32_t held = page->node_identifiers[index];
+        /* An insertion is not part of the page: its list goes into the box
+           of its class, and the node itself is left out. See
+           docs/DECISIONS.md, insertions. */
+        if (held != 0U && (size_t)held <= engine->node_count &&
+            engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT) {
+            continue;
+        }
+        status = append_vbox_item(engine, held, error, error_capacity);
+    }
+    if (status == 0) {
+        status = collect_page_insertions(engine, page->node_identifiers, split,
+                                         error, error_capacity);
     }
     struct hstex_box packed = {0};
     if (status == 0) {
@@ -11928,6 +12045,46 @@ static int build_page(struct hstex_engine *engine, char *error,
                 /* A whatsit or a mark joins the page wherever it stands and
                    settles nothing; see docs/DECISIONS.md,
                    whatsits-on-an-empty-page and marks. */
+            } else if (node.kind == HSTEX_NODE_INSERT) {
+                /* An insertion joins the page too, and takes room away from
+                   what the page has left for the text: the glue of its class
+                   the first time one of that class arrives, and its own size
+                   scaled by the class's count. See docs/DECISIONS.md,
+                   insertions. */
+                uint16_t number = node.value.insert.number;
+                bool first = true;
+                for (size_t seen = 0U; first && seen < page->count; ++seen) {
+                    uint32_t held = page->node_identifiers[seen];
+                    if (held != 0U && (size_t)held <= engine->node_count &&
+                        engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT &&
+                        engine->nodes[held - 1U].value.insert.number ==
+                            number) {
+                        first = false;
+                    }
+                }
+                /* A thousand takes a size as it stands; any other count
+                   divides first and multiplies after, which is not the same
+                   rounding. */
+                int32_t factor = engine->counts[number];
+                int64_t taken = 0;
+                if (first) {
+                    /* The glue of the class, and room for whatever the box
+                       of the class already holds: the page has to carry that
+                       too. */
+                    taken += engine->glues[number].width;
+                    const struct hstex_box *standing = &engine->boxes[number];
+                    int32_t held = standing->kind == HSTEX_BOX_VOID
+                                       ? 0
+                                       : standing->height + standing->depth;
+                    taken += factor == 1000 ? (int64_t)held
+                                            : (int64_t)(held / 1000) * factor;
+                }
+                int32_t size = packed_dimen(node.height);
+                taken += factor == 1000 ? (int64_t)size
+                                        : (int64_t)(size / 1000) * factor;
+                if (!page_is_empty(engine)) {
+                    engine->page_dimens[HSTEX_PAGE_GOAL] -= (int32_t)taken;
+                }
             } else if (page_is_empty(engine)) {
                 if (!is_box) {
                     continue;
@@ -14435,6 +14592,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 10;
     case HSTEX_NODE_MARK:
         return 5;
+    case HSTEX_NODE_INSERT:
+        return 4;
     }
     return -1;
 }
@@ -15612,6 +15771,7 @@ static bool protrusion_passes_over(const struct hstex_node *node)
     case HSTEX_NODE_PENALTY:
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
+    case HSTEX_NODE_INSERT:
     case HSTEX_NODE_DISCRETIONARY:
         return true;
     case HSTEX_NODE_GLUE:
@@ -15715,6 +15875,7 @@ static bool precedes_glue_break(const struct hstex_node *node)
     case HSTEX_NODE_DISCRETIONARY:
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
+    case HSTEX_NODE_INSERT:
         return true;
     }
     return true;
@@ -16568,9 +16729,9 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             status = emit_parameter_glue(engine, right, HSTEX_GLUE_RIGHT_SKIP,
                                          error, error_capacity);
         }
-        /* A mark does not stay in the line it was written in: it moves to
-           the vertical list, behind the line's box. See docs/DECISIONS.md,
-           marks. */
+        /* A mark or an insertion does not stay in the line it was written
+           in: it moves to the vertical list, behind the line's box. See
+           docs/DECISIONS.md, marks and insertions. */
         uint32_t *migrated = NULL;
         size_t migrated_count = 0U;
         if (status == 0) {
@@ -16578,7 +16739,8 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             for (size_t item = 0U; item < builder.count; ++item) {
                 uint32_t held = builder.node_identifiers[item];
                 if (held != 0U && (size_t)held <= engine->node_count &&
-                    engine->nodes[held - 1U].kind == HSTEX_NODE_MARK) {
+                    (engine->nodes[held - 1U].kind == HSTEX_NODE_MARK ||
+                     engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT)) {
                     uint32_t *grown = realloc(
                         migrated, (migrated_count + 1U) * sizeof(*migrated));
                     if (grown == NULL) {
@@ -21188,6 +21350,68 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
                                       error_capacity);
 }
 
+/* \insert reads a class and a vertical list, which is packed at its natural
+   size and set aside for the page builder; see docs/DECISIONS.md,
+   insertions. */
+static int execute_insert(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    int32_t number = 0;
+    if (scan_integer(engine, &number, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (number < 0 || number > 254) {
+        return set_error(error, error_capacity,
+                         "insertion class %d is outside 0..254", number);
+    }
+    hstex_token opening = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
+        engine, &opening, &location, error, error_capacity);
+    if (result != HSTEX_ENGINE_TOKEN ||
+        !token_is_effective_begin_group(engine, opening)) {
+        return set_error(error, error_capacity,
+                         "\\insert requires a braced vertical list");
+    }
+    int32_t split_top_skip =
+        engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP].width;
+    int32_t split_max_depth =
+        engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
+    int32_t float_cost =
+        engine->integer_parameters[HSTEX_INTEGER_FLOATING_PENALTY];
+    struct hstex_vbox_builder builder = {0};
+    int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
+                                        NULL, error, error_capacity);
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        /* The list is packed at its natural size, with the depth the
+           insertion itself allows. */
+        int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
+        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = split_max_depth;
+        status = finalize_vbox(engine, &builder, false, false, 0, &packed,
+                               error, error_capacity);
+        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = limit;
+    }
+    free(builder.node_identifiers);
+    if (status != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_INSERT,
+        /* What the page builder measures: everything the list came to. */
+        .height = packed.height + packed.depth,
+        .value.insert = {
+            .node_start = packed.node_start,
+            .node_count = packed.node_count,
+            .number = (uint16_t)number,
+            .split_top_skip = split_top_skip,
+            .split_max_depth = split_max_depth,
+            .float_cost = float_cost,
+        },
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
 /* \mark and \marks leave a token list in the list being built, expanded once
    as \edef expands one; see docs/DECISIONS.md, marks. */
 static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
@@ -25485,6 +25709,11 @@ handle_token:
         case HSTEX_COMMAND_MARK:
             if (execute_mark(engine, meaning->value.integer != 0, error,
                              error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_INSERT:
+            if (execute_insert(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

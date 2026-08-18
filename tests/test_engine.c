@@ -2704,6 +2704,141 @@ static int test_a_mark_in_a_list(void)
 );
 }
 
+/* An \insert holds a vertical list packed at its natural size, and
+   remembers the \splittopskip, \splitmaxdepth and \floatingpenalty of
+   where it was written. It takes up no room in the list it stands in, and
+   moves out of a paragraph line as a mark does. See docs/DECISIONS.md,
+   insertions. */
+static int test_an_insertion_in_a_list(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=4 \\showboxbreadth=100 \\dimen100=10pt \\"
+    "count100=500 \\skip100=3pt plus1pt \\splittopskip="
+    "5pt \\splitmaxdepth=2pt \\floatingpenalty=77 \\bas"
+    "elineskip=12pt \\message{[a]}\\setbox0=\\vbox{\\hr"
+    "ule\\insert100{\\hbox{a}\\hbox{b}}}\\showbox0 \\me"
+    "ssage{[b]}\\setbox0=\\vbox{\\hrule{\\splittopskip="
+    "1pt \\splitmaxdepth=3pt \\floatingpenalty=5 \\inse"
+    "rt200{\\hbox{a}}}}\\showbox0 \\message{[h]}\\setbo"
+    "x0=\\vbox{\\noindent aa\\insert100{\\hbox{b}}bb\\p"
+    "ar}\\showbox0 \\message{[t]}\\setbox0=\\vbox{\\hru"
+    "le\\insert100{\\hbox{a}}\\xdef\\t{\\the\\lastnodet"
+    "ype}}\\showbox0 \\message{[type]}\\setbox0=\\hbox{"
+    "\\t}\\showbox0%"
+,
+    "[a]> \\box0=\n\\vbox(0.4+0.0)x0.0\n.\\rule(0.4+0.0"
+    ")x*\n.\\insert100, natural size 16.30554; split(5."
+    "0,2.0); float cost 77\n..\\hbox(4.30554+0.0)x5.000"
+    "02\n...\\tenrm a\n..\\glue(\\baselineskip) 5.05556"
+    "\n..\\hbox(6.94444+0.0)x5.55557\n...\\tenrm b\n\n!"
+    " OK.\n[b]> \\box0=\n\\vbox(0.4+0.0)x0.0\n.\\rule(0"
+    ".4+0.0)x*\n.\\insert200, natural size 4.30554; spl"
+    "it(1.0,3.0); float cost 5\n..\\hbox(4.30554+0.0)x5"
+    ".00002\n...\\tenrm a\n\n! OK.\n[h]> \\box0=\n\\vbo"
+    "x(6.94444+0.0)x200.0\n.\\hbox(6.94444+0.0)x200.0, "
+    "glue set 178.88882fil\n..\\tenrm a\n..\\tenrm a\n."
+    ".\\tenrm b\n..\\tenrm b\n..\\penalty 10000\n..\\gl"
+    "ue(\\parfillskip) 0.0 plus 1.0fil\n..\\glue(\\righ"
+    "tskip) 0.0\n.\\insert100, natural size 6.94444; sp"
+    "lit(5.0,2.0); float cost 77\n..\\hbox(6.94444+0.0)"
+    "x5.55557\n...\\tenrm b\n\n! OK.\n[t]> \\box0=\n\\v"
+    "box(0.4+0.0)x0.0\n.\\rule(0.4+0.0)x*\n.\\insert100"
+    ", natural size 4.30554; split(5.0,2.0); float cost"
+    " 77\n..\\hbox(4.30554+0.0)x5.00002\n...\\tenrm a\n"
+    "\n! OK.\n[type]> \\box0=\n\\hbox(6.44444+0.0)x5.00"
+    "002\n.\\tenrm 4\n\n! OK.\n"
+);
+}
+
+/* What an insertion takes from the page: the glue of its class and room
+   for what the class's box already holds, once, and its own size scaled by
+   the class's count. The page's insertions are added to that box at
+   shipout. See docs/DECISIONS.md, insertions. */
+static int test_an_insertion_on_a_page(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=3 \\showboxbreadth=100 \\baselineskip=12p"
+    "t \\vsize=50pt \\maxdepth=2pt \\topskip=0pt \\coun"
+    "t0=1 \\hsize=100pt \\dimen100=100pt \\count100=500"
+    " \\skip100=3pt plus1pt \\dimen200=100pt \\count200"
+    "=1000 \\skip200=0pt \\output={\\message{[goal]}\\s"
+    "etbox1=\\hbox{\\the\\pagegoal|\\the\\pagetotal|\\t"
+    "he\\insertpenalties|\\the\\ht100|\\the\\ht200}\\sh"
+    "owbox1 \\message{[ins]}\\showbox100 \\shipout\\box"
+    "255 \\global\\advance\\count0 by 1 }\\hrule height"
+    "10pt \\vskip0pt \\insert100{\\hrule height7pt}\\hr"
+    "ule height10pt \\vskip0pt \\insert200{\\hrule heig"
+    "ht4pt}\\hrule height10pt \\vskip0pt \\hrule height"
+    "10pt \\vskip0pt \\hrule height10pt \\vskip0pt \\in"
+    "sert100{\\hrule height5pt}\\hrule height10pt \\vsk"
+    "ip0pt \\hrule height10pt \\end%"
+,
+    "[goal]> \\box1=\n\\hbox(6.44444+1.94444)x163.88933"
+    "\n.\\tenrm 3\n.\\tenrm 9\n.\\tenrm .\n.\\tenrm 5\n"
+    ".\\tenrm 0\n.\\tenrm 5\n.\\tenrm 7\n.\\tenrm 4\n."
+    "\\tenrm p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 4\n.\\"
+    "tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm p\n.\\te"
+    "nrm t\n.\\tenrm |\n.\\tenrm 0\n.\\tenrm |\n.\\tenr"
+    "m 7\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm p\n.\\tenrm "
+    "t\n.\\tenrm |\n.\\tenrm 4\n.\\tenrm .\n.\\tenrm 0"
+    "\n.\\tenrm p\n.\\tenrm t\n\n! OK.\n[ins]> \\box100"
+    "=\n\\vbox(7.0+0.0)x0.0\n.\\rule(7.0+0.0)x*\n\n! OK"
+    ".\n[goal]> \\box1=\n\\hbox(6.44444+1.94444)x168.88"
+    "934\n.\\tenrm 4\n.\\tenrm 1\n.\\tenrm .\n.\\tenrm "
+    "0\n.\\tenrm 1\n.\\tenrm 0\n.\\tenrm 9\n.\\tenrm 3"
+    "\n.\\tenrm p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 4\n"
+    ".\\tenrm 0\n.\\tenrm .\n.\\tenrm 0\n.\\tenrm p\n."
+    "\\tenrm t\n.\\tenrm |\n.\\tenrm 0\n.\\tenrm |\n.\\"
+    "tenrm 1\n.\\tenrm 2\n.\\tenrm .\n.\\tenrm 0\n.\\te"
+    "nrm p\n.\\tenrm t\n.\\tenrm |\n.\\tenrm 4\n.\\tenr"
+    "m .\n.\\tenrm 0\n.\\tenrm p\n.\\tenrm t\n\n! OK.\n"
+    "[ins]> \\box100=\n\\vbox(12.0+0.0)x0.0\n.\\rule(7."
+    "0+0.0)x*\n.\\rule(5.0+0.0)x*\n\n! OK.\n"
+);
+}
+
 /* \topmark is what the page before ended with, \firstmark and \botmark the
    first and last marks of the page in hand; a page with no marks of a class
    keeps all three at what went before. \marks keeps a set of its own for
@@ -7534,6 +7669,8 @@ int main(void)
         test_a_limit_at_its_own_width() != 0 ||
         test_a_vcenter_in_braces() != 0 ||
         test_a_mark_in_a_list() != 0 ||
+        test_an_insertion_in_a_list() != 0 ||
+        test_an_insertion_on_a_page() != 0 ||
         test_marks_on_a_page() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||

@@ -230,6 +230,7 @@ enum hstex_command {
     /* \mark and \marks, and the five texts they leave behind. */
     HSTEX_COMMAND_MARK,
     HSTEX_COMMAND_MARK_TEXT,
+    HSTEX_COMMAND_INSERT,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -1004,6 +1005,7 @@ enum hstex_node_kind {
     HSTEX_NODE_DISCRETIONARY,
     HSTEX_NODE_MATH,
     HSTEX_NODE_MARK,
+    HSTEX_NODE_INSERT,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
@@ -1095,6 +1097,17 @@ struct hstex_node {
             uint32_t tokens;
             uint16_t class_number;
         } mark;
+        struct {
+            /* The vertical list \insert was given, the class it belongs to,
+               and the three things it remembers of where it was written; see
+               docs/DECISIONS.md, insertions. */
+            uint32_t node_start;
+            uint32_t node_count;
+            uint16_t number;
+            int32_t split_top_skip;
+            int32_t split_max_depth;
+            int32_t float_cost;
+        } insert;
         struct {
             /* An enum hstex_whatsit_kind. */
             uint8_t kind;

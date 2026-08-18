@@ -147,7 +147,10 @@ display marks a formula needs. `\tracingparagraphs` writes the passes out the
 way the reference does, which is how the last few of those were found.
 
 What `\shipout` does not do yet is write anything: there is no page
-description, so no PDF. Insertions and marks are still to come. The corpus
+description, so no PDF. Marks are there, and insertions as far as the page
+that holds them: what the reference does when one does not fit -- split it,
+hold the rest over, and count it in `\insertpenalties` -- waits on the
+vertical-break routine `\vsplit` needs too. The corpus
 comes to 2,335 pages, which is `pdflatex`'s count, and every file it writes
 beside them is identical to the reference's: the table of contents, the
 bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
