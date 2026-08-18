@@ -145,6 +145,14 @@ static int run_document(const char *source, const char *expected)
         (void)unlink(path);
         return 1;
     }
+    /* A probe that ships a page writes a page description, which belongs in
+       a place of its own rather than the directory the tests run in. */
+    char directory[80];
+    (void)snprintf(directory, sizeof(directory), "%s-out", path);
+    if (mkdir(directory, 0700) == 0) {
+        (void)hstex_engine_set_output_directory(&engine, directory, error,
+                                                sizeof(error));
+    }
     char *captured = NULL;
     size_t captured_length = 0U;
     FILE *sink = open_memstream(&captured, &captured_length);
@@ -175,6 +183,12 @@ static int run_document(const char *source, const char *expected)
     }
     free(captured);
     hstex_engine_destroy(&engine);
+    char written[256];
+    const char *name = strrchr(path, '/');
+    (void)snprintf(written, sizeof(written), "%s%s.dvi", directory,
+                   name == NULL ? path : name);
+    (void)unlink(written);
+    (void)rmdir(directory);
     (void)unlink(path);
     return status;
 }
