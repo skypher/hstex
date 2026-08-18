@@ -22428,6 +22428,25 @@ static int finish_alignment(struct hstex_engine *engine,
                             int32_t shift, bool display, char *error,
                             size_t error_capacity)
 {
+    /* A column of the preamble that no row ever reached is not part of the
+       alignment: it settles nothing and its \tabskip is not counted in the
+       width. See docs/DECISIONS.md, a-row-that-stops-early. */
+    size_t reached = 0U;
+    for (size_t index = 0U; index < row_count; ++index) {
+        if (rows[index].noalign) {
+            continue;
+        }
+        size_t used = 0U;
+        for (size_t cell = 0U; cell < rows[index].cell_count; ++cell) {
+            used += rows[index].cells[cell].span;
+        }
+        if (used > reached) {
+            reached = used;
+        }
+    }
+    if (reached < column_count) {
+        column_count = reached;
+    }
     for (size_t index = 0U; index < column_count; ++index) {
         columns[index].width = 0;
         columns[index].measured = false;
@@ -22542,14 +22561,12 @@ static int finish_alignment(struct hstex_engine *engine,
             skip = last < column_count ? columns[last].tabskip : leading;
             column += entry->span;
         }
-        /* A row that stops early still carries the glue of the columns it
-           did not reach, so that every row is the same shape. */
-        for (; status == 0 && column <= column_count; ++column) {
+        /* The row ends with the glue that follows its own last column, and
+           nothing of the columns it never reached; see docs/DECISIONS.md,
+           a-row-that-stops-early. */
+        if (status == 0) {
             status = emit_parameter_glue(engine, skip, HSTEX_GLUE_TAB_SKIP,
                                          error, error_capacity);
-            if (column < column_count) {
-                skip = columns[column].tabskip;
-            }
         }
         struct hstex_box packed = {0};
         if (status == 0) {

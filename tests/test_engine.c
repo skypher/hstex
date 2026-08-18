@@ -2645,6 +2645,80 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* A row with fewer entries than the alignment has columns ends with the
+   glue that follows its own last column, and carries nothing of the
+   columns it never reached; see docs/DECISIONS.md, a-row-that-stops-early. */
+static int test_a_row_that_stops_early(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\catc"
+    "ode`\\#=6 \\catcode`\\&=4 \\showboxdepth=2 \\showb"
+    "oxbreadth=100 \\message{[short]}\\tabskip=1pt \\se"
+    "tbox0=\\vbox{\\halign{#\\tabskip=5pt&#\\tabskip=7p"
+    "t&#\\tabskip=9pt\\cr a&b&c\\cr d\\cr e&f\\cr\\cr\\"
+    "omit x\\cr}}\\showbox0 \\message{[one]}\\setbox0="
+    "\\vbox{\\halign{#\\tabskip=5pt&#\\tabskip=7pt&#\\t"
+    "abskip=9pt\\cr a\\cr bb\\cr}}\\showbox0 \\message{"
+    "[two]}\\setbox0=\\vbox{\\halign{#\\tabskip=5pt&#\\"
+    "tabskip=7pt&#\\tabskip=9pt\\cr a&b\\cr cc\\cr}}\\s"
+    "howbox0%"
+,
+    "[short]> \\box0=\n\\vbox(54.94444+0.0)x37.55559\n."
+    "\\hbox(6.94444+0.0)x37.55559\n..\\glue(\\tabskip) "
+    "1.0\n..\\hbox(6.94444+0.0)x5.55557 []\n..\\glue(\\"
+    "tabskip) 5.0\n..\\hbox(6.94444+0.0)x5.55557 []\n.."
+    "\\glue(\\tabskip) 7.0\n..\\hbox(6.94444+0.0)x4.444"
+    "44 []\n..\\glue(\\tabskip) 9.0\n.\\glue(\\baseline"
+    "skip) 5.05556\n.\\hbox(6.94444+0.0)x37.55559\n..\\"
+    "glue(\\tabskip) 1.0\n..\\hbox(6.94444+0.0)x5.55557"
+    " []\n..\\glue(\\tabskip) 5.0\n.\\glue(\\baselinesk"
+    "ip) 5.05556\n.\\hbox(6.94444+0.0)x37.55559\n..\\gl"
+    "ue(\\tabskip) 1.0\n..\\hbox(6.94444+0.0)x5.55557 ["
+    "]\n..\\glue(\\tabskip) 5.0\n..\\hbox(6.94444+0.0)x"
+    "5.55557 []\n..\\glue(\\tabskip) 7.0\n.\\glue(\\bas"
+    "elineskip) 12.0\n.\\hbox(0.0+0.0)x37.55559\n..\\gl"
+    "ue(\\tabskip) 1.0\n..\\hbox(0.0+0.0)x5.55557\n..\\"
+    "glue(\\tabskip) 5.0\n.\\glue(\\baselineskip) 7.694"
+    "46\n.\\hbox(4.30554+0.0)x37.55559\n..\\glue(\\tabs"
+    "kip) 1.0\n..\\hbox(4.30554+0.0)x5.55557 []\n..\\gl"
+    "ue(\\tabskip) 5.0\n\n! OK.\n[one]> \\box0=\n\\vbox"
+    "(16.30554+0.0)x17.11115\n.\\hbox(4.30554+0.0)x17.1"
+    "1115\n..\\glue(\\tabskip) 1.0\n..\\hbox(4.30554+0."
+    "0)x11.11115 []\n..\\glue(\\tabskip) 5.0\n.\\glue("
+    "\\baselineskip) 5.05556\n.\\hbox(6.94444+0.0)x17.1"
+    "1115\n..\\glue(\\tabskip) 1.0\n..\\hbox(6.94444+0."
+    "0)x11.11115 []\n..\\glue(\\tabskip) 5.0\n\n! OK.\n"
+    "[two]> \\box0=\n\\vbox(18.94444+0.0)x27.44446\n.\\"
+    "hbox(6.94444+0.0)x27.44446\n..\\glue(\\tabskip) 1."
+    "0\n..\\hbox(6.94444+0.0)x8.88889 []\n..\\glue(\\ta"
+    "bskip) 5.0\n..\\hbox(6.94444+0.0)x5.55557 []\n..\\"
+    "glue(\\tabskip) 7.0\n.\\glue(\\baselineskip) 7.694"
+    "46\n.\\hbox(4.30554+0.0)x27.44446\n..\\glue(\\tabs"
+    "kip) 1.0\n..\\hbox(4.30554+0.0)x8.88889 []\n..\\gl"
+    "ue(\\tabskip) 5.0\n\n! OK.\n"
+);
+}
+
 /* Looking back for the character to protrude past the right margin, a kern
    the font supplied is stepped over and one the document asked for is not,
    unless it takes up no room; see docs/DECISIONS.md, protruding-past-a-kern. */
@@ -7148,6 +7222,7 @@ int main(void)
         test_the_look_before_an_entry() != 0 ||
         test_a_space_leaves_the_factor_alone() != 0 ||
         test_protruding_past_a_kern() != 0 ||
+        test_a_row_that_stops_early() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

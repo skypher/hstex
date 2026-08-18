@@ -132,9 +132,9 @@ may, and the protrusion counts toward the line's width in the breaker once
 with math nodes carrying `\mathsurround`, and a binary operator or a relation
 leaves `\binoppenalty` or `\relpenalty` behind it.
 
-Together these are enough for the corpus's first two chapters to match
-`pdflatex` node for node -- 1,793,175 lines of `\showbox` output for the front
-matter and both chapters, and not one of them different.
+Together these are enough for the whole corpus to match `pdflatex` node for
+node: every page of it, dumped with `\showbox` as the output routine sees it,
+comes to 6,449,072 lines, and not one of them is different.
 
 Everything a line is made of is pinned the same way: protrusion kerns that
 look inside boxes and are dropped again when the paragraph's last line is
@@ -150,7 +150,8 @@ comes to 2,335 pages, which is `pdflatex`'s count, and every file it writes
 beside them is identical to the reference's: the table of contents, the
 bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
 every page number, section number and cross-reference in a 2,335-page
-document, and every `\citation` in the order the reference wrote it.
+document, and every `\citation` in the order the reference wrote it. What is
+left is the page description itself.
 
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
