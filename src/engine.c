@@ -13555,14 +13555,6 @@ static int pdf_end_text(struct hstex_engine *engine, char *error,
 /* What one character of a font moves the file's own idea of where the text
    stands: the width the file states for it, which is not quite the width the
    metrics gave. See docs/DECISIONS.md, the-pdf-file. */
-static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
-{
-    int64_t width = (int64_t)packed_dimen(font->characters[code].width);
-    int64_t size = font->size == 0 ? 1 : font->size;
-    int64_t tenths = (width * 10000 + size / 2) / size;
-    return (int32_t)tenths;
-}
-
 /* One thousandth of the size the file states for the font, in scaled points
    as a fraction: the size is printed in ten-thousandths of a big point, and
    a big point is 1644544/25 scaled points. See docs/DECISIONS.md,
@@ -13581,6 +13573,30 @@ static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
                           : -((-numerator + denominator / 2) / denominator);
 }
 
+/* The size the file states for a font, in whole scaled points, taken towards
+   the size the engine has: the file states it in ten-thousandths of a big
+   point, and both the widths it states and the places it moves the text to
+   are worked out from the whole scaled points that means. See
+   docs/DECISIONS.md, the-width-a-file-states. */
+static int32_t pdf_stated_size(const struct hstex_font *font)
+{
+    int64_t numerator = pdf_unit_numerator(font);
+    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR / 1000;
+    int64_t stated = numerator / denominator;
+    if (stated * denominator != numerator && stated < font->size) {
+        stated += 1;
+    }
+    return (int32_t)(stated == 0 ? 1 : stated);
+}
+
+static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
+{
+    int64_t width = (int64_t)packed_dimen(font->characters[code].width);
+    int64_t size = pdf_stated_size(font);
+    int64_t tenths = (width * 10000 + size / 2) / size;
+    return (int32_t)tenths;
+}
+
 /* How far the file thinks the text has moved when it has set this character:
    the width it states for it, at the size it states for the font, taken
    towards the width the engine itself has for it. See docs/DECISIONS.md,
@@ -13588,16 +13604,7 @@ static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
 static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
 {
     int64_t tenths = pdf_glyph_units(font, code);
-    /* The size the file states, in whole scaled points, taken towards the
-       size the engine has: the printed size is in ten-thousandths of a big
-       point, and the whole scaled points it means are what the advance is
-       worked out from. */
-    int64_t numerator = pdf_unit_numerator(font);
-    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR / 1000;
-    int64_t stated = numerator / denominator;
-    if (stated * denominator != numerator && stated < font->size) {
-        stated += 1;
-    }
+    int64_t stated = pdf_stated_size(font);
     int64_t whole = tenths * stated / 10000;
     int64_t rest = tenths * stated - whole * 10000;
     int64_t width = packed_dimen(font->characters[code].width);
@@ -13686,7 +13693,18 @@ static int pdf_place_character(struct hstex_engine *engine,
         engine->pdf_origin_h += across;
         engine->pdf_origin_v += down;
         engine->pdf_origin_line = v;
-        engine->pdf_text_h = h;
+        /* The file's text stands where the place it named puts it, which is
+           the rounded place, not the engine's own. */
+        int64_t scale = 1;
+        for (int32_t index = 0; index < digits; ++index) {
+            scale *= 10;
+        }
+        int64_t exact = engine->pdf_origin_h * INT64_C(473628672);
+        int64_t den = 7200 * scale;
+        int64_t whole = exact / den;
+        int64_t rest = exact - whole * den;
+        engine->pdf_text_h =
+            (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
         engine->pdf_placed = true;
     }
     if (!engine->pdf_in_array) {
@@ -13712,8 +13730,11 @@ static int pdf_place_character(struct hstex_engine *engine,
                               (long long)offset) != 0) {
                 return -1;
             }
-            engine->pdf_text_h -= (int32_t)pdf_round_division(
-                offset * unit, HSTEX_PDF_UNIT_DENOMINATOR);
+            /* What the correction moves the file's idea by is the whole
+               scaled points it comes to, and no more. */
+            int64_t amount = offset * unit;
+            engine->pdf_text_h -=
+                (int32_t)(amount / HSTEX_PDF_UNIT_DENOMINATOR);
         }
     }
     if (!engine->pdf_in_string) {
@@ -15065,7 +15086,9 @@ static int pdf_font_units(struct hstex_engine *engine,
                           const struct hstex_font *font, int32_t value,
                           char *error, size_t error_capacity)
 {
-    int64_t size = font->size == 0 ? 1 : font->size;
+    /* Against the size the file states, not the size the engine has; see
+       docs/DECISIONS.md, the-width-a-file-states. */
+    int64_t size = pdf_stated_size(font);
     int64_t units = ((int64_t)value * 10000 + size / 2) / size;
     char text[64];
     pdf_format_units(text, sizeof(text), units, 1);
