@@ -164,9 +164,10 @@ left is the page description itself.
 Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
 23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
 for the same source with a prebuilt format and an 11 MB PDF at the end. A
-large part of that is allocation: a definition is a fresh record every time,
-so the bootstrap alone leaves 417,000 of them and the corpus 8.2 million.
-Nothing has been tuned yet; correctness came first.
+definition that nothing holds any more is now taken apart and its record used
+again, so the corpus's 8.1 million definitions need 388,000 records rather
+than 8.1 million, and the run peaks at 1.25 GB rather than 3.10 GB. Nothing
+else has been tuned; correctness came first.
 
 ## Build
 

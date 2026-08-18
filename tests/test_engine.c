@@ -2993,6 +2993,58 @@ static int test_what_a_split_leaves_behind(void)
     return run_document_parts(source, expected);
 }
 
+/* A definition that nothing holds any more is taken apart and its record
+   used again, so a redefinition costs nothing in the long run. What is
+   held is what a control sequence has now and what the save stack keeps
+   for a group to end. See docs/DECISIONS.md, a-definition-nothing-holds. */
+static int test_a_definition_nothing_holds(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showbox254 \\catcode`\\$=3 \\c"
+        "atcode`\\\"=12 \\catcode`\\^=7 \\catcode`\\_=8 \\t"
+        "racingonline=1 \\showboxdepth=10 \\showboxbreadth="
+        "1000 \\hbadness=10000 \\vbadness=10000 \\hfuzz=100"
+        "0pt \\vfuzz=1000pt \\hsize=200pt \\parindent=0pt "
+        "\\boxmaxdepth=16383.99998pt \\baselineskip=12pt \\"
+        "lineskip=0pt \\lineskiplimit=0pt \\parfillskip=0pt"
+        " plus1fil \\leftskip=0pt \\rightskip=0pt \\toleran"
+        "ce=10000 \\pretolerance=-1 \\spaceskip=4pt \\font"
+        "\\tenrm=cmr10 \\font\\sevenrm=cmr7 \\font\\fiverm="
+        "cmr5 \\font\\teni=cmmi10 \\font\\seveni=cmmi7 \\fo"
+        "nt\\fivei=cmmi5 \\font\\tensy=cmsy10 \\font\\seven"
+        "sy=cmsy7 \\font\\fivesy=cmsy5 \\font\\tenex=cmex10"
+        " \\textfont0=\\tenrm \\scriptfont0=\\sevenrm \\scr"
+        "iptscriptfont0=\\fiverm \\textfont1=\\teni \\scrip"
+        "tfont1=\\seveni \\scriptscriptfont1=\\fivei \\text"
+        "font2=\\tensy \\scriptfont2=\\sevensy \\scriptscri"
+        "ptfont2=\\fivesy \\textfont3=\\tenex \\scriptfont3"
+        "=\\tenex \\scriptscriptfont3=\\tenex \\skewchar\\t"
+        "eni=127 \\skewchar\\seveni=127 \\skewchar\\fivei=1"
+        "27 \\skewchar\\tensy=48 \\skewchar\\sevensy=48 \\s"
+        "kewchar\\fivesy=48 \\tenrm \\showboxdepth=2 \\show"
+        "boxbreadth=20 \\def\\x{A}\\let\\y\\x \\def\\x{B}\\"
+        "message{[one \\meaning\\x/\\meaning\\y]}{\\def\\x{"
+        "C}\\message{[two \\meaning\\x/\\meaning\\y]}\\glob"
+        "al\\def\\y{D}\\message{[three \\meaning\\x/\\meani"
+        "ng\\y]}}\\message{[four \\meaning\\x/\\meaning\\y]"
+        "}\\def\\z{E}\\let\\z\\z \\message{[five \\meaning"
+        "\\z]}{\\let\\x\\x \\message{[six \\meaning\\x]}}\\"
+        "message{[seven \\meaning\\x]}\\setbox0=\\hbox{\\x"
+        "\\y}\\showbox0 \\showbox254 ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box254=void\n\n! OK.\n[one macro:->B/macro:->A"
+        "] [two macro:->C/macro:->A]\n[three macro:->C/macr"
+        "o:->D] [four macro:->B/macro:->D] [five macro:->E]"
+        "\n[six macro:->B] [seven macro:->B]\n> \\box0=\n\\"
+        "hbox(6.83331+0.0)x14.72226\n.\\tenrm B\n.\\tenrm D"
+        "\n\n! OK.\n> \\box254=void\n\n! OK.\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);;
+}
+
 /* An \insert holds a vertical list packed at its natural size, and
    remembers the \splittopskip, \splitmaxdepth and \floatingpenalty of
    where it was written. It takes up no room in the list it stands in, and
@@ -8322,6 +8374,7 @@ int main(void)
         test_a_limit_at_its_own_width() != 0 ||
         test_a_vcenter_in_braces() != 0 ||
         test_a_mark_in_a_list() != 0 ||
+        test_a_definition_nothing_holds() != 0 ||
         test_what_a_split_leaves_behind() != 0 ||
         test_an_insertion_in_a_list() != 0 ||
         test_an_insertion_on_a_page() != 0 ||

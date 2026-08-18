@@ -273,9 +273,11 @@ static int run_ini(const char *path)
     }
     if (status == 0) {
         (void)printf(
-            "path=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu\n",
+            "path=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu"
+            " definitions=%zu\n",
             path, engine.shipped_pages, output_tokens,
-            engine.lexical_state.symbols.entry_count, engine.macro_count);
+            engine.lexical_state.symbols.entry_count, engine.macro_count,
+            engine.macro_definitions);
     }
     hstex_engine_destroy(&engine);
     return status;
@@ -332,9 +334,11 @@ static int run_latex(const char *format_path, const char *document_path)
         hstex_engine_destroy(&engine);
         return 1;
     }
-    (void)printf("format=%s output_tokens=%zu symbols=%zu macros=%zu\n",
+    (void)printf("format=%s output_tokens=%zu symbols=%zu macros=%zu"
+                 " definitions=%zu\n",
                  format_path, format_output_tokens,
-                 engine.lexical_state.symbols.entry_count, engine.macro_count);
+                 engine.lexical_state.symbols.entry_count, engine.macro_count,
+                 engine.macro_definitions);
     if (hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) !=
         0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
@@ -346,9 +350,11 @@ static int run_latex(const char *format_path, const char *document_path)
         drain_engine(&engine, document_path, &document_output_tokens);
     if (status == 0) {
         (void)printf(
-            "document=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu\n",
+            "document=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu"
+            " definitions=%zu\n",
             document_path, engine.shipped_pages, document_output_tokens,
-            engine.lexical_state.symbols.entry_count, engine.macro_count);
+            engine.lexical_state.symbols.entry_count, engine.macro_count,
+            engine.macro_definitions);
     }
     hstex_engine_destroy(&engine);
     return status;

@@ -1066,6 +1066,44 @@ const struct hstex_meaning *hstex_engine_meaning(
     return &engine->meanings[identifier - 1U];
 }
 
+/* A definition is held by every meaning that names it: the one a control
+   sequence has now and the ones the save stack keeps for a group to end. When
+   the last of them lets go, the definition is taken apart and its record put
+   by for the next \def. See docs/DECISIONS.md, a-definition-nothing-holds. */
+static void retain_macro(struct hstex_engine *engine,
+                         const struct hstex_meaning *meaning)
+{
+    if (meaning->command != HSTEX_COMMAND_MACRO) {
+        return;
+    }
+    uint32_t identifier = meaning->value.macro_identifier;
+    if (identifier == 0U || (size_t)identifier > engine->macro_count) {
+        return;
+    }
+    ++engine->macros[identifier - 1U].references;
+}
+
+static void release_macro(struct hstex_engine *engine,
+                          const struct hstex_meaning *meaning)
+{
+    if (meaning->command != HSTEX_COMMAND_MACRO) {
+        return;
+    }
+    uint32_t identifier = meaning->value.macro_identifier;
+    if (identifier == 0U || (size_t)identifier > engine->macro_count) {
+        return;
+    }
+    struct hstex_macro *macro = &engine->macros[identifier - 1U];
+    if (macro->references == 0U || --macro->references != 0U) {
+        return;
+    }
+    free(macro->parameter_text);
+    free(macro->replacement);
+    memset(macro, 0, sizeof(*macro));
+    macro->next_free = engine->macro_free_list;
+    engine->macro_free_list = identifier;
+}
+
 static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
                        struct hstex_meaning meaning, bool global, char *error,
                        size_t error_capacity)
@@ -1077,6 +1115,9 @@ static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
                          "invalid control-sequence assignment");
     }
     struct hstex_meaning *destination = &engine->meanings[identifier - 1U];
+    /* Held before anything is let go, in case this is the same definition
+       coming back to the same control sequence. */
+    retain_macro(engine, &meaning);
     bool local = !global && engine->group_level != 0U;
     if (local) {
         if (reserve_saves(engine, engine->save_count + 1U, error,
@@ -1088,10 +1129,15 @@ static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
         save->index = identifier;
         save->level = engine->group_level;
         save->previous_level = destination->level;
+        /* The save entry takes over what the control sequence was holding. */
         save->previous.meaning = *destination;
         meaning.level = engine->group_level;
     } else {
+        struct hstex_meaning previous = *destination;
         meaning.level = 0U;
+        *destination = meaning;
+        release_macro(engine, &previous);
+        return 0;
     }
     *destination = meaning;
     return 0;
@@ -7896,25 +7942,36 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         return -1;
     }
 
-    if (reserve_macros(engine, engine->macro_count + 1U, error,
-                       error_capacity) != 0) {
-        vector_destroy(&parameter_text);
-        vector_destroy(&replacement);
-        return -1;
+    /* A record no meaning holds any more is used again rather than another
+       one made; see docs/DECISIONS.md, a-definition-nothing-holds. */
+    uint32_t identifier = engine->macro_free_list;
+    if (identifier != 0U) {
+        engine->macro_free_list = engine->macros[identifier - 1U].next_free;
+    } else {
+        if (reserve_macros(engine, engine->macro_count + 1U, error,
+                           error_capacity) != 0) {
+            vector_destroy(&parameter_text);
+            vector_destroy(&replacement);
+            return -1;
+        }
+        ++engine->macro_count;
+        identifier = (uint32_t)engine->macro_count;
     }
-    struct hstex_macro *macro = &engine->macros[engine->macro_count];
+    struct hstex_macro *macro = &engine->macros[identifier - 1U];
     macro->parameter_text = parameter_text.data;
     macro->parameter_count_tokens = parameter_text.count;
     macro->replacement = replacement.data;
     macro->replacement_count = replacement.count;
     macro->parameter_count = parameter_count;
     macro->flags = engine->pending_macro_flags;
-    ++engine->macro_count;
+    macro->references = 0U;
+    macro->next_free = 0U;
+    ++engine->macro_definitions;
 
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_MACRO,
         .level = 0U,
-        .value = {.macro_identifier = (uint32_t)engine->macro_count},
+        .value = {.macro_identifier = identifier},
     };
     bool global = assignment_is_global(
         engine, inherent_global || engine->pending_global);
@@ -25390,7 +25447,13 @@ static int end_group(struct hstex_engine *engine, char *error,
             struct hstex_meaning *current =
                 &engine->meanings[save.index - 1U];
             if (current->level == leaving_level) {
+                struct hstex_meaning previous = *current;
                 *current = save.previous.meaning;
+                release_macro(engine, &previous);
+            } else {
+                /* Something global took the control sequence over, so what
+                   was being kept for this group is let go instead. */
+                release_macro(engine, &save.previous.meaning);
             }
             break;
         }

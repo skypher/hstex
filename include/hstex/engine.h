@@ -579,6 +579,13 @@ struct hstex_macro {
     size_t replacement_count;
     uint8_t parameter_count;
     uint8_t flags;
+    /* How many meanings hold this definition: the ones control sequences
+       have now and the ones the save stack is keeping for a group to end. A
+       definition nothing holds any more is taken apart and its record used
+       again. See docs/DECISIONS.md, a-definition-nothing-holds. */
+    uint32_t references;
+    /* The next record on the free list, one more than its index, or zero. */
+    uint32_t next_free;
 };
 
 struct hstex_meaning {
@@ -1199,6 +1206,11 @@ struct hstex_engine {
     struct hstex_macro *macros;
     size_t macro_count;
     size_t macro_capacity;
+    /* The first record no meaning holds any more, one more than its index. */
+    uint32_t macro_free_list;
+    /* How many definitions have been made and how many records they needed,
+       which is what the driver reports. */
+    size_t macro_definitions;
     struct hstex_save_entry *saves;
     size_t save_count;
     size_t save_capacity;
