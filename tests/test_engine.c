@@ -2645,6 +2645,65 @@ static int test_a_box_register_in_a_formula(void)
 );
 }
 
+/* A limit widened to match the operator keeps the italic correction it ends
+   with; one left at its own width loses it, exactly as a fraction's sides
+   do. See docs/DECISIONS.md, a-clean-box-of-one-character. */
+static int test_a_limit_at_its_own_width(void)
+{
+    return run_document(
+    "\\catcode`\\$=3 \\catcode`\\\"=12 \\catcode`\\^=7 "
+    "\\catcode`\\_=8 \\tracingonline=1 \\showboxdepth=1"
+    "0 \\showboxbreadth=1000 \\hbadness=10000 \\vbadnes"
+    "s=10000 \\hfuzz=1000pt \\vfuzz=1000pt \\hsize=200p"
+    "t \\parindent=0pt \\boxmaxdepth=16383.99998pt \\ba"
+    "selineskip=12pt \\lineskip=0pt \\lineskiplimit=0pt"
+    " \\parfillskip=0pt plus1fil \\leftskip=0pt \\right"
+    "skip=0pt \\tolerance=10000 \\pretolerance=-1 \\spa"
+    "ceskip=4pt \\font\\tenrm=cmr10 \\font\\sevenrm=cmr"
+    "7 \\font\\fiverm=cmr5 \\font\\teni=cmmi10 \\font\\"
+    "seveni=cmmi7 \\font\\fivei=cmmi5 \\font\\tensy=cms"
+    "y10 \\font\\sevensy=cmsy7 \\font\\fivesy=cmsy5 \\f"
+    "ont\\tenex=cmex10 \\textfont0=\\tenrm \\scriptfont"
+    "0=\\sevenrm \\scriptscriptfont0=\\fiverm \\textfon"
+    "t1=\\teni \\scriptfont1=\\seveni \\scriptscriptfon"
+    "t1=\\fivei \\textfont2=\\tensy \\scriptfont2=\\sev"
+    "ensy \\scriptscriptfont2=\\fivesy \\textfont3=\\te"
+    "nex \\scriptfont3=\\tenex \\scriptscriptfont3=\\te"
+    "nex \\skewchar\\teni=127 \\skewchar\\seveni=127 \\"
+    "skewchar\\fivei=127 \\skewchar\\tensy=48 \\skewcha"
+    "r\\sevensy=48 \\skewchar\\fivesy=48 \\tenrm \\show"
+    "boxdepth=6 \\showboxbreadth=100 \\message{[lim]}\\"
+    "setbox0=\\hbox{$\\displaystyle\\mathop{\\vcenter{"
+    "\\hbox{X}}}\\limits_{Z}^{W}$}\\showbox0 \\message{"
+    "[wide]}\\setbox0=\\hbox{$\\displaystyle\\mathop{\\"
+    "hbox{}}\\limits_{ZZZZ}^{W}$}\\showbox0%"
+,
+    "[lim]> \\box0=\n\\hbox(13.69998+8.36665)x8.59724\n"
+    ".\\mathon\n.\\vbox(13.69998+8.36665)x8.59724\n..\\"
+    "kern1.0\n..\\hbox(4.78334+0.0)x8.59724\n...\\seven"
+    "i W\n..\\kern1.99998\n..\\hbox(5.91666+0.91666)x8."
+    "59724, glue set 0.54861fil\n...\\glue 0.0 plus 1.0"
+    "fil minus 1.0fil\n...\\vbox(5.91666+0.91666)x7.500"
+    "02\n....\\hbox(6.83331+0.0)x7.50002\n.....\\tenrm "
+    "X\n...\\glue 0.0 plus 1.0fil minus 1.0fil\n..\\ker"
+    "n1.66666\n..\\hbox(4.78334+0.0)x8.59724, glue set "
+    "1.32918fil\n...\\glue 0.0 plus 1.0fil minus 1.0fil"
+    "\n...\\seveni Z\n...\\kern0.49026\n...\\glue 0.0 p"
+    "lus 1.0fil minus 1.0fil\n..\\kern1.0\n.\\mathoff\n"
+    "\n! OK.\n[wide]> \\box0=\n\\hbox(7.78333+7.45)x23."
+    "75555\n.\\mathon\n.\\vbox(7.78333+7.45)x23.75555\n"
+    "..\\kern1.0\n..\\hbox(4.78334+0.0)x23.75555, glue "
+    "set 7.57916fil\n...\\glue 0.0 plus 1.0fil minus 1."
+    "0fil\n...\\seveni W\n...\\kern1.07639\n...\\glue 0"
+    ".0 plus 1.0fil minus 1.0fil\n..\\kern1.99998\n..\\"
+    "hbox(0.0+0.0)x23.75555\n..\\kern1.66666\n..\\hbox("
+    "4.78334+0.0)x23.75555\n...\\seveni Z\n...\\kern0.4"
+    "9026\n...\\seveni Z\n...\\kern0.49026\n...\\seveni"
+    " Z\n...\\kern0.49026\n...\\seveni Z\n...\\kern0.49"
+    "026\n..\\kern1.0\n.\\mathoff\n\n! OK.\n"
+);
+}
+
 /* A rule \noalign leaves in an alignment, with no width of its own, is as
    wide as the alignment; and the alignment's own list is what a paragraph
    started in \noalign sees, so it takes \parskip when rows have gone before
@@ -7293,6 +7352,7 @@ int main(void)
         test_protruding_past_a_kern() != 0 ||
         test_a_row_that_stops_early() != 0 ||
         test_a_rule_between_rows() != 0 ||
+        test_a_limit_at_its_own_width() != 0 ||
         test_a_box_register_in_a_formula() != 0 ||
         test_only_a_character_is_centred_still() != 0 ||
         test_the_italic_of_a_math_ligature() != 0 ||

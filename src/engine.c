@@ -18305,10 +18305,31 @@ static void simplify_clean_box(struct hstex_engine *engine,
     }
 }
 
+/* The same box before the trivial-box simplification, for the callers that
+   widen it first: what a box ends with is settled after that, not before.
+   See docs/DECISIONS.md, a-clean-box-of-one-character. */
+static int math_field_box_unsimplified(struct hstex_engine *engine,
+                                       const struct hstex_math_field *field,
+                                       uint8_t style, struct hstex_box *box,
+                                       char *error, size_t error_capacity);
+
 static int math_field_box(struct hstex_engine *engine,
                           const struct hstex_math_field *field, uint8_t style,
                           struct hstex_box *box, char *error,
                           size_t error_capacity)
+{
+    int status = math_field_box_unsimplified(engine, field, style, box, error,
+                                             error_capacity);
+    if (status == 0) {
+        simplify_clean_box(engine, box);
+    }
+    return status;
+}
+
+static int math_field_box_unsimplified(struct hstex_engine *engine,
+                                       const struct hstex_math_field *field,
+                                       uint8_t style, struct hstex_box *box,
+                                       char *error, size_t error_capacity)
 {
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_HLIST;
@@ -18345,7 +18366,6 @@ static int math_field_box(struct hstex_engine *engine,
         box->node_start = node->value.list.node_start;
         box->node_count = node->value.list.node_count;
         box->glue = node->value.list.glue;
-        simplify_clean_box(engine, box);
         return 0;
     }
     if (field->kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY) {
@@ -18378,7 +18398,6 @@ static int math_field_box(struct hstex_engine *engine,
     if (status != 0) {
         return status;
     }
-    simplify_clean_box(engine, box);
     return 0;
 }
 
@@ -19862,12 +19881,13 @@ static int build_operator_limits(struct hstex_engine *engine,
     bool has_above = noad->superscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY;
     bool has_below = noad->subscript.kind != (uint8_t)HSTEX_MATH_FIELD_EMPTY;
     if ((has_above &&
-         math_field_box(engine, &noad->superscript,
-                        math_superscript_style(style), &above, error,
-                        error_capacity) != 0) ||
+         math_field_box_unsimplified(engine, &noad->superscript,
+                                     math_superscript_style(style), &above,
+                                     error, error_capacity) != 0) ||
         (has_below &&
-         math_field_box(engine, &noad->subscript, math_subscript_style(style),
-                        &below, error, error_capacity) != 0)) {
+         math_field_box_unsimplified(engine, &noad->subscript,
+                                     math_subscript_style(style), &below,
+                                     error, error_capacity) != 0)) {
         return -1;
     }
     int32_t width = middle.width;
@@ -19884,6 +19904,11 @@ static int build_operator_limits(struct hstex_engine *engine,
         rebox_limit(engine, &middle, width, error, error_capacity) != 0) {
         return -1;
     }
+    /* A limit left at its own width loses the italic correction it ends
+       with; one widened to match keeps it, because the kern is no longer
+       what the box ends with. */
+    simplify_clean_box(engine, &above);
+    simplify_clean_box(engine, &below);
 
     struct hstex_vbox_builder body = {0};
     struct hstex_vbox_builder *previous_vbox = engine->active_vbox_builder;
