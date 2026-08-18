@@ -15294,6 +15294,40 @@ static int pdf_write_font(struct hstex_engine *engine,
     return 0;
 }
 
+/* Whether what the document wrote for a dictionary names an entry of its
+   own: the reference looks for the name anywhere in that text, inside a
+   string or at the head of a longer name as readily as on its own. See
+   docs/DECISIONS.md, what-the-document-says-about-itself. */
+static bool pdf_dictionary_names(const uint8_t *text, size_t length,
+                                 const char *name)
+{
+    size_t width = strlen(name);
+    if (text == NULL || length < width) {
+        return false;
+    }
+    for (size_t index = 0U; index + width <= length; ++index) {
+        if (memcmp(text + index, name, width) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* What the document itself wrote for a dictionary, on a line of its own. */
+static int pdf_dictionary_text(struct hstex_engine *engine,
+                               const uint8_t *text, size_t length, char *error,
+                               size_t error_capacity)
+{
+    if (length == 0U) {
+        return 0;
+    }
+    return pdf_out(engine, (const char *)text, length, error, error_capacity) !=
+                   0 ||
+                   pdf_out_text(engine, "\n", error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
 /* What the reference writes after the last page: the fonts, the tree of
    pages, what the file is about, and the table of where everything is. */
 static int pdf_close(struct hstex_engine *engine, char *error,
@@ -15601,13 +15635,30 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         (names != 0U &&
          pdf_out_formatted(engine, error, error_capacity, "/Names %zu 0 R\n",
                            names) != 0) ||
+        pdf_dictionary_text(engine, engine->pdf_catalog,
+                            engine->pdf_catalog_length, error,
+                            error_capacity) != 0 ||
         pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0 ||
         pdf_begin_object(engine, info, error, error_capacity) != 0 ||
-        pdf_out_text(engine,
-                     "<<\n/Producer (pdfTeX-1.40.25)\n/Creator (TeX)\n"
-                     "/Trapped /False\n>>\n",
-                     error, error_capacity) != 0 ||
+        pdf_out_text(engine, "<<\n", error, error_capacity) != 0 ||
+        /* The reference writes each of its own entries unless the document
+           has already named it. */
+        (!pdf_dictionary_names(engine->pdf_info, engine->pdf_info_length,
+                               "/Producer") &&
+         pdf_out_text(engine, "/Producer (pdfTeX-1.40.25)\n", error,
+                      error_capacity) != 0) ||
+        pdf_dictionary_text(engine, engine->pdf_info, engine->pdf_info_length,
+                            error, error_capacity) != 0 ||
+        (!pdf_dictionary_names(engine->pdf_info, engine->pdf_info_length,
+                               "/Creator") &&
+         pdf_out_text(engine, "/Creator (TeX)\n", error, error_capacity) !=
+             0) ||
+        (!pdf_dictionary_names(engine->pdf_info, engine->pdf_info_length,
+                               "/Trapped") &&
+         pdf_out_text(engine, "/Trapped /False\n", error, error_capacity) !=
+             0) ||
+        pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -18666,16 +18717,14 @@ static char *own_general_text(const uint8_t *bytes, size_t count)
 
 /* \pdfcatalog and \pdfinfo each accumulate into one dictionary, so repeated
    uses append rather than replace. */
+/* What the document says about itself, kept as it was written: a second
+   \pdfinfo or \pdfcatalog is joined to the first with nothing between them.
+   See docs/DECISIONS.md, what-the-document-says-about-itself. */
 static int append_pdf_dictionary(uint8_t **buffer, size_t *length,
                                  size_t *capacity, const uint8_t *bytes,
                                  size_t count, char *error,
                                  size_t error_capacity)
 {
-    if (*length != 0U &&
-        append_byte(buffer, length, capacity, (uint8_t)' ', error,
-                    error_capacity) != 0) {
-        return -1;
-    }
     for (size_t index = 0U; index < count; ++index) {
         if (append_byte(buffer, length, capacity, bytes[index], error,
                         error_capacity) != 0) {

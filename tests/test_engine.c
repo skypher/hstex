@@ -3583,6 +3583,73 @@ static int test_a_paragraph_a_brace_ends(void)
    own stream of text and rules, the objects it needs, the measurements of
    every font it names, and the table of where all of them are. See
    docs/DECISIONS.md, the-pdf-file. */
+static int test_what_the_document_says_about_itself(void)
+{
+    /* What \pdfinfo and \pdfcatalog were given goes into the file's own
+       dictionaries, a second call joined to the first with nothing between
+       them, and each of the three entries the reference writes for itself is
+       left out where the document has named it. */
+    static const char *const source[] = {
+        "\\catcode`\\{=1 \\catcode`\\}=2 \\catcode`\\#=6 \\"
+        "catcode`\\^=7 \\catcode`\\_=8 \\nonstopmode\\pdfou"
+        "tput=1 \\pdfcompresslevel=0 \\pdfobjcompresslevel="
+        "0 \\font\\t=cmr10 \\t \\hsize=200pt \\vsize=300pt "
+        "\\parindent=0pt\\pdfinfo{/Author (A)}\\pdfinfo{/Pr"
+        "oducer (P)/Creator (C)/Trapped /True}\\pdfcatalog{"
+        "/A (1)}\\pdfcatalog{/B (2)}\\shipout\\hbox{a}\n\\e"
+        "nd\n",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "255044462d312e340a25d0d4c5d80a332030206f626a0a3c3c"
+        "0a2f4c656e67746820333720202020202020200a3e3e0a7374"
+        "7265616d0a42540a2f463120392e3936323620546620373220"
+        "3732205464205b2861295d544a0a45540a0a656e6473747265"
+        "616d0a656e646f626a0a322030206f626a0a3c3c0a2f547970"
+        "65202f506167650a2f436f6e74656e74732033203020520a2f"
+        "5265736f75726365732031203020520a2f4d65646961426f78"
+        "205b302030203134382e393831203134382e3238395d0a2f50"
+        "6172656e742035203020520a3e3e0a656e646f626a0a312030"
+        "206f626a0a3c3c0a2f466f6e74203c3c202f46312034203020"
+        "52203e3e0a2f50726f63536574205b202f504446202f546578"
+        "74205d0a3e3e0a656e646f626a0a362030206f626a0a5b3530"
+        "305d0a656e646f626a0a372030206f626a0a3c3c0a2f547970"
+        "65202f466f6e7444657363726970746f720a2f466f6e744e61"
+        "6d65202f434d5231300a2f466c6167732033340a2f466f6e74"
+        "42426f78205b30202d3139342031303030203639345d0a2f41"
+        "7363656e74203639340a2f436170486569676874203638330a"
+        "2f44657363656e74202d3139340a2f4974616c6963416e676c"
+        "6520300a2f5374656d562039330a2f58486569676874203433"
+        "310a3e3e0a656e646f626a0a342030206f626a0a3c3c0a2f54"
+        "797065202f466f6e740a2f53756274797065202f5479706531"
+        "0a2f42617365466f6e74202f434d5231300a2f466f6e744465"
+        "7363726970746f722037203020520a2f466972737443686172"
+        "2039370a2f4c617374436861722039370a2f57696474687320"
+        "36203020520a3e3e0a656e646f626a0a352030206f626a0a3c"
+        "3c0a2f54797065202f50616765730a2f436f756e7420310a2f"
+        "4b696473205b32203020525d0a3e3e0a656e646f626a0a3820"
+        "30206f626a0a3c3c0a2f54797065202f436174616c6f670a2f"
+        "50616765732035203020520a2f41202831292f42202832290a"
+        "3e3e0a656e646f626a0a392030206f626a0a3c3c0a2f417574"
+        "686f72202841292f50726f6475636572202850292f43726561"
+        "746f72202843292f54726170706564202f547275650a3e3e0a"
+        "656e646f626a0a787265660a302031300a3030303030303030"
+        "30302036353533352066200a30303030303030323232203030"
+        "303030206e200a30303030303030313130203030303030206e"
+        "200a30303030303030303135203030303030206e200a303030"
+        "30303030343837203030303030206e200a3030303030303036"
+        "3136203030303030206e200a30303030303030323839203030"
+        "303030206e200a30303030303030333130203030303030206e"
+        "200a30303030303030363733203030303030206e200a303030"
+        "30303030373335203030303030206e200a747261696c65720a"
+        "3c3c202f53697a652031300a2f526f6f742038203020520a2f"
+        "496e666f2039203020520a203e3e0a7374617274787265660a"
+        "3830370a2525454f460a",
+        NULL,
+    };
+    return run_document_pdf(source, expected);
+}
+
 static int test_the_box_a_font_fills(void)
 {
     /* The bounding box a font is described by reaches as far up as the font
@@ -12151,6 +12218,7 @@ int main(void)
         test_a_definition_nothing_holds() != 0 ||
         test_the_page_description() != 0 ||
         test_leaders_on_a_page() != 0 ||
+        test_what_the_document_says_about_itself() != 0 ||
         test_the_box_a_font_fills() != 0 ||
         test_what_a_string_escapes() != 0 ||
         test_the_pdf_file() != 0 ||
