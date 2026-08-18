@@ -13695,10 +13695,9 @@ static int pdf_place_character(struct hstex_engine *engine,
        it: a step shorter than the last place the file prints would come to
        nothing, and the file has no way to move by less. See
        docs/DECISIONS.md, a-step-too-short-to-name. */
-    bool moved =
-        !engine->pdf_placed ||
-        pdf_step_names_a_place(
-            engine, (engine->pdf_height - v) - engine->pdf_line_v);
+    bool names = pdf_step_names_a_place(
+        engine, (engine->pdf_height - v) - engine->pdf_line_v);
+    bool moved = !engine->pdf_placed || names;
     if (!engine->pdf_font_chosen || engine->pdf_text_font != identifier) {
         if (pdf_end_array(engine, error, error_capacity) != 0 ||
             pdf_formatted(engine, error, error_capacity, "/F%u ",
@@ -13746,8 +13745,13 @@ static int pdf_place_character(struct hstex_engine *engine,
            from the engine's own place; see docs/DECISIONS.md,
            the-text-position-in-the-file. */
         int64_t across = pdf_bp_units(h - engine->pdf_line_h, digits);
+        /* A place named for another reason -- a font of its own, or a
+           correction the array cannot carry -- names no step down: the line
+           the file's text is on has not moved. */
         int64_t down =
-            pdf_bp_units((engine->pdf_height - v) - engine->pdf_line_v, digits);
+            names ? pdf_bp_units((engine->pdf_height - v) - engine->pdf_line_v,
+                                 digits)
+                  : 0;
         char text[64];
         pdf_format_units(text, sizeof(text), across, digits);
         if (pdf_text(engine, text, error, error_capacity) != 0 ||
