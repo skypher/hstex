@@ -262,6 +262,27 @@ change that, and the sequential core -- seven eighths of the run, and what
 every one of those processors would be running -- is what matters either
 way. See docs/DECISIONS.md, what-could-leave-the-critical-path.
 
+That checkpoint now exists. Where the driver's loop is entered from outside
+rather than from inside itself and a page has just shipped, nothing is half
+built in a call of its own -- which is why what a page leaves behind is
+given back exactly there -- so a run is entirely in the engine record and
+the files it has open, and `fork` copies both. `HSTEX_CHECKPOINT` names the
+page to stop at, or `every:N` a stride. Taken up after its first page, in
+the middle of its longest chapter, after its last page, and twenty-three
+times over, the corpus writes the same PDF, `.aux`, `.toc` and `.out` byte
+for byte, and a hundred handoffs cost about a second of the twenty.
+
+Reading the clock at all 2,364 of those boundaries says what the boundary
+being a page rather than a file is worth. Of 23.6 seconds, 22.7 lie between
+the first page and the last, and dividing those into equal-cost chunks gives
+10.0 times on sixteen workers, 18.1 on sixty-four, and a ceiling of 24 --
+against 3.9 at file granularity. So the milestone's second threshold is
+reachable, and it takes sixteen workers rather than a faster expansion
+machinery. What it still takes is a guess at the state each chunk begins in
+and a check that the guess held: a checkpoint says where a run may be taken
+up, not what the state there will be before the run has reached it. See
+docs/DECISIONS.md, a-checkpoint-inside-a-file.
+
 ## Build
 
 The engine itself requires a C17 compiler, Meson, and Ninja. The engine tests
