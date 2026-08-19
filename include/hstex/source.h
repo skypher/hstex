@@ -36,6 +36,11 @@ struct hstex_token_source {
        until it is done with them, or zero. See docs/DECISIONS.md,
        a-definition-nothing-holds. */
     uint32_t definition;
+    /* Where in the stack's own store the frame's tokens stand, when they
+       stand there: the store is given back to that mark when the frame is
+       popped. */
+    bool from_store;
+    size_t store_base;
 };
 
 struct hstex_source_frame {
@@ -54,6 +59,12 @@ struct hstex_source_stack {
     /* What to tell when a frame lets go of the definition it was reading. */
     void *definition_owner;
     void (*definition_release)(void *owner, uint32_t definition);
+    /* Room the stack keeps for the expansions it is reading, given back in
+       the order it was taken; an expansion that does not fit finds its own.
+       The store only grows while nothing stands in it. */
+    hstex_token *store;
+    size_t store_count;
+    size_t store_capacity;
     /* Counts files that have run out, so that the engine can insert
        \everyeof once for each; see docs/DECISIONS.md, everyeof. */
     size_t file_end_count;
@@ -80,6 +91,16 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
 int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity);
+/* Room in the stack's own store for tokens about to be read, or NULL where
+   the store has none to spare. What it returns stands until the frame that
+   `hstex_source_push_reserved` makes for it is popped, and nothing else may
+   be pushed in between. */
+hstex_token *hstex_source_reserve(struct hstex_source_stack *stack,
+                                  size_t count);
+int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
+                               struct hstex_source_location location,
+                               char *error, size_t error_capacity);
+
 /* A definition's own tokens, read where they stand rather than copied: the
    frame holds the definition until it has read them. */
 int hstex_source_push_definition(struct hstex_source_stack *stack,

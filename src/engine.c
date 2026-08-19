@@ -7108,30 +7108,49 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         }
         total += arguments[parameter - 1U].count;
     }
-    if (vector_reserve(&expansion, total, error, error_capacity) != 0) {
-        vector_destroy(&expansion);
+    if (total == 0U) {
+        status = 0;
         goto cleanup;
     }
-    hstex_token *out = expansion.data;
+    /* The expansion is built where it will be read from -- the room the
+       input stack keeps for what it is reading -- and only finds room of its
+       own where that store has none to spare. */
+    hstex_token *out = hstex_source_reserve(&engine->sources, total);
+    bool reserved = out != NULL;
+    if (!reserved) {
+        if (vector_reserve(&expansion, total, error, error_capacity) != 0) {
+            vector_destroy(&expansion);
+            goto cleanup;
+        }
+        out = expansion.data;
+    }
+    hstex_token *at = out;
     for (size_t index = 0U; index < macro->replacement_count; ++index) {
         hstex_token token = macro->replacement[index];
         if (!hstex_token_is_parameter(token)) {
-            *out++ = token;
+            *at++ = token;
             continue;
         }
         const struct hstex_token_vector *argument =
             &arguments[hstex_token_parameter_number(token) - 1U];
         if (argument->count != 0U) {
-            memcpy(out, argument->data,
+            memcpy(at, argument->data,
                    argument->count * sizeof(*argument->data));
-            out += argument->count;
+            at += argument->count;
         }
     }
-    expansion.count = total;
-    if (push_owned_vector(engine, &expansion, call_location, error,
-                          error_capacity) != 0) {
-        vector_destroy(&expansion);
-        goto cleanup;
+    if (reserved) {
+        if (hstex_source_push_reserved(&engine->sources, total, call_location,
+                                       error, error_capacity) != 0) {
+            goto cleanup;
+        }
+    } else {
+        expansion.count = total;
+        if (push_owned_vector(engine, &expansion, call_location, error,
+                              error_capacity) != 0) {
+            vector_destroy(&expansion);
+            goto cleanup;
+        }
     }
     status = 0;
 

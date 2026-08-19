@@ -66,6 +66,9 @@ static void pop_frame(struct hstex_source_stack *stack)
         free(frame->value.file.path);
     } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
         free(frame->value.token_list.owned_allocation);
+        if (frame->value.token_list.from_store) {
+            stack->store_count = frame->value.token_list.store_base;
+        }
         if (frame->value.token_list.definition != 0U &&
             stack->definition_release != NULL) {
             stack->definition_release(stack->definition_owner,
@@ -104,6 +107,7 @@ void hstex_source_stack_destroy(struct hstex_source_stack *stack)
         pop_frame(stack);
     }
     free(stack->frames);
+    free(stack->store);
     memset(stack, 0, sizeof(*stack));
 }
 
@@ -201,6 +205,7 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     source->location = location;
     source->holds_own = false;
     source->definition = 0U;
+    source->from_store = false;
     return 0;
 }
 
@@ -233,6 +238,7 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     source->location = location;
     source->holds_own = false;
     source->definition = 0U;
+    source->from_store = false;
     return 0;
 }
 
@@ -258,6 +264,72 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     source->cursor = 0U;
     source->location = location;
     source->definition = 0U;
+    source->from_store = false;
+    return 0;
+}
+
+hstex_token *hstex_source_reserve(struct hstex_source_stack *stack,
+                                  size_t count)
+{
+    if (stack == NULL || count == 0U) {
+        return NULL;
+    }
+    /* What has been read to the end is given back first, so that the room a
+       run of expansions took comes back as each of them finishes. */
+    pop_exhausted_token_frames(stack);
+    if (count > stack->store_capacity - stack->store_count) {
+        /* The store grows only while nothing stands in it, since what stands
+           in it points into it. */
+        if (stack->store_count != 0U) {
+            return NULL;
+        }
+        size_t capacity = stack->store_capacity == 0U ? 65536U
+                                                      : stack->store_capacity;
+        while (capacity < count) {
+            if (capacity > SIZE_MAX / 2U) {
+                return NULL;
+            }
+            capacity *= 2U;
+        }
+        if (capacity > SIZE_MAX / sizeof(*stack->store)) {
+            return NULL;
+        }
+        hstex_token *grown =
+            realloc(stack->store, capacity * sizeof(*stack->store));
+        if (grown == NULL) {
+            return NULL;
+        }
+        stack->store = grown;
+        stack->store_capacity = capacity;
+    }
+    return stack->store + stack->store_count;
+}
+
+int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
+                               struct hstex_source_location location,
+                               char *error, size_t error_capacity)
+{
+    if (stack == NULL || count == 0U ||
+        count > stack->store_capacity - stack->store_count) {
+        return set_error(error, error_capacity,
+                         "invalid reserved token-source request");
+    }
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    struct hstex_token_source *source = &frame->value.token_list;
+    frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+    source->tokens = stack->store + stack->store_count;
+    source->owned_allocation = NULL;
+    source->count = count;
+    source->cursor = 0U;
+    source->location = location;
+    source->holds_own = false;
+    source->definition = 0U;
+    source->from_store = true;
+    source->store_base = stack->store_count;
+    stack->store_count += count;
     return 0;
 }
 
@@ -285,6 +357,7 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     source->location = location;
     source->holds_own = false;
     source->definition = definition;
+    source->from_store = false;
     return 0;
 }
 
