@@ -181,10 +181,10 @@ document, and every `\citation` in the order the reference wrote it.
 
 The engine is now faster than the reference on the corpus, and no longer
 extravagant with memory. Its final pass -- auxiliary inputs in place, format
-read from a file, nothing compressed on either side -- takes 18.3 processor
-seconds against `pdflatex`'s 25.4 for the same source, and peaks at 161 MB
+read from a file, nothing compressed on either side -- takes 16.7 processor
+seconds against `pdflatex`'s 24.7 for the same source, and peaks at 162 MB
 against 47. A fresh `hstex` -> BibTeX -> `hstex` -> `hstex` build of the
-whole thing takes 56.2 seconds against `pdflatex`'s 75.5. Every run above is
+whole thing takes 51.3 seconds against `pdflatex`'s 75.4. Every run above is
 the least of five, taken alternately on one pinned processor.
 
 The first round of tuning took the final pass from 72 seconds to 28: reading
@@ -195,19 +195,24 @@ comparing every pair of them; taking a macro's arguments in runs rather than
 a token at a time; and keeping the room a macro call needs rather than
 taking and giving it back at every one of them.
 
-The second round took 30 to 18, in order of what it was worth: building the
-engine from a profile of what it does, at -O3 and linked in one piece (19%);
-naming the primitive a failed scan was inside only where one fails, rather
-than writing out the name of every one of the corpus's 25.6 million (6%);
-starting one `kpsewhich` for the whole run and asking it over a pipe, rather
-than starting one for each of 181 names at twelve milliseconds each (5%);
-holding what the input is reading in forty-eight bytes rather than a hundred
-and forty-four (3%); passing over a skipped conditional and moving short
-runs of tokens without the library (2%); counting what a macro's body is
-made of when it is defined rather than at each of its calls, which also
-showed that fifty-seven per cent of calls copy nothing at all (1.5%); and
-finding a font's place in the file by its number rather than by comparing
-forty-six million names (0.7%).
+The second round took 30 to 16.7, in order of what it was worth: building
+the engine from a profile of what it does, at -O3 and linked in one piece
+(19%); naming the primitive a failed scan was inside only where one fails,
+rather than writing out the name of every one of the corpus's 25.6 million
+(6%); keeping where the input is reading beside the stack rather than
+finding it again for each of 388 million tokens, and popping a frame that
+has run out where it stands (5.5%); reading a control sequence's name and an
+expanded body where they stand, which between them are half of everything
+the corpus expands (5% and 3.5%); starting one `kpsewhich` for the whole run
+and asking it over a pipe, rather than starting one for each of 181 names at
+twelve milliseconds each (5%); handing the PDF file a megabyte at a time
+rather than 594,747 pieces of eighty-four bytes, and passing over a skipped
+conditional where it stands (3%); holding what the input is reading in
+forty-eight bytes rather than a hundred and forty-four (3%); counting what a
+macro's body is made of when it is defined rather than at each of its calls,
+which also showed that fifty-seven per cent of calls copy nothing at all
+(1.5%); and finding a font's place in the file by its number rather than by
+comparing forty-six million names (0.7%).
 
 Memory went from 1.26 GB to 161 MB in the same round. Nodes and the lists
 that hold them were made and never unmade, and most of what that kept was
@@ -217,10 +222,20 @@ belongs to can name one. What is left is now walked from the places that can
 still name a node and the rest given back, between one page and the next.
 Of the 161 MB, 72 is what reading the format costs before a document starts.
 
-The milestone wants five times `pdflatex`, not one and a third, and that is
-open. The profile is flat: macro expansion is half of it and runs within a
-few per cent of the reference's own speed per token, so the next factor will
-have to come from somewhere other than tightening these loops.
+The milestone wants five times `pdflatex`, not one and a half, and that is
+open. Asking the reference how much work there is to do settles where the
+rest cannot come from: over six controlled probes the engine expands between
+one and four per cent *fewer* macros than `pdflatex` does, so the two do the
+same work and what separates them is the cost of each expansion rather than
+the number of them. There is no redundant expansion left to find. Two thirds
+of the remaining time is the expansion machinery, so five times the reference
+would mean running that machinery about three and a half times faster than it
+runs -- some twenty cycles for each token read, counting the macro call that
+one token in twelve begins. That is the budget of a tight bytecode
+interpreter, and it is not reachable by tightening the loops that are here:
+it would take a different representation for the input stack, the argument
+scan and the macro record. See docs/DECISIONS.md,
+how-much-work-there-is-to-do.
 
 ## Build
 
