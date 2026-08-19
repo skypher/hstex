@@ -2842,6 +2842,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->pdf_outlines);
     finder_stop(engine);
+    free(engine->pdf_out_buffer);
     free(engine->dead_nodes);
     free(engine->pdf_fonts);
     free(engine->pdf_font_places);
@@ -14173,15 +14174,51 @@ static int pdf_formatted(struct hstex_engine *engine, char *error,
     return pdf_bytes(engine, buffer, (size_t)written, error, error_capacity);
 }
 
+/* What has been written to the file but not yet handed to it. The corpus
+   writes fifty megabytes in six hundred thousand pieces of eighty-four bytes,
+   and handing each of them over on its own costs more than the writing. */
+#define HSTEX_PDF_OUT_BUFFER (1U << 20)
+
+static int pdf_flush(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    if (engine->pdf_out_count == 0U) {
+        return 0;
+    }
+    size_t count = engine->pdf_out_count;
+    engine->pdf_out_count = 0U;
+    if (fwrite(engine->pdf_out_buffer, 1U, count, engine->pdf_file) != count) {
+        return set_error(error, error_capacity, "cannot write the PDF file");
+    }
+    return 0;
+}
+
 /* Straight to the file, counting the bytes so that the table at the end can
    say where everything is. */
 static int pdf_out(struct hstex_engine *engine, const char *text, size_t length,
                    char *error, size_t error_capacity)
 {
-    if (fwrite(text, 1U, length, engine->pdf_file) != length) {
-        return set_error(error, error_capacity, "cannot write the PDF file");
-    }
     engine->pdf_written += length;
+    if (engine->pdf_out_buffer == NULL) {
+        engine->pdf_out_buffer = malloc(HSTEX_PDF_OUT_BUFFER);
+        if (engine->pdf_out_buffer == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF output buffer allocation failed");
+        }
+    }
+    if (length >= HSTEX_PDF_OUT_BUFFER) {
+        if (pdf_flush(engine, error, error_capacity) != 0 ||
+            fwrite(text, 1U, length, engine->pdf_file) != length) {
+            return set_error(error, error_capacity, "cannot write the PDF file");
+        }
+        return 0;
+    }
+    if (engine->pdf_out_count + length > HSTEX_PDF_OUT_BUFFER &&
+        pdf_flush(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    memcpy(engine->pdf_out_buffer + engine->pdf_out_count, text, length);
+    engine->pdf_out_count += length;
     return 0;
 }
 
@@ -17052,6 +17089,9 @@ static int pdf_close(struct hstex_engine *engine, char *error,
                           "/Info %zu 0 R\n >>\nstartxref\n%zu\n%%%%EOF\n",
                           numbered + 1U, catalog, info,
                           table) != 0) {
+        return -1;
+    }
+    if (pdf_flush(engine, error, error_capacity) != 0) {
         return -1;
     }
     (void)fclose(engine->pdf_file);

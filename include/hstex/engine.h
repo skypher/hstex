@@ -1855,6 +1855,9 @@ struct hstex_engine {
     size_t dead_node_count;
     /* Whether this run is being asked that question, and how. */
     enum hstex_dead_node_check dead_node_check;
+    /* What has been written to the PDF file but not yet handed to it. */
+    uint8_t *pdf_out_buffer;
+    size_t pdf_out_count;
     /* How many of the driver's loops are running inside one another: a box
        body is read on the live input, so the loop runs again inside itself
        while one is being built. */
