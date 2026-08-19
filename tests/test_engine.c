@@ -782,6 +782,86 @@ static int test_a_definition_read_while_it_is_replaced(void)
     return status;
 }
 
+/* A body that asks for none of the macro's arguments is read where it stands
+   rather than copied, so it is a definition the input holds while it reads
+   it, and the macro may be replaced in the middle of its own body. */
+static int test_a_body_that_asks_for_no_argument(void)
+{
+    const char source[] = "\\def\\a#1{\\def\\a##1{y}x}\\a{Q}\\a{R}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    char produced[16];
+    size_t count = 0U;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result;
+    while ((result = hstex_engine_next_output(&engine, &token, &location, error,
+                                              sizeof(error))) ==
+           HSTEX_ENGINE_TOKEN) {
+        if (hstex_token_is_character(token) && count + 1U < sizeof(produced)) {
+            produced[count++] = (char)hstex_token_character_code(token);
+        }
+    }
+    produced[count] = '\0';
+    int status = result != HSTEX_ENGINE_EOF || strcmp(produced, "xy") != 0;
+    if (status != 0) {
+        (void)fprintf(stderr, "a body that asks for no argument: got \"%s\": %s\n",
+                      produced, error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
+/* An argument put in more than once, and two of them in the other order:
+   how long the expansion comes to is worked out from what the body was
+   counted to be when it was defined. */
+static int test_arguments_put_in_more_than_once(void)
+{
+    const char source[] =
+        "\\def\\b#1{#1#1}\\def\\c#1#2{#2#1}\\b{R}\\c{S}{T}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    char produced[16];
+    size_t count = 0U;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result;
+    while ((result = hstex_engine_next_output(&engine, &token, &location, error,
+                                              sizeof(error))) ==
+           HSTEX_ENGINE_TOKEN) {
+        if (hstex_token_is_character(token) && count + 1U < sizeof(produced)) {
+            produced[count++] = (char)hstex_token_character_code(token);
+        }
+    }
+    produced[count] = '\0';
+    int status = result != HSTEX_ENGINE_EOF || strcmp(produced, "RRTS") != 0;
+    if (status != 0) {
+        (void)fprintf(stderr,
+                      "arguments put in more than once: got \"%s\": %s\n",
+                      produced, error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 static const struct hstex_meaning *meaning_named(struct hstex_engine *engine,
                                                  const char *name);
 
@@ -12613,6 +12693,8 @@ int main(void)
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_a_definition_read_while_it_is_replaced() != 0 ||
+        test_a_body_that_asks_for_no_argument() != 0 ||
+        test_arguments_put_in_more_than_once() != 0 ||
         test_a_format_a_run_starts_from() != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_job_name() != 0 ||

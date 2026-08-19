@@ -7233,6 +7233,43 @@ static int match_parameter_prefix(struct hstex_engine *engine,
     return 0;
 }
 
+/* What a body is made of, counted once when the definition is made rather
+   than at every call: how many of its tokens stand for themselves, and how
+   often it asks for each argument. A body whose counts will not fit says so,
+   and a call reading such a body looks at every token the way it used to. */
+#define HSTEX_BODY_UNCOUNTED UINT16_MAX
+
+static void count_macro_body(struct hstex_macro *macro)
+{
+    macro->body_plain_count = 0U;
+    macro->body_parameter_total = 0U;
+    memset(macro->body_uses, 0, sizeof(macro->body_uses));
+    size_t plain = 0U;
+    size_t total = 0U;
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        hstex_token token = macro->replacement[index];
+        if (!hstex_token_is_parameter(token)) {
+            ++plain;
+            continue;
+        }
+        uint8_t parameter = hstex_token_parameter_number(token);
+        if (parameter == 0U || parameter > macro->parameter_count ||
+            macro->body_uses[parameter - 1U] == UINT8_MAX ||
+            total + 1U >= (size_t)HSTEX_BODY_UNCOUNTED) {
+            macro->body_parameter_total = HSTEX_BODY_UNCOUNTED;
+            return;
+        }
+        ++macro->body_uses[parameter - 1U];
+        ++total;
+    }
+    if (plain > UINT32_MAX) {
+        macro->body_parameter_total = HSTEX_BODY_UNCOUNTED;
+        return;
+    }
+    macro->body_plain_count = (uint32_t)plain;
+    macro->body_parameter_total = (uint16_t)total;
+}
+
 static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                              const struct hstex_macro *macro,
                              struct hstex_source_location call_location,
@@ -7323,9 +7360,10 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     }
 
     /* A macro that substitutes nothing is read where it stands: the frame
-       holds the definition rather than a copy of it, which is a third of the
-       macro calls a document makes. */
-    if (macro->parameter_count == 0U) {
+       holds the definition rather than a copy of it. That is more than half
+       the macro calls a document makes -- a third of them take no argument
+       at all, and others take one and put it nowhere. */
+    if (macro->body_parameter_total == 0U) {
         if (macro->replacement_count != 0U) {
             retain_definition(engine, identifier);
             if (hstex_source_push_definition(
@@ -7341,22 +7379,34 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     }
     /* How long the expansion comes to is known before it is built, so the
        room for it is taken once and the tokens go in without a check at
-       every one. */
+       every one. What the body is made of was counted when the definition
+       was made, so the length follows from the arguments alone. */
     struct hstex_token_vector expansion = {0};
     size_t total = 0U;
-    for (size_t index = 0U; index < macro->replacement_count; ++index) {
-        hstex_token token = macro->replacement[index];
-        if (!hstex_token_is_parameter(token)) {
-            total += 1U;
-            continue;
+    if (macro->body_parameter_total != HSTEX_BODY_UNCOUNTED) {
+        total = macro->body_plain_count;
+        for (uint8_t parameter = 0U; parameter < macro->parameter_count;
+             ++parameter) {
+            if (macro->body_uses[parameter] != 0U) {
+                total += (size_t)macro->body_uses[parameter] *
+                         arguments[parameter].count;
+            }
         }
-        uint8_t parameter = hstex_token_parameter_number(token);
-        if (parameter == 0U || parameter > macro->parameter_count) {
-            (void)set_error(error, error_capacity,
-                            "invalid parameter in a macro body");
-            goto cleanup;
+    } else {
+        for (size_t index = 0U; index < macro->replacement_count; ++index) {
+            hstex_token token = macro->replacement[index];
+            if (!hstex_token_is_parameter(token)) {
+                total += 1U;
+                continue;
+            }
+            uint8_t parameter = hstex_token_parameter_number(token);
+            if (parameter == 0U || parameter > macro->parameter_count) {
+                (void)set_error(error, error_capacity,
+                                "invalid parameter in a macro body");
+                goto cleanup;
+            }
+            total += arguments[parameter - 1U].count;
         }
-        total += arguments[parameter - 1U].count;
     }
     if (total == 0U) {
         status = 0;
@@ -8398,6 +8448,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     macro->flags = engine->pending_macro_flags;
     macro->references = 0U;
     macro->next_free = 0U;
+    count_macro_body(macro);
     ++engine->macro_definitions;
 
     struct hstex_meaning meaning = {
@@ -29449,6 +29500,7 @@ static int define_read_tokens(struct hstex_engine *engine, hstex_cs_id target,
     memset(macro, 0, sizeof(*macro));
     macro->replacement = replacement->data;
     macro->replacement_count = replacement->count;
+    count_macro_body(macro);
     memset(replacement, 0, sizeof(*replacement));
     ++engine->macro_count;
     struct hstex_meaning meaning = {

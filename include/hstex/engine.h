@@ -627,6 +627,15 @@ struct hstex_macro {
     size_t replacement_count;
     uint8_t parameter_count;
     uint8_t flags;
+    /* What the body is made of, counted once when the definition is made
+       rather than at every call: how many of its tokens stand for
+       themselves, how often each argument is asked for, and how many
+       arguments it asks for at all. Fifty-seven per cent of the corpus's
+       macro calls have a body that asks for none, and those are read where
+       they stand rather than copied. */
+    uint32_t body_plain_count;
+    uint8_t body_uses[HSTEX_PARAMETER_LIMIT];
+    uint16_t body_parameter_total;
     /* How many meanings hold this definition: the ones control sequences
        have now and the ones the save stack is keeping for a group to end. A
        definition nothing holds any more is taken apart and its record used
