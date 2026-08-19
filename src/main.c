@@ -24,9 +24,11 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --trace-ini-mouth FILE\n"
                   "       %s --mouth-stats-latex FILE\n"
                   "       %s --run-ini FILE\n"
-                  "       %s --run-latex LATEX_LTX DOCUMENT\n",
-                  program, program, program, program, program, program,
-                  program);
+                  "       %s --run-latex LATEX_LTX DOCUMENT\n"
+                  "       %s --make-format LATEX_LTX FORMAT\n"
+                  "       %s --format FORMAT DOCUMENT\n",
+                  program, program, program, program, program, program, program,
+                  program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -299,6 +301,85 @@ static int drain_engine(struct hstex_engine *engine, const char *fallback_path,
     return 0;
 }
 
+/* The format source, read and put by so that a run can start from it. */
+static int make_format(const char *format_path, const char *format_file)
+{
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    static const char config_name[] = "pdftexconfig.tex";
+    if (hstex_engine_push_file(&engine, format_path, error, sizeof(error)) !=
+            0 ||
+        hstex_engine_push_input(&engine, config_name, error, sizeof(error)) !=
+            0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t format_output_tokens = 0U;
+    if (drain_engine(&engine, format_path, &format_output_tokens) != 0 ||
+        !engine.dump_requested) {
+        (void)fprintf(stderr, "hstex: format source ended without dump\n");
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    if (hstex_engine_write_format(&engine, format_file, error,
+                                  sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    (void)printf("format=%s written=%s symbols=%zu macros=%zu\n", format_path,
+                 format_file, engine.lexical_state.symbols.entry_count,
+                 engine.macro_count);
+    hstex_engine_destroy(&engine);
+    return 0;
+}
+
+static int run_document_from_format(const char *format_file,
+                                    const char *document_path)
+{
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    static const char output_directory[] = "build/document-output";
+    if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
+        hstex_engine_set_output_directory(&engine, output_directory, error,
+                                          sizeof(error)) != 0 ||
+        hstex_engine_read_format(&engine, format_file, error, sizeof(error)) !=
+            0) {
+        (void)fprintf(stderr, "hstex: %s\n",
+                      error[0] == '\0' ? "cannot prepare document output"
+                                       : error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    if (hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) !=
+        0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t document_output_tokens = 0U;
+    int status = drain_engine(&engine, document_path, &document_output_tokens);
+    if (status == 0) {
+        (void)printf(
+            "document=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu"
+            " definitions=%zu\n",
+            document_path, engine.shipped_pages, document_output_tokens,
+            engine.lexical_state.symbols.entry_count, engine.macro_count,
+            engine.macro_definitions);
+    }
+    hstex_engine_destroy(&engine);
+    return status;
+}
+
 static int run_latex(const char *format_path, const char *document_path)
 {
     char error[512] = {0};
@@ -386,6 +467,12 @@ int main(int argument_count, char **arguments)
     }
     if (argument_count == 4 && strcmp(arguments[1], "--run-latex") == 0) {
         return run_latex(arguments[2], arguments[3]);
+    }
+    if (argument_count == 4 && strcmp(arguments[1], "--make-format") == 0) {
+        return make_format(arguments[2], arguments[3]);
+    }
+    if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
+        return run_document_from_format(arguments[2], arguments[3]);
     }
 
     print_usage(stderr, arguments[0]);

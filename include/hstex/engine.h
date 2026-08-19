@@ -1782,6 +1782,14 @@ struct hstex_engine {
 int hstex_engine_init(struct hstex_engine *engine, char *error,
                       size_t error_capacity);
 void hstex_engine_destroy(struct hstex_engine *engine);
+
+/* The engine's state once the format source has been read, put by so that
+   the next run need not read it again, and read back into a fresh engine.
+   See docs/DECISIONS.md, the-format-a-run-starts-from. */
+int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
+                              char *error, size_t error_capacity);
+int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
+                             char *error, size_t error_capacity);
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
 /* Push a file named the way \input names it, resolved through the same

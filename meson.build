@@ -37,6 +37,7 @@ core = static_library(
   files(
     'src/catcode.c',
     'src/engine.c',
+    'src/format.c',
     'src/input.c',
     'src/lex.c',
     'src/mouth.c',

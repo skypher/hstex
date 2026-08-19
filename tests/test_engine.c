@@ -782,6 +782,108 @@ static int test_a_definition_read_while_it_is_replaced(void)
     return status;
 }
 
+static const struct hstex_meaning *meaning_named(struct hstex_engine *engine,
+                                                 const char *name);
+
+/* A format is the engine's state put by once the format source has been
+   read: the names it knows and what they mean, the registers, the
+   parameters, the fonts and the patterns. What is read back is what was put
+   by -- a document run from it cannot tell the difference. */
+static int test_a_format_a_run_starts_from(void)
+{
+    const char source[] =
+        "\\catcode`\\@=11 \\def\\a#1{[#1]}\\count5=17 \\dimen3=2pt "
+        "\\skip2=3pt plus 1fil \\toks1={xy}\\font\\f=cmr10 \\f "
+        "\\hyphenation{man-u-script}\\dump%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine written;
+    if (prepare_engine(&written, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result;
+    do {
+        result = hstex_engine_next_output(&written, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    char format_path[64];
+    (void)strcpy(format_path, "/tmp/hstex-format-test-XXXXXX");
+    int descriptor = mkstemp(format_path);
+    int status = result != HSTEX_ENGINE_EOF || !written.dump_requested ||
+                 descriptor < 0;
+    if (descriptor >= 0) {
+        (void)close(descriptor);
+    }
+    if (status == 0 &&
+        hstex_engine_write_format(&written, format_path, error,
+                                  sizeof(error)) != 0) {
+        (void)fprintf(stderr, "format write failed: %s\n", error);
+        status = 1;
+    }
+    struct hstex_engine read_back;
+    if (status == 0 && hstex_engine_init(&read_back, error, sizeof(error)) != 0) {
+        status = 1;
+    } else if (status == 0) {
+        if (hstex_engine_read_format(&read_back, format_path, error,
+                                     sizeof(error)) != 0) {
+            (void)fprintf(stderr, "format read failed: %s\n", error);
+            status = 1;
+        } else {
+            const struct hstex_meaning *one = meaning_named(&written, "a");
+            const struct hstex_meaning *other = meaning_named(&read_back, "a");
+            status =
+                read_back.lexical_state.symbols.entry_count !=
+                        written.lexical_state.symbols.entry_count ||
+                read_back.macro_count != written.macro_count ||
+                read_back.counts[5] != 17 ||
+                read_back.dimens[3] != written.dimens[3] ||
+                read_back.glues[2].width != written.glues[2].width ||
+                read_back.glues[2].stretch != written.glues[2].stretch ||
+                read_back.font_count != written.font_count ||
+                read_back.current_font != written.current_font ||
+                read_back.hyphen_exception_count !=
+                        written.hyphen_exception_count ||
+                read_back.hyphen_node_count != written.hyphen_node_count ||
+                hstex_catcode_get(&read_back.lexical_state.catcodes,
+                                  (uint8_t)'@') !=
+                        (uint8_t)HSTEX_CAT_LETTER ||
+                one->command != HSTEX_COMMAND_MACRO ||
+                other->command != one->command ||
+                !read_back.dump_requested;
+            if (status == 0) {
+                const struct hstex_macro *before =
+                    &written.macros[one->value.macro_identifier - 1U];
+                const struct hstex_macro *after =
+                    &read_back.macros[other->value.macro_identifier - 1U];
+                status = before->replacement_count != after->replacement_count ||
+                         before->parameter_count != after->parameter_count ||
+                         memcmp(before->replacement, after->replacement,
+                                before->replacement_count *
+                                    sizeof(*before->replacement)) != 0;
+            }
+            if (status == 0) {
+                const struct hstex_font *font =
+                    &read_back.fonts[read_back.font_count - 1U];
+                status = font->name == NULL || strcmp(font->name, "cmr10") != 0;
+            }
+        }
+        hstex_engine_destroy(&read_back);
+    }
+    if (status != 0) {
+        (void)fprintf(stderr, "format test failed: %s\n", error);
+    }
+    hstex_engine_destroy(&written);
+    (void)unlink(path);
+    (void)unlink(format_path);
+    return status;
+}
+
 static int test_macro_flags(void)
 {
     const char source[] = "\\long\\outer\\def\\a#1{#1}%";
@@ -12511,6 +12613,7 @@ int main(void)
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_a_definition_read_while_it_is_replaced() != 0 ||
+        test_a_format_a_run_starts_from() != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
