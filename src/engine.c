@@ -13525,11 +13525,37 @@ static int64_t pdf_bp_units(int32_t value, int32_t digits)
                           : -((-numerator + denominator / 2) / denominator);
 }
 
-/* A number with that many decimals, with the trailing zeros -- and the point
-   with them -- left off. */
-static void pdf_format_units(char *out, size_t capacity, int64_t units,
-                             int32_t digits)
+/* A whole number written out where the library would read a format string to
+   do it. The file is some millions of these, and the library's own printer
+   spends most of its time deciding what it was asked for. What it returns is
+   how long the number came to; nothing is written after it. */
+static size_t pdf_decimal(char *out, int64_t value)
 {
+    char reversed[24];
+    uint64_t magnitude =
+        value < 0 ? (uint64_t)0 - (uint64_t)value : (uint64_t)value;
+    size_t length = 0U;
+    do {
+        reversed[length++] = (char)('0' + (int)(magnitude % 10U));
+        magnitude /= 10U;
+    } while (magnitude != 0U);
+    size_t at = 0U;
+    if (value < 0) {
+        out[at++] = '-';
+    }
+    while (length != 0U) {
+        out[at++] = reversed[--length];
+    }
+    return at;
+}
+
+/* A number with that many decimals, with the trailing zeros -- and the point
+   with them -- left off. What it returns is how long it came to; the string
+   is ended as well, since some of what asks for one hands it on by name. */
+static size_t pdf_format_units(char *out, size_t capacity, int64_t units,
+                               int32_t digits)
+{
+    (void)capacity;
     int64_t scale = 1;
     for (int32_t index = 0; index < digits; ++index) {
         scale *= 10;
@@ -13548,14 +13574,19 @@ static void pdf_format_units(char *out, size_t capacity, int64_t units,
     while (length != 0U && digits_text[length - 1U] == '0') {
         --length;
     }
-    if (length == 0U) {
-        (void)snprintf(out, capacity, "%s%lld", negative ? "-" : "",
-                       (long long)whole);
-        return;
+    size_t at = 0U;
+    if (negative) {
+        out[at++] = '-';
     }
-    digits_text[length] = '\0';
-    (void)snprintf(out, capacity, "%s%lld.%s", negative ? "-" : "",
-                   (long long)whole, digits_text);
+    at += pdf_decimal(out + at, whole);
+    if (length != 0U) {
+        out[at++] = '.';
+        for (size_t index = 0U; index < length; ++index) {
+            out[at++] = digits_text[index];
+        }
+    }
+    out[at] = '\0';
+    return at;
 }
 
 /* How many decimals the file's places are written with: the reference keeps
@@ -13575,8 +13606,9 @@ static int pdf_number(struct hstex_engine *engine, int32_t value, char *error,
 {
     char text[64];
     int32_t digits = pdf_digits(engine);
-    pdf_format_units(text, sizeof(text), pdf_bp_units(value, digits), digits);
-    return pdf_text(engine, text, error, error_capacity);
+    size_t length =
+        pdf_format_units(text, sizeof(text), pdf_bp_units(value, digits), digits);
+    return pdf_bytes(engine, text, length, error, error_capacity);
 }
 
 static size_t pdf_new_object(struct hstex_engine *engine)
@@ -14074,14 +14106,15 @@ static int pdf_place_character(struct hstex_engine *engine,
                                  digits)
                   : 0;
         char text[64];
-        pdf_format_units(text, sizeof(text), across, digits);
-        if (pdf_text(engine, text, error, error_capacity) != 0 ||
-            pdf_text(engine, " ", error, error_capacity) != 0) {
-            return -1;
-        }
-        pdf_format_units(text, sizeof(text), down, digits);
-        if (pdf_text(engine, text, error, error_capacity) != 0 ||
-            pdf_text(engine, " Td ", error, error_capacity) != 0) {
+        size_t length = pdf_format_units(text, sizeof(text), across, digits);
+        text[length++] = ' ';
+        length += pdf_format_units(text + length, sizeof(text) - length, down,
+                                   digits);
+        text[length++] = ' ';
+        text[length++] = 'T';
+        text[length++] = 'd';
+        text[length++] = ' ';
+        if (pdf_bytes(engine, text, length, error, error_capacity) != 0) {
             return -1;
         }
         engine->pdf_origin_h += across;
@@ -14122,9 +14155,11 @@ static int pdf_place_character(struct hstex_engine *engine,
     if (h != engine->pdf_text_h) {
         int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h);
         if (offset != 0) {
+            char rendered[24];
+            size_t rendered_length = pdf_decimal(rendered, offset);
             if (pdf_end_string(engine, error, error_capacity) != 0 ||
-                pdf_formatted(engine, error, error_capacity, "%lld",
-                              (long long)offset) != 0) {
+                pdf_bytes(engine, rendered, rendered_length, error,
+                          error_capacity) != 0) {
                 return -1;
             }
             /* The correction moves the file's text by its own worth of
