@@ -336,6 +336,12 @@ struct hstex_token_vector {
     size_t capacity;
 };
 
+/* How long a body may be and still be copied where it is read rather than
+   read where it stands. Reading it where it stands saves the copy but the
+   definition must then be held until the frame has read it, and letting go
+   of it again costs more than copying a few words. */
+#define HSTEX_MACRO_COPY_LIMIT ((size_t)32)
+
 /* How many arguments a macro may take, and how deep the engine keeps room
    for them. */
 #define HSTEX_PARAMETER_LIMIT 9

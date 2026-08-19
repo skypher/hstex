@@ -7624,6 +7624,21 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
        at all, and others take one and put it nowhere. */
     if (macro->body_parameter_total == 0U) {
         if (macro->replacement_count != 0U) {
+            /* A short body is copied instead: reading it where it stands
+               means the definition must be held until the frame is done with
+               it, and letting go of it again costs more than the copy. */
+            hstex_token *room =
+                macro->replacement_count <= HSTEX_MACRO_COPY_LIMIT
+                    ? hstex_source_push_room(&engine->sources,
+                                             macro->replacement_count,
+                                             call_location)
+                    : NULL;
+            if (room != NULL) {
+                copy_tokens(room, macro->replacement,
+                            macro->replacement_count);
+                status = 0;
+                goto cleanup;
+            }
             retain_definition(engine, identifier);
             if (hstex_source_push_definition(
                     &engine->sources, macro->replacement,
