@@ -2804,6 +2804,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->pdf_outlines);
     free(engine->pdf_dest_slots);
+    free(engine->cs_name_scratch);
     for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
         free(engine->resolved_files[index].name);
         free(engine->resolved_files[index].path);
@@ -6383,13 +6384,45 @@ static int expand_the_primitive(struct hstex_engine *engine,
     return expand_integer_primitive(engine, location, error, error_capacity);
 }
 
+/* The room a name was built in, given back: the engine's own room is kept
+   for the next name, and any other is freed. */
+static void release_cs_name_room(struct hstex_engine *engine, bool scratch,
+                                 uint8_t *bytes, size_t capacity)
+{
+    if (!scratch) {
+        free(bytes);
+        return;
+    }
+    engine->cs_name_scratch = bytes;
+    engine->cs_name_scratch_capacity = capacity;
+    engine->cs_name_scratch_busy = false;
+}
+
+/* A name the caller has done with. */
+static void release_cs_name(struct hstex_engine *engine, uint8_t *name)
+{
+    if (name != NULL && name == engine->cs_name_scratch) {
+        engine->cs_name_scratch_busy = false;
+        return;
+    }
+    free(name);
+}
+
 static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                               size_t *name_count, char *error,
                               size_t error_capacity)
 {
+    /* The name is built in the room the engine keeps for it; a \csname met
+       while another is being built takes its own room. */
+    bool scratch = !engine->cs_name_scratch_busy;
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t name_capacity = 0U;
+    if (scratch) {
+        engine->cs_name_scratch_busy = true;
+        bytes = engine->cs_name_scratch;
+        name_capacity = engine->cs_name_scratch_capacity;
+    }
     /* \protected suppresses expansion while an \edef or \write builds a token
        list, but a csname is expanded in full regardless: \edef\z{\csname
        \protectedmacro\endcsname} expands the macro. */
@@ -6405,7 +6438,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
         if (result != HSTEX_ENGINE_TOKEN) {
             engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-            free(bytes);
+            release_cs_name_room(engine, scratch, bytes, name_capacity);
             return set_error(error, error_capacity,
                              "end of input inside csname");
         }
@@ -6422,7 +6455,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                              error_capacity) != 0) {
                     engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-                    free(bytes);
+                    release_cs_name_room(engine, scratch, bytes, name_capacity);
                     return -1;
                 }
                 continue;
@@ -6445,7 +6478,7 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                                            : (int)unexpected_length;
                 engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-                free(bytes);
+                release_cs_name_room(engine, scratch, bytes, name_capacity);
                 return set_error(error, error_capacity,
                                  "non-character token inside csname: \\%.*s",
                                  printable_length,
@@ -6453,14 +6486,14 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
             }
             engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-            free(bytes);
+            release_cs_name_room(engine, scratch, bytes, name_capacity);
             return set_error(error, error_capacity,
                              "non-character token inside csname");
         }
         if (!hstex_token_is_character(token)) {
             engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-            free(bytes);
+            release_cs_name_room(engine, scratch, bytes, name_capacity);
             return set_error(error, error_capacity,
                              "internal token inside csname");
         }
@@ -6469,13 +6502,17 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
                         error_capacity) != 0) {
             engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
-            free(bytes);
+            release_cs_name_room(engine, scratch, bytes, name_capacity);
             return -1;
         }
     }
     engine->inhibit_protected_expansion = previous_inhibition;
             engine->building_cs_name = previous_in_cs_name;
 
+    if (scratch) {
+        engine->cs_name_scratch = bytes;
+        engine->cs_name_scratch_capacity = name_capacity;
+    }
     *name = bytes;
     *name_count = count;
     return 0;
@@ -6496,10 +6533,10 @@ static int expand_cs_name(struct hstex_engine *engine,
     if (hstex_symbol_intern(&engine->lexical_state.symbols,
                             HSTEX_SYMBOL_REGULAR, name, name_count,
                             &identifier, error, error_capacity) != 0) {
-        free(name);
+        release_cs_name(engine, name);
         return -1;
     }
-    free(name);
+    release_cs_name(engine, name);
     if (hstex_engine_meaning(engine, identifier)->command ==
         HSTEX_COMMAND_UNDEFINED) {
         struct hstex_meaning relax = {
@@ -29476,7 +29513,7 @@ static int scan_if_cs_name(struct hstex_engine *engine, char *error,
                           name, name_count, &identifier) == 1 &&
         hstex_engine_meaning(engine, identifier)->command !=
             HSTEX_COMMAND_UNDEFINED;
-    free(name);
+    release_cs_name(engine, name);
     return finish_conditional(engine, conditional, defined, error,
                               error_capacity);
 }

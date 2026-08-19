@@ -65,7 +65,12 @@ static void pop_frame(struct hstex_source_stack *stack)
         hstex_input_close(&frame->value.file.input);
         free(frame->value.file.path);
     } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
-        free(frame->value.token_list.owned_allocation);
+        /* Most frames hold no allocation of their own -- an expansion stands
+           in the stack's own store -- and asking the library to give nothing
+           back is 48 million calls over the corpus. */
+        if (frame->value.token_list.owned_allocation != NULL) {
+            free(frame->value.token_list.owned_allocation);
+        }
         if (frame->value.token_list.from_store) {
             stack->store_count = frame->value.token_list.store_base;
         }
