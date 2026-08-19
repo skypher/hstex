@@ -17,6 +17,25 @@
 
 static const char hstex_format_magic[] = "HSTEX format 1\n";
 
+/* How wide the records a format carries are. A format written by one build
+   and read by another whose records are laid out differently is not a format
+   at all, and saying so is better than reading nonsense out of it. */
+static uint64_t hstex_format_layout(void)
+{
+    const size_t widths[] = {
+        sizeof(struct hstex_engine),  sizeof(struct hstex_macro),
+        sizeof(struct hstex_meaning), sizeof(struct hstex_node),
+        sizeof(struct hstex_box),     sizeof(struct hstex_font),
+        sizeof(struct hstex_glue),    sizeof(struct hstex_save_entry),
+    };
+    uint64_t digest = UINT64_C(0xcbf29ce484222325);
+    for (size_t index = 0U; index < sizeof(widths) / sizeof(widths[0]);
+         ++index) {
+        digest = (digest ^ (uint64_t)widths[index]) * UINT64_C(0x100000001b3);
+    }
+    return digest;
+}
+
 static int format_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
 
@@ -339,6 +358,8 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
     stream.writing = true;
     transfer(&stream, (void *)(uintptr_t)(const void *)hstex_format_magic,
              sizeof(hstex_format_magic));
+    uint64_t layout = hstex_format_layout();
+    transfer(&stream, &layout, sizeof(layout));
     transfer_format(&stream, engine);
     if (fclose(file) != 0 || stream.failed) {
         return format_error(error, error_capacity, "cannot write %s", path);
@@ -383,6 +404,15 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
         free(bytes);
         return format_error(error, error_capacity, "%s is not a format",
                                path);
+    }
+    uint64_t layout = 0U;
+    transfer(&stream, &layout, sizeof(layout));
+    if (stream.failed || layout != hstex_format_layout()) {
+        free(bytes);
+        return format_error(error, error_capacity,
+                            "%s was written by a build whose records are laid "
+                            "out differently; build the format again",
+                            path);
     }
     transfer_format(&stream, engine);
     free(bytes);
