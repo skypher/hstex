@@ -248,6 +248,20 @@ at all: `end_group` spends four hundred cycles restoring six meanings because
 each is a walk into a megabyte that no cache holds. See docs/DECISIONS.md,
 how-much-work-there-is-to-do.
 
+The other place a factor could come from is more than one processor, and
+what that is worth has now been measured rather than guessed. Breaking
+paragraphs, shipping pages and giving back what a page leaves behind come to
+an eighth of the run between them; everything else is the thread that reads
+the input, so taking the back end off it wins at most 1.14 times. Running
+the chapters at once, each seeded from a checkpoint and checked afterwards,
+wins at most 3.9 times, because the longest single `\input` is a quarter of
+the run and no `\input` boundary divides it. Both of them perfect come to
+about 4.4 times, so five is close and ten is out of reach at that
+granularity. A checkpoint the engine can take *inside* a file is what would
+change that, and the sequential core -- seven eighths of the run, and what
+every one of those processors would be running -- is what matters either
+way. See docs/DECISIONS.md, what-could-leave-the-critical-path.
+
 ## Build
 
 The engine itself requires a C17 compiler, Meson, and Ninja. The engine tests
