@@ -179,13 +179,25 @@ bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
 every page number, section number and cross-reference in a 2,375-page
 document, and every `\citation` in the order the reference wrote it.
 
-Speed is not there yet either. Loading `latex.ltx` and `amsmath` takes about
-23 seconds, and the whole corpus about 74, against `pdflatex`'s 41 seconds
-for the same source with a prebuilt format and an 11 MB PDF at the end. A
-definition that nothing holds any more is now taken apart and its record used
-again, so the corpus's 8.1 million definitions need 388,000 records rather
-than 8.1 million, and the run peaks at 1.25 GB rather than 3.10 GB. Nothing
-else has been tuned; correctness came first.
+Speed has had a first pass. The corpus's final pass, with its auxiliary
+inputs in place and its format read from a file, takes 28 processor seconds
+against `pdflatex`'s 26 for the same source -- from 72 when the tuning
+started. What that took, in order of what it was worth: reading the format
+from a file rather than executing `latex.ltx` again at every run (8.8
+seconds); asking `kpsewhich` where a file is once rather than 381 times, and
+asking it without copying a gigabyte of process (11 seconds of it in the
+kernel); sorting the 23,513 destination names once rather than comparing
+every pair of them, and finding one by name rather than by walking them all
+(173 million comparisons and 73 million more); taking a macro's arguments in
+runs rather than a token at a time; and keeping the room a macro call needs
+rather than taking and giving it back at every one of the corpus's 51.8
+million calls.
+
+Peak memory is 1.25 GB against `pdflatex`'s 48 MB, and the milestone wants
+five times `pdflatex`'s speed rather than parity. Both of those are open.
+The profile is now flat -- macro expansion is 40% of it and is within a few
+per cent of the reference's own speed per token -- so the next factor will
+have to come from somewhere other than tightening these loops.
 
 ## Build
 
