@@ -9,11 +9,16 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 static void print_usage(FILE *stream, const char *program)
 {
@@ -441,8 +446,23 @@ static int run_latex(const char *format_path, const char *document_path)
     return status;
 }
 
+/* A run takes and gives back the room for eight million definitions, and the
+   allocator's own answer to that is to hand the pages back to the system and
+   ask for them again. It is told to keep them instead: the run reaches the
+   same peak either way, and stops paying for the ground it has already
+   walked. */
+static void keep_the_heap(void)
+{
+#ifdef __GLIBC__
+    (void)mallopt(M_TRIM_THRESHOLD, INT_MAX);
+    (void)mallopt(M_TOP_PAD, 32 * 1024 * 1024);
+    (void)mallopt(M_MMAP_THRESHOLD, 32 * 1024 * 1024);
+#endif
+}
+
 int main(int argument_count, char **arguments)
 {
+    keep_the_heap();
     if (argument_count == 2 && strcmp(arguments[1], "--version") == 0) {
         (void)printf("hstex %s\n", HSTEX_VERSION);
         return 0;

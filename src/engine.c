@@ -276,7 +276,13 @@ static int vector_reserve(struct hstex_token_vector *vector, size_t required,
     if (required <= vector->capacity) {
         return 0;
     }
-    size_t capacity = vector->capacity == 0U ? 32U : vector->capacity;
+    /* A vector starts at eight tokens rather than thirty-two and doubles
+       from there. Three definitions in four have a body of seven tokens or
+       fewer, and starting every one of the corpus's seven million of them
+       at thirty-two asked for four times the tokens they hold. Doubling is
+       kept, so a vector filled a token at a time still grows in as few
+       steps as it did. */
+    size_t capacity = vector->capacity == 0U ? 8U : vector->capacity;
     while (capacity < required) {
         if (capacity > SIZE_MAX / 2U) {
             return set_error(error, error_capacity,
@@ -30764,13 +30770,15 @@ static int skip_case_remainder(struct hstex_engine *engine, size_t target,
 static const char *current_source_line(const struct hstex_engine *engine,
                                        uint32_t *line)
 {
-    for (size_t index = engine->sources.count; index > 0U; --index) {
+    /* The stack says where its innermost file stands, so this is a look
+       rather than a walk: every definition and every conditional asks, and
+       the corpus makes seven million of the one and more of the other. */
+    size_t top = engine->sources.file_top;
+    if (top != 0U && top <= engine->sources.count) {
         const struct hstex_source_frame *frame =
-            &engine->sources.frames[index - 1U];
-        if (frame->kind == HSTEX_SOURCE_FILE) {
-            *line = frame->value.file->mouth.line_number;
-            return frame->value.file->path;
-        }
+            &engine->sources.frames[top - 1U];
+        *line = frame->value.file->mouth.line_number;
+        return frame->value.file->path;
     }
     *line = 0U;
     return "<no file>";

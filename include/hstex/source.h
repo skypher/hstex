@@ -83,6 +83,10 @@ struct hstex_source_stack {
     /* Counts files that have run out, so that the engine can insert
        \everyeof once for each; see docs/DECISIONS.md, everyeof. */
     size_t file_end_count;
+    /* Where the innermost file frame stands, one more than its index, or
+       zero. Whoever asks where the reading is wants that frame, and finding
+       it again is a walk down a stack that a deep expansion makes deep. */
+    size_t file_top;
 };
 
 void hstex_source_stack_init(struct hstex_source_stack *stack,

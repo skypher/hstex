@@ -73,6 +73,7 @@ static int reserve_frames(struct hstex_source_stack *stack, size_t required,
 static void pop_frame(struct hstex_source_stack *stack)
 {
     struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
+    const bool was_file = frame->kind == HSTEX_SOURCE_FILE;
     if (frame->kind == HSTEX_SOURCE_FILE) {
         hstex_mouth_destroy(&frame->value.file->mouth);
         hstex_input_close(&frame->value.file->input);
@@ -95,6 +96,17 @@ static void pop_frame(struct hstex_source_stack *stack)
         }
     }
     --stack->count;
+    if (was_file) {
+        /* A run opens a few hundred files against thirty million token
+           frames, so the one below is looked for here rather than kept. */
+        stack->file_top = 0U;
+        for (size_t index = stack->count; index != 0U; --index) {
+            if (stack->frames[index - 1U].kind == HSTEX_SOURCE_FILE) {
+                stack->file_top = index;
+                break;
+            }
+        }
+    }
     note_top_frame(stack);
 }
 
@@ -164,6 +176,7 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_FILE;
     frame->value.file = file;
+    stack->file_top = stack->count;
     file->input = input;
     file->path = path_copy;
     hstex_mouth_init(&file->mouth, input.data, input.length,
@@ -210,6 +223,7 @@ int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_FILE;
     frame->value.file = file;
+    stack->file_top = stack->count;
     file->input.data = bytes;
     file->input.length = length;
     file->input.storage = HSTEX_INPUT_STORAGE_OWNED;
@@ -521,11 +535,8 @@ const char *hstex_source_current_name(const struct hstex_source_stack *stack)
     if (stack == NULL || stack->count == 0U) {
         return NULL;
     }
-    for (size_t index = stack->count; index > 0U; --index) {
-        const struct hstex_source_frame *frame = &stack->frames[index - 1U];
-        if (frame->kind == HSTEX_SOURCE_FILE) {
-            return frame->value.file->path;
-        }
+    if (stack->file_top != 0U && stack->file_top <= stack->count) {
+        return stack->frames[stack->file_top - 1U].value.file->path;
     }
     return NULL;
 }

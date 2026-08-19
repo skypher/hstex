@@ -182,7 +182,7 @@ document, and every `\citation` in the order the reference wrote it.
 The engine is now faster than the reference on the corpus, and no longer
 extravagant with memory. Its final pass -- auxiliary inputs in place, format
 read from a file, nothing compressed on either side -- takes 16.6 processor
-seconds against `pdflatex`'s 24.8 for the same source, and peaks at 161 MB
+seconds against `pdflatex`'s 24.8 for the same source, and peaks at 128 MB
 against 47. A fresh `hstex` -> BibTeX -> `hstex` -> `hstex` build of the
 whole thing takes 52.6 seconds against `pdflatex`'s 75.5. Every run above is
 the least of six, taken alternately on one pinned processor.
@@ -218,13 +218,14 @@ of an ordinary macro not read at all, a brace told from a character in one
 comparison, a short body copied rather than held (1.5% for all of it, which
 is the interesting part; see below).
 
-Memory went from 1.26 GB to 161 MB in the same round. Nodes and the lists
+Memory went from 1.26 GB to 161 MB in the same round, and to 128 MB once a
+definition stopped asking for four times the tokens it holds. Nodes and the lists
 that hold them were made and never unmade, and most of what that kept was
 not the pages but the sub-formulas -- kept for the lifetime of the run, with
 every box each had been set as, although nothing outside the formula it
 belongs to can name one. What is left is now walked from the places that can
 still name a node and the rest given back, between one page and the next.
-Of the 161 MB, 72 is what reading the format costs before a document starts.
+Of the 128 MB, 72 is what reading the format costs before a document starts.
 
 The milestone wants five times `pdflatex`, not one and a half, and that is
 open. Asking the reference how much work there is to do settles where the
