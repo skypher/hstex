@@ -6531,6 +6531,58 @@ static int scan_balanced_group(struct hstex_engine *engine,
 {
     size_t depth = 1U;
     while (depth != 0U) {
+        /* Where what is being read is a list of tokens standing together,
+           the group is looked at where it stands and taken in one go rather
+           than a token at a time: this is where a macro call spends most of
+           what it spends. A token that needs looking after -- one \noexpand
+           has marked -- ends the run and is taken the slow way. */
+        struct hstex_source_stack *sources = &engine->sources;
+        if (sources->count != 0U) {
+            struct hstex_source_frame *frame =
+                &sources->frames[sources->count - 1U];
+            if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+                struct hstex_token_source *source = &frame->value.token_list;
+                const hstex_token *tokens = source->tokens + source->cursor;
+                size_t available = source->count - source->cursor;
+                size_t taken = 0U;
+                bool closed = false;
+                while (taken < available) {
+                    hstex_token token = tokens[taken];
+                    if (hstex_token_is_unexpanded_control_sequence(token)) {
+                        break;
+                    }
+                    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+                        ++depth;
+                    } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+                        --depth;
+                        if (depth == 0U) {
+                            closed = true;
+                            break;
+                        }
+                    } else if (!long_macro && token_is_paragraph(engine, token)) {
+                        break;
+                    }
+                    ++taken;
+                }
+                if (taken != 0U) {
+                    if (vector_reserve(argument, argument->count + taken, error,
+                                       error_capacity) != 0) {
+                        return -1;
+                    }
+                    memcpy(argument->data + argument->count, tokens,
+                           taken * sizeof(*tokens));
+                    argument->count += taken;
+                    source->cursor += taken;
+                }
+                if (closed) {
+                    source->cursor += 1U;
+                    return 0;
+                }
+                if (taken != 0U) {
+                    continue;
+                }
+            }
+        }
         hstex_token token = 0U;
         struct hstex_source_location location;
         enum hstex_engine_result result = raw_next(
@@ -6971,7 +7023,56 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                                    char *error, size_t error_capacity)
 {
     size_t depth = 0U;
+    /* What the argument runs up to can only be reached at the delimiter's
+       last token, so everything before one of those -- and before a brace
+       that is not counted, a token \noexpand has marked, or the paragraph
+       that would end the argument -- is taken in one go. */
+    hstex_token last =
+        delimiter_count == 0U
+            ? 0U
+            : normalize_one_shot_token(delimiter[delimiter_count - 1U]);
     for (;;) {
+        struct hstex_source_stack *sources = &engine->sources;
+        if (sources->count != 0U && delimiter_count != 0U) {
+            struct hstex_source_frame *frame =
+                &sources->frames[sources->count - 1U];
+            if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+                struct hstex_token_source *source = &frame->value.token_list;
+                const hstex_token *tokens = source->tokens + source->cursor;
+                size_t available = source->count - source->cursor;
+                size_t taken = 0U;
+                while (taken < available) {
+                    hstex_token token = tokens[taken];
+                    if (hstex_token_is_unexpanded_control_sequence(token) ||
+                        (depth == 0U &&
+                         normalize_one_shot_token(token) == last)) {
+                        break;
+                    }
+                    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+                        ++depth;
+                    } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+                        if (depth != 0U) {
+                            --depth;
+                        }
+                    } else if (!long_macro &&
+                               token_is_paragraph(engine, token)) {
+                        break;
+                    }
+                    ++taken;
+                }
+                if (taken != 0U) {
+                    if (vector_reserve(argument, argument->count + taken, error,
+                                       error_capacity) != 0) {
+                        return -1;
+                    }
+                    memcpy(argument->data + argument->count, tokens,
+                           taken * sizeof(*tokens));
+                    argument->count += taken;
+                    source->cursor += taken;
+                    continue;
+                }
+            }
+        }
         hstex_token token = 0U;
         struct hstex_source_location location;
         enum hstex_engine_result result = raw_next(
