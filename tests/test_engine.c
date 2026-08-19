@@ -578,6 +578,33 @@ static int test_output_routine(void)
     return run_document_parts(source, expected);
 }
 
+/* Between one page and the next the engine gives back the nodes nothing can
+   reach any more. A box register can reach its own, so a box set before six
+   pages are shipped still holds what it was given after they are. See
+   docs/DECISIONS.md, what-a-page-leaves-behind. */
+static int test_what_a_page_leaves_behind(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\showboxdepth=5 \\showboxbreadth"
+        "=10 \\vsize=30pt \\maxdepth=2pt \\topskip=10pt \\b"
+        "aselineskip=12pt \\hsize=100pt \\lineskip=0pt \\li"
+        "neskiplimit=0pt \\boxmaxdepth=16383.99998pt \\hbad"
+        "ness=10000 \\vbadness=10000 \\vfuzz=1000pt \\hfuzz"
+        "=1000pt \\output={\\shipout\\box255 }\\def\\B{\\hbo"
+        "x{\\vrule width4pt height20pt depth1pt}}\\setbox1="
+        "\\hbox{\\vrule width7pt height5pt depth2pt\\kern3pt"
+        "\\vrule width1pt}\\B\\B\\B\\B\\B\\B\\showbox1 \\end ",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "[0] [0] [0] [0]\n> \\box1=\n\\hbox(5.0+2.0)x11.0"
+        "\n.\\rule(5.0+2.0)x7.0\n.\\kern 3.0\n.\\rule(*+*"
+        ")x1.0\n\n! OK.\n[0] [0]",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 static int test_page_totals(void)
 {
     static const char *const source[] = {
@@ -12695,6 +12722,7 @@ int main(void)
         test_a_definition_read_while_it_is_replaced() != 0 ||
         test_a_body_that_asks_for_no_argument() != 0 ||
         test_arguments_put_in_more_than_once() != 0 ||
+        test_what_a_page_leaves_behind() != 0 ||
         test_a_format_a_run_starts_from() != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_job_name() != 0 ||

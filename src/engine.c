@@ -1761,6 +1761,15 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
     engine->sources.definition_owner = engine;
     engine->sources.definition_release = release_input_definition;
+    /* Whether this run is being asked whether the list of places that can
+       still name a node is complete; see docs/DECISIONS.md,
+       what-a-page-leaves-behind. */
+    const char *dead_nodes = getenv("HSTEX_DEAD_NODES");
+    if (dead_nodes != NULL && strcmp(dead_nodes, "trace") == 0) {
+        engine->dead_node_check = HSTEX_DEAD_NODES_TRACED;
+    } else if (dead_nodes != NULL && strcmp(dead_nodes, "poison") == 0) {
+        engine->dead_node_check = HSTEX_DEAD_NODES_POISONED;
+    }
     engine->count_capacity = (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
     engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
     engine->count_levels =
@@ -2833,6 +2842,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->pdf_outlines);
     finder_stop(engine);
+    free(engine->dead_nodes);
     free(engine->pdf_fonts);
     free(engine->pdf_font_places);
     free(engine->pdf_dest_slots);
@@ -8975,6 +8985,369 @@ static int store_node(struct hstex_engine *engine,
     *identifier = (uint32_t)engine->node_count + 1U;
     ++engine->node_count;
     return 0;
+}
+
+/* Nodes and the lists that hold them are made and never unmade: a run of the
+   corpus makes ten million nodes, and at the end of a page can still reach
+   only a few thousand of them. Between one page and the next, with nothing
+   half built, what is still reachable is copied to the front of the arenas
+   and the rest is given back. See docs/DECISIONS.md,
+   what-a-page-leaves-behind. */
+struct node_move {
+    struct hstex_node *nodes;
+    size_t count;
+    size_t capacity;
+    uint32_t *items;
+    size_t item_count;
+    size_t item_capacity;
+    /* Where each of the old nodes went, one more than its place, or zero
+       for one nothing has reached. */
+    uint32_t *places;
+    bool failed;
+    /* For finding roots that are missing from the list below: which root the
+       walk is inside, and which nodes the last walk did not reach. */
+    const char *root;
+    uint8_t *dead;
+    /* Walk the roots without moving anything: what a walk reaches is
+       recorded, and everything is left where it stands. */
+    bool marking;
+};
+
+static uint32_t move_node(struct hstex_engine *engine, struct node_move *to,
+                          uint32_t identifier);
+
+static uint32_t move_list(struct hstex_engine *engine, struct node_move *to,
+                          uint32_t start, uint32_t count)
+{
+    if (count == 0U || to->failed) {
+        return 0U;
+    }
+    if (to->marking) {
+        for (uint32_t index = 0U; index < count; ++index) {
+            if ((size_t)start + index < engine->list_item_count) {
+                (void)move_node(engine, to, engine->list_items[start + index]);
+            }
+        }
+        return start;
+    }
+    if (to->item_count + count > to->item_capacity) {
+        size_t capacity = to->item_capacity == 0U ? 4096U : to->item_capacity;
+        while (capacity < to->item_count + count) {
+            capacity *= 2U;
+        }
+        uint32_t *grown = realloc(to->items, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            to->failed = true;
+            return 0U;
+        }
+        to->items = grown;
+        to->item_capacity = capacity;
+    }
+    size_t at = to->item_count;
+    to->item_count += count;
+    for (uint32_t index = 0U; index < count; ++index) {
+        uint32_t old = (size_t)start + index < engine->list_item_count
+                           ? engine->list_items[start + index]
+                           : 0U;
+        uint32_t moved = move_node(engine, to, old);
+        to->items[at + index] = moved;
+    }
+    return (uint32_t)at;
+}
+
+/* The lists a node of its kind holds, taken with it. */
+static void move_children(struct hstex_engine *engine, struct node_move *to,
+                          struct hstex_node *node)
+{
+    switch (node->kind) {
+    case HSTEX_NODE_LIST:
+        node->value.list.node_start = move_list(
+            engine, to, node->value.list.node_start, node->value.list.node_count);
+        break;
+    case HSTEX_NODE_DISCRETIONARY:
+        node->value.disc.pre_start = move_list(
+            engine, to, node->value.disc.pre_start, node->value.disc.pre_count);
+        node->value.disc.post_start = move_list(
+            engine, to, node->value.disc.post_start, node->value.disc.post_count);
+        break;
+    case HSTEX_NODE_INSERT:
+        node->value.insert.node_start =
+            move_list(engine, to, node->value.insert.node_start,
+                      node->value.insert.node_count);
+        break;
+    case HSTEX_NODE_GLUE:
+        node->value.glue.leader = move_node(engine, to, node->value.glue.leader);
+        break;
+    default:
+        break;
+    }
+}
+
+static uint32_t move_node(struct hstex_engine *engine, struct node_move *to,
+                          uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count ||
+        to->failed) {
+        return 0U;
+    }
+    if (to->places[identifier - 1U] != 0U) {
+        return to->marking ? identifier : to->places[identifier - 1U];
+    }
+    if (to->marking) {
+        to->places[identifier - 1U] = identifier;
+        if (to->dead != NULL && to->dead[identifier - 1U] != 0U) {
+            to->dead[identifier - 1U] = 0U;
+            (void)fprintf(stderr,
+                          "hstex: node %u of kind %d was given back and is "
+                          "wanted again on page %d, from %s\n",
+                          identifier, (int)engine->nodes[identifier - 1U].kind,
+                          engine->shipped_pages,
+                          to->root == NULL ? "?" : to->root);
+        }
+        struct hstex_node seen = engine->nodes[identifier - 1U];
+        move_children(engine, to, &seen);
+        return identifier;
+    }
+    if (to->count == to->capacity) {
+        size_t capacity = to->capacity == 0U ? 1024U : to->capacity * 2U;
+        struct hstex_node *grown = realloc(to->nodes, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            to->failed = true;
+            return 0U;
+        }
+        to->nodes = grown;
+        to->capacity = capacity;
+    }
+    size_t at = to->count++;
+    to->places[identifier - 1U] = (uint32_t)(at + 1U);
+    /* The node is taken by value, because what it holds is moved before it
+       is put down and the arena it is put down in may move meanwhile. */
+    struct hstex_node node = engine->nodes[identifier - 1U];
+    move_children(engine, to, &node);
+    to->nodes[at] = node;
+    return (uint32_t)(at + 1U);
+}
+
+static void move_box(struct hstex_engine *engine, struct node_move *to,
+                     struct hstex_box *box)
+{
+    box->node_start = move_list(engine, to, box->node_start, box->node_count);
+}
+
+static void move_identifiers(struct hstex_engine *engine, struct node_move *to,
+                             uint32_t *identifiers, size_t count)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        identifiers[index] = move_node(engine, to, identifiers[index]);
+    }
+}
+
+static void move_field(struct hstex_engine *engine, struct node_move *to,
+                       struct hstex_math_field *field)
+{
+    field->node = move_node(engine, to, field->node);
+}
+
+static void move_noads(struct hstex_engine *engine, struct node_move *to,
+                       struct hstex_noad *noads, size_t count)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        struct hstex_noad *noad = &noads[index];
+        noad->node = move_node(engine, to, noad->node);
+        move_field(engine, to, &noad->nucleus);
+        move_field(engine, to, &noad->superscript);
+        move_field(engine, to, &noad->subscript);
+    }
+}
+
+/* Everything that can still name a node. A place left out here is a page's
+   worth of nodes given back while something still points at them, so the
+   list is meant to be exhaustive rather than short. */
+static void move_roots(struct hstex_engine *engine, struct node_move *to)
+{
+    to->root = "a box register";
+    for (size_t index = 0U; index < engine->count_capacity; ++index) {
+        move_box(engine, to, &engine->boxes[index]);
+    }
+    /* A box register set inside a group has its old value on the save
+       stack, waiting for the group to end. */
+    to->root = "a box register a group is keeping";
+    for (size_t index = 0U; index < engine->save_count; ++index) {
+        if (engine->saves[index].kind == HSTEX_SAVE_BOX) {
+            move_box(engine, to, &engine->saves[index].previous.box);
+        }
+    }
+    to->root = "the equation being displayed";
+    move_box(engine, to, &engine->displayed_equation);
+    /* The same list may be reached by more than one name -- the list being
+       built is the contribution list between two pages -- and a list whose
+       nodes were moved once must not be moved again, since what it holds by
+       then is where they went rather than where they were. */
+    to->root = "a vertical list being built";
+    struct hstex_vbox_builder *const vboxes[] = {
+        engine->page_builder, engine->contribution_builder,
+        engine->active_vbox_builder, engine->display_rows,
+        engine->display_outer_vbox};
+    const size_t vbox_count = sizeof(vboxes) / sizeof(vboxes[0]);
+    for (size_t index = 0U; index < vbox_count; ++index) {
+        bool moved_already = false;
+        for (size_t before = 0U; before < index; ++before) {
+            moved_already = moved_already || vboxes[before] == vboxes[index];
+        }
+        if (vboxes[index] != NULL && !moved_already) {
+            move_identifiers(engine, to, vboxes[index]->node_identifiers,
+                             vboxes[index]->count);
+        }
+    }
+    to->root = "a horizontal list being built";
+    struct hstex_hbox_builder *const hboxes[] = {engine->active_hbox_builder,
+                                                 engine->paragraph_builder};
+    const size_t hbox_count = sizeof(hboxes) / sizeof(hboxes[0]);
+    for (size_t index = 0U; index < hbox_count; ++index) {
+        bool moved_already = false;
+        for (size_t before = 0U; before < index; ++before) {
+            moved_already = moved_already || hboxes[before] == hboxes[index];
+        }
+        if (hboxes[index] != NULL && !moved_already) {
+            move_identifiers(engine, to, hboxes[index]->node_identifiers,
+                             hboxes[index]->count);
+        }
+    }
+    to->root = "the box leaders are waiting on";
+    engine->pending_leader = move_node(engine, to, engine->pending_leader);
+    to->root = "an insertion that was split";
+    for (size_t index = 0U; index < engine->page_insert_count; ++index) {
+        engine->page_inserts[index].broken =
+            move_node(engine, to, engine->page_inserts[index].broken);
+    }
+    /* What the page builder last took off the contribution list is a node of
+       its own rather than one of the arena's, but the lists it holds are the
+       arena's. */
+    to->root = "the last node of the page";
+    move_children(engine, to, &engine->page_last_node);
+    to->root = "a formula";
+    /* Sub-formulas outlive the formula that made them, so all of them are
+       kept, and so are the lists a formula is still being built from. */
+    move_noads(engine, to, engine->math_items, engine->math_item_count);
+    for (size_t index = 0U; index < engine->math_depth; ++index) {
+        move_noads(engine, to, engine->math_stack[index].noads,
+                   engine->math_stack[index].count);
+    }
+}
+
+/* Nothing may be half built when the arenas move. Every construct that holds
+   nodes where the engine cannot reach them -- a box body, an alignment, a
+   formula, an output routine -- runs inside a group, so a run standing at
+   group level zero between two pages is holding none of them. */
+/* A builder the engine owns can be walked from the engine; one standing in a
+   call of its own cannot, so a run holding one gives nothing back. */
+static bool vbox_builder_is_the_engine_s(const struct hstex_engine *engine,
+                                         const struct hstex_vbox_builder *builder)
+{
+    return builder == NULL || builder == engine->page_builder ||
+           builder == engine->contribution_builder ||
+           builder == engine->display_rows ||
+           builder == engine->display_outer_vbox;
+}
+
+/* Nothing may be half built in a call of its own when the arenas move. An
+   alignment gathers its rows there, and a box body that is not the
+   paragraph's or the page's is built there too. */
+static bool engine_is_between_pages(const struct hstex_engine *engine)
+{
+    return engine->alignment_entry == NULL && !engine->building_alignment &&
+           vbox_builder_is_the_engine_s(engine, engine->active_vbox_builder) &&
+           (engine->active_hbox_builder == NULL ||
+            engine->active_hbox_builder == engine->paragraph_builder);
+}
+
+
+static void compact_nodes(struct hstex_engine *engine)
+{
+    if (engine->node_count == 0U || !engine_is_between_pages(engine)) {
+        return;
+    }
+    /* A sub-formula is kept beyond the atom that made it, so that a field
+       may name one without owning it, and a fraction may set one again in
+       another style. Nothing outside the formula it belongs to can name one,
+       so where no formula is being read they are all done with -- and so are
+       the boxes they were holding, which is most of what a run of the corpus
+       was keeping. */
+    if (engine->math_depth == 0U) {
+        engine->math_item_count = 0U;
+        engine->math_sublist_count = 0U;
+    }
+    struct node_move to = {0};
+    to.places = calloc(engine->node_count, sizeof(*to.places));
+    if (to.places == NULL) {
+        return;
+    }
+    /* For finding roots that are missing: nothing is given back, and a node
+       the last walk did not reach says so if this one does. */
+    bool tracing = engine->dead_node_check == HSTEX_DEAD_NODES_TRACED;
+    bool poisoning = engine->dead_node_check == HSTEX_DEAD_NODES_POISONED;
+    if (poisoning) {
+        to.marking = true;
+    }
+    if (tracing) {
+        /* The record grows with the arena; a node made since the last walk
+           was never given back. */
+        uint8_t *dead = realloc(engine->dead_nodes, engine->node_count);
+        if (dead == NULL) {
+            free(to.places);
+            return;
+        }
+        if (engine->node_count > engine->dead_node_count) {
+            memset(dead + engine->dead_node_count, 0,
+                   engine->node_count - engine->dead_node_count);
+        }
+        engine->dead_nodes = dead;
+        engine->dead_node_count = engine->node_count;
+        to.dead = dead;
+        to.marking = true;
+    }
+    move_roots(engine, &to);
+    if (to.failed) {
+        free(to.places);
+        free(to.nodes);
+        free(to.items);
+        return;
+    }
+    /* With nothing installed, a node nothing reached is written over rather
+       than given back, so that a run says whether anything still wanted it.
+       For finding out what this list of roots misses; not for a real run. */
+    if (tracing) {
+        for (size_t index = 0U; index < engine->node_count; ++index) {
+            engine->dead_nodes[index] = to.places[index] == 0U ? 1U : 0U;
+        }
+        free(to.places);
+        free(to.nodes);
+        free(to.items);
+        return;
+    }
+    if (poisoning) {
+        for (size_t index = 0U; index < engine->node_count; ++index) {
+            if (to.places[index] == 0U) {
+                struct hstex_node *node = &engine->nodes[index];
+                memset(node, 0x5a, sizeof(*node));
+                node->kind = HSTEX_NODE_PENALTY;
+                node->value.penalty = INT32_C(1234567);
+            }
+        }
+        free(to.places);
+        free(to.nodes);
+        free(to.items);
+        return;
+    }
+    free(to.places);
+    free(engine->nodes);
+    free(engine->list_items);
+    engine->nodes = to.nodes;
+    engine->node_count = to.count;
+    engine->node_capacity = to.capacity;
+    engine->list_items = to.items;
+    engine->list_item_count = to.item_count;
+    engine->list_item_capacity = to.item_capacity;
 }
 
 /* A running dimension contributes nothing while a box is measured; the
@@ -30898,7 +31271,7 @@ int hstex_engine_run(struct hstex_engine *engine,
     return pdf_close(engine, error, error_capacity);
 }
 
-enum hstex_engine_result hstex_engine_next_output(
+static enum hstex_engine_result next_output(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
     size_t error_capacity)
@@ -32357,4 +32730,25 @@ handle_token:
                 "non-integer register execution is not implemented");
         }
     }
+}
+
+/* A box body is read on the live input, so this loop runs again inside
+   itself while one is being built, and the builders it is holding then stand
+   in calls of its own. What a page leaves behind is given back only where no
+   such call is running, which is where this loop is entered from outside. */
+enum hstex_engine_result hstex_engine_next_output(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error,
+    size_t error_capacity)
+{
+    if (engine->output_depth == 0U &&
+        engine->shipped_pages != engine->compacted_pages) {
+        engine->compacted_pages = engine->shipped_pages;
+        compact_nodes(engine);
+    }
+    ++engine->output_depth;
+    enum hstex_engine_result result =
+        next_output(engine, token, location, error, error_capacity);
+    --engine->output_depth;
+    return result;
 }

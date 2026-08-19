@@ -32,6 +32,23 @@ struct hstex_file_finder {
     bool broken;
 };
 
+/* What a run does with the nodes a page has left behind, beyond giving them
+   back. Both of these answer the question "is the list of places that can
+   still name a node complete?", which is a question about the engine rather
+   than about a document, so a run is asked it by
+   HSTEX_DEAD_NODES=trace or =poison rather than by the document. See
+   docs/DECISIONS.md, what-a-page-leaves-behind. */
+enum hstex_dead_node_check {
+    HSTEX_DEAD_NODES_GIVEN_BACK = 0,
+    /* Give nothing back, and say so where a node one walk did not reach is
+       reached by the next. */
+    HSTEX_DEAD_NODES_TRACED,
+    /* Give nothing back, and write over every node no walk reached, so that
+       a document that still comes out the same says none of them was
+       wanted. */
+    HSTEX_DEAD_NODES_POISONED
+};
+
 enum hstex_engine_result {
     HSTEX_ENGINE_ERROR = -1,
     HSTEX_ENGINE_EOF = 0,
@@ -1829,6 +1846,19 @@ struct hstex_engine {
     uint32_t *pdf_font_places;
     size_t pdf_font_place_capacity;
     struct hstex_file_finder finder;
+    /* How many pages had been shipped when the node arenas were last given
+       back; see docs/DECISIONS.md, what-a-page-leaves-behind. */
+    int32_t compacted_pages;
+    /* Which nodes the last walk over the roots did not reach, kept only
+       while a run is being asked whether that list of roots is complete. */
+    uint8_t *dead_nodes;
+    size_t dead_node_count;
+    /* Whether this run is being asked that question, and how. */
+    enum hstex_dead_node_check dead_node_check;
+    /* How many of the driver's loops are running inside one another: a box
+       body is read on the live input, so the loop runs again inside itself
+       while one is being built. */
+    size_t output_depth;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,
