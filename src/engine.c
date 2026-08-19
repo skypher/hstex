@@ -3714,7 +3714,7 @@ static int integer_from_control_sequence(
             const struct hstex_source_frame *frame =
                 &engine->sources.frames[index - 1U];
             if (frame->kind == HSTEX_SOURCE_FILE) {
-                uint32_t line = frame->value.file.mouth.line_number;
+                uint32_t line = frame->value.file->mouth.line_number;
                 *value = line > (uint32_t)INT32_MAX ? INT32_MAX : (int32_t)line;
                 return 0;
             }
@@ -6637,7 +6637,7 @@ static int scan_balanced_group(struct hstex_engine *engine,
                     copy_tokens(argument->data + argument->count, tokens,
                                 taken);
                     argument->count += taken;
-                    source->cursor += taken;
+                    source->cursor += (uint32_t)taken;
                 }
                 if (closed) {
                     source->cursor += 1U;
@@ -7133,7 +7133,7 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                     copy_tokens(argument->data + argument->count, tokens,
                                 taken);
                     argument->count += taken;
-                    source->cursor += taken;
+                    source->cursor += (uint32_t)taken;
                     continue;
                 }
             }
@@ -8307,7 +8307,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                     copy_tokens(replacement.data + replacement.count, tokens,
                                 taken);
                     replacement.count += taken;
-                    source->cursor += taken;
+                    source->cursor += (uint32_t)taken;
                     continue;
                 }
             }
@@ -29816,7 +29816,7 @@ static int skip_conditional(struct hstex_engine *engine, size_t target,
                 &engine->sources.frames[engine->sources.count - 1U];
             if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
                 struct hstex_token_source *source = &frame->value.token_list;
-                size_t cursor = source->cursor;
+                uint32_t cursor = source->cursor;
                 while (cursor < source->count &&
                        !hstex_token_is_control_sequence(
                            normalize_unexpanded_control_sequence(
@@ -30005,8 +30005,8 @@ static const char *current_source_line(const struct hstex_engine *engine,
         const struct hstex_source_frame *frame =
             &engine->sources.frames[index - 1U];
         if (frame->kind == HSTEX_SOURCE_FILE) {
-            *line = frame->value.file.mouth.line_number;
-            return frame->value.file.path;
+            *line = frame->value.file->mouth.line_number;
+            return frame->value.file->path;
         }
     }
     *line = 0U;

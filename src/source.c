@@ -50,7 +50,8 @@ static int reserve_frames(struct hstex_source_stack *stack, size_t required,
     for (size_t index = 0U; index < stack->count; ++index) {
         struct hstex_source_frame *frame = &stack->frames[index];
         if (frame->kind == HSTEX_SOURCE_TOKEN_LIST &&
-            frame->value.token_list.holds_own) {
+            (frame->value.token_list.flags &
+             (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN) != 0U) {
             frame->value.token_list.tokens = &frame->value.token_list.held;
         }
     }
@@ -61,23 +62,24 @@ static void pop_frame(struct hstex_source_stack *stack)
 {
     struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
     if (frame->kind == HSTEX_SOURCE_FILE) {
-        hstex_mouth_destroy(&frame->value.file.mouth);
-        hstex_input_close(&frame->value.file.input);
-        free(frame->value.file.path);
+        hstex_mouth_destroy(&frame->value.file->mouth);
+        hstex_input_close(&frame->value.file->input);
+        free(frame->value.file->path);
+        free(frame->value.file);
     } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+        struct hstex_token_source *source = &frame->value.token_list;
         /* Most frames hold no allocation of their own -- an expansion stands
            in the stack's own store -- and asking the library to give nothing
            back is 48 million calls over the corpus. */
-        if (frame->value.token_list.owned_allocation != NULL) {
-            free(frame->value.token_list.owned_allocation);
+        if ((source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_OWNS) != 0U) {
+            free((hstex_token *)(uintptr_t)(const void *)source->tokens);
         }
-        if (frame->value.token_list.from_store) {
-            stack->store_count = frame->value.token_list.store_base;
+        if ((source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE) != 0U) {
+            stack->store_count = source->store_base;
         }
-        if (frame->value.token_list.definition != 0U &&
-            stack->definition_release != NULL) {
+        if (source->definition != 0U && stack->definition_release != NULL) {
             stack->definition_release(stack->definition_owner,
-                                      frame->value.token_list.definition);
+                                      source->definition);
         }
     }
     --stack->count;
@@ -139,12 +141,19 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     }
     memcpy(path_copy, path, path_length + 1U);
 
+    struct hstex_file_source *file = calloc(1U, sizeof(*file));
+    if (file == NULL) {
+        free(path_copy);
+        hstex_input_close(&input);
+        return set_error(error, error_capacity, "input file allocation failed");
+    }
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_FILE;
-    frame->value.file.input = input;
-    frame->value.file.path = path_copy;
-    hstex_mouth_init(&frame->value.file.mouth, input.data, input.length,
+    frame->value.file = file;
+    file->input = input;
+    file->path = path_copy;
+    hstex_mouth_init(&file->mouth, input.data, input.length,
                      stack->lexical_state);
     return 0;
 }
@@ -176,15 +185,22 @@ int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
     }
     memcpy(name_copy, name, name_length + 1U);
 
+    struct hstex_file_source *file = calloc(1U, sizeof(*file));
+    if (file == NULL) {
+        free(name_copy);
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "pseudo-file allocation failed");
+    }
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_FILE;
-    frame->value.file.input.data = bytes;
-    frame->value.file.input.length = length;
-    frame->value.file.input.storage = HSTEX_INPUT_STORAGE_OWNED;
-    frame->value.file.path = name_copy;
-    hstex_mouth_init(&frame->value.file.mouth, bytes, length,
-                     stack->lexical_state);
+    frame->value.file = file;
+    file->input.data = bytes;
+    file->input.length = length;
+    file->input.storage = HSTEX_INPUT_STORAGE_OWNED;
+    file->path = name_copy;
+    hstex_mouth_init(&file->mouth, bytes, length, stack->lexical_state);
     return 0;
 }
 
@@ -193,7 +209,8 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity)
 {
-    if (stack == NULL || (count != 0U && tokens == NULL)) {
+    if (stack == NULL || (count != 0U && tokens == NULL) ||
+        count > UINT32_MAX) {
         return set_error(error, error_capacity, "invalid token-source request");
     }
     pop_exhausted_token_frames(stack);
@@ -204,13 +221,13 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     source->tokens = tokens;
-    source->owned_allocation = NULL;
-    source->count = count;
+    source->count = (uint32_t)count;
     source->cursor = 0U;
     source->location = location;
-    source->holds_own = false;
+    source->held = 0U;
     source->definition = 0U;
-    source->from_store = false;
+    source->store_base = 0U;
+    source->flags = 0U;
     return 0;
 }
 
@@ -219,7 +236,8 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
                                    struct hstex_source_location location,
                                    char *error, size_t error_capacity)
 {
-    if (stack == NULL || (count != 0U && tokens == NULL)) {
+    if (stack == NULL || (count != 0U && tokens == NULL) ||
+        count > UINT32_MAX) {
         free(tokens);
         return set_error(error, error_capacity,
                          "invalid owned token-source request");
@@ -237,13 +255,13 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     source->tokens = tokens;
-    source->owned_allocation = tokens;
-    source->count = count;
+    source->count = (uint32_t)count;
     source->cursor = 0U;
     source->location = location;
-    source->holds_own = false;
+    source->held = 0U;
     source->definition = 0U;
-    source->from_store = false;
+    source->store_base = 0U;
+    source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_OWNS;
     return 0;
 }
 
@@ -262,14 +280,13 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     source->held = token;
-    source->holds_own = true;
     source->tokens = &source->held;
-    source->owned_allocation = NULL;
     source->count = 1U;
     source->cursor = 0U;
     source->location = location;
     source->definition = 0U;
-    source->from_store = false;
+    source->store_base = 0U;
+    source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
     return 0;
 }
 
@@ -315,7 +332,8 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
                                char *error, size_t error_capacity)
 {
     if (stack == NULL || count == 0U ||
-        count > stack->store_capacity - stack->store_count) {
+        count > stack->store_capacity - stack->store_count ||
+        stack->store_count + count > UINT32_MAX) {
         return set_error(error, error_capacity,
                          "invalid reserved token-source request");
     }
@@ -326,14 +344,13 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     source->tokens = stack->store + stack->store_count;
-    source->owned_allocation = NULL;
-    source->count = count;
+    source->count = (uint32_t)count;
     source->cursor = 0U;
     source->location = location;
-    source->holds_own = false;
+    source->held = 0U;
     source->definition = 0U;
-    source->from_store = true;
-    source->store_base = stack->store_count;
+    source->store_base = (uint32_t)stack->store_count;
+    source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE;
     stack->store_count += count;
     return 0;
 }
@@ -344,7 +361,8 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
                                  struct hstex_source_location location,
                                  char *error, size_t error_capacity)
 {
-    if (stack == NULL || count == 0U || tokens == NULL) {
+    if (stack == NULL || count == 0U || tokens == NULL ||
+        count > UINT32_MAX) {
         return set_error(error, error_capacity,
                          "invalid definition-source request");
     }
@@ -356,13 +374,13 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
     source->tokens = tokens;
-    source->owned_allocation = NULL;
-    source->count = count;
+    source->count = (uint32_t)count;
     source->cursor = 0U;
     source->location = location;
-    source->holds_own = false;
+    source->held = 0U;
     source->definition = definition;
-    source->from_store = false;
+    source->store_base = 0U;
+    source->flags = 0U;
     return 0;
 }
 
@@ -419,7 +437,7 @@ int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
         if (frame->kind != HSTEX_SOURCE_FILE) {
             continue;
         }
-        struct hstex_mouth *mouth = &frame->value.file.mouth;
+        struct hstex_mouth *mouth = &frame->value.file->mouth;
         mouth->next_line_offset = mouth->length;
         mouth->line_loaded = false;
         mouth->has_end_line_byte = false;
@@ -454,7 +472,7 @@ enum hstex_mouth_result hstex_source_next(
             return HSTEX_MOUTH_TOKEN;
         }
         enum hstex_mouth_result result = hstex_mouth_next(
-            &frame->value.file.mouth, token, location, error, error_capacity);
+            &frame->value.file->mouth, token, location, error, error_capacity);
         if (result == HSTEX_MOUTH_EOF) {
             pop_frame(stack);
             ++stack->file_end_count;
@@ -473,7 +491,7 @@ const char *hstex_source_current_name(const struct hstex_source_stack *stack)
     for (size_t index = stack->count; index > 0U; --index) {
         const struct hstex_source_frame *frame = &stack->frames[index - 1U];
         if (frame->kind == HSTEX_SOURCE_FILE) {
-            return frame->value.file.path;
+            return frame->value.file->path;
         }
     }
     return NULL;

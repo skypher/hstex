@@ -21,32 +21,43 @@ struct hstex_file_source {
     char *path;
 };
 
-struct hstex_token_source {
-    const hstex_token *tokens;
-    hstex_token *owned_allocation;
-    size_t count;
-    size_t cursor;
-    struct hstex_source_location location;
+/* What a token-list frame is besides its tokens. */
+enum hstex_token_source_flag {
     /* A token put back on its own is held in the frame itself rather than in
        an allocation of its own; the frame then points at `held`, and the
        stack points it there again whenever the frames move. */
+    HSTEX_TOKEN_SOURCE_HOLDS_OWN = 1U << 0,
+    /* The frame owns the tokens it reads and gives them back when it is
+       popped; what it owns starts where `tokens` points. */
+    HSTEX_TOKEN_SOURCE_OWNS = 1U << 1,
+    /* The tokens stand in the stack's own store, which is given back to
+       `store_base` when the frame is popped. */
+    HSTEX_TOKEN_SOURCE_FROM_STORE = 1U << 2
+};
+
+/* A frame is pushed and popped for every macro call a document makes -- some
+   thirty million over the corpus -- so it is kept as narrow as it can be:
+   counts are words rather than double words, what the frame owns and where
+   it stands are told by flags, and a file, of which a run opens a few
+   hundred, keeps its reading state elsewhere. */
+struct hstex_token_source {
+    const hstex_token *tokens;
+    uint32_t count;
+    uint32_t cursor;
+    struct hstex_source_location location;
     hstex_token held;
-    bool holds_own;
     /* The definition whose own tokens the frame is reading, which it holds
        until it is done with them, or zero. See docs/DECISIONS.md,
        a-definition-nothing-holds. */
     uint32_t definition;
-    /* Where in the stack's own store the frame's tokens stand, when they
-       stand there: the store is given back to that mark when the frame is
-       popped. */
-    bool from_store;
-    size_t store_base;
+    uint32_t store_base;
+    uint8_t flags;
 };
 
 struct hstex_source_frame {
     enum hstex_source_frame_kind kind;
     union {
-        struct hstex_file_source file;
+        struct hstex_file_source *file;
         struct hstex_token_source token_list;
     } value;
 };
