@@ -8056,30 +8056,37 @@ enum hstex_engine_result hstex_engine_next_expanded(
     for (;;) {
         engine->returned_unexpanded = false;
         engine->returned_unexpanded_executable = false;
+        /* The token is looked at here rather than where the caller wants it
+           put: what the caller points at may be anything, so every look at it
+           would be a fetch of what was just written there. */
+        hstex_token current = 0U;
         enum hstex_engine_result result = raw_next(
-            engine, token, location, error, error_capacity);
+            engine, &current, location, error, error_capacity);
         if (result != HSTEX_ENGINE_TOKEN) {
             return result;
         }
-        if (hstex_token_is_unexpanded_non_control(*token)) {
-            *token = hstex_token_normalize_unexpanded_non_control(*token);
+        if (hstex_token_is_unexpanded_non_control(current)) {
+            *token = hstex_token_normalize_unexpanded_non_control(current);
             engine->returned_unexpanded = true;
             engine->returned_unexpanded_executable = false;
             return HSTEX_ENGINE_TOKEN;
         }
-        if (hstex_token_is_frozen_control_sequence(*token)) {
-            bool executable = hstex_token_is_unexpanded_control_sequence(*token);
+        if (hstex_token_is_frozen_control_sequence(current)) {
+            bool executable =
+                hstex_token_is_unexpanded_control_sequence(current);
             *token = hstex_token_control_sequence(
-                hstex_token_control_sequence_id(*token));
+                hstex_token_control_sequence_id(current));
             engine->returned_unexpanded = true;
             engine->returned_unexpanded_executable = executable;
             return HSTEX_ENGINE_TOKEN;
         }
-        if (!hstex_token_is_control_sequence(*token)) {
+        if (!hstex_token_is_control_sequence(current)) {
+            *token = current;
             return HSTEX_ENGINE_TOKEN;
         }
+        *token = current;
         const struct hstex_meaning *meaning = hstex_engine_meaning(
-            engine, hstex_token_control_sequence_id(*token));
+            engine, hstex_token_control_sequence_id(current));
         if (meaning->command == HSTEX_COMMAND_MACRO) {
             if (meaning->value.macro_identifier == 0U ||
                 (size_t)meaning->value.macro_identifier > engine->macro_count) {
