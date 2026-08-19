@@ -8100,6 +8100,24 @@ enum hstex_engine_result hstex_engine_next_expanded(
     }
 }
 
+/* A token in a replacement text that must be looked at on its own: a brace
+   tells the body where it ends, a parameter marker names an argument, and a
+   frozen control sequence is written down under its plain name. Everything
+   else goes into the body as it stands. */
+static bool token_ends_definition_run(hstex_token token)
+{
+    if (hstex_token_is_frozen_control_sequence(token)) {
+        return true;
+    }
+    if (!hstex_token_is_character(token)) {
+        return false;
+    }
+    uint8_t category = hstex_token_category(token);
+    return category == (uint8_t)HSTEX_CAT_BEGIN_GROUP ||
+           category == (uint8_t)HSTEX_CAT_END_GROUP ||
+           category == (uint8_t)HSTEX_CAT_PARAMETER;
+}
+
 static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                            bool expanded_replacement, char *error,
                            size_t error_capacity)
@@ -8187,6 +8205,38 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     struct hstex_token_vector replacement = {0};
     size_t depth = 1U;
     while (depth != 0U) {
+        /* Where the body is being read from a list of tokens standing
+           together, it is taken in one go rather than a token at a time: the
+           corpus makes nearly eight million definitions, and reading their
+           bodies is most of what they cost. A token the body must look at on
+           its own ends the run. */
+        if (!expanded_replacement && engine->sources.count != 0U) {
+            struct hstex_source_frame *frame =
+                &engine->sources.frames[engine->sources.count - 1U];
+            if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+                struct hstex_token_source *source = &frame->value.token_list;
+                const hstex_token *tokens = source->tokens + source->cursor;
+                size_t available = source->count - source->cursor;
+                size_t taken = 0U;
+                while (taken < available &&
+                       !token_ends_definition_run(tokens[taken])) {
+                    ++taken;
+                }
+                if (taken != 0U) {
+                    if (vector_reserve(&replacement, replacement.count + taken,
+                                       error, error_capacity) != 0) {
+                        vector_destroy(&parameter_text);
+                        vector_destroy(&replacement);
+                        return -1;
+                    }
+                    memcpy(replacement.data + replacement.count, tokens,
+                           taken * sizeof(*tokens));
+                    replacement.count += taken;
+                    source->cursor += taken;
+                    continue;
+                }
+            }
+        }
         hstex_token current = 0U;
         struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
