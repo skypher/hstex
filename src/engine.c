@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <spawn.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -68,6 +69,9 @@ struct hstex_vbox_builder {
        docs/DECISIONS.md, a-rule-between-rows. */
     bool continues;
 };
+
+/* The environment a file search is started with; POSIX puts it here. */
+extern char **environ;
 
 static int set_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);
@@ -616,6 +620,7 @@ static int reserve_hyphen_exceptions(struct hstex_engine *engine,
 }
 
 static char *resolve_with_kpsewhich(const char *filename);
+static char *resolve_file(struct hstex_engine *engine, const char *filename);
 
 static uint16_t read_big_endian_u16(const uint8_t *bytes)
 {
@@ -671,7 +676,8 @@ static int32_t scale_fix_word(int32_t fixed, int32_t size)
     return (int32_t)scaled;
 }
 
-static int open_tfm(const char *name, struct hstex_input *input, char *error,
+static int open_tfm(struct hstex_engine *engine, const char *name,
+                    struct hstex_input *input, char *error,
                     size_t error_capacity)
 {
     char *filename = tfm_filename(name, error, error_capacity);
@@ -679,7 +685,7 @@ static int open_tfm(const char *name, struct hstex_input *input, char *error,
         return -1;
     }
     char *path = access(filename, R_OK) == 0 ? strdup(filename)
-                                             : resolve_with_kpsewhich(filename);
+                                             : resolve_file(engine, filename);
     free(filename);
     if (path == NULL) {
         return set_error(error, error_capacity,
@@ -700,11 +706,11 @@ static int open_tfm(const char *name, struct hstex_input *input, char *error,
 /* The design size is a fixed-point number of points in the second header
    word, which carries twenty fractional bits where a scaled point has
    sixteen. */
-static int tfm_design_size(const char *name, int32_t *design, char *error,
-                           size_t error_capacity)
+static int tfm_design_size(struct hstex_engine *engine, const char *name,
+                           int32_t *design, char *error, size_t error_capacity)
 {
     struct hstex_input input;
-    if (open_tfm(name, &input, error, error_capacity) != 0) {
+    if (open_tfm(engine, name, &input, error, error_capacity) != 0) {
         return -1;
     }
     uint16_t header_length = read_big_endian_u16(input.data + 2U);
@@ -723,12 +729,13 @@ static int tfm_design_size(const char *name, int32_t *design, char *error,
     return 0;
 }
 
-static int load_tfm_parameters(struct hstex_font *font, const char *name,
+static int load_tfm_parameters(struct hstex_engine *engine,
+                               struct hstex_font *font, const char *name,
                                int32_t size, char *error,
                                size_t error_capacity)
 {
     struct hstex_input input;
-    if (open_tfm(name, &input, error, error_capacity) != 0) {
+    if (open_tfm(engine, name, &input, error, error_capacity) != 0) {
         return -1;
     }
 
@@ -964,8 +971,8 @@ static int find_or_create_font(struct hstex_engine *engine, const char *name,
             return -1;
         }
         font->dimen_count = 7U;
-    } else if (load_tfm_parameters(font, name, size, error, error_capacity) !=
-               0) {
+    } else if (load_tfm_parameters(engine, font, name, size, error,
+                                   error_capacity) != 0) {
         free(font->name);
         free(font->dimens);
         memset(font, 0, sizeof(*font));
@@ -2796,6 +2803,11 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_outlines[index].attributes);
     }
     free(engine->pdf_outlines);
+    for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
+        free(engine->resolved_files[index].name);
+        free(engine->resolved_files[index].path);
+    }
+    free(engine->resolved_files);
     for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
         vector_destroy(&engine->argument_pool[index]);
     }
@@ -3259,22 +3271,39 @@ static char *resolve_with_kpsewhich(const char *filename)
     if (pipe(descriptors) != 0) {
         return NULL;
     }
-    pid_t child = fork();
-    if (child < 0) {
+    /* The child is started without copying this process's page tables, which
+       for a run that has grown to a gigabyte costs more than the search it
+       is being started for. See docs/DECISIONS.md, finding-a-file. */
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
         (void)close(descriptors[0]);
         (void)close(descriptors[1]);
         return NULL;
     }
-    if (child == 0) {
+    pid_t child = 0;
+    char program[] = "kpsewhich";
+    char *name = strdup(filename);
+    if (name == NULL) {
+        (void)posix_spawn_file_actions_destroy(&actions);
         (void)close(descriptors[0]);
-        if (dup2(descriptors[1], STDOUT_FILENO) < 0) {
-            _exit(127);
-        }
         (void)close(descriptors[1]);
-        execlp("kpsewhich", "kpsewhich", filename, (char *)NULL);
-        _exit(127);
+        return NULL;
     }
+    char *const arguments[] = {program, name, NULL};
+    int spawned =
+        posix_spawn_file_actions_addclose(&actions, descriptors[0]) != 0 ||
+                posix_spawn_file_actions_adddup2(&actions, descriptors[1],
+                                                 STDOUT_FILENO) != 0 ||
+                posix_spawn_file_actions_addclose(&actions, descriptors[1]) != 0
+            ? -1
+            : posix_spawnp(&child, program, &actions, NULL, arguments, environ);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    free(name);
     (void)close(descriptors[1]);
+    if (spawned != 0) {
+        (void)close(descriptors[0]);
+        return NULL;
+    }
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
@@ -3319,6 +3348,57 @@ static char *resolve_with_kpsewhich(const char *filename)
         return NULL;
     }
     return (char *)bytes;
+}
+
+/* What kpsewhich says a file is, remembered. The corpus asks after 181
+   distinct names 7,239 times, and a child process for each of them costs
+   more than the typesetting; a name it did not find is asked after again
+   once the run has written a file, since that file may be the answer. See
+   docs/DECISIONS.md, finding-a-file. */
+static char *resolve_file(struct hstex_engine *engine, const char *filename)
+{
+    if (engine == NULL) {
+        return resolve_with_kpsewhich(filename);
+    }
+    struct hstex_resolved_file *entry = NULL;
+    for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
+        if (strcmp(engine->resolved_files[index].name, filename) == 0) {
+            entry = &engine->resolved_files[index];
+            break;
+        }
+    }
+    if (entry != NULL && (entry->path != NULL ||
+                          entry->generation == engine->file_generation)) {
+        return entry->path == NULL ? NULL : strdup(entry->path);
+    }
+    char *path = resolve_with_kpsewhich(filename);
+    if (entry != NULL) {
+        free(entry->path);
+        entry->path = path == NULL ? NULL : strdup(path);
+        entry->generation = engine->file_generation;
+        return path;
+    }
+    if (engine->resolved_file_count == engine->resolved_file_capacity) {
+        size_t capacity = engine->resolved_file_capacity == 0U
+                              ? 32U
+                              : engine->resolved_file_capacity * 2U;
+        struct hstex_resolved_file *grown =
+            realloc(engine->resolved_files, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return path;
+        }
+        engine->resolved_files = grown;
+        engine->resolved_file_capacity = capacity;
+    }
+    entry = &engine->resolved_files[engine->resolved_file_count];
+    entry->name = strdup(filename);
+    if (entry->name == NULL) {
+        return path;
+    }
+    entry->path = path == NULL ? NULL : strdup(path);
+    entry->generation = engine->file_generation;
+    ++engine->resolved_file_count;
+    return path;
 }
 
 static bool filename_has_extension(const char *filename)
@@ -3376,7 +3456,7 @@ static char *resolve_input_path(struct hstex_engine *engine,
             }
             free(candidate);
         }
-        char *resolved = resolve_with_kpsewhich(variant);
+        char *resolved = resolve_file(engine, variant);
         if (resolved != NULL) {
             free(extended);
             return resolved;
@@ -8254,7 +8334,8 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         /* Without `at`, the font is used at its own design size, and
            `scaled` is a thousandth part of that rather than of ten points. */
         int32_t design = 0;
-        if (tfm_design_size(name, &design, error, error_capacity) != 0) {
+        if (tfm_design_size(engine, name, &design, error, error_capacity) !=
+            0) {
             free(name);
             return -1;
         }
@@ -17603,6 +17684,7 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
                          "output path allocation failed");
     }
     FILE *file = fopen(path, "wb");
+    ++engine->file_generation;
     if (file == NULL) {
         int saved_errno = errno;
         int status = set_error(error, error_capacity, "cannot open %s: %s", path,

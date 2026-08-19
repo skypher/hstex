@@ -279,6 +279,16 @@ struct hstex_pdf_record {
     char *content;
 };
 
+/* Where a file the run asked after turned out to be, remembered so that the
+   same question is not put to a child process again. A name that was not
+   found is asked after afresh once the run has written a file, since that
+   file may be the answer. See docs/DECISIONS.md, finding-a-file. */
+struct hstex_resolved_file {
+    char *name;
+    char *path;
+    uint64_t generation;
+};
+
 /* A growable run of tokens: what a macro's arguments are scanned into and
    what its expansion is built in. */
 struct hstex_token_vector {
@@ -1556,6 +1566,12 @@ struct hstex_engine {
     size_t pdf_pages_object;
     /* What the file does when it is opened, if the document named it. */
     size_t pdf_open_action;
+    /* What kpsewhich said about the files the run has asked after, and how
+       many files the run has written since. */
+    struct hstex_resolved_file *resolved_files;
+    size_t resolved_file_count;
+    size_t resolved_file_capacity;
+    uint64_t file_generation;
     /* Room kept for the arguments of the macro being expanded, so that the
        storage one call takes serves the next rather than being given back
        and taken again; a call that finds it busy takes its own. */
