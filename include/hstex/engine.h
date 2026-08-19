@@ -1783,9 +1783,12 @@ struct hstex_engine {
     /* Where the current math context starts. A box body opens a fresh one
        without disturbing the lists the enclosing formula is still holding. */
     size_t math_floor;
-    /* Name of the primitive the executor is currently running, for
-       diagnostics: a scan that fails names the command that asked for the
-       value, which is otherwise invisible from inside the scanner. */
+    /* The primitive the executor is currently running, for diagnostics: a
+       scan that fails names the command that asked for the value, which is
+       otherwise invisible from inside the scanner. What is kept is the token
+       rather than its name: the corpus runs twenty-five million primitives
+       and asks for the name only where one of them fails. */
+    hstex_token executing_token;
     char executing_name[64];
 };
 

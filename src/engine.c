@@ -83,6 +83,18 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
                     size_t error_capacity);
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity);
+/* The name of the primitive the executor is running, worked out where a
+   diagnostic asks for it rather than at every command. */
+static const char *executing_name(struct hstex_engine *engine)
+{
+    if (engine->executing_token == 0U) {
+        engine->executing_name[0] = '\0';
+    } else {
+        describe_token(engine, engine->executing_token, engine->executing_name,
+                       sizeof(engine->executing_name));
+    }
+    return engine->executing_name;
+}
 static const char *current_source_line(const struct hstex_engine *engine,
                                       uint32_t *line);
 static const struct hstex_node *current_list_last_node(
@@ -4050,7 +4062,7 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
             return set_error(error, error_capacity,
                              "invalid based integer constant, found %s for %s "
                              "at %s:%u",
-                             found, engine->executing_name, origin,
+                             found, executing_name(engine), origin,
                              (unsigned int)line);
         }
         *value = sign > 0 ? (int32_t)accumulated
@@ -4110,7 +4122,7 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
                 return set_error(error, error_capacity,
                                  "%s scanning \\%.*s for %s, at %s:%u", reason,
                                  (int)length, (const char *)name,
-                                 engine->executing_name, origin,
+                                 executing_name(engine), origin,
                                  (unsigned int)line);
             }
             return -1;
@@ -7177,8 +7189,7 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
    to place a failure inside a macro expansion. */
 static void record_executing_name(struct hstex_engine *engine, hstex_token token)
 {
-    describe_token(engine, token, engine->executing_name,
-                   sizeof(engine->executing_name));
+    engine->executing_token = token;
 }
 
 static int match_parameter_prefix(struct hstex_engine *engine,
@@ -8926,7 +8937,7 @@ static int append_hbox_node(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "horizontal node used outside an hbox, for %s at "
                          "%s:%u",
-                         engine->executing_name, origin, (unsigned int)line);
+                         executing_name(engine), origin, (unsigned int)line);
     }
     /* A horizontal list that has not been packed yet has no width of its
        own -- a paragraph runs to whatever length it runs to, and only the
@@ -23013,7 +23024,7 @@ static int ensure_horizontal_mode(struct hstex_engine *engine, char *error,
     return set_error(error, error_capacity,
                      "horizontal command \\%s used outside horizontal mode, "
                      "at %s:%u",
-                     engine->executing_name, origin, (unsigned int)line);
+                     executing_name(engine), origin, (unsigned int)line);
 }
 
 /* The commands that begin a paragraph when they are met in vertical mode.
