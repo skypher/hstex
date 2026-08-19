@@ -90,7 +90,6 @@ int main(void)
         hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'Y'),
     };
     struct hstex_source_location inserted_location = {
-        .byte_offset = 17U,
         .line = 99U,
         .column = 3U,
     };

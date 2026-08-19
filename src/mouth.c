@@ -55,10 +55,6 @@ static struct hstex_source_location raw_location(const struct hstex_mouth *mouth
                                                   size_t index)
 {
     struct hstex_source_location location;
-    location.byte_offset = mouth->line_start +
-                           (index < mouth->line_content_length
-                                ? index
-                                : mouth->line_content_length);
     location.line = mouth->line_number;
     size_t column = index + 1U;
     location.column = column > UINT32_MAX ? UINT32_MAX : (uint32_t)column;

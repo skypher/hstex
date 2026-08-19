@@ -20,8 +20,10 @@ enum hstex_mouth_result {
     HSTEX_MOUTH_TOKEN = 1,
 };
 
+/* Where a token came from. Two words, because one of these is copied for
+   every token the engine reads -- some hundreds of millions over the
+   corpus -- and nothing has ever asked how far into the file it stood. */
 struct hstex_source_location {
-    size_t byte_offset;
     uint32_t line;
     uint32_t column;
 };
