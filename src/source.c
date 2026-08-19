@@ -23,6 +23,17 @@ static int set_error(char *error, size_t capacity, const char *format, ...)
     return -1;
 }
 
+/* The frame at the top, where it is a list of tokens; see the note on
+   `top` in the header. Everything that moves the frames says so here. */
+static void note_top_frame(struct hstex_source_stack *stack)
+{
+    stack->top = stack->count != 0U &&
+                         stack->frames[stack->count - 1U].kind ==
+                             HSTEX_SOURCE_TOKEN_LIST
+                     ? &stack->frames[stack->count - 1U].value.token_list
+                     : NULL;
+}
+
 static int reserve_frames(struct hstex_source_stack *stack, size_t required,
                           char *error, size_t error_capacity)
 {
@@ -55,6 +66,7 @@ static int reserve_frames(struct hstex_source_stack *stack, size_t required,
             frame->value.token_list.tokens = &frame->value.token_list.held;
         }
     }
+    note_top_frame(stack);
     return 0;
 }
 
@@ -83,6 +95,7 @@ static void pop_frame(struct hstex_source_stack *stack)
         }
     }
     --stack->count;
+    note_top_frame(stack);
 }
 
 static void pop_exhausted_token_frames(struct hstex_source_stack *stack)
@@ -155,6 +168,7 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     file->path = path_copy;
     hstex_mouth_init(&file->mouth, input.data, input.length,
                      stack->lexical_state);
+    note_top_frame(stack);
     return 0;
 }
 
@@ -201,6 +215,7 @@ int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
     file->input.storage = HSTEX_INPUT_STORAGE_OWNED;
     file->path = name_copy;
     hstex_mouth_init(&file->mouth, bytes, length, stack->lexical_state);
+    note_top_frame(stack);
     return 0;
 }
 
@@ -228,6 +243,7 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = 0U;
+    note_top_frame(stack);
     return 0;
 }
 
@@ -262,6 +278,7 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_OWNS;
+    note_top_frame(stack);
     return 0;
 }
 
@@ -287,6 +304,7 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
+    note_top_frame(stack);
     return 0;
 }
 
@@ -352,6 +370,7 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     source->store_base = (uint32_t)stack->store_count;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE;
     stack->store_count += count;
+    note_top_frame(stack);
     return 0;
 }
 
@@ -381,6 +400,7 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     source->definition = definition;
     source->store_base = 0U;
     source->flags = 0U;
+    note_top_frame(stack);
     return 0;
 }
 
@@ -397,6 +417,7 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_BOUNDARY;
+    note_top_frame(stack);
     return 0;
 }
 

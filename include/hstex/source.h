@@ -66,6 +66,10 @@ struct hstex_source_stack {
     struct hstex_source_frame *frames;
     size_t count;
     size_t capacity;
+    /* The frame at the top, where it is a list of tokens, and null where it
+       is anything else. Almost every token a run reads comes from there, and
+       finding it again costs more than keeping it. */
+    struct hstex_token_source *top;
     struct hstex_lexical_state *lexical_state;
     /* What to tell when a frame lets go of the definition it was reading. */
     void *definition_owner;
@@ -142,20 +146,34 @@ static inline bool hstex_source_take(struct hstex_source_stack *stack,
                                      hstex_token *token,
                                      struct hstex_source_location *location)
 {
-    if (stack->count == 0U) {
-        return false;
+    for (;;) {
+        struct hstex_token_source *source = stack->top;
+        if (source == NULL) {
+            return false;
+        }
+        if (source->cursor < source->count) {
+            *token = source->tokens[source->cursor++];
+            *location = source->location;
+            return true;
+        }
+        /* The frame has been read to the end. One that holds nothing to be
+           given back by hand -- no allocation of its own, no definition it
+           is keeping -- is popped here rather than in a call of its own,
+           which is two frames in three over the corpus. */
+        if (source->definition != 0U ||
+            (source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_OWNS) != 0U) {
+            return false;
+        }
+        if ((source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE) != 0U) {
+            stack->store_count = source->store_base;
+        }
+        --stack->count;
+        stack->top =
+            stack->count != 0U && stack->frames[stack->count - 1U].kind ==
+                                      HSTEX_SOURCE_TOKEN_LIST
+                ? &stack->frames[stack->count - 1U].value.token_list
+                : NULL;
     }
-    struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
-    if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
-        return false;
-    }
-    struct hstex_token_source *source = &frame->value.token_list;
-    if (source->cursor >= source->count) {
-        return false;
-    }
-    *token = source->tokens[source->cursor++];
-    *location = source->location;
-    return true;
 }
 const char *hstex_source_current_name(const struct hstex_source_stack *stack);
 
