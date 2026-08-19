@@ -181,11 +181,11 @@ document, and every `\citation` in the order the reference wrote it.
 
 The engine is now faster than the reference on the corpus, and no longer
 extravagant with memory. Its final pass -- auxiliary inputs in place, format
-read from a file, nothing compressed on either side -- takes 16.7 processor
-seconds against `pdflatex`'s 24.7 for the same source, and peaks at 162 MB
+read from a file, nothing compressed on either side -- takes 16.6 processor
+seconds against `pdflatex`'s 24.8 for the same source, and peaks at 161 MB
 against 47. A fresh `hstex` -> BibTeX -> `hstex` -> `hstex` build of the
-whole thing takes 51.3 seconds against `pdflatex`'s 75.4. Every run above is
-the least of five, taken alternately on one pinned processor.
+whole thing takes 52.6 seconds against `pdflatex`'s 75.5. Every run above is
+the least of six, taken alternately on one pinned processor.
 
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
@@ -211,8 +211,12 @@ conditional where it stands (3%); holding what the input is reading in
 forty-eight bytes rather than a hundred and forty-four (3%); counting what a
 macro's body is made of when it is defined rather than at each of its calls,
 which also showed that fifty-seven per cent of calls copy nothing at all
-(1.5%); and finding a font's place in the file by its number rather than by
-comparing forty-six million names (0.7%).
+(1.5%); finding a font's place in the file by its number rather than by comparing
+forty-six million names (0.7%); and a rewrite of the whole macro-call path
+-- the arguments into one arena rather than nine vectors, the parameter text
+of an ordinary macro not read at all, a brace told from a character in one
+comparison, a short body copied rather than held (1.5% for all of it, which
+is the interesting part; see below).
 
 Memory went from 1.26 GB to 161 MB in the same round. Nodes and the lists
 that hold them were made and never unmade, and most of what that kept was
@@ -231,10 +235,16 @@ the number of them. There is no redundant expansion left to find. Two thirds
 of the remaining time is the expansion machinery, so five times the reference
 would mean running that machinery about three and a half times faster than it
 runs -- some twenty cycles for each token read, counting the macro call that
-one token in twelve begins. That is the budget of a tight bytecode
-interpreter, and it is not reachable by tightening the loops that are here:
-it would take a different representation for the input stack, the argument
-scan and the macro record. See docs/DECISIONS.md,
+one token in twelve begins.
+
+The macro-call path was then rewritten around what the cycle counter says it
+is made of -- sixty per cent scanning the arguments, twenty copying the body,
+fifteen pushing the frame -- and the whole rewrite came to one and a half per
+cent. That is the useful result: the remaining factor is not hiding in the
+macro call, or anywhere else in particular. It is spread across a hundred
+places at one or two per cent each, and a good deal of it is not instructions
+at all: `end_group` spends four hundred cycles restoring six meanings because
+each is a walk into a megabyte that no cache holds. See docs/DECISIONS.md,
 how-much-work-there-is-to-do.
 
 ## Build
