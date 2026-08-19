@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <regex.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -83,6 +84,7 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
                     size_t error_capacity);
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity);
+static void finder_stop(struct hstex_engine *engine);
 /* The name of the primitive the executor is running, worked out where a
    diagnostic asks for it rather than at every command. */
 static const char *executing_name(struct hstex_engine *engine)
@@ -2830,6 +2832,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_outlines[index].attributes);
     }
     free(engine->pdf_outlines);
+    finder_stop(engine);
     free(engine->pdf_fonts);
     free(engine->pdf_font_places);
     free(engine->pdf_dest_slots);
@@ -3381,6 +3384,190 @@ static char *resolve_with_kpsewhich(const char *filename)
     return (char *)bytes;
 }
 
+/* The name whose answer marks the end of one question's answers. The tool
+   says nothing at all about a name it cannot find, so every question is
+   asked together with a name that is always found, and an answer that is
+   the marker's is the marker's rather than the name's. */
+static const char hstex_finder_marker[] = "texmf.cnf";
+
+static void finder_stop(struct hstex_engine *engine)
+{
+    struct hstex_file_finder *finder = &engine->finder;
+    if (finder->questions != NULL) {
+        (void)fclose(finder->questions);
+        finder->questions = NULL;
+    }
+    if (finder->answers != NULL) {
+        (void)fclose(finder->answers);
+        finder->answers = NULL;
+    }
+    if (finder->child > 0) {
+        int status = 0;
+        while (waitpid((pid_t)finder->child, &status, 0) < 0 &&
+               errno == EINTR) {
+        }
+        finder->child = 0;
+    }
+    free(finder->marker_answer);
+    finder->marker_answer = NULL;
+}
+
+/* One line of what the tool says, without what ends it, or NULL where it has
+   stopped talking. */
+static char *finder_answer(struct hstex_file_finder *finder)
+{
+    char *line = NULL;
+    size_t capacity = 0U;
+    ssize_t length = getline(&line, &capacity, finder->answers);
+    if (length < 0) {
+        free(line);
+        return NULL;
+    }
+    while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r')) {
+        line[--length] = '\0';
+    }
+    return line;
+}
+
+/* Start the tool with its questions and its answers on pipes of their own.
+   `stdbuf` is what makes it answer a line at a time: without it the answers
+   sit in the tool's own buffer until it is done, and it is never done. */
+static bool finder_start(struct hstex_engine *engine)
+{
+    struct hstex_file_finder *finder = &engine->finder;
+    int questions[2];
+    int answers[2];
+    if (pipe(questions) != 0) {
+        return false;
+    }
+    if (pipe(answers) != 0) {
+        (void)close(questions[0]);
+        (void)close(questions[1]);
+        return false;
+    }
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        (void)close(questions[0]);
+        (void)close(questions[1]);
+        (void)close(answers[0]);
+        (void)close(answers[1]);
+        return false;
+    }
+    char program[] = "stdbuf";
+    char by_the_line[] = "-oL";
+    char tool[] = "kpsewhich";
+    char interactive[] = "-interactive";
+    char marker[sizeof(hstex_finder_marker)];
+    memcpy(marker, hstex_finder_marker, sizeof(marker));
+    char *const arguments[] = {program,     by_the_line, tool,
+                               interactive, marker,      NULL};
+    pid_t child = 0;
+    int spawned =
+        posix_spawn_file_actions_adddup2(&actions, questions[0],
+                                         STDIN_FILENO) != 0 ||
+                posix_spawn_file_actions_adddup2(&actions, answers[1],
+                                                 STDOUT_FILENO) != 0 ||
+                posix_spawn_file_actions_addclose(&actions, questions[0]) != 0 ||
+                posix_spawn_file_actions_addclose(&actions, questions[1]) != 0 ||
+                posix_spawn_file_actions_addclose(&actions, answers[0]) != 0 ||
+                posix_spawn_file_actions_addclose(&actions, answers[1]) != 0
+            ? -1
+            : posix_spawnp(&child, program, &actions, NULL, arguments, environ);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    (void)close(questions[0]);
+    (void)close(answers[1]);
+    if (spawned != 0) {
+        (void)close(questions[1]);
+        (void)close(answers[0]);
+        return false;
+    }
+    finder->child = (int)child;
+    finder->questions = fdopen(questions[1], "w");
+    finder->answers = fdopen(answers[0], "r");
+    if (finder->questions == NULL || finder->answers == NULL) {
+        if (finder->questions == NULL) {
+            (void)close(questions[1]);
+        }
+        if (finder->answers == NULL) {
+            (void)close(answers[0]);
+        }
+        finder_stop(engine);
+        return false;
+    }
+    /* The marker was asked after on the command line, so its answer is the
+       first thing the tool says. */
+    finder->marker_answer = finder_answer(finder);
+    if (finder->marker_answer == NULL || finder->marker_answer[0] == '\0') {
+        finder_stop(engine);
+        return false;
+    }
+    finder->generation = engine->file_generation;
+    return true;
+}
+
+/* Where the tool says a file is, asked of the one that is already running.
+   A question it cannot be asked -- an empty name, a name with a line end in
+   it, the marker itself -- is put to a tool of its own. */
+static char *finder_ask(struct hstex_engine *engine, const char *filename)
+{
+    struct hstex_file_finder *finder = &engine->finder;
+    if (finder->broken || filename[0] == '\0' ||
+        strchr(filename, '\n') != NULL ||
+        strcmp(filename, hstex_finder_marker) == 0) {
+        return resolve_with_kpsewhich(filename);
+    }
+    if (finder->questions != NULL &&
+        finder->generation != engine->file_generation) {
+        /* The run has written something since, and the tool remembers what
+           the directories held when it looked. */
+        finder_stop(engine);
+    }
+    if (finder->questions == NULL && !finder_start(engine)) {
+        finder->broken = true;
+        return resolve_with_kpsewhich(filename);
+    }
+    /* Nothing is read from the tool until it has been asked, so a tool that
+       has died would end this run rather than the question. */
+    struct sigaction ignore;
+    struct sigaction before;
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    bool restore = sigaction(SIGPIPE, &ignore, &before) == 0;
+    int asked = fprintf(finder->questions, "%s\n%s\n", filename,
+                        hstex_finder_marker);
+    int flushed = fflush(finder->questions);
+    if (restore) {
+        (void)sigaction(SIGPIPE, &before, NULL);
+    }
+    if (asked < 0 || flushed != 0) {
+        finder_stop(engine);
+        finder->broken = true;
+        return resolve_with_kpsewhich(filename);
+    }
+    char *answer = finder_answer(finder);
+    if (answer == NULL) {
+        finder_stop(engine);
+        finder->broken = true;
+        return resolve_with_kpsewhich(filename);
+    }
+    if (strcmp(answer, finder->marker_answer) == 0) {
+        free(answer);
+        return NULL;
+    }
+    char *marker_answer = finder_answer(finder);
+    if (marker_answer == NULL ||
+        strcmp(marker_answer, finder->marker_answer) != 0) {
+        free(marker_answer);
+        free(answer);
+        finder_stop(engine);
+        finder->broken = true;
+        return resolve_with_kpsewhich(filename);
+    }
+    free(marker_answer);
+    return answer;
+}
+
 /* What kpsewhich says a file is, remembered. The corpus asks after 181
    distinct names 7,239 times, and a child process for each of them costs
    more than the typesetting; a name it did not find is asked after again
@@ -3402,7 +3589,7 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
                           entry->generation == engine->file_generation)) {
         return entry->path == NULL ? NULL : strdup(entry->path);
     }
-    char *path = resolve_with_kpsewhich(filename);
+    char *path = finder_ask(engine, filename);
     if (entry != NULL) {
         free(entry->path);
         entry->path = path == NULL ? NULL : strdup(path);

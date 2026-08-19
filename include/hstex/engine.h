@@ -10,6 +10,28 @@
 #include <stdio.h>
 #include <stdint.h>
 
+/* The tool that says where a file is, kept alive between questions. Starting
+   it costs twelve milliseconds -- it reads the configuration and the file
+   lists over again every time -- and a run of the corpus asks after nearly
+   two hundred names. See docs/DECISIONS.md, finding-a-file. */
+struct hstex_file_finder {
+    FILE *questions;
+    FILE *answers;
+    /* The child, kept as a plain integer so that this header needs nothing
+       from <sys/types.h>; zero where none is running. */
+    int child;
+    /* What the marker name answers with, which is how a name the tool did not
+       find is told apart from one it did. */
+    char *marker_answer;
+    /* The state of the directory the tool was started in: it remembers what
+       it found there, so a file the run has written since means starting it
+       again. */
+    uint64_t generation;
+    /* Set where the tool cannot be kept alive at all, so that a run does not
+       try again for every name. */
+    bool broken;
+};
+
 enum hstex_engine_result {
     HSTEX_ENGINE_ERROR = -1,
     HSTEX_ENGINE_EOF = 0,
@@ -1806,6 +1828,7 @@ struct hstex_engine {
        otherwise do over again. */
     uint32_t *pdf_font_places;
     size_t pdf_font_place_capacity;
+    struct hstex_file_finder finder;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,
