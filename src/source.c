@@ -374,6 +374,18 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     return 0;
 }
 
+hstex_token *hstex_source_push_room(struct hstex_source_stack *stack,
+                                    size_t count,
+                                    struct hstex_source_location location)
+{
+    hstex_token *room = hstex_source_reserve(stack, count);
+    if (room == NULL ||
+        hstex_source_push_reserved(stack, count, location, NULL, 0U) != 0) {
+        return NULL;
+    }
+    return room;
+}
+
 int hstex_source_push_definition(struct hstex_source_stack *stack,
                                  const hstex_token *tokens, size_t count,
                                  uint32_t definition,

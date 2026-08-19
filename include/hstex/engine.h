@@ -656,7 +656,17 @@ enum hstex_token_parameter {
 enum hstex_macro_flag {
     HSTEX_MACRO_LONG = 1U << 0U,
     HSTEX_MACRO_OUTER = 1U << 1U,
-    HSTEX_MACRO_PROTECTED = 1U << 2U,
+    HSTEX_MACRO_PROTECTED = 1U << 2U
+};
+
+/* What the engine has worked out about a macro for itself, which is nothing
+   the definition said and nothing \ifx compares. */
+enum hstex_macro_shape {
+    /* The parameter text is nothing but `#1#2...` in order: no text in front
+       of an argument and none between two of them, so every argument runs to
+       one token or one group and a call need not read the parameter text at
+       all. Nearly every macro a document defines is of that shape. */
+    HSTEX_MACRO_PLAIN_PARAMETERS = 1U << 0U
 };
 
 struct hstex_macro {
@@ -666,6 +676,8 @@ struct hstex_macro {
     size_t replacement_count;
     uint8_t parameter_count;
     uint8_t flags;
+    /* See enum hstex_macro_shape. */
+    uint8_t shape;
     /* What the body is made of, counted once when the definition is made
        rather than at every call: how many of its tokens stand for
        themselves, how often each argument is asked for, and how many
@@ -1633,8 +1645,12 @@ struct hstex_engine {
     /* Room kept for the arguments of the macro being expanded, so that the
        storage one call takes serves the next rather than being given back
        and taken again; a call that finds it busy takes its own. */
-    struct hstex_token_vector argument_pool[HSTEX_PARAMETER_LIMIT];
-    bool argument_pool_busy;
+    /* Where the arguments of the macro call being made are gathered. It is a
+       stack: a call takes what it needs from the top and gives it back when
+       it is done, so a call made while another is being made -- which
+       nothing in an argument scan can bring about, since it expands nothing
+       -- would still find room of its own. */
+    struct hstex_token_vector argument_arena;
     /* The outline the document builds, in the order it was written, and the
        root the catalogue points at once it is finished. */
     size_t pdf_outline_object;

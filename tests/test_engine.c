@@ -1025,8 +1025,11 @@ static int test_macro_flags(void)
     if (status == 0) {
         const struct hstex_macro *macro =
             &engine.macros[meaning->value.macro_identifier - 1U];
+        /* What the prefixes said, and, separately, what the engine worked
+           out for itself: `#1` is a parameter text a call need not read. */
         status = macro->flags !=
-                 ((uint8_t)HSTEX_MACRO_LONG | (uint8_t)HSTEX_MACRO_OUTER);
+                     ((uint8_t)HSTEX_MACRO_LONG | (uint8_t)HSTEX_MACRO_OUTER) ||
+                 macro->shape != (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS;
     }
     if (status != 0) {
         (void)fprintf(stderr, "macro flag test failed: %s\n", error);

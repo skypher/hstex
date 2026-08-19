@@ -2853,9 +2853,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->resolved_files[index].path);
     }
     free(engine->resolved_files);
-    for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
-        vector_destroy(&engine->argument_pool[index]);
-    }
+    vector_destroy(&engine->argument_arena);
     for (size_t index = 0U; index < engine->color_stack_count; ++index) {
         struct hstex_color_stack *stack = &engine->color_stacks[index];
         for (size_t depth = 0U; depth < stack->count; ++depth) {
@@ -7262,10 +7260,14 @@ static int expand_expanded_text(struct hstex_engine *engine,
     return 0;
 }
 
+/* The argument being scanned starts at `base`: what is under it belongs to
+   the arguments scanned before it, and neither the delimiter nor the braces
+   round this one may be looked for there. */
 static bool vector_has_suffix(const struct hstex_token_vector *vector,
-                              const hstex_token *suffix, size_t suffix_count)
+                              size_t base, const hstex_token *suffix,
+                              size_t suffix_count)
 {
-    if (suffix_count > vector->count) {
+    if (suffix_count > vector->count - base) {
         return false;
     }
     size_t start = vector->count - suffix_count;
@@ -7278,16 +7280,17 @@ static bool vector_has_suffix(const struct hstex_token_vector *vector,
     return true;
 }
 
-static void strip_single_outer_group(struct hstex_token_vector *argument)
+static void strip_single_outer_group(struct hstex_token_vector *argument,
+                                    size_t base)
 {
-    if (argument->count < 2U ||
-        !token_is_category(argument->data[0], HSTEX_CAT_BEGIN_GROUP) ||
+    if (argument->count - base < 2U ||
+        !token_is_category(argument->data[base], HSTEX_CAT_BEGIN_GROUP) ||
         !token_is_category(argument->data[argument->count - 1U],
                            HSTEX_CAT_END_GROUP)) {
         return;
     }
     size_t depth = 0U;
-    for (size_t index = 0U; index < argument->count; ++index) {
+    for (size_t index = base; index < argument->count; ++index) {
         if (token_is_category(argument->data[index], HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
         } else if (token_is_category(argument->data[index],
@@ -7302,8 +7305,8 @@ static void strip_single_outer_group(struct hstex_token_vector *argument)
         }
     }
     if (depth == 0U) {
-        memmove(argument->data, argument->data + 1U,
-                (argument->count - 2U) * sizeof(*argument->data));
+        memmove(argument->data + base, argument->data + base + 1U,
+                (argument->count - base - 2U) * sizeof(*argument->data));
         argument->count -= 2U;
     }
 }
@@ -7314,6 +7317,7 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                                    size_t delimiter_count, bool long_macro,
                                    char *error, size_t error_capacity)
 {
+    const size_t base = argument->count;
     size_t depth = 0U;
     /* What the argument runs up to can only be reached at the delimiter's
        last token, so everything before one of those -- and before a brace
@@ -7382,9 +7386,9 @@ static int scan_delimited_argument(struct hstex_engine *engine,
             return -1;
         }
         if (depth == 0U &&
-            vector_has_suffix(argument, delimiter, delimiter_count)) {
+            vector_has_suffix(argument, base, delimiter, delimiter_count)) {
             argument->count -= delimiter_count;
-            strip_single_outer_group(argument);
+            strip_single_outer_group(argument, base);
             return 0;
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
@@ -7468,6 +7472,17 @@ static int match_parameter_prefix(struct hstex_engine *engine,
 
 static void count_macro_body(struct hstex_macro *macro)
 {
+    /* A parameter text that is nothing but `#1#2...` in order is what nearly
+       every definition has, and a call reading one need not look at it. */
+    bool in_order =
+        macro->parameter_count_tokens == (size_t)macro->parameter_count;
+    for (size_t index = 0U; in_order && index < macro->parameter_count_tokens;
+         ++index) {
+        in_order = hstex_token_is_parameter(macro->parameter_text[index]) &&
+                   hstex_token_parameter_number(macro->parameter_text[index]) ==
+                       (uint8_t)(index + 1U);
+    }
+    macro->shape = in_order ? (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS : 0U;
     macro->body_plain_count = 0U;
     macro->body_parameter_total = 0U;
     memset(macro->body_uses, 0, sizeof(macro->body_uses));
@@ -7502,52 +7517,49 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                              struct hstex_source_location call_location,
                              char *error, size_t error_capacity)
 {
-    /* The arguments are scanned into the room the engine keeps for them, so
-       that a macro call takes no storage of its own; a call that finds that
-       room busy -- which nothing in the argument scan can bring about, since
-       it expands nothing -- takes its own. */
-    struct hstex_token_vector own[HSTEX_MAX_PARAMETERS];
-    bool pooled = !engine->argument_pool_busy;
-    struct hstex_token_vector *arguments;
-    if (pooled) {
-        engine->argument_pool_busy = true;
-        arguments = engine->argument_pool;
-    } else {
-        memset(own, 0, sizeof(own));
-        arguments = own;
-    }
-    /* Only the arguments this macro takes are emptied; room for nine of them
-       is cleared at every call otherwise, and most macros take one or none. */
-    for (uint8_t index = 0U; index < macro->parameter_count; ++index) {
-        arguments[index].count = 0U;
-    }
+    /* The arguments are gathered one after another in the room the engine
+       keeps for them, and each is remembered by where it starts and how long
+       it is rather than by a vector of its own: a call then takes no storage
+       of its own and clears none. */
+    struct hstex_token_vector *arena = &engine->argument_arena;
+    const size_t arena_base = arena->count;
+    struct argument_bounds {
+        size_t start;
+        size_t count;
+    } bounds[HSTEX_MAX_PARAMETERS];
+    const bool long_macro = (macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U;
     size_t cursor = 0U;
     uint8_t next_parameter = 1U;
     int status = -1;
 
     while (next_parameter <= macro->parameter_count) {
-        size_t marker = cursor;
-        while (marker < macro->parameter_count_tokens &&
-               !(hstex_token_is_parameter(macro->parameter_text[marker]) &&
-                 hstex_token_parameter_number(macro->parameter_text[marker]) ==
-                     next_parameter)) {
-            ++marker;
+        size_t delimiter_start = 0U;
+        size_t delimiter_count = 0U;
+        if ((macro->shape & (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS) == 0U) {
+            size_t marker = cursor;
+            while (marker < macro->parameter_count_tokens &&
+                   !(hstex_token_is_parameter(macro->parameter_text[marker]) &&
+                     hstex_token_parameter_number(
+                         macro->parameter_text[marker]) == next_parameter)) {
+                ++marker;
+            }
+            if (marker >= macro->parameter_count_tokens ||
+                match_parameter_prefix(engine, macro->parameter_text + cursor,
+                                       marker - cursor, error,
+                                       error_capacity) != 0) {
+                goto cleanup;
+            }
+            delimiter_start = marker + 1U;
+            size_t delimiter_end = delimiter_start;
+            while (delimiter_end < macro->parameter_count_tokens &&
+                   !hstex_token_is_parameter(
+                       macro->parameter_text[delimiter_end])) {
+                ++delimiter_end;
+            }
+            delimiter_count = delimiter_end - delimiter_start;
+            cursor = delimiter_end;
         }
-        if (marker >= macro->parameter_count_tokens ||
-            match_parameter_prefix(engine, macro->parameter_text + cursor,
-                                   marker - cursor, error, error_capacity) != 0) {
-            goto cleanup;
-        }
-        size_t delimiter_start = marker + 1U;
-        size_t delimiter_end = delimiter_start;
-        while (delimiter_end < macro->parameter_count_tokens &&
-               !hstex_token_is_parameter(
-                   macro->parameter_text[delimiter_end])) {
-            ++delimiter_end;
-        }
-        size_t delimiter_count = delimiter_end - delimiter_start;
-        struct hstex_token_vector *argument = &arguments[next_parameter - 1U];
-        bool long_macro = (macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U;
+        size_t start = arena->count;
         if (delimiter_count == 0U) {
             hstex_token first = 0U;
             struct hstex_source_location location;
@@ -7565,22 +7577,24 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                 goto cleanup;
             }
             if (token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
-                if (scan_balanced_group(engine, argument, long_macro, error,
+                if (scan_balanced_group(engine, arena, long_macro, error,
                                         error_capacity) != 0) {
                     goto cleanup;
                 }
-            } else if (vector_push(argument, first, error, error_capacity) != 0) {
+            } else if (vector_push(arena, first, error, error_capacity) != 0) {
                 goto cleanup;
             }
         } else if (scan_delimited_argument(
-                       engine, argument, macro->parameter_text + delimiter_start,
+                       engine, arena, macro->parameter_text + delimiter_start,
                        delimiter_count, long_macro, error, error_capacity) != 0) {
             goto cleanup;
         }
-        cursor = delimiter_end;
+        bounds[next_parameter - 1U].start = start;
+        bounds[next_parameter - 1U].count = arena->count - start;
         ++next_parameter;
     }
-    if (match_parameter_prefix(engine, macro->parameter_text + cursor,
+    if ((macro->shape & (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS) == 0U &&
+        match_parameter_prefix(engine, macro->parameter_text + cursor,
                                macro->parameter_count_tokens - cursor, error,
                                error_capacity) != 0) {
         goto cleanup;
@@ -7616,7 +7630,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
              ++parameter) {
             if (macro->body_uses[parameter] != 0U) {
                 total += (size_t)macro->body_uses[parameter] *
-                         arguments[parameter].count;
+                         bounds[parameter].count;
             }
         }
     } else {
@@ -7632,7 +7646,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                                 "invalid parameter in a macro body");
                 goto cleanup;
             }
-            total += arguments[parameter - 1U].count;
+            total += bounds[parameter - 1U].count;
         }
     }
     if (total == 0U) {
@@ -7642,7 +7656,8 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     /* The expansion is built where it will be read from -- the room the
        input stack keeps for what it is reading -- and only finds room of its
        own where that store has none to spare. */
-    hstex_token *out = hstex_source_reserve(&engine->sources, total);
+    hstex_token *out =
+        hstex_source_push_room(&engine->sources, total, call_location);
     bool reserved = out != NULL;
     if (!reserved) {
         if (vector_reserve(&expansion, total, error, error_capacity) != 0) {
@@ -7658,19 +7673,14 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             *at++ = token;
             continue;
         }
-        const struct hstex_token_vector *argument =
-            &arguments[hstex_token_parameter_number(token) - 1U];
+        const struct argument_bounds *argument =
+            &bounds[hstex_token_parameter_number(token) - 1U];
         if (argument->count != 0U) {
-            copy_tokens(at, argument->data, argument->count);
+            copy_tokens(at, arena->data + argument->start, argument->count);
             at += argument->count;
         }
     }
-    if (reserved) {
-        if (hstex_source_push_reserved(&engine->sources, total, call_location,
-                                       error, error_capacity) != 0) {
-            goto cleanup;
-        }
-    } else {
+    if (!reserved) {
         expansion.count = total;
         if (push_owned_vector(engine, &expansion, call_location, error,
                               error_capacity) != 0) {
@@ -7681,13 +7691,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     status = 0;
 
 cleanup:
-    if (pooled) {
-        engine->argument_pool_busy = false;
-    } else {
-        for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
-            vector_destroy(&own[index]);
-        }
-    }
+    arena->count = arena_base;
     return status;
 }
 

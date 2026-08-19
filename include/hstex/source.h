@@ -115,6 +115,12 @@ hstex_token *hstex_source_reserve(struct hstex_source_stack *stack,
 int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
                                struct hstex_source_location location,
                                char *error, size_t error_capacity);
+/* Room in the store with a frame already standing on it, which is the two
+   above in one: the tokens are written into what it returns before anything
+   reads them. Null where the store has no room to spare. */
+hstex_token *hstex_source_push_room(struct hstex_source_stack *stack,
+                                    size_t count,
+                                    struct hstex_source_location location);
 
 /* A definition's own tokens, read where they stand rather than copied: the
    frame holds the definition until it has read them. */
