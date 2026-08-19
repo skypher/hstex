@@ -1884,6 +1884,11 @@ struct hstex_engine {
        body is read on the live input, so the loop runs again inside itself
        while one is being built. */
     size_t output_depth;
+    /* The page after which the run is to be taken up by another process, or
+       zero, and how many pages later to do it again. See docs/DECISIONS.md,
+       a-checkpoint-inside-a-file. */
+    int32_t checkpoint_page;
+    int32_t checkpoint_stride;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

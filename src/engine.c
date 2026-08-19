@@ -1776,6 +1776,17 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     } else if (dead_nodes != NULL && strcmp(dead_nodes, "poison") == 0) {
         engine->dead_node_check = HSTEX_DEAD_NODES_POISONED;
     }
+    /* Where the run is to be handed to another process; see
+       docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+    const char *checkpoint = getenv("HSTEX_CHECKPOINT");
+    if (checkpoint != NULL) {
+        bool every = strncmp(checkpoint, "every:", 6U) == 0;
+        long page = strtol(every ? checkpoint + 6 : checkpoint, NULL, 10);
+        if (page > 0L && page < 0x7fffffffL) {
+            engine->checkpoint_page = (int32_t)page;
+            engine->checkpoint_stride = every ? (int32_t)page : 0;
+        }
+    }
     engine->count_capacity = (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
     engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
     engine->count_levels =
@@ -32904,6 +32915,41 @@ handle_token:
    itself while one is being built, and the builders it is holding then stand
    in calls of its own. What a page leaves behind is given back only where no
    such call is running, which is where this loop is entered from outside. */
+/* A run handed to another process where it stands. The loop this is called
+   from is the one place a run holds nothing in a call of its own -- the same
+   place what a page leaves behind is given back -- so everything the run is
+   is in the engine and in the files it has open, and `fork` copies both.
+   Where in the document that falls is not a file boundary but a page
+   boundary, which is what makes it a checkpoint inside a file.
+
+   The parent writes nothing more. It has buffers the child now has a copy
+   of, so it leaves by `_exit`, which does not flush them: whatever was
+   pending is written once, by the child, at the offset the two of them
+   share. See docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+static void take_up_elsewhere(struct hstex_engine *engine)
+{
+    if (engine->checkpoint_page == 0 ||
+        engine->shipped_pages != engine->checkpoint_page) {
+        return;
+    }
+    /* Moved on before the fork, so that the child takes up the run looking
+       for the next one rather than this one again. */
+    engine->checkpoint_page = engine->checkpoint_stride == 0
+                                  ? 0
+                                  : engine->checkpoint_page +
+                                        engine->checkpoint_stride;
+    pid_t child = fork();
+    if (child < 0) {
+        return;
+    }
+    if (child != 0) {
+        int status = 0;
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        }
+        _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+    }
+}
+
 enum hstex_engine_result hstex_engine_next_output(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
@@ -32913,6 +32959,7 @@ enum hstex_engine_result hstex_engine_next_output(
         engine->shipped_pages != engine->compacted_pages) {
         engine->compacted_pages = engine->shipped_pages;
         compact_nodes(engine);
+        take_up_elsewhere(engine);
     }
     ++engine->output_depth;
     enum hstex_engine_result result =
