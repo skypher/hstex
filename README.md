@@ -179,24 +179,47 @@ bookmark file, and the `.aux` with all 23,372 of its `\newlabel` lines --
 every page number, section number and cross-reference in a 2,375-page
 document, and every `\citation` in the order the reference wrote it.
 
-Speed has had a first pass. The corpus's final pass, with its auxiliary
-inputs in place and its format read from a file, takes 28 processor seconds
-against `pdflatex`'s 26 for the same source -- from 72 when the tuning
-started. What that took, in order of what it was worth: reading the format
-from a file rather than executing `latex.ltx` again at every run (8.8
-seconds); asking `kpsewhich` where a file is once rather than 381 times, and
-asking it without copying a gigabyte of process (11 seconds of it in the
-kernel); sorting the 23,513 destination names once rather than comparing
-every pair of them, and finding one by name rather than by walking them all
-(173 million comparisons and 73 million more); taking a macro's arguments in
-runs rather than a token at a time; and keeping the room a macro call needs
-rather than taking and giving it back at every one of the corpus's 51.8
-million calls.
+The engine is now faster than the reference on the corpus, and no longer
+extravagant with memory. Its final pass -- auxiliary inputs in place, format
+read from a file, nothing compressed on either side -- takes 18.3 processor
+seconds against `pdflatex`'s 25.4 for the same source, and peaks at 161 MB
+against 47. A fresh `hstex` -> BibTeX -> `hstex` -> `hstex` build of the
+whole thing takes 56.2 seconds against `pdflatex`'s 75.5. Every run above is
+the least of five, taken alternately on one pinned processor.
 
-Peak memory is 1.25 GB against `pdflatex`'s 48 MB, and the milestone wants
-five times `pdflatex`'s speed rather than parity. Both of those are open.
-The profile is now flat -- macro expansion is 40% of it and is within a few
-per cent of the reference's own speed per token -- so the next factor will
+The first round of tuning took the final pass from 72 seconds to 28: reading
+the format from a file rather than executing `latex.ltx` again at every run;
+asking `kpsewhich` where a file is once for each name rather than once for
+each mention; sorting the 23,513 destination names once rather than
+comparing every pair of them; taking a macro's arguments in runs rather than
+a token at a time; and keeping the room a macro call needs rather than
+taking and giving it back at every one of them.
+
+The second round took 30 to 18, in order of what it was worth: building the
+engine from a profile of what it does, at -O3 and linked in one piece (19%);
+naming the primitive a failed scan was inside only where one fails, rather
+than writing out the name of every one of the corpus's 25.6 million (6%);
+starting one `kpsewhich` for the whole run and asking it over a pipe, rather
+than starting one for each of 181 names at twelve milliseconds each (5%);
+holding what the input is reading in forty-eight bytes rather than a hundred
+and forty-four (3%); passing over a skipped conditional and moving short
+runs of tokens without the library (2%); counting what a macro's body is
+made of when it is defined rather than at each of its calls, which also
+showed that fifty-seven per cent of calls copy nothing at all (1.5%); and
+finding a font's place in the file by its number rather than by comparing
+forty-six million names (0.7%).
+
+Memory went from 1.26 GB to 161 MB in the same round. Nodes and the lists
+that hold them were made and never unmade, and most of what that kept was
+not the pages but the sub-formulas -- kept for the lifetime of the run, with
+every box each had been set as, although nothing outside the formula it
+belongs to can name one. What is left is now walked from the places that can
+still name a node and the rest given back, between one page and the next.
+Of the 161 MB, 72 is what reading the format costs before a document starts.
+
+The milestone wants five times `pdflatex`, not one and a third, and that is
+open. The profile is flat: macro expansion is half of it and runs within a
+few per cent of the reference's own speed per token, so the next factor will
 have to come from somewhere other than tightening these loops.
 
 ## Build
@@ -210,6 +233,15 @@ tool.
 meson setup build
 meson compile -C build
 meson test -C build --no-rebuild
+```
+
+A build to measure with is built from a profile of the engine's own work,
+which `tools/build-pgo.sh` takes in one command. The profile comes from
+building the format and from `benchmarks/training/train.tex`, never from the
+milestone corpus:
+
+```sh
+tools/build-pgo.sh
 ```
 
 Inspect the selected scanner and probe an input file:
