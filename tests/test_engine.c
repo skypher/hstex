@@ -742,6 +742,46 @@ static int expect_failure(const char *source, const char *error_fragment)
     return status;
 }
 
+/* A macro that redefines itself while its own body is being read: the body
+   is read where it stands rather than copied, so the definition must last as
+   long as the reading of it. */
+static int test_a_definition_read_while_it_is_replaced(void)
+{
+    const char source[] = "\\def\\a{\\def\\a{y}x}\\a\\a%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    char produced[16];
+    size_t count = 0U;
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    enum hstex_engine_result result;
+    while ((result = hstex_engine_next_output(&engine, &token, &location, error,
+                                              sizeof(error))) ==
+           HSTEX_ENGINE_TOKEN) {
+        if (hstex_token_is_character(token) && count + 1U < sizeof(produced)) {
+            produced[count++] = (char)hstex_token_character_code(token);
+        }
+    }
+    produced[count] = '\0';
+    int status = result != HSTEX_ENGINE_EOF || strcmp(produced, "xy") != 0;
+    if (status != 0) {
+        (void)fprintf(stderr,
+                      "a definition read while it is replaced: got \"%s\": %s\n",
+                      produced, error);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 static int test_macro_flags(void)
 {
     const char source[] = "\\long\\outer\\def\\a#1{#1}%";
@@ -12470,6 +12510,7 @@ int main(void)
                        "ERRMESSAGE: expanded") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
+        test_a_definition_read_while_it_is_replaced() != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||

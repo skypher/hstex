@@ -41,13 +41,7 @@ enum {
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
     HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
     HSTEX_COUNT_REGISTER_CAPACITY = 32768,
-    HSTEX_MAX_PARAMETERS = 9,
-};
-
-struct token_vector {
-    hstex_token *data;
-    size_t count;
-    size_t capacity;
+    HSTEX_MAX_PARAMETERS = HSTEX_PARAMETER_LIMIT,
 };
 
 struct hstex_hbox_builder {
@@ -252,13 +246,13 @@ static int code_table_index(enum hstex_command command)
     }
 }
 
-static void vector_destroy(struct token_vector *vector)
+static void vector_destroy(struct hstex_token_vector *vector)
 {
     free(vector->data);
     memset(vector, 0, sizeof(*vector));
 }
 
-static int vector_reserve(struct token_vector *vector, size_t required,
+static int vector_reserve(struct hstex_token_vector *vector, size_t required,
                           char *error, size_t error_capacity)
 {
     if (required <= vector->capacity) {
@@ -286,30 +280,13 @@ static int vector_reserve(struct token_vector *vector, size_t required,
     return 0;
 }
 
-static int vector_push(struct token_vector *vector, hstex_token token,
+static int vector_push(struct hstex_token_vector *vector, hstex_token token,
                        char *error, size_t error_capacity)
 {
     if (vector_reserve(vector, vector->count + 1U, error, error_capacity) != 0) {
         return -1;
     }
     vector->data[vector->count++] = token;
-    return 0;
-}
-
-static int vector_append(struct token_vector *vector, const hstex_token *tokens,
-                         size_t count, char *error, size_t error_capacity)
-{
-    if (count == 0U) {
-        return 0;
-    }
-    if (tokens == NULL || count > SIZE_MAX - vector->count ||
-        vector_reserve(vector, vector->count + count, error, error_capacity) !=
-            0) {
-        return set_error(error, error_capacity,
-                         "invalid token-vector append");
-    }
-    memcpy(vector->data + vector->count, tokens, count * sizeof(*tokens));
-    vector->count += count;
     return 0;
 }
 
@@ -1080,26 +1057,17 @@ const struct hstex_meaning *hstex_engine_meaning(
    sequence has now and the ones the save stack keeps for a group to end. When
    the last of them lets go, the definition is taken apart and its record put
    by for the next \def. See docs/DECISIONS.md, a-definition-nothing-holds. */
-static void retain_macro(struct hstex_engine *engine,
-                         const struct hstex_meaning *meaning)
+static void retain_definition(struct hstex_engine *engine, uint32_t identifier)
 {
-    if (meaning->command != HSTEX_COMMAND_MACRO) {
-        return;
-    }
-    uint32_t identifier = meaning->value.macro_identifier;
     if (identifier == 0U || (size_t)identifier > engine->macro_count) {
         return;
     }
     ++engine->macros[identifier - 1U].references;
 }
 
-static void release_macro(struct hstex_engine *engine,
-                          const struct hstex_meaning *meaning)
+static void release_definition(struct hstex_engine *engine,
+                               uint32_t identifier)
 {
-    if (meaning->command != HSTEX_COMMAND_MACRO) {
-        return;
-    }
-    uint32_t identifier = meaning->value.macro_identifier;
     if (identifier == 0U || (size_t)identifier > engine->macro_count) {
         return;
     }
@@ -1112,6 +1080,31 @@ static void release_macro(struct hstex_engine *engine,
     memset(macro, 0, sizeof(*macro));
     macro->next_free = engine->macro_free_list;
     engine->macro_free_list = identifier;
+}
+
+/* What the input stack tells when a frame has read the last of a
+   definition's own tokens. */
+static void release_input_definition(void *owner, uint32_t identifier)
+{
+    release_definition(owner, identifier);
+}
+
+static void retain_macro(struct hstex_engine *engine,
+                         const struct hstex_meaning *meaning)
+{
+    if (meaning->command != HSTEX_COMMAND_MACRO) {
+        return;
+    }
+    retain_definition(engine, meaning->value.macro_identifier);
+}
+
+static void release_macro(struct hstex_engine *engine,
+                          const struct hstex_meaning *meaning)
+{
+    if (meaning->command != HSTEX_COMMAND_MACRO) {
+        return;
+    }
+    release_definition(engine, meaning->value.macro_identifier);
 }
 
 static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
@@ -1210,7 +1203,7 @@ static int save_token_list_identifier(
 }
 
 static int store_token_list(struct hstex_engine *engine,
-                            struct token_vector *tokens,
+                            struct hstex_token_vector *tokens,
                             uint32_t *identifier, char *error,
                             size_t error_capacity)
 {
@@ -1730,6 +1723,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         return -1;
     }
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
+    engine->sources.definition_owner = engine;
+    engine->sources.definition_release = release_input_definition;
     engine->count_capacity = (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
     engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
     engine->count_levels =
@@ -2801,6 +2796,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_outlines[index].attributes);
     }
     free(engine->pdf_outlines);
+    for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
+        vector_destroy(&engine->argument_pool[index]);
+    }
     for (size_t index = 0U; index < engine->color_stack_count; ++index) {
         struct hstex_color_stack *stack = &engine->color_stacks[index];
         for (size_t depth = 0U; depth < stack->count; ++depth) {
@@ -2880,6 +2878,8 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     }
     hstex_source_stack_destroy(&engine->sources);
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
+    engine->sources.definition_owner = engine;
+    engine->sources.definition_release = release_input_definition;
     for (size_t index = 0U; index < 16U; ++index) {
         if (engine->write_streams[index] != NULL) {
             (void)fclose(engine->write_streams[index]);
@@ -2965,6 +2965,9 @@ static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
 {
+    if (hstex_source_take(&engine->sources, token, location)) {
+        return HSTEX_ENGINE_TOKEN;
+    }
     for (;;) {
         size_t ended_before = engine->sources.file_end_count;
         enum hstex_mouth_result result = hstex_source_next(
@@ -3010,7 +3013,7 @@ static enum hstex_engine_result raw_next_non_space(
 }
 
 static int push_owned_vector(struct hstex_engine *engine,
-                             struct token_vector *vector,
+                             struct hstex_token_vector *vector,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity)
 {
@@ -3021,18 +3024,14 @@ static int push_owned_vector(struct hstex_engine *engine,
                                           error, error_capacity);
 }
 
+/* A token put back on its own: the frame holds it, so putting one back costs
+   no allocation at all. */
 static int push_one(struct hstex_engine *engine, hstex_token token,
                     struct hstex_source_location location, char *error,
                     size_t error_capacity)
 {
-    hstex_token *allocation = malloc(sizeof(*allocation));
-    if (allocation == NULL) {
-        return set_error(error, error_capacity,
-                         "single-token input allocation failed");
-    }
-    allocation[0] = token;
-    return hstex_source_push_owned_tokens(&engine->sources, allocation, 1U,
-                                          location, error, error_capacity);
+    return hstex_source_push_one(&engine->sources, token, location, error,
+                                 error_capacity);
 }
 
 static int finish_assignment(struct hstex_engine *engine, int status,
@@ -5802,7 +5801,7 @@ static int push_integer_expansion(struct hstex_engine *engine, int32_t value,
         return set_error(error, error_capacity,
                          "could not format integer expansion");
     }
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (int index = 0; index < length; ++index) {
         if (vector_push(&expansion,
                         hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
@@ -5861,7 +5860,7 @@ static int push_other_character_expansion(
     struct hstex_source_location location, char *error,
     size_t error_capacity)
 {
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (size_t index = 0U; index < length; ++index) {
         /* Text turned back into tokens is all of category twelve except
            for the space, which keeps category ten; see
@@ -5931,7 +5930,7 @@ static int expand_font_name(struct hstex_engine *engine,
         return -1;
     }
     const struct hstex_font *font = font_by_identifier(engine, identifier);
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     size_t name_length = strlen(font->name);
     for (size_t index = 0U; index < name_length; ++index) {
         uint8_t category = font->name[index] == ' '
@@ -6066,7 +6065,7 @@ static int expand_roman_numeral(struct hstex_engine *engine,
         {10, "x"},   {9, "ix"},   {5, "v"},   {4, "iv"},
         {1, "i"},
     };
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (size_t part = 0U; part < sizeof(parts) / sizeof(parts[0]); ++part) {
         while (value >= parts[part].value) {
             for (size_t index = 0U; parts[part].digits[index] != '\0'; ++index) {
@@ -6118,7 +6117,7 @@ static int expand_pdf_file_size(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "could not format file size");
     }
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (int index = 0; index < length; ++index) {
         if (vector_push(&expansion,
                         hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
@@ -6185,7 +6184,7 @@ static int push_token_list_expansion(
         return set_error(error, error_capacity,
                          "invalid token-list identifier");
     }
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     if (vector_reserve(&expansion, list->count, error, error_capacity) != 0) {
         return -1;
     }
@@ -6447,7 +6446,7 @@ static bool token_is_paragraph(const struct hstex_engine *engine,
 /* Balanced text counts only explicit braces, the way the reference compares
    tokens; see docs/DECISIONS.md, implicit-braces. */
 static int scan_balanced_group(struct hstex_engine *engine,
-                               struct token_vector *argument, bool long_macro,
+                               struct hstex_token_vector *argument, bool long_macro,
                                char *error, size_t error_capacity)
 {
     size_t depth = 1U;
@@ -6533,7 +6532,7 @@ static int execute_case_shift(struct hstex_engine *engine, size_t table,
     }
     (void)opening_location;
 
-    struct token_vector text = {0};
+    struct hstex_token_vector text = {0};
     if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
@@ -6580,7 +6579,7 @@ static int expand_unexpanded_text(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "unexpanded requires a braced token list");
     }
-    struct token_vector output = {0};
+    struct hstex_token_vector output = {0};
     if (scan_balanced_group(engine, &output, true, error, error_capacity) != 0) {
         vector_destroy(&output);
         return -1;
@@ -6654,7 +6653,7 @@ static int expand_mark_text(struct hstex_engine *engine, int32_t which,
                                     location, error, error_capacity);
 }
 
-static int push_detokenized_character(struct token_vector *output,
+static int push_detokenized_character(struct hstex_token_vector *output,
                                       uint8_t character, char *error,
                                       size_t error_capacity)
 {
@@ -6693,14 +6692,14 @@ static int expand_detokenize(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "detokenize requires a braced token list");
     }
-    struct token_vector input = {0};
+    struct hstex_token_vector input = {0};
     if (scan_balanced_group(engine, &input, true, error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
     }
     (void)opening_location;
 
-    struct token_vector output = {0};
+    struct hstex_token_vector output = {0};
     for (size_t index = 0U; index < input.count; ++index) {
         hstex_token token = input.data[index];
         if (hstex_token_is_character(token)) {
@@ -6792,7 +6791,7 @@ static int expand_expanded_text(struct hstex_engine *engine,
     }
     (void)opening_location;
 
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     size_t depth = 1U;
     while (depth != 0U) {
         hstex_token token = 0U;
@@ -6839,7 +6838,7 @@ static int expand_expanded_text(struct hstex_engine *engine,
     return 0;
 }
 
-static bool vector_has_suffix(const struct token_vector *vector,
+static bool vector_has_suffix(const struct hstex_token_vector *vector,
                               const hstex_token *suffix, size_t suffix_count)
 {
     if (suffix_count > vector->count) {
@@ -6855,7 +6854,7 @@ static bool vector_has_suffix(const struct token_vector *vector,
     return true;
 }
 
-static void strip_single_outer_group(struct token_vector *argument)
+static void strip_single_outer_group(struct hstex_token_vector *argument)
 {
     if (argument->count < 2U ||
         !token_is_category(argument->data[0], HSTEX_CAT_BEGIN_GROUP) ||
@@ -6886,7 +6885,7 @@ static void strip_single_outer_group(struct token_vector *argument)
 }
 
 static int scan_delimited_argument(struct hstex_engine *engine,
-                                   struct token_vector *argument,
+                                   struct hstex_token_vector *argument,
                                    const hstex_token *delimiter,
                                    size_t delimiter_count, bool long_macro,
                                    char *error, size_t error_capacity)
@@ -6989,12 +6988,25 @@ static int match_parameter_prefix(struct hstex_engine *engine,
     return 0;
 }
 
-static int instantiate_macro(struct hstex_engine *engine,
+static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                              const struct hstex_macro *macro,
                              struct hstex_source_location call_location,
                              char *error, size_t error_capacity)
 {
-    struct token_vector arguments[HSTEX_MAX_PARAMETERS] = {{0}};
+    /* The arguments are scanned into the room the engine keeps for them, so
+       that a macro call takes no storage of its own; a call that finds that
+       room busy -- which nothing in the argument scan can bring about, since
+       it expands nothing -- takes its own. */
+    struct hstex_token_vector own[HSTEX_MAX_PARAMETERS] = {{0}};
+    bool pooled = !engine->argument_pool_busy;
+    struct hstex_token_vector *arguments = own;
+    if (pooled) {
+        engine->argument_pool_busy = true;
+        arguments = engine->argument_pool;
+        for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
+            arguments[index].count = 0U;
+        }
+    }
     size_t cursor = 0U;
     uint8_t next_parameter = 1U;
     int status = -1;
@@ -7020,7 +7032,7 @@ static int instantiate_macro(struct hstex_engine *engine,
             ++delimiter_end;
         }
         size_t delimiter_count = delimiter_end - delimiter_start;
-        struct token_vector *argument = &arguments[next_parameter - 1U];
+        struct hstex_token_vector *argument = &arguments[next_parameter - 1U];
         bool long_macro = (macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U;
         if (delimiter_count == 0U) {
             hstex_token first = 0U;
@@ -7060,23 +7072,62 @@ static int instantiate_macro(struct hstex_engine *engine,
         goto cleanup;
     }
 
-    struct token_vector expansion = {0};
-    for (size_t index = 0U; index < macro->replacement_count; ++index) {
-        hstex_token token = macro->replacement[index];
-        if (hstex_token_is_parameter(token)) {
-            uint8_t parameter = hstex_token_parameter_number(token);
-            if (parameter == 0U || parameter > macro->parameter_count ||
-                vector_append(&expansion, arguments[parameter - 1U].data,
-                              arguments[parameter - 1U].count, error,
-                              error_capacity) != 0) {
-                vector_destroy(&expansion);
+    /* A macro that substitutes nothing is read where it stands: the frame
+       holds the definition rather than a copy of it, which is a third of the
+       macro calls a document makes. */
+    if (macro->parameter_count == 0U) {
+        if (macro->replacement_count != 0U) {
+            retain_definition(engine, identifier);
+            if (hstex_source_push_definition(
+                    &engine->sources, macro->replacement,
+                    macro->replacement_count, identifier, call_location, error,
+                    error_capacity) != 0) {
+                release_definition(engine, identifier);
                 goto cleanup;
             }
-        } else if (vector_push(&expansion, token, error, error_capacity) != 0) {
-            vector_destroy(&expansion);
+        }
+        status = 0;
+        goto cleanup;
+    }
+    /* How long the expansion comes to is known before it is built, so the
+       room for it is taken once and the tokens go in without a check at
+       every one. */
+    struct hstex_token_vector expansion = {0};
+    size_t total = 0U;
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        hstex_token token = macro->replacement[index];
+        if (!hstex_token_is_parameter(token)) {
+            total += 1U;
+            continue;
+        }
+        uint8_t parameter = hstex_token_parameter_number(token);
+        if (parameter == 0U || parameter > macro->parameter_count) {
+            (void)set_error(error, error_capacity,
+                            "invalid parameter in a macro body");
             goto cleanup;
         }
+        total += arguments[parameter - 1U].count;
     }
+    if (vector_reserve(&expansion, total, error, error_capacity) != 0) {
+        vector_destroy(&expansion);
+        goto cleanup;
+    }
+    hstex_token *out = expansion.data;
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        hstex_token token = macro->replacement[index];
+        if (!hstex_token_is_parameter(token)) {
+            *out++ = token;
+            continue;
+        }
+        const struct hstex_token_vector *argument =
+            &arguments[hstex_token_parameter_number(token) - 1U];
+        if (argument->count != 0U) {
+            memcpy(out, argument->data,
+                   argument->count * sizeof(*argument->data));
+            out += argument->count;
+        }
+    }
+    expansion.count = total;
     if (push_owned_vector(engine, &expansion, call_location, error,
                           error_capacity) != 0) {
         vector_destroy(&expansion);
@@ -7085,8 +7136,12 @@ static int instantiate_macro(struct hstex_engine *engine,
     status = 0;
 
 cleanup:
-    for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
-        vector_destroy(&arguments[index]);
+    if (pooled) {
+        engine->argument_pool_busy = false;
+    } else {
+        for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
+            vector_destroy(&own[index]);
+        }
     }
     return status;
 }
@@ -7285,8 +7340,8 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
             (macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U) {
             return push_one(engine, token, location, error, error_capacity);
         }
-        return instantiate_macro(engine, macro, location, error,
-                                 error_capacity);
+        return instantiate_macro(engine, meaning->value.macro_identifier, macro,
+                                 location, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_EXPAND_AFTER) {
         return expand_after(engine, location, error, error_capacity);
@@ -7496,7 +7551,8 @@ enum hstex_engine_result hstex_engine_next_expanded(
                 engine->returned_unexpanded_executable = true;
                 return HSTEX_ENGINE_TOKEN;
             }
-            if (instantiate_macro(engine, macro, *location, error,
+            if (instantiate_macro(engine, meaning->value.macro_identifier,
+                                  macro, *location, error,
                                   error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -7817,7 +7873,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
 
     uint32_t origin_line = 0U;
     const char *origin = current_source_line(engine, &origin_line);
-    struct token_vector parameter_text = {0};
+    struct hstex_token_vector parameter_text = {0};
     uint8_t parameter_count = 0U;
     bool has_hash_brace = false;
     hstex_token hash_brace = 0U;
@@ -7885,7 +7941,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         }
     }
 
-    struct token_vector replacement = {0};
+    struct hstex_token_vector replacement = {0};
     size_t depth = 1U;
     while (depth != 0U) {
         hstex_token current = 0U;
@@ -8118,7 +8174,7 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
         meaning.value.token = source;
     }
 
-    struct token_vector replay = {0};
+    struct hstex_token_vector replay = {0};
     if (vector_push(&replay, first, error, error_capacity) != 0 ||
         vector_push(&replay, second, error, error_capacity) != 0) {
         vector_destroy(&replay);
@@ -16994,7 +17050,7 @@ static int scan_token_list_value(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "token-list assignment requires a register or braces");
     }
-    struct token_vector tokens = {0};
+    struct hstex_token_vector tokens = {0};
     if (scan_balanced_group(engine, &tokens, true, error, error_capacity) != 0 ||
         store_token_list(engine, &tokens, identifier, error, error_capacity) !=
             0) {
@@ -17496,7 +17552,7 @@ static int store_text_as_token_list(struct hstex_engine *engine,
                                     const char *text, uint32_t *identifier,
                                     char *error, size_t error_capacity)
 {
-    struct token_vector tokens = {0};
+    struct hstex_token_vector tokens = {0};
     for (const char *cursor = text; *cursor != '\0'; ++cursor) {
         uint8_t byte = (uint8_t)*cursor;
         uint8_t category = byte == (uint8_t)' ' ? (uint8_t)HSTEX_CAT_SPACE
@@ -17768,7 +17824,7 @@ static int expand_string(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "internal token after string");
     }
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (size_t index = 0U; index < count; ++index) {
         uint8_t category = bytes[index] == (uint8_t)' '
                                ? (uint8_t)HSTEX_CAT_SPACE
@@ -18057,7 +18113,7 @@ static int expand_meaning(struct hstex_engine *engine,
                          "internal token after meaning");
     }
 
-    struct token_vector expansion = {0};
+    struct hstex_token_vector expansion = {0};
     for (size_t index = 0U; index < count; ++index) {
         uint8_t category = bytes[index] == (uint8_t)' '
                                ? (uint8_t)HSTEX_CAT_SPACE
@@ -18152,7 +18208,7 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "write requires a braced token list");
     }
-    struct token_vector text = {0};
+    struct hstex_token_vector text = {0};
     if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
@@ -18173,7 +18229,7 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
    so that \topmark and its relatives can put it back into the input. See
    docs/DECISIONS.md, marks. */
 static int expand_to_tokens(struct hstex_engine *engine,
-                            struct token_vector *out, char *error,
+                            struct hstex_token_vector *out, char *error,
                             size_t error_capacity)
 {
     for (;;) {
@@ -18199,7 +18255,7 @@ static int expand_to_tokens(struct hstex_engine *engine,
 /* The text of a \write is kept as it was written, so it can be expanded when
    the page reaches the shipper. See docs/DECISIONS.md, whatsits. */
 static int scan_general_text(struct hstex_engine *engine,
-                             struct token_vector *text, char *error,
+                             struct hstex_token_vector *text, char *error,
                              size_t error_capacity)
 {
     hstex_token opening = 0U;
@@ -18275,7 +18331,7 @@ static int expand_stored_token_list(struct hstex_engine *engine,
 {
     const struct hstex_token_list *list =
         token_list_by_identifier(engine, identifier);
-    struct token_vector text = {0};
+    struct hstex_token_vector text = {0};
     for (size_t index = 0U; list != NULL && index < list->count; ++index) {
         if (vector_push(&text, list->tokens[index], error, error_capacity) !=
             0) {
@@ -18652,7 +18708,7 @@ static int expand_scan_tokens(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "scantokens requires a braced token list");
     }
-    struct token_vector input = {0};
+    struct hstex_token_vector input = {0};
     if (scan_balanced_group(engine, &input, true, error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
@@ -19914,7 +19970,7 @@ static int execute_pdf_color_stack(struct hstex_engine *engine, char *error,
     }
     /* The text is expanded where it stands and kept as it was read, the way
        a \special's is. */
-    struct token_vector tokens = {0};
+    struct hstex_token_vector tokens = {0};
     for (size_t index = 0U; index < count; ++index) {
         uint8_t category = bytes[index] == (uint8_t)' '
                                ? (uint8_t)HSTEX_CAT_SPACE
@@ -26293,7 +26349,7 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
         return set_error(error, error_capacity,
                          "\\mark requires a braced token list");
     }
-    struct token_vector raw = {0};
+    struct hstex_token_vector raw = {0};
     if (scan_balanced_group(engine, &raw, true, error, error_capacity) != 0) {
         vector_destroy(&raw);
         return -1;
@@ -26308,7 +26364,7 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
         vector_destroy(&raw);
         return -1;
     }
-    struct token_vector text = {0};
+    struct hstex_token_vector text = {0};
     if (expand_to_tokens(engine, &text, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
@@ -27391,8 +27447,8 @@ static int scan_align_preamble(struct hstex_engine *engine,
     struct hstex_align_column *columns = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
-    struct token_vector before = {0};
-    struct token_vector after = {0};
+    struct hstex_token_vector before = {0};
+    struct hstex_token_vector after = {0};
     bool seen_marker = false;
     int status = 0;
 
@@ -28618,7 +28674,7 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
         /* The text is kept as it was written and expanded when the page is
            shipped, which is what lets \write{\thepage} name the page it
            landed on. See docs/DECISIONS.md, whatsits. */
-        struct token_vector text = {0};
+        struct hstex_token_vector text = {0};
         uint32_t tokens = 0U;
         if (scan_general_text(engine, &text, error, error_capacity) != 0) {
             return -1;
@@ -28656,7 +28712,7 @@ static int execute_special(struct hstex_engine *engine, char *error,
         free(bytes);
         return -1;
     }
-    struct token_vector tokens = {0};
+    struct hstex_token_vector tokens = {0};
     for (size_t index = 0U; index < byte_count; ++index) {
         uint8_t category = bytes[index] == (uint8_t)' '
                                ? (uint8_t)HSTEX_CAT_SPACE
@@ -28924,7 +28980,7 @@ static int scan_keyword_to(struct hstex_engine *engine, char *error,
 }
 
 static int define_read_tokens(struct hstex_engine *engine, hstex_cs_id target,
-                              struct token_vector *replacement, char *error,
+                              struct hstex_token_vector *replacement, char *error,
                               size_t error_capacity)
 {
     if (reserve_macros(engine, engine->macro_count + 1U, error,
@@ -28954,7 +29010,7 @@ static int define_read_line(struct hstex_engine *engine, hstex_cs_id target,
 {
     struct hstex_mouth mouth;
     hstex_mouth_init(&mouth, line, length, &engine->lexical_state);
-    struct token_vector replacement = {0};
+    struct hstex_token_vector replacement = {0};
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -28983,7 +29039,7 @@ static int define_other_read_line(struct hstex_engine *engine,
     while (length != 0U && line[length - 1U] == (uint8_t)' ') {
         --length;
     }
-    struct token_vector replacement = {0};
+    struct hstex_token_vector replacement = {0};
     for (size_t index = 0U; index < length; ++index) {
         uint8_t category = line[index] == (uint8_t)' '
                                ? (uint8_t)HSTEX_CAT_SPACE

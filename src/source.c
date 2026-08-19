@@ -45,6 +45,15 @@ static int reserve_frames(struct hstex_source_stack *stack, size_t required,
     }
     stack->frames = allocation;
     stack->capacity = capacity;
+    /* A frame that holds its own token pointed into the frames that have
+       just moved. */
+    for (size_t index = 0U; index < stack->count; ++index) {
+        struct hstex_source_frame *frame = &stack->frames[index];
+        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST &&
+            frame->value.token_list.holds_own) {
+            frame->value.token_list.tokens = &frame->value.token_list.held;
+        }
+    }
     return 0;
 }
 
@@ -57,6 +66,11 @@ static void pop_frame(struct hstex_source_stack *stack)
         free(frame->value.file.path);
     } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
         free(frame->value.token_list.owned_allocation);
+        if (frame->value.token_list.definition != 0U &&
+            stack->definition_release != NULL) {
+            stack->definition_release(stack->definition_owner,
+                                      frame->value.token_list.definition);
+        }
     }
     --stack->count;
 }
@@ -178,11 +192,15 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
         return -1;
     }
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
-    memset(frame, 0, sizeof(*frame));
+    struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
-    frame->value.token_list.tokens = tokens;
-    frame->value.token_list.count = count;
-    frame->value.token_list.location = location;
+    source->tokens = tokens;
+    source->owned_allocation = NULL;
+    source->count = count;
+    source->cursor = 0U;
+    source->location = location;
+    source->holds_own = false;
+    source->definition = 0U;
     return 0;
 }
 
@@ -206,12 +224,67 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
         return -1;
     }
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
-    memset(frame, 0, sizeof(*frame));
+    struct hstex_token_source *source = &frame->value.token_list;
     frame->kind = HSTEX_SOURCE_TOKEN_LIST;
-    frame->value.token_list.tokens = tokens;
-    frame->value.token_list.owned_allocation = tokens;
-    frame->value.token_list.count = count;
-    frame->value.token_list.location = location;
+    source->tokens = tokens;
+    source->owned_allocation = tokens;
+    source->count = count;
+    source->cursor = 0U;
+    source->location = location;
+    source->holds_own = false;
+    source->definition = 0U;
+    return 0;
+}
+
+int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
+                          struct hstex_source_location location, char *error,
+                          size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity, "invalid token-source request");
+    }
+    pop_exhausted_token_frames(stack);
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    struct hstex_token_source *source = &frame->value.token_list;
+    frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+    source->held = token;
+    source->holds_own = true;
+    source->tokens = &source->held;
+    source->owned_allocation = NULL;
+    source->count = 1U;
+    source->cursor = 0U;
+    source->location = location;
+    source->definition = 0U;
+    return 0;
+}
+
+int hstex_source_push_definition(struct hstex_source_stack *stack,
+                                 const hstex_token *tokens, size_t count,
+                                 uint32_t definition,
+                                 struct hstex_source_location location,
+                                 char *error, size_t error_capacity)
+{
+    if (stack == NULL || count == 0U || tokens == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid definition-source request");
+    }
+    pop_exhausted_token_frames(stack);
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    struct hstex_token_source *source = &frame->value.token_list;
+    frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+    source->tokens = tokens;
+    source->owned_allocation = NULL;
+    source->count = count;
+    source->cursor = 0U;
+    source->location = location;
+    source->holds_own = false;
+    source->definition = definition;
     return 0;
 }
 

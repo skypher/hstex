@@ -279,6 +279,18 @@ struct hstex_pdf_record {
     char *content;
 };
 
+/* A growable run of tokens: what a macro's arguments are scanned into and
+   what its expansion is built in. */
+struct hstex_token_vector {
+    hstex_token *data;
+    size_t count;
+    size_t capacity;
+};
+
+/* How many arguments a macro may take, and how deep the engine keeps room
+   for them. */
+#define HSTEX_PARAMETER_LIMIT 9
+
 /* One entry of the outline the document builds with \pdfoutline: the
    objects it was given as it was written, what the document declared about
    its children, and where the finished tree puts it. The five links hold the
@@ -1544,6 +1556,11 @@ struct hstex_engine {
     size_t pdf_pages_object;
     /* What the file does when it is opened, if the document named it. */
     size_t pdf_open_action;
+    /* Room kept for the arguments of the macro being expanded, so that the
+       storage one call takes serves the next rather than being given back
+       and taken again; a call that finds it busy takes its own. */
+    struct hstex_token_vector argument_pool[HSTEX_PARAMETER_LIMIT];
+    bool argument_pool_busy;
     /* The outline the document builds, in the order it was written, and the
        root the catalogue points at once it is finished. */
     size_t pdf_outline_object;
