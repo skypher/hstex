@@ -1799,6 +1799,13 @@ struct hstex_engine {
        and asks for the name only where one of them fails. */
     hstex_token executing_token;
     char executing_name[64];
+    /* Which entry of `pdf_fonts` a font identifier belongs to, one more than
+       its place, or zero where it has not been asked for yet. Two fonts
+       loaded from the same file are one font in the file, and finding that
+       out means comparing names, which every glyph run of every page would
+       otherwise do over again. */
+    uint32_t *pdf_font_places;
+    size_t pdf_font_place_capacity;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

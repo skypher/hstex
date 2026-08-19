@@ -2830,6 +2830,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_outlines[index].attributes);
     }
     free(engine->pdf_outlines);
+    free(engine->pdf_fonts);
+    free(engine->pdf_font_places);
     free(engine->pdf_dest_slots);
     free(engine->cs_name_scratch);
     for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
@@ -13819,6 +13821,32 @@ static int pdf_open(struct hstex_engine *engine, char *error,
                          error_capacity);
 }
 
+/* Where a font identifier's entry stands, put by so that the next glyph run
+   set in that font need not compare any names. */
+static int remember_pdf_font_place(struct hstex_engine *engine,
+                                   uint32_t identifier, size_t place)
+{
+    if ((size_t)identifier >= engine->pdf_font_place_capacity) {
+        size_t capacity = engine->pdf_font_place_capacity == 0U
+                              ? 64U
+                              : engine->pdf_font_place_capacity;
+        while (capacity <= (size_t)identifier) {
+            capacity *= 2U;
+        }
+        uint32_t *grown =
+            realloc(engine->pdf_font_places, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return -1;
+        }
+        memset(grown + engine->pdf_font_place_capacity, 0,
+               (capacity - engine->pdf_font_place_capacity) * sizeof(*grown));
+        engine->pdf_font_places = grown;
+        engine->pdf_font_place_capacity = capacity;
+    }
+    engine->pdf_font_places[identifier] = (uint32_t)(place + 1U);
+    return 0;
+}
+
 /* The font's place among the ones the file names, adding it if it is new. */
 static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
                                              uint32_t identifier, char *error,
@@ -13827,6 +13855,10 @@ static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
     /* Two fonts that come from the same file are one font in the file, named
        after whichever of them a page used first, however they are sized. See
        docs/DECISIONS.md, the-fonts-a-page-names. */
+    if ((size_t)identifier < engine->pdf_font_place_capacity &&
+        engine->pdf_font_places[identifier] != 0U) {
+        return &engine->pdf_fonts[engine->pdf_font_places[identifier] - 1U];
+    }
     const struct hstex_font *font = font_by_identifier(engine, identifier);
     if (font == NULL) {
         (void)set_error(error, error_capacity, "invalid font");
@@ -13836,6 +13868,11 @@ static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
         const struct hstex_font *other = font_by_identifier(
             engine, engine->pdf_fonts[index].identifier);
         if (other != NULL && strcmp(other->name, font->name) == 0) {
+            if (remember_pdf_font_place(engine, identifier, index) != 0) {
+                (void)set_error(error, error_capacity,
+                                "PDF font allocation failed");
+                return NULL;
+            }
             return &engine->pdf_fonts[index];
         }
     }
@@ -13853,6 +13890,12 @@ static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
     }
     struct hstex_pdf_font *entry = &engine->pdf_fonts[engine->pdf_font_count++];
     memset(entry, 0, sizeof(*entry));
+    if (remember_pdf_font_place(engine, identifier,
+                               engine->pdf_font_count - 1U) != 0) {
+        --engine->pdf_font_count;
+        (void)set_error(error, error_capacity, "PDF font allocation failed");
+        return NULL;
+    }
     entry->identifier = identifier;
     entry->object = pdf_new_object(engine);
     /* \nullfont is the font before the first one loaded, and is numbered
