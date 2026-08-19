@@ -296,6 +296,21 @@ static int vector_reserve(struct hstex_token_vector *vector, size_t required,
     return 0;
 }
 
+/* Tokens moved from one place to another. A run of them is usually a few
+   words long -- an argument, a body, the tail of a group -- and going out to
+   the library to move sixteen bytes costs more than moving them here. */
+static inline void copy_tokens(hstex_token *to, const hstex_token *from,
+                               size_t count)
+{
+    if (count > 16U) {
+        memcpy(to, from, count * sizeof(*to));
+        return;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        to[index] = from[index];
+    }
+}
+
 static int vector_push(struct hstex_token_vector *vector, hstex_token token,
                        char *error, size_t error_capacity)
 {
@@ -6619,8 +6634,8 @@ static int scan_balanced_group(struct hstex_engine *engine,
                                        error_capacity) != 0) {
                         return -1;
                     }
-                    memcpy(argument->data + argument->count, tokens,
-                           taken * sizeof(*tokens));
+                    copy_tokens(argument->data + argument->count, tokens,
+                                taken);
                     argument->count += taken;
                     source->cursor += taken;
                 }
@@ -7115,8 +7130,8 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                                        error_capacity) != 0) {
                         return -1;
                     }
-                    memcpy(argument->data + argument->count, tokens,
-                           taken * sizeof(*tokens));
+                    copy_tokens(argument->data + argument->count, tokens,
+                                taken);
                     argument->count += taken;
                     source->cursor += taken;
                     continue;
@@ -7369,8 +7384,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         const struct hstex_token_vector *argument =
             &arguments[hstex_token_parameter_number(token) - 1U];
         if (argument->count != 0U) {
-            memcpy(at, argument->data,
-                   argument->count * sizeof(*argument->data));
+            copy_tokens(at, argument->data, argument->count);
             at += argument->count;
         }
     }
@@ -8240,8 +8254,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                         vector_destroy(&replacement);
                         return -1;
                     }
-                    memcpy(replacement.data + replacement.count, tokens,
-                           taken * sizeof(*tokens));
+                    copy_tokens(replacement.data + replacement.count, tokens,
+                                taken);
                     replacement.count += taken;
                     source->cursor += taken;
                     continue;
@@ -13507,7 +13521,17 @@ static int pdf_bytes(struct hstex_engine *engine, const char *text,
                     error_capacity) != 0) {
         return -1;
     }
-    memcpy(engine->pdf_page + engine->pdf_page_count, text, length);
+    /* A glyph, a number, a single space: what goes into a page description
+       is short far more often than not, and the corpus writes ten million
+       of them. */
+    uint8_t *at = engine->pdf_page + engine->pdf_page_count;
+    if (length > 16U) {
+        memcpy(at, text, length);
+    } else {
+        for (size_t index = 0U; index < length; ++index) {
+            at[index] = (uint8_t)text[index];
+        }
+    }
     engine->pdf_page_count += length;
     return 0;
 }
@@ -29732,6 +29756,24 @@ static int skip_conditional(struct hstex_engine *engine, size_t target,
     size_t active_nested = engine->conditional_count - target - 1U;
     size_t skipped_depth = 0U;
     for (;;) {
+        /* Nothing but a control sequence can end the skip, so where the
+           skipped text stands in a list already the run up to the next one
+           is passed over without asking for each token in it. */
+        if (engine->sources.count != 0U) {
+            struct hstex_source_frame *frame =
+                &engine->sources.frames[engine->sources.count - 1U];
+            if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+                struct hstex_token_source *source = &frame->value.token_list;
+                size_t cursor = source->cursor;
+                while (cursor < source->count &&
+                       !hstex_token_is_control_sequence(
+                           normalize_unexpanded_control_sequence(
+                               source->tokens[cursor]))) {
+                    ++cursor;
+                }
+                source->cursor = cursor;
+            }
+        }
         hstex_token token = 0U;
         struct hstex_source_location location;
         if (raw_next(engine, &token, &location, error, error_capacity) !=
