@@ -8413,6 +8413,20 @@ enum hstex_engine_result hstex_engine_next_expanded(
    tells the body where it ends, a parameter marker names an argument, and a
    frozen control sequence is written down under its plain name. Everything
    else goes into the body as it stands. */
+static bool token_ends_expanded_run(hstex_token token)
+{
+    /* Anything but a character stands to be expanded, and a character a
+       \noexpand or an \unexpanded has marked is not rescanned for a
+       parameter marker, so neither may be taken in a run. */
+    if ((token >> 29U) != 0U) {
+        return true;
+    }
+    uint8_t category = hstex_token_category(token);
+    return category == (uint8_t)HSTEX_CAT_BEGIN_GROUP ||
+           category == (uint8_t)HSTEX_CAT_END_GROUP ||
+           category == (uint8_t)HSTEX_CAT_PARAMETER;
+}
+
 static bool token_ends_definition_run(hstex_token token)
 {
     if (hstex_token_is_frozen_control_sequence(token)) {
@@ -8519,6 +8533,33 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
            corpus makes nearly eight million definitions, and reading their
            bodies is most of what they cost. A token the body must look at on
            its own ends the run. */
+        /* An expanded body is read the same way, over the tokens that stand
+           for themselves however they are reached: a character that is not a
+           brace, not a parameter marker, and not one \noexpand has marked.
+           Reading an \edef's body is a fifth of everything the corpus
+           expands. */
+        if (expanded_replacement && engine->sources.top != NULL) {
+            struct hstex_token_source *source = engine->sources.top;
+            const hstex_token *tokens = source->tokens + source->cursor;
+            size_t available = source->count - source->cursor;
+            size_t taken = 0U;
+            while (taken < available &&
+                   !token_ends_expanded_run(tokens[taken])) {
+                ++taken;
+            }
+            if (taken != 0U) {
+                if (vector_reserve(&replacement, replacement.count + taken,
+                                   error, error_capacity) != 0) {
+                    vector_destroy(&parameter_text);
+                    vector_destroy(&replacement);
+                    return -1;
+                }
+                copy_tokens(replacement.data + replacement.count, tokens, taken);
+                replacement.count += taken;
+                source->cursor += (uint32_t)taken;
+                continue;
+            }
+        }
         if (!expanded_replacement && engine->sources.count != 0U) {
             struct hstex_source_frame *frame =
                 &engine->sources.frames[engine->sources.count - 1U];
