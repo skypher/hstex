@@ -7216,15 +7216,20 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
        that a macro call takes no storage of its own; a call that finds that
        room busy -- which nothing in the argument scan can bring about, since
        it expands nothing -- takes its own. */
-    struct hstex_token_vector own[HSTEX_MAX_PARAMETERS] = {{0}};
+    struct hstex_token_vector own[HSTEX_MAX_PARAMETERS];
     bool pooled = !engine->argument_pool_busy;
-    struct hstex_token_vector *arguments = own;
+    struct hstex_token_vector *arguments;
     if (pooled) {
         engine->argument_pool_busy = true;
         arguments = engine->argument_pool;
-        for (size_t index = 0U; index < HSTEX_MAX_PARAMETERS; ++index) {
-            arguments[index].count = 0U;
-        }
+    } else {
+        memset(own, 0, sizeof(own));
+        arguments = own;
+    }
+    /* Only the arguments this macro takes are emptied; room for nine of them
+       is cleared at every call otherwise, and most macros take one or none. */
+    for (uint8_t index = 0U; index < macro->parameter_count; ++index) {
+        arguments[index].count = 0U;
     }
     size_t cursor = 0U;
     uint8_t next_parameter = 1U;
