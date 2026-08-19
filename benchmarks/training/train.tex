@@ -1,0 +1,3389 @@
+\pdfoutput=1 \pdfcompresslevel=0 \pdfobjcompresslevel=0
+\documentclass[11pt,a4paper]{report}
+\year=2026 \month=8 \day=19 \time=600
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[protrusion=true,expansion=false]{microtype}
+\usepackage[colorlinks=true,hypertexnames=false]{hyperref}
+\usepackage{xr}
+\usepackage[capitalize,noabbrev]{cleveref}
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}[chapter]
+\newcommand{\vecn}[1]{\mathbf{#1}}
+\newcommand{\pairs}[2]{\langle #1,#2\rangle}
+\emergencystretch=3em
+\begin{document}
+\tableofcontents
+\chapter{A chapter of ordinary matter, number 1}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose1-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose1-1} and citations of a page such
+as \pageref{sec:prose1-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:1-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:1-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:1-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:1-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose1-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose1-2} and citations of a page such
+as \pageref{sec:prose1-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:1-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:1-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:1-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:1-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose1-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose1-3} and citations of a page such
+as \pageref{sec:prose1-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:1-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:1-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:1-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:1-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose1-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose1-4} and citations of a page such
+as \pageref{sec:prose1-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:1-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:1-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:1-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:1-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 2}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose2-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose2-1} and citations of a page such
+as \pageref{sec:prose2-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:2-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:2-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:2-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:2-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose2-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose2-2} and citations of a page such
+as \pageref{sec:prose2-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:2-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:2-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:2-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:2-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose2-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose2-3} and citations of a page such
+as \pageref{sec:prose2-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:2-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:2-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:2-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:2-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose2-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose2-4} and citations of a page such
+as \pageref{sec:prose2-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:2-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:2-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:2-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:2-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 3}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose3-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose3-1} and citations of a page such
+as \pageref{sec:prose3-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:3-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:3-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:3-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:3-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose3-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose3-2} and citations of a page such
+as \pageref{sec:prose3-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:3-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:3-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:3-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:3-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose3-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose3-3} and citations of a page such
+as \pageref{sec:prose3-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:3-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:3-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:3-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:3-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose3-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose3-4} and citations of a page such
+as \pageref{sec:prose3-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:3-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:3-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:3-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:3-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 4}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose4-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose4-1} and citations of a page such
+as \pageref{sec:prose4-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:4-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:4-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:4-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:4-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose4-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose4-2} and citations of a page such
+as \pageref{sec:prose4-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:4-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:4-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:4-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:4-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose4-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose4-3} and citations of a page such
+as \pageref{sec:prose4-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:4-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:4-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:4-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:4-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose4-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose4-4} and citations of a page such
+as \pageref{sec:prose4-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:4-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:4-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:4-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:4-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 5}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose5-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose5-1} and citations of a page such
+as \pageref{sec:prose5-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:5-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:5-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:5-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:5-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose5-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose5-2} and citations of a page such
+as \pageref{sec:prose5-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:5-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:5-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:5-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:5-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose5-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose5-3} and citations of a page such
+as \pageref{sec:prose5-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:5-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:5-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:5-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:5-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose5-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose5-4} and citations of a page such
+as \pageref{sec:prose5-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:5-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:5-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:5-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:5-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 6}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose6-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose6-1} and citations of a page such
+as \pageref{sec:prose6-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:6-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:6-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:6-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:6-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose6-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose6-2} and citations of a page such
+as \pageref{sec:prose6-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:6-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:6-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:6-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:6-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose6-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose6-3} and citations of a page such
+as \pageref{sec:prose6-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:6-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:6-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:6-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:6-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose6-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose6-4} and citations of a page such
+as \pageref{sec:prose6-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:6-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:6-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:6-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:6-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 7}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose7-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose7-1} and citations of a page such
+as \pageref{sec:prose7-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:7-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:7-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:7-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:7-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose7-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose7-2} and citations of a page such
+as \pageref{sec:prose7-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:7-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:7-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:7-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:7-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose7-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose7-3} and citations of a page such
+as \pageref{sec:prose7-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:7-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:7-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:7-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:7-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose7-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose7-4} and citations of a page such
+as \pageref{sec:prose7-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:7-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:7-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:7-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:7-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 8}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose8-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose8-1} and citations of a page such
+as \pageref{sec:prose8-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:8-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:8-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:8-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:8-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose8-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose8-2} and citations of a page such
+as \pageref{sec:prose8-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:8-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:8-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:8-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:8-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose8-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose8-3} and citations of a page such
+as \pageref{sec:prose8-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:8-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:8-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:8-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:8-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose8-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose8-4} and citations of a page such
+as \pageref{sec:prose8-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:8-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:8-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:8-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:8-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 9}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose9-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose9-1} and citations of a page such
+as \pageref{sec:prose9-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:9-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:9-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:9-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:9-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose9-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose9-2} and citations of a page such
+as \pageref{sec:prose9-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:9-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:9-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:9-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:9-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose9-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose9-3} and citations of a page such
+as \pageref{sec:prose9-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:9-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:9-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:9-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:9-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose9-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose9-4} and citations of a page such
+as \pageref{sec:prose9-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:9-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:9-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:9-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:9-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 10}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose10-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose10-1} and citations of a page such
+as \pageref{sec:prose10-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:10-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:10-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:10-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:10-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose10-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose10-2} and citations of a page such
+as \pageref{sec:prose10-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:10-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:10-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:10-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:10-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose10-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose10-3} and citations of a page such
+as \pageref{sec:prose10-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:10-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:10-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:10-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:10-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose10-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose10-4} and citations of a page such
+as \pageref{sec:prose10-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:10-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:10-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:10-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:10-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 11}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose11-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose11-1} and citations of a page such
+as \pageref{sec:prose11-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:11-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:11-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:11-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:11-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose11-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose11-2} and citations of a page such
+as \pageref{sec:prose11-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:11-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:11-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:11-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:11-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose11-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose11-3} and citations of a page such
+as \pageref{sec:prose11-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:11-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:11-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:11-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:11-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose11-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose11-4} and citations of a page such
+as \pageref{sec:prose11-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:11-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:11-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:11-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:11-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\chapter{A chapter of ordinary matter, number 12}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose12-1}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose12-1} and citations of a page such
+as \pageref{sec:prose12-1} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:12-1}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:12-1} asserts.
+\end{proof}
+\begin{equation}\label{eq:12-1}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:12-1}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose12-2}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose12-2} and citations of a page such
+as \pageref{sec:prose12-2} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:12-2}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:12-2} asserts.
+\end{proof}
+\begin{equation}\label{eq:12-2}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:12-2}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose12-3}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose12-3} and citations of a page such
+as \pageref{sec:prose12-3} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:12-3}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:12-3} asserts.
+\end{proof}
+\begin{equation}\label{eq:12-3}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:12-3}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\section{Prose that fills lines and breaks pages}
+\label{sec:prose12-4}
+Ordinary running text is what a typesetting engine spends most of its effort
+upon, so the training document supplies a great deal of it. The words are
+chosen for their length and their hyphenation, with incomprehensibility and
+antidisestablishmentarianism thrown in so that the patterns are exercised.
+Cross references such as \cref{sec:prose12-4} and citations of a page such
+as \pageref{sec:prose12-4} make the auxiliary machinery run, and a
+paragraph long enough to break over several lines gives the line breaker
+something to weigh.
+\begin{proposition}\label{prop:12-4}
+For every $n\in\mathbb{N}$ the sum $\sum_{k=1}^{n}k$ equals
+$\tfrac{1}{2}n(n+1)$.
+\end{proposition}
+\begin{proof}
+Induction on $n$; the base case is $\pairs{1}{1}$ and the step adds $n+1$ to
+both sides of the identity, which is what \cref{prop:12-4} asserts.
+\end{proof}
+\begin{equation}\label{eq:12-4}
+  \int_{0}^{\infty}\frac{\vecn{x}^{s-1}}{e^{\vecn{x}}-1}\,d\vecn{x}
+    = \Gamma(s)\zeta(s),\qquad \Re(s)>1 .
+\end{equation}
+\begin{align}
+  \mathcal{L}[f](s) &= \int_{0}^{\infty} e^{-st} f(t)\,dt, \\
+  \widehat{f}(\xi)  &= \int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx .
+\end{align}
+\par\noindent\begin{center}
+\begin{tabular}{lrrr}
+\hline
+Name & One & Two & Three \\
+\hline
+Alpha & 1 & 2 & 3 \\
+Beta & 4 & 5 & 6 \\
+Gamma & 7 & 8 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+\begin{itemize}
+  \item A first item with a formula $a^2+b^2=c^2$ in it.
+  \item A second item that refers to \eqref{eq:12-4}.
+  \item A third item, longer, so that the list breaks across a line and the
+    paragraph builder has something to weigh when it chooses the break.
+\end{itemize}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\subsection{A subsection}
+Running text again, with \textit{italics}, \textbf{bold}, and
+\texttt{typewriter}, and a formula $\alpha\beta\gamma\delta$ set inline so
+that the math list machinery runs inside a paragraph. A displayed formula
+follows:
+\[ \lim_{n\to\infty}\left(1+\frac{1}{n}\right)^{n}=e . \]
+And a little more prose to fill the page out, with an em-dash --- and
+quotation marks ``like these'' and a footnote.\footnote{A footnote, which is
+an insertion, so the page builder must split it.}
+\end{document}

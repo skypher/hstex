@@ -25,6 +25,16 @@ add_project_arguments(
   language: 'c',
 )
 
+# A build told which way its branches go is built from a profile taken over
+# the engine alone; the tests were not run under it, and a test that has no
+# profile of its own is not a fault. See tools/build-pgo.sh.
+if get_option('b_pgo') == 'use'
+  add_project_arguments(
+    cc.get_supported_arguments('-Wno-missing-profile'),
+    language: 'c',
+  )
+endif
+
 configuration = configuration_data()
 configuration.set_quoted('HSTEX_VERSION', meson.project_version())
 configure_file(output: 'hstex_config.h', configuration: configuration)
