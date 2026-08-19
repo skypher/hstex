@@ -116,6 +116,23 @@ hstex_token_is_unexpanded_control_sequence(hstex_token token)
            (token & HSTEX_TOKEN_UNEXPANDED_EXECUTABLE_FLAG) != 0U;
 }
 
+/* A token's kind and its category in one word, so that a scan can tell a
+   brace from an ordinary character in one comparison rather than four. A
+   token that is not a character has no category, and the kind bits keep it
+   above every value a character can take. */
+#define HSTEX_TOKEN_SHAPE_MASK UINT32_C(0xc0000f00)
+#define HSTEX_TOKEN_SHAPE_NOT_A_CHARACTER UINT32_C(0x40000000)
+
+static inline hstex_token hstex_token_shape(hstex_token token)
+{
+    return token & HSTEX_TOKEN_SHAPE_MASK;
+}
+
+static inline hstex_token hstex_token_shape_of_category(uint8_t category)
+{
+    return (uint32_t)category << 8U;
+}
+
 static inline bool hstex_token_is_parameter(hstex_token token)
 {
     return hstex_token_kind_of(token) == HSTEX_TOKEN_PARAMETER;

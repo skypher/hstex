@@ -6836,21 +6836,32 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 size_t available = source->count - source->cursor;
                 size_t taken = 0U;
                 bool closed = false;
+                /* This is where a macro call spends most of what it spends,
+                   so an ordinary character -- which is nearly every token of
+                   an argument -- is passed over in one comparison against
+                   each brace, and everything that is not a character is left
+                   to the tests below. */
+                const hstex_token opens = hstex_token_shape_of_category(
+                    (uint8_t)HSTEX_CAT_BEGIN_GROUP);
+                const hstex_token closes = hstex_token_shape_of_category(
+                    (uint8_t)HSTEX_CAT_END_GROUP);
                 while (taken < available) {
                     hstex_token token = tokens[taken];
-                    if (hstex_token_is_unexpanded_control_sequence(token)) {
-                        break;
-                    }
-                    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+                    hstex_token shape = hstex_token_shape(token);
+                    if (shape >= HSTEX_TOKEN_SHAPE_NOT_A_CHARACTER) {
+                        if (hstex_token_is_unexpanded_control_sequence(token) ||
+                            (!long_macro &&
+                             token_is_paragraph(engine, token))) {
+                            break;
+                        }
+                    } else if (shape == opens) {
                         ++depth;
-                    } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+                    } else if (shape == closes) {
                         --depth;
                         if (depth == 0U) {
                             closed = true;
                             break;
                         }
-                    } else if (!long_macro && token_is_paragraph(engine, token)) {
-                        break;
                     }
                     ++taken;
                 }
@@ -7337,22 +7348,29 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                 const hstex_token *tokens = source->tokens + source->cursor;
                 size_t available = source->count - source->cursor;
                 size_t taken = 0U;
+                const hstex_token opens = hstex_token_shape_of_category(
+                    (uint8_t)HSTEX_CAT_BEGIN_GROUP);
+                const hstex_token closes = hstex_token_shape_of_category(
+                    (uint8_t)HSTEX_CAT_END_GROUP);
                 while (taken < available) {
                     hstex_token token = tokens[taken];
-                    if (hstex_token_is_unexpanded_control_sequence(token) ||
-                        (depth == 0U &&
-                         normalize_one_shot_token(token) == last)) {
+                    if (depth == 0U &&
+                        normalize_one_shot_token(token) == last) {
                         break;
                     }
-                    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+                    hstex_token shape = hstex_token_shape(token);
+                    if (shape >= HSTEX_TOKEN_SHAPE_NOT_A_CHARACTER) {
+                        if (hstex_token_is_unexpanded_control_sequence(token) ||
+                            (!long_macro &&
+                             token_is_paragraph(engine, token))) {
+                            break;
+                        }
+                    } else if (shape == opens) {
                         ++depth;
-                    } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+                    } else if (shape == closes) {
                         if (depth != 0U) {
                             --depth;
                         }
-                    } else if (!long_macro &&
-                               token_is_paragraph(engine, token)) {
-                        break;
                     }
                     ++taken;
                 }
