@@ -1566,6 +1566,10 @@ struct hstex_engine {
     size_t pdf_pages_object;
     /* What the file does when it is opened, if the document named it. */
     size_t pdf_open_action;
+    /* Where the destination of each name is, one more than its place, so
+       that finding one need not walk all of them: the corpus has 23,513. */
+    uint32_t *pdf_dest_slots;
+    size_t pdf_dest_slot_capacity;
     /* What kpsewhich said about the files the run has asked after, and how
        many files the run has written since. */
     struct hstex_resolved_file *resolved_files;

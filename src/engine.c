@@ -2803,6 +2803,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_outlines[index].attributes);
     }
     free(engine->pdf_outlines);
+    free(engine->pdf_dest_slots);
     for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
         free(engine->resolved_files[index].name);
         free(engine->resolved_files[index].path);
@@ -14364,20 +14365,103 @@ static int pdf_page_colours(struct hstex_engine *engine, int32_t h, int32_t v,
    before. Every destination is an object of its own, whether a \pdfdest has
    put it anywhere yet or not. See docs/DECISIONS.md,
    destinations-in-the-file. */
+static uint64_t name_hash(const uint8_t *name, size_t length)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t index = 0U; index < length; ++index) {
+        hash ^= (uint64_t)name[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+/* Where a destination of this name stands, or nothing. */
+static struct hstex_pdf_dest *pdf_dest_by_name(struct hstex_engine *engine,
+                                               const uint8_t *name,
+                                               size_t length)
+{
+    if (engine->pdf_dest_slot_capacity == 0U) {
+        return NULL;
+    }
+    size_t mask = engine->pdf_dest_slot_capacity - 1U;
+    size_t probe = (size_t)name_hash(name, length) & mask;
+    for (;;) {
+        uint32_t slot = engine->pdf_dest_slots[probe];
+        if (slot == 0U) {
+            return NULL;
+        }
+        struct hstex_pdf_dest *entry = &engine->pdf_dests[slot - 1U];
+        if (entry->length == length &&
+            memcmp(entry->name, name, length) == 0) {
+            return entry;
+        }
+        probe = (probe + 1U) & mask;
+    }
+}
+
+/* Room for another name in the table of where they are, rehashing where it
+   has filled past a half. */
+static int pdf_remember_dest(struct hstex_engine *engine, size_t place,
+                             char *error, size_t error_capacity)
+{
+    size_t wanted = engine->pdf_dest_count + 1U;
+    if (engine->pdf_dest_slot_capacity < wanted * 2U) {
+        size_t capacity = engine->pdf_dest_slot_capacity == 0U
+                              ? 64U
+                              : engine->pdf_dest_slot_capacity;
+        while (capacity < wanted * 2U) {
+            capacity *= 2U;
+        }
+        uint32_t *grown = calloc(capacity, sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF destination allocation failed");
+        }
+        free(engine->pdf_dest_slots);
+        engine->pdf_dest_slots = grown;
+        engine->pdf_dest_slot_capacity = capacity;
+        for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
+            const struct hstex_pdf_dest *entry = &engine->pdf_dests[index];
+            if (!entry->named) {
+                continue;
+            }
+            size_t mask = capacity - 1U;
+            size_t probe =
+                (size_t)name_hash((const uint8_t *)entry->name, entry->length) &
+                mask;
+            while (engine->pdf_dest_slots[probe] != 0U) {
+                probe = (probe + 1U) & mask;
+            }
+            engine->pdf_dest_slots[probe] = (uint32_t)(index + 1U);
+        }
+    }
+    const struct hstex_pdf_dest *entry = &engine->pdf_dests[place - 1U];
+    size_t mask = engine->pdf_dest_slot_capacity - 1U;
+    size_t probe =
+        (size_t)name_hash((const uint8_t *)entry->name, entry->length) & mask;
+    while (engine->pdf_dest_slots[probe] != 0U) {
+        probe = (probe + 1U) & mask;
+    }
+    engine->pdf_dest_slots[probe] = (uint32_t)place;
+    return 0;
+}
+
 static struct hstex_pdf_dest *pdf_dest_entry(struct hstex_engine *engine,
                                              const uint8_t *name, size_t length,
                                              int32_t number, bool named,
                                              char *error, size_t error_capacity)
 {
-    for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
-        struct hstex_pdf_dest *entry = &engine->pdf_dests[index];
-        if (entry->named != named) {
-            continue;
+    if (named) {
+        struct hstex_pdf_dest *found = pdf_dest_by_name(engine, name, length);
+        if (found != NULL) {
+            return found;
         }
-        if (named ? entry->length == length &&
-                        memcmp(entry->name, name, length) == 0
-                  : entry->number == number) {
-            return entry;
+    } else {
+        for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
+            struct hstex_pdf_dest *entry = &engine->pdf_dests[index];
+            if (!entry->named && entry->number == number) {
+                return entry;
+            }
         }
     }
     if (engine->pdf_dest_count == engine->pdf_dest_capacity) {
@@ -14411,6 +14495,11 @@ static struct hstex_pdf_dest *pdf_dest_entry(struct hstex_engine *engine,
     }
     entry->object = pdf_new_object(engine);
     ++engine->pdf_dest_count;
+    if (named &&
+        pdf_remember_dest(engine, engine->pdf_dest_count, error,
+                          error_capacity) != 0) {
+        return NULL;
+    }
     return entry;
 }
 
@@ -15748,6 +15837,15 @@ static int pdf_dictionary_text(struct hstex_engine *engine,
                : 0;
 }
 
+/* Destinations stand in the file's tree of names in the order of their
+   names. */
+static int compare_destination_names(const void *one, const void *other)
+{
+    const struct hstex_pdf_dest *const *first = one;
+    const struct hstex_pdf_dest *const *second = other;
+    return strcmp((*first)->name, (*second)->name);
+}
+
 /* What the reference writes after the last page: the fonts, the tree of
    pages, what the file is about, and the table of where everything is. */
 static int pdf_close(struct hstex_engine *engine, char *error,
@@ -15944,15 +16042,10 @@ static int pdf_close(struct hstex_engine *engine, char *error,
                     sorted[at++] = &engine->pdf_dests[index];
                 }
             }
-            for (size_t index = 0U; index < named; ++index) {
-                for (size_t other = index + 1U; other < named; ++other) {
-                    if (strcmp(sorted[other]->name, sorted[index]->name) < 0) {
-                        struct hstex_pdf_dest *swapped = sorted[index];
-                        sorted[index] = sorted[other];
-                        sorted[other] = swapped;
-                    }
-                }
-            }
+            /* The names are sorted rather than picked out one at a time:
+               the corpus has 23,513 of them, and comparing every pair is
+               276 million comparisons. */
+            qsort(sorted, named, sizeof(*sorted), compare_destination_names);
             widths[0] = (named + 5U) / 6U;
             objects[0] = malloc(widths[0] * sizeof(**objects));
             status = objects[0] == NULL ? -1 : 0;
