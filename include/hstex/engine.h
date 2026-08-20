@@ -1898,6 +1898,10 @@ struct hstex_engine {
        a \par in a non-long argument. The call produces nothing and the
        \par is read again. */
     bool argument_abandoned;
+    /* What a balanced text belongs to, for the message an \outer macro
+       inside it draws: the control sequence as it was written, so a
+       \toksdef'd register is named by its own name. */
+    char scanning_text_name[160];
     /* What closes each open group, indexed by level - 1. */
     uint8_t *group_kinds;
     size_t group_kind_capacity;

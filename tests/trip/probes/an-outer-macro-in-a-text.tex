@@ -10,12 +10,18 @@
 % the fault. \outer was recorded here for \meaning's sake and never
 % checked.
 %
-% trip line 354 writes \tokens{\a^^@^^@a...} where \a was defined \outer.
+% A register is named by the control sequence that was WRITTEN, not by the
+% primitive behind it: a \toksdef'd \tk reads as "text of \tk".
+%
+% trip line 354 writes \tokens{\a^^@^^@a...} where \a was defined \outer,
+% and \tokens is a \toksdef'd register, so the reference names it.
 \tracingonline=1
 \outer\def\o{O}
 \toks0={\o}\message{[after a toks text]}
 \uppercase{\o}\message{[after uppercase]}
 \def\q#1{[#1]}\q{\o}\message{[after a macro argument]}
 \o\message{[but using it is fine]}
-\toks0={x}\message{[and an ordinary text is silent]}
+\toksdef\tk=5 \tk={\o}\message{[a register by its own name]}
+\everypar={\o}\message{[and a parameter by its]}
+\toks0={x}\message{[an ordinary text is silent]}
 \end

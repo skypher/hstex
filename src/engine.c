@@ -20617,6 +20617,12 @@ static int scan_token_list_value(struct hstex_engine *engine,
                                  uint32_t *identifier, char *error,
                                  size_t error_capacity)
 {
+    /* The register is named by the control sequence that was written, so
+       a \toksdef'd one reads as itself: trip's \tokens, not \toks. */
+    char named[128];
+    describe_token(engine, engine->executing_token, named, sizeof(named));
+    (void)snprintf(engine->scanning_text_name,
+                   sizeof(engine->scanning_text_name), "text of %s", named);
     hstex_token first = 0U;
     struct hstex_source_location location;
     if (expanded_next_non_space(engine, &first, &location, error,
@@ -20639,7 +20645,7 @@ static int scan_token_list_value(struct hstex_engine *engine,
                          "token-list assignment requires a register or braces");
     }
     struct hstex_token_vector tokens = {0};
-    if (scan_balanced_group(engine, &tokens, true, "text of \\toks", error, error_capacity) != 0 ||
+    if (scan_balanced_group(engine, &tokens, true, engine->scanning_text_name, error, error_capacity) != 0 ||
         store_token_list(engine, &tokens, identifier, error, error_capacity) !=
             0) {
         vector_destroy(&tokens);
