@@ -1916,6 +1916,10 @@ struct hstex_engine {
     bool negate_next_conditional;
     /* The \if last expanded, which the conditional it opens remembers. */
     hstex_cs_id conditional_opener;
+    /* Set while an \edef or \xdef body is being read. The reference
+       refuses an \outer macro there BEFORE expanding it, so the expander
+       has to know. Holds the name to put in the message. */
+    const char *expanded_definition_name;
     bool dump_requested;
     bool end_requested;
     uint32_t output_group_floor;

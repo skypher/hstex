@@ -14,9 +14,9 @@
 % sequence found while scanning definition of \a". \noexpand protects the
 % macro there, as it does anywhere.
 %
-% NOT YET: in an \edef body the reference reports one BEFORE expanding it,
-% so `\edef\a{X\o Y}' draws the fault even though \o would have expanded
-% away. This engine sees only what survives expansion and stays silent.
+% In an \edef or \xdef body it is refused BEFORE being expanded, so
+% `\edef\a{X\o Y}' draws the fault even though \o would have expanded
+% away and left nothing to see. trip line 365 is an \xdef of that shape.
 %
 % A register is named by the control sequence that was WRITTEN, not by the
 % primitive behind it: a \toksdef'd \tk reads as "text of \tk".

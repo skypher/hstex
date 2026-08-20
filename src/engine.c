@@ -9051,6 +9051,31 @@ enum hstex_engine_result hstex_engine_next_expanded(
                 engine->returned_unexpanded_executable = true;
                 return HSTEX_ENGINE_TOKEN;
             }
+            /* An \outer macro is refused where an \edef body is being
+               read, before it is expanded -- so `\edef\a{X\o Y}' draws
+               the fault even though \o would have expanded away. */
+            if (engine->expanded_definition_name != NULL &&
+                (macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U) {
+                static const char *const help[] = {
+                    "I suspect you have forgotten a `}', causing me",
+                    "to read past where you wanted me to stop.",
+                    "I'll try to recover; but if the error is serious,",
+                    "you'd better type `E' or `X' now and fix your file.",
+                    NULL};
+                hstex_token close = hstex_token_character(
+                    (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+                if (push_one(engine, current, *location, error,
+                             error_capacity) != 0 ||
+                    push_one(engine, close, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                tex_error(engine, help,
+                          "Forbidden control sequence found while scanning "
+                          "definition of %s",
+                          engine->expanded_definition_name);
+                continue;
+            }
             engine->expanding_macro_cs =
                 hstex_token_control_sequence_id(current);
             if (instantiate_macro(engine, meaning->value.macro_identifier,
@@ -9578,8 +9603,14 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         hstex_token current = 0U;
         struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
+        const char *previous_definition_name =
+            engine->expanded_definition_name;
+        char definition_named[128];
         if (expanded_replacement) {
             engine->inhibit_protected_expansion = true;
+            describe_token(engine, target, definition_named,
+                           sizeof(definition_named));
+            engine->expanded_definition_name = definition_named;
         }
         enum hstex_engine_result result =
             expanded_replacement
@@ -9587,6 +9618,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                                              error_capacity)
                 : raw_next(engine, &current, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
+        engine->expanded_definition_name = previous_definition_name;
         /* Tokens delivered by \unexpanded or \the are inserted verbatim and
            are not rescanned for parameter markers. */
         bool current_unexpanded =
