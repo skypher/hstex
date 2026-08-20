@@ -24997,8 +24997,14 @@ static bool take_word_letters(struct hstex_engine *engine,
         return true;
     }
     uint8_t originals = node->value.character.original_count;
-    if (originals == 0U ||
-        word->count + originals > (size_t)HSTEX_MAX_HYPHENATED_WORD) {
+    /* A ligature made of nothing -- the character an operation puts between
+       two it keeps -- is part of the word and contributes no letter to it,
+       the way the reference passes over one whose list of originals is
+       empty. */
+    if (originals == 0U) {
+        return true;
+    }
+    if (word->count + originals > (size_t)HSTEX_MAX_HYPHENATED_WORD) {
         return false;
     }
     for (uint8_t item = 0U; item < originals; ++item) {
@@ -25059,7 +25065,23 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
             if (node->explicit_kern) {
                 return false;
             }
-        } else if (node->kind != HSTEX_NODE_WHATSIT) {
+        } else if (node->kind == HSTEX_NODE_WHATSIT) {
+            /* A \setlanguage passed on the way to the word says what that
+               word is hyphenated by. The reference reads these here, while
+               it is looking for the word, which is why one standing between
+               the glue and the first letter still counts. See
+               docs/DECISIONS.md, hyphenation-minima. */
+            if (node->value.whatsit.kind ==
+                (uint8_t)HSTEX_WHATSIT_LANGUAGE) {
+                int32_t chosen = node->value.whatsit.number;
+                if (chosen < 0 || (size_t)chosen >= engine->count_capacity) {
+                    chosen = 0;
+                }
+                engine->hyphenating_language = chosen;
+                engine->hyphenating_left_min = node->value.whatsit.stream;
+                engine->hyphenating_right_min = node->value.whatsit.action;
+            }
+        } else {
             return false;
         }
         ++index;
@@ -25289,6 +25311,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
     if (language < 0 || (size_t)language >= engine->count_capacity) {
         language = 0;
     }
+    engine->hyphenating_language = language;
     engine->hyphenating_left_min = engine->paragraph_left_min;
     engine->hyphenating_right_min = engine->paragraph_right_min;
     size_t capacity = count + 16U;
@@ -25315,7 +25338,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             engine->nodes[identifier - 1U].kind == HSTEX_NODE_MATH) {
             breaking = engine->nodes[identifier - 1U].value.math.after;
         }
-        /* A \\setlanguage passed on the way says what the words after it are
+        /* A \setlanguage passed on the way says what the words after it are
            hyphenated by. */
         if (identifier != 0U && (size_t)identifier <= engine->node_count &&
             engine->nodes[identifier - 1U].kind == HSTEX_NODE_WHATSIT &&
@@ -25326,6 +25349,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             if (language < 0 || (size_t)language >= engine->count_capacity) {
                 language = 0;
             }
+            engine->hyphenating_language = language;
             engine->hyphenating_left_min = at->value.whatsit.stream;
             engine->hyphenating_right_min = at->value.whatsit.action;
         }
@@ -25343,7 +25367,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             continue;
         }
         uint8_t breaks[HSTEX_MAX_HYPHENATED_WORD + 1U] = {0};
-        if (hstex_engine_hyphenate_word(engine, language, word.letters,
+        if (hstex_engine_hyphenate_word(engine, engine->hyphenating_language,
+                                        word.letters,
                                         word.count, breaks, sizeof(breaks),
                                         error, error_capacity) != 0) {
             status = -1;
