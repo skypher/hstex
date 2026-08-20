@@ -1,0 +1,30 @@
+% Where a \cr inside braces belongs -- and the answer is not the same in a
+% preamble as in a cell. NOT IMPLEMENTED; this records the measurements.
+%
+% IN A CELL it ends the entry, closing the group forcibly:
+%   \halign{#\cr\hbox{A\cr B}\cr}   and   \halign{#\cr{A\cr B}\cr}
+% both draw "Missing } inserted", "Missing \cr inserted", "Misplaced \cr"
+% from the reference. This engine already ends the entry there, so the two
+% agree on the shape if not yet on every message.
+%
+% IN A PREAMBLE it does NOT end the column:
+%   \halign{{\cr}#\cr A\cr}    \halign{{&}#\cr A\cr}
+%   \halign{{\crcr}#\cr A\cr}  \halign{\vbox{\cr}#\cr A\cr}
+% all keep the whole group in the u-part, and the reference draws only one
+% "Misplaced \cr" (or & or \crcr) later, when the template is used. This
+% engine ends the preamble column at the inner \cr and reports "Missing #
+% inserted in alignment preamble" instead.
+%
+% That second difference is what makes trip line 332 diverge: its inner
+% \halign to 0pt{...\crcr} sits two braces deep in the outer preamble.
+%
+% Counting brace nesting in scan_align_preamble to fix it was tried and
+% reverted: it changes gentle's output and stops testmath with a \noalign
+% reaching a cell, so the count is not measuring what it seems to in real
+% preambles. Whatever the rule is, it is not "skip everything at depth".
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\vbox{\halign{#\cr\hbox{A\cr B}\cr}}\showbox0
+\setbox1=\vbox{\halign{{\cr}#\cr A\cr}}\showbox1
+\setbox2=\vbox{\halign{{&}#\cr A\cr}}\showbox2
+\end
