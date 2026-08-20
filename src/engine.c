@@ -31432,18 +31432,19 @@ void hstex_engine_set_message_stream(struct hstex_engine *engine,
 }
 
 static void hstex_engine_release_chunks(struct hstex_engine *engine);
+static void finish_a_chunk(struct hstex_engine *engine);
 
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity)
 {
     if (engine->parallel_chunk != 0) {
-        int gate[2];
-        if (pipe(gate) != 0) {
+        int done[2];
+        if (pipe(done) != 0) {
             engine->parallel_chunk = 0;
         } else {
-            engine->parallel_gate_read = gate[0];
-            engine->parallel_gate_write = gate[1];
+            engine->parallel_done_read = done[0];
+            engine->parallel_done_write = done[1];
         }
     }
     struct hstex_source_location location = {0};
@@ -31473,6 +31474,10 @@ int hstex_engine_run(struct hstex_engine *engine,
         return -1;
     }
     int closed = pdf_close(engine, error, error_capacity);
+    if (engine->parallel_is_worker) {
+        /* The last chunk has no boundary to stop at, so it stops here. */
+        finish_a_chunk(engine);
+    }
     hstex_engine_release_chunks(engine);
     return closed;
 }
@@ -33119,6 +33124,26 @@ static void redirect_to_the_fleet_file(struct hstex_engine *engine)
     engine->pdf_file = own;
 }
 
+/* A chunk is done: what it still holds goes into the file, it says so, and
+   it leaves. Its replacement is already parked. */
+static void finish_a_chunk(struct hstex_engine *engine)
+{
+    char ignored[256];
+    (void)pdf_flush(engine, ignored, sizeof(ignored));
+    if (engine->pdf_file != NULL) {
+        (void)fflush(engine->pdf_file);
+    }
+    for (size_t index = 0U; index < 16U; ++index) {
+        if (engine->write_streams[index] != NULL) {
+            (void)fflush(engine->write_streams[index]);
+        }
+    }
+    char done = 1;
+    ssize_t said = write(engine->parallel_done_write, &done, 1);
+    (void)said;
+    _exit(0);
+}
+
 static void park_a_chunk(struct hstex_engine *engine)
 {
     if (engine->parallel_chunk == 0) {
@@ -33127,12 +33152,7 @@ static void park_a_chunk(struct hstex_engine *engine)
     if (engine->parallel_is_worker) {
         if (engine->parallel_stop > 0 &&
             engine->shipped_pages >= engine->parallel_stop) {
-            char ignored[256];
-            (void)pdf_flush(engine, ignored, sizeof(ignored));
-            if (engine->pdf_file != NULL) {
-                (void)fflush(engine->pdf_file);
-            }
-            _exit(0);
+            finish_a_chunk(engine);
         }
         return;
     }
@@ -33142,14 +33162,22 @@ static void park_a_chunk(struct hstex_engine *engine)
         return;
     }
     long reached[16];
+    int gate[2];
+    if (pipe(gate) != 0) {
+        return;
+    }
     pid_t child = fork();
     if (child < 0) {
+        (void)close(gate[0]);
+        (void)close(gate[1]);
         return;
     }
     if (child == 0) {
         engine->parallel_is_worker = 1;
         engine->parallel_stop = engine->shipped_pages + engine->parallel_chunk;
-        (void)close(engine->parallel_gate_write);
+        engine->parallel_gate_read = gate[0];
+        (void)close(gate[1]);
+        (void)close(engine->parallel_done_read);
         /* The run keeps one tool alive to ask where files are, on a pipe of
            its own. A fleet of chunks would all be asking down the same pipe
            and reading each other's answers, so a chunk forgets the one it
@@ -33179,12 +33207,28 @@ static void park_a_chunk(struct hstex_engine *engine)
                                  ? -1L
                                  : ftell(engine->write_streams[index]);
         }
-        char go = 0;
-        ssize_t got;
-        do {
-            got = read(engine->parallel_gate_read, &go, 1);
-        } while (got < 0 && errno == EINTR);
-        (void)got;
+        /* Parked. Each time the gate opens, this chunk leaves a copy of
+           itself parked on the same gate -- taken before any work is done,
+           so the copy holds the state the chunk began in -- and then goes on
+           to do the work itself. The fleet therefore serves one run after
+           another rather than one only. */
+        for (;;) {
+            char go = 0;
+            ssize_t got;
+            do {
+                got = read(engine->parallel_gate_read, &go, 1);
+            } while (got < 0 && errno == EINTR);
+            if (got <= 0) {
+                _exit(0);
+            }
+            pid_t again = fork();
+            if (again < 0) {
+                break;
+            }
+            if (again != 0) {
+                break;
+            }
+        }
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
         }
@@ -33196,7 +33240,8 @@ static void park_a_chunk(struct hstex_engine *engine)
            run wrote before any chunk was parked comes to. */
         engine->parallel_first_offset = engine->pdf_written;
     }
-    engine->parallel_pids[engine->parallel_workers++] = (int)child;
+    (void)close(gate[0]);
+    engine->parallel_gates[engine->parallel_workers++] = gate[1];
 }
 
 /* The gate the parked chunks wait on, opened once the run that parked them
@@ -33260,29 +33305,29 @@ static void lay_out_the_fleet_file(struct hstex_engine *engine)
     (void)fclose(target);
 }
 
-static void hstex_engine_release_chunks(struct hstex_engine *engine)
+static void release_them_once(struct hstex_engine *engine)
 {
-    if (engine->parallel_is_worker || engine->parallel_workers == 0) {
-        return;
-    }
     lay_out_the_fleet_file(engine);
     struct timespec before;
     struct timespec after;
     (void)clock_gettime(CLOCK_MONOTONIC, &before);
     for (int index = 0; index < engine->parallel_workers; ++index) {
         char go = 1;
-        ssize_t wrote = write(engine->parallel_gate_write, &go, 1);
+        ssize_t wrote = write(engine->parallel_gates[index], &go, 1);
         (void)wrote;
     }
-    (void)close(engine->parallel_gate_write);
-    (void)close(engine->parallel_gate_read);
-    /* Only the chunks are waited for. The run keeps a tool alive to ask
-       where files are, and waiting for any child at all would wait for
-       that too, which never ends. */
+    /* Counted back rather than waited for: a chunk's replacement is a child
+       of the chunk, so the run above is not its parent and cannot wait for
+       it. Waiting for any child at all would wait for the file-finding
+       tool, which never ends. */
     for (int index = 0; index < engine->parallel_workers; ++index) {
-        int status = 0;
-        while (waitpid((pid_t)engine->parallel_pids[index], &status, 0) < 0 &&
-               errno == EINTR) {
+        char done = 0;
+        ssize_t got;
+        do {
+            got = read(engine->parallel_done_read, &done, 1);
+        } while (got < 0 && errno == EINTR);
+        if (got <= 0) {
+            break;
         }
     }
     (void)clock_gettime(CLOCK_MONOTONIC, &after);
@@ -33290,6 +33335,25 @@ static void hstex_engine_release_chunks(struct hstex_engine *engine)
                   engine->parallel_workers, engine->parallel_chunk,
                   (double)(after.tv_sec - before.tv_sec) +
                       (double)(after.tv_nsec - before.tv_nsec) / 1e9);
+}
+
+/* The fleet is let go as many times as it is asked for. Each chunk leaves a
+   replacement parked before it works, so what the second round costs is what
+   a run costs once the fleet is standing: the persistent mode the benchmark
+   contract reports on its own. */
+static void hstex_engine_release_chunks(struct hstex_engine *engine)
+{
+    if (engine->parallel_is_worker || engine->parallel_workers == 0) {
+        return;
+    }
+    const char *asked = getenv("HSTEX_PARALLEL_ROUNDS");
+    long rounds = asked == NULL ? 1L : strtol(asked, NULL, 10);
+    if (rounds < 1L || rounds > 100L) {
+        rounds = 1L;
+    }
+    for (long round = 0; round < rounds; ++round) {
+        release_them_once(engine);
+    }
 }
 
 static void take_up_elsewhere(struct hstex_engine *engine)

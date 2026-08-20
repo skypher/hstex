@@ -1894,10 +1894,18 @@ struct hstex_engine {
     int32_t parallel_chunk;
     int32_t parallel_stop;
     int parallel_is_worker;
+    /* A chunk waits on a gate of its own, which the run above keeps the
+       other end of, so that the fleet can be let go more than once: a chunk
+       leaves a replacement of itself parked on the same gate before it does
+       any work. */
     int parallel_gate_read;
-    int parallel_gate_write;
+    int parallel_gates[256];
+    /* What a chunk says when it is finished. A chunk's replacement is a
+       child of the chunk and not of the run above, so the run counts them
+       here rather than waiting for them by name. */
+    int parallel_done_read;
+    int parallel_done_write;
     int parallel_workers;
-    int parallel_pids[256];
     /* Where in the file this chunk's own bytes begin, and the file it writes
        them into. A chunk inherits the byte count the run had reached where
        it was parked, which is exactly where the chunk before it stops. */

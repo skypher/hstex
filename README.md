@@ -295,9 +295,16 @@ PDF the same engine writes alone -- as are the `.aux`, the `.toc` and the
 `.out`. Fifteen chunks give 10.4 times; the flattening after twenty-three
 is the machine.
 
+A chunk leaves a copy of itself parked before it does any work, so the fleet
+stands rather than being spent: let go five times over, twenty-three chunks
+take 2.087, 2.130, 1.945, 1.879 and 2.030 seconds against 25.39 on one
+processor -- a median of **12.5 times** -- and after all five the four files
+are still byte for byte right.
+
 That is the taking up and the writing, and it is not a cold run made
-faster: the chunks are parked by a sequential run of the same document, so
-what is measured is what the pages cost the second time. The guessing --
+faster: standing the fleet up costs a sequential run of the same document,
+so what is measured is what a run costs once the fleet is there, which is
+the persistent mode the contract reports on its own. The guessing --
 starting a chunk before the state it begins in is known, and checking the
 digest afterwards -- is what is left. See docs/DECISIONS.md,
 a-checkpoint-inside-a-file.
