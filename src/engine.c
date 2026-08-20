@@ -12267,7 +12267,12 @@ static int insert_hyphen_exception(struct hstex_engine *engine,
                                    const uint8_t *breaks, size_t letter_count,
                                    char *error, size_t error_capacity)
 {
-    if (letter_count == 0U || language > (uint32_t)UINT16_MAX ||
+    /* A word of one letter cannot be broken, so the reference does not keep
+       it: only a word of two or more becomes an exception. */
+    if (letter_count < 2U) {
+        return 0;
+    }
+    if (language > (uint32_t)UINT16_MAX ||
         letter_count > (size_t)HSTEX_MAX_HYPHEN_PATTERN_LENGTH ||
         letter_count > (SIZE_MAX - 1U) / 2U) {
         return set_error(error, error_capacity,
@@ -14371,6 +14376,71 @@ static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
     free(bytes);
     tex_error(engine, help, "You can't use `%s' in %s", scratch,
               mode_name(engine));
+}
+
+/* What the reference says when it dumps a format. The counts it gives of its
+   own storage cannot be reproduced by an engine that keeps its state
+   differently; what can, and what is about the document rather than the
+   engine, is which file is being written, what the format is called, and
+   which fonts it holds. See docs/DECISIONS.md,
+   what-a-clean-room-engine-cannot-reproduce. */
+static int report_the_dump(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    (void)error;
+    (void)error_capacity;
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    /* The files still being read have their brackets closed first, the way
+       the reference finishes with them before it dumps. */
+    while (engine->open_parens != 0U) {
+        print_text(engine, " )");
+        --engine->open_parens;
+    }
+    print_fresh_line(engine);
+    print_formatted(engine, "Beginning to dump on file %s.fmt", job);
+    print_fresh_line(engine);
+    print_formatted(engine, " (preloaded format=%s %d.%d.%d)", job,
+                    engine->integer_parameters[HSTEX_INTEGER_YEAR],
+                    engine->integer_parameters[HSTEX_INTEGER_MONTH],
+                    engine->integer_parameters[HSTEX_INTEGER_DAY]);
+    print_fresh_line(engine);
+    print_text(engine, "\\font\\nullfont=nullfont");
+    for (size_t index = 0U; index < engine->font_count; ++index) {
+        const struct hstex_font *font = &engine->fonts[index];
+        if (font->name == NULL || strcmp(font->name, "nullfont") == 0) {
+            continue;
+        }
+        print_fresh_line(engine);
+        print_text(engine, "\\font");
+        if (font->identifier_cs != 0U) {
+            uint8_t *bytes = NULL;
+            size_t count = 0U;
+            size_t room = 0U;
+            char ignored[256];
+            if (serialize_control_sequence(
+                    engine, hstex_token_control_sequence(font->identifier_cs),
+                    &bytes, &count, &room, false, ignored,
+                    sizeof(ignored)) == 0) {
+                print_bytes(engine, (const char *)bytes, count);
+            }
+            free(bytes);
+        }
+        print_formatted(engine, "=%s", font->name);
+        if (font->size != font->design_size) {
+            print_text(engine, " at ");
+            show_scaled(engine, font->size);
+            print_text(engine, "pt");
+        }
+    }
+    if (engine->hyphen_exception_count != 0U) {
+        print_fresh_line(engine);
+        print_formatted(engine, "%zu hyphenation exception%s",
+                        engine->hyphen_exception_count,
+                        engine->hyphen_exception_count == 1U ? "" : "s");
+    }
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+    return 0;
 }
 
 /* \show: the meaning of the token that follows, whatever it is. */
@@ -34496,6 +34566,9 @@ handle_token:
                     error, error_capacity, "dump requested in nested state");
             }
             engine->dump_requested = true;
+            if (report_the_dump(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
             return HSTEX_ENGINE_EOF;
         case HSTEX_COMMAND_CAT_CODE:
             if (finish_assignment(
