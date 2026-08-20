@@ -134,6 +134,8 @@ static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static void report_improper_aux(struct hstex_engine *engine,
                                 const char *name);
+static int math_append_character(struct hstex_engine *engine, uint8_t code,
+                                 char *error, size_t error_capacity);
 static bool too_many_errors(const struct hstex_engine *engine);
 /* The text of a run of nodes, and the nodes themselves, both wanted by the
    packer before either is defined. */
@@ -26826,6 +26828,15 @@ static int execute_char(struct hstex_engine *engine, char *error,
         if (start_paragraph(engine, true, error, error_capacity) != 0) {
             return -1;
         }
+    }
+    /* Inside a formula \char names a math character, through \mathcode,
+       exactly as the character itself would. Appending it horizontally
+       happened to work in an inline formula, where the paragraph's own
+       list was there to take it, and failed in a display, where there is
+       none. trip line 266 writes \char`B inside a display. */
+    if (engine->mode == HSTEX_MODE_MATH) {
+        return math_append_character(engine, (uint8_t)code, error,
+                                     error_capacity);
     }
     return append_horizontal_character(engine, (uint8_t)code, error,
                                        error_capacity);

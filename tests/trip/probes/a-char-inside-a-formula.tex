@@ -1,0 +1,16 @@
+% \char inside a formula.
+%
+% Measured against pdftex: it names a math character, through \mathcode,
+% exactly as the character itself would -- `$x\char`B y$' and `$xBy$'
+% build the same box.
+%
+% Appending it horizontally instead happened to work in an inline formula,
+% where the paragraph's own list was there to take it, and failed outright
+% in a display, where there is none. trip line 266 writes \char`B inside
+% a display.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{$x\char`B y$}\showbox0
+\setbox1=\hbox{$xBy$}\showbox1            % the same list
+\setbox2=\vbox{\hsize=100pt $$x\char`B y$$}\showbox2
+\end
