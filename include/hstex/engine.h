@@ -1872,6 +1872,18 @@ struct hstex_engine {
     struct hstex_source_location after_assignment_location;
     bool has_after_assignment;
     uint32_t group_level;
+    /* An \accent whose character has not been read yet. The reference runs
+       assignments between the two, so the accent waits while the main loop
+       does that and is finished by whatever arrives that is not one. */
+    struct {
+        struct hstex_char_metric metric;
+        uint32_t font;
+        int32_t code;
+        int32_t x_height;
+        int32_t slant;
+        bool present;
+    } pending_accent;
+    bool accent_pending;
     /* What closes each open group, indexed by level - 1. */
     uint8_t *group_kinds;
     size_t group_kind_capacity;

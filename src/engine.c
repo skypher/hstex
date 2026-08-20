@@ -12453,8 +12453,10 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
        before the display closes, and the reference says so -- after
        reading the register number and the `=', so that what would have
        been the box is read as itself. It refuses one between \accent and
-       its character in the same words. */
-    if (engine->display_alignment) {
+       its character in the same words, and for a plain reason: a \setbox
+       there would build its box into the very list the accent is waiting
+       in. */
+    if (engine->display_alignment || engine->accent_pending) {
         static const char *const help[] = {
             "Sorry, \\setbox is not allowed after \\halign in a display,",
             "or between \\accent and an accented character.", NULL};
@@ -33098,75 +33100,37 @@ static int execute_accent(struct hstex_engine *engine, char *error,
     }
     /* The accent itself is set in the font that was in force where \\accent
        was read, whatever an assignment after it changes the font to. */
-    uint32_t accent_font = engine->current_font;
-    struct hstex_char_metric accent =
+    engine->pending_accent.font = engine->current_font;
+    engine->pending_accent.code = code;
+    engine->pending_accent.present = have_accent;
+    engine->pending_accent.metric =
         have_accent ? font->characters[code] : (struct hstex_char_metric){0};
-    int32_t x_height =
+    engine->pending_accent.x_height =
         font != NULL && font->dimen_count >= 5U ? font->dimens[4] : 0;
-    int32_t slant =
+    engine->pending_accent.slant =
         font != NULL && font->dimen_count >= 1U ? font->dimens[0] : 0;
+    /* What stands between the accent and its character is read by the main
+       loop, so that the assignments the reference carries out there really
+       are carried out. See docs/DECISIONS.md,
+       what-may-stand-between-an-accent-and-its-character. */
+    engine->accent_pending = true;
+    return 0;
+}
 
-    /* Whatever follows, after any assignments, is the accented character.
-       The reference carries those assignments out and goes on looking, so the
-       accent comes from the font in force where \\accent was read and the
-       character under it from whatever font is in force by the time it is
-       reached -- which is exactly what plain TeX's \\t does. See
-       docs/DECISIONS.md, what-may-stand-between-an-accent-and-its-character. */
-    hstex_token token = 0U;
-    struct hstex_source_location location;
-    enum hstex_engine_result result;
-    for (;;) {
-        result = expanded_next_non_space(engine, &token, &location, error,
-                                         error_capacity);
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-        if (result != HSTEX_ENGINE_TOKEN ||
-            !hstex_token_is_control_sequence(token)) {
-            break;
-        }
-        const struct hstex_meaning *between = hstex_engine_meaning(
-            engine, hstex_token_control_sequence_id(token));
-        if (between->command == HSTEX_COMMAND_RELAX) {
-            continue;
-        }
-        if (between->command == HSTEX_COMMAND_FONT_GIVEN &&
-            between->value.integer > 0 &&
-            font_by_identifier(engine, (uint32_t)between->value.integer) !=
-                NULL) {
-            if (select_font(engine, (uint32_t)between->value.integer, error,
-                            error_capacity) != 0) {
-                return -1;
-            }
-            continue;
-        }
-        break;
-    }
-    int32_t accented = -1;
-    if (result == HSTEX_ENGINE_TOKEN) {
-        if (hstex_token_is_character(token) &&
-            (token_is_category(token, HSTEX_CAT_LETTER) ||
-             token_is_category(token, HSTEX_CAT_OTHER))) {
-            accented = (int32_t)hstex_token_character_code(token);
-        } else if (hstex_token_is_control_sequence(token)) {
-            const struct hstex_meaning *meaning = hstex_engine_meaning(
-                engine, hstex_token_control_sequence_id(token));
-            if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN) {
-                accented = meaning->value.integer;
-            } else if (meaning->command == HSTEX_COMMAND_CHAR) {
-                if (scan_integer(engine, &accented, error, error_capacity) !=
-                    0) {
-                    return -1;
-                }
-            } else if (push_one(engine, token, location, error,
-                                error_capacity) != 0) {
-                return -1;
-            }
-        } else if (push_one(engine, token, location, error, error_capacity) !=
-                   0) {
-            return -1;
-        }
-    }
+/* The character the accent goes over, once the main loop has found it.
+   `accented' is its code, or -1 when there is none. */
+static int finish_accent(struct hstex_engine *engine, int32_t accented,
+                         char *error, size_t error_capacity)
+{
+    uint32_t accent_font = engine->pending_accent.font;
+    int32_t code = engine->pending_accent.code;
+    bool have_accent = engine->pending_accent.present;
+    struct hstex_char_metric accent = engine->pending_accent.metric;
+    int32_t x_height = engine->pending_accent.x_height;
+    int32_t slant = engine->pending_accent.slant;
+    const struct hstex_font *font = font_by_identifier(engine, accent_font);
+    engine->accent_pending = false;
+
     /* The character under the accent belongs to the font in force now, which
        an assignment in between may have changed. */
     const struct hstex_font *base_font =
@@ -35622,6 +35586,51 @@ static enum hstex_engine_result next_output(
         }
 
 handle_token:
+        /* An \accent waits here for its character, while the main loop
+           carries out the assignments the reference allows in between. A
+           blank is skipped, \relax and any assignment are obeyed and the
+           accent goes on waiting, and anything else is the character --
+           or, if it is not a character at all, the end of the search. */
+        if (engine->accent_pending) {
+            if (token_is_space(*token)) {
+                continue;
+            }
+            int32_t accented = -1;
+            bool finish = true;
+            if (hstex_token_is_character(*token)) {
+                if (token_is_category(*token, HSTEX_CAT_LETTER) ||
+                    token_is_category(*token, HSTEX_CAT_OTHER)) {
+                    accented = (int32_t)hstex_token_character_code(*token);
+                } else if (push_one(engine, *token, *location, error,
+                                    error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+            } else {
+                const struct hstex_meaning *between = hstex_engine_meaning(
+                    engine, hstex_token_control_sequence_id(*token));
+                if (between->command == HSTEX_COMMAND_RELAX ||
+                    command_assigns(between->command)) {
+                    finish = false;
+                } else if (between->command == HSTEX_COMMAND_CHAR_GIVEN) {
+                    accented = between->value.integer;
+                } else if (between->command == HSTEX_COMMAND_CHAR) {
+                    if (scan_integer(engine, &accented, error,
+                                     error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                } else if (push_one(engine, *token, *location, error,
+                                    error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+            }
+            if (finish) {
+                if (finish_accent(engine, accented, error, error_capacity) !=
+                    0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+        }
         /* A vertical command inside a formula closes it first, and a math
            command outside one opens it: both put a $ in front of the
            command and read it again. Without the first an unclosed display
