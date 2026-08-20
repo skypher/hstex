@@ -7489,12 +7489,37 @@ static bool token_is_outer_macro(struct hstex_engine *engine,
     return (macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U;
 }
 
+/* \meaning, \string and \noexpand read the token after them with the
+   \outer check off, so an \outer macro may stand there. Measured: in a
+   text that will be expanded -- \message, \write, \mark, \special --
+   `\meaning\lz' draws no fault where a bare \lz draws one, and the same
+   holds inside an \edef body. In a text that will not be expanded the
+   conversion is never reached, so `\toks0={\meaning\lz}' does fault. */
+static bool token_reads_its_operand_plainly(const struct hstex_engine *engine,
+                                            hstex_token token)
+{
+    if (!hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (meaning == NULL) {
+        return false;
+    }
+    return meaning->command == HSTEX_COMMAND_MEANING ||
+           meaning->command == HSTEX_COMMAND_STRING ||
+           meaning->command == HSTEX_COMMAND_NO_EXPAND;
+}
+
 static int scan_balanced_group(struct hstex_engine *engine,
                                struct hstex_token_vector *argument, bool long_macro,
-                               const char *scanning, char *error,
+                               const char *scanning, bool expanded, char *error,
                                size_t error_capacity)
 {
     size_t depth = 1U;
+    /* Set when the token just taken reads the next one plainly, so that the
+       next one goes unexamined. */
+    bool operand_follows = false;
     while (depth != 0U) {
         /* Where what is being read is a list of tokens standing together,
            the group is looked at where it stands and taken in one go rather
@@ -7573,7 +7598,10 @@ static int scan_balanced_group(struct hstex_engine *engine,
            it, and reads the offending control sequence again. Measured for
            \toks, \uppercase, a definition and a macro's own argument --
            all the same words. */
-        if (hstex_token_is_control_sequence(token) &&
+        bool exempt = operand_follows;
+        operand_follows =
+            expanded && token_reads_its_operand_plainly(engine, token);
+        if (!exempt && hstex_token_is_control_sequence(token) &&
             token_is_outer_macro(engine, token)) {
             static const char *const help[] = {
                 "I suspect you have forgotten a `}', causing me",
@@ -7692,7 +7720,7 @@ static int execute_case_shift(struct hstex_engine *engine, size_t table,
     (void)opening_location;
 
     struct hstex_token_vector text = {0};
-    if (scan_balanced_group(engine, &text, true, "text of \\uppercase", error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &text, true, "text of \\uppercase", false, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
     }
@@ -7739,7 +7767,7 @@ static int expand_unexpanded_text(struct hstex_engine *engine,
                          "unexpanded requires a braced token list");
     }
     struct hstex_token_vector output = {0};
-    if (scan_balanced_group(engine, &output, true, "text of \\unexpanded", error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &output, true, "text of \\unexpanded", false, error, error_capacity) != 0) {
         vector_destroy(&output);
         return -1;
     }
@@ -7852,7 +7880,7 @@ static int expand_detokenize(struct hstex_engine *engine,
                          "detokenize requires a braced token list");
     }
     struct hstex_token_vector input = {0};
-    if (scan_balanced_group(engine, &input, true, "text of \\detokenize", error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &input, true, "text of \\detokenize", false, error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
     }
@@ -8486,7 +8514,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                 continue;
             }
             if (token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
-                if (scan_balanced_group(engine, arena, long_macro, NULL, error,
+                if (scan_balanced_group(engine, arena, long_macro, NULL, false, error,
                                         error_capacity) != 0) {
                     goto cleanup;
                 }
@@ -20774,7 +20802,7 @@ static int scan_token_list_value(struct hstex_engine *engine,
                          "token-list assignment requires a register or braces");
     }
     struct hstex_token_vector tokens = {0};
-    if (scan_balanced_group(engine, &tokens, true, engine->scanning_text_name, error, error_capacity) != 0 ||
+    if (scan_balanced_group(engine, &tokens, true, engine->scanning_text_name, false, error, error_capacity) != 0 ||
         store_token_list(engine, &tokens, identifier, error, error_capacity) !=
             0) {
         vector_destroy(&tokens);
@@ -22004,9 +22032,16 @@ static int expand_to_bytes(struct hstex_engine *engine, uint8_t **bytes,
     return 0;
 }
 
-static int scan_expanded_general_text(struct hstex_engine *engine,
-                                      uint8_t **bytes, size_t *byte_count,
-                                      char *error, size_t error_capacity)
+/* Whether the text is expanded as it is read or only after it has been
+   taken whole decides one thing beyond speed: a conversion's operand is
+   only reached, and so only exempted from the \outer check, in the first
+   kind. Measured: \message{\meaning\lz} is quiet and
+   \immediate\write16{\meaning\lz} is not, though both end up writing the
+   same bytes. */
+static int scan_general_text_bytes(struct hstex_engine *engine,
+                                   uint8_t **bytes, size_t *byte_count,
+                                   bool expanding, char *error,
+                                   size_t error_capacity)
 {
     hstex_token opening = 0U;
     struct hstex_source_location location;
@@ -22017,8 +22052,16 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "write requires a braced token list");
     }
+    /* The reference names the primitive whose text it is -- "text of
+       \\message", "text of \\write" -- and only the main loop knows which
+       one that is. */
+    char named[128];
+    describe_token(engine, engine->executing_token, named, sizeof(named));
+    (void)snprintf(engine->scanning_text_name,
+                   sizeof(engine->scanning_text_name), "text of %s", named);
     struct hstex_token_vector text = {0};
-    if (scan_balanced_group(engine, &text, true, NULL, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &text, true, engine->scanning_text_name,
+                            expanding, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
     }
@@ -22063,6 +22106,25 @@ static int expand_to_tokens(struct hstex_engine *engine,
 
 /* The text of a \write is kept as it was written, so it can be expanded when
    the page reaches the shipper. See docs/DECISIONS.md, whatsits. */
+/* The text of \write, \pdfliteral and the rest: taken whole, expanded
+   after. */
+static int scan_expanded_general_text(struct hstex_engine *engine,
+                                      uint8_t **bytes, size_t *byte_count,
+                                      char *error, size_t error_capacity)
+{
+    return scan_general_text_bytes(engine, bytes, byte_count, false, error,
+                                   error_capacity);
+}
+
+/* The text of \message and \special: expanded as it is read. */
+static int scan_general_text_expanding(struct hstex_engine *engine,
+                                       uint8_t **bytes, size_t *byte_count,
+                                       char *error, size_t error_capacity)
+{
+    return scan_general_text_bytes(engine, bytes, byte_count, true, error,
+                                   error_capacity);
+}
+
 static int scan_general_text(struct hstex_engine *engine,
                              struct hstex_token_vector *text, char *error,
                              size_t error_capacity)
@@ -22076,7 +22138,12 @@ static int scan_general_text(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "write requires a braced token list");
     }
-    if (scan_balanced_group(engine, text, true, NULL, error, error_capacity) != 0) {
+    char named[128];
+    describe_token(engine, engine->executing_token, named, sizeof(named));
+    (void)snprintf(engine->scanning_text_name,
+                   sizeof(engine->scanning_text_name), "text of %s", named);
+    if (scan_balanced_group(engine, text, true, engine->scanning_text_name,
+                            false, error, error_capacity) != 0) {
         vector_destroy(text);
         return -1;
     }
@@ -22518,7 +22585,7 @@ static int expand_scan_tokens(struct hstex_engine *engine,
                          "scantokens requires a braced token list");
     }
     struct hstex_token_vector input = {0};
-    if (scan_balanced_group(engine, &input, true, "text of \\scantokens", error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &input, true, "text of \\scantokens", false, error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
     }
@@ -31141,7 +31208,7 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
                          "\\mark requires a braced token list");
     }
     struct hstex_token_vector raw = {0};
-    if (scan_balanced_group(engine, &raw, true, "text of \\mark", error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &raw, true, "text of \\mark", true, error, error_capacity) != 0) {
         vector_destroy(&raw);
         return -1;
     }
@@ -33903,7 +33970,7 @@ static int execute_special(struct hstex_engine *engine, char *error,
 {
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+    if (scan_general_text_expanding(engine, &bytes, &byte_count, error,
                                    error_capacity) != 0) {
         free(bytes);
         return -1;
@@ -34056,7 +34123,7 @@ static int execute_message(struct hstex_engine *engine, char *error,
 {
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+    if (scan_general_text_expanding(engine, &bytes, &byte_count, error,
                                    error_capacity) != 0) {
         free(bytes);
         return -1;
@@ -34084,7 +34151,7 @@ static int execute_error_message(struct hstex_engine *engine, char *error,
 {
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+    if (scan_general_text_expanding(engine, &bytes, &byte_count, error,
                                    error_capacity) != 0) {
         free(bytes);
         return -1;

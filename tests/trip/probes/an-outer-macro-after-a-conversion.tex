@@ -1,0 +1,44 @@
+% Where an \outer macro may stand: after \meaning, \string or \noexpand,
+% in a text that is expanded as it is read.
+%
+% Measured against pdftex. The three conversions read the token after them
+% with the \outer check off, so
+%
+%   \message{\meaning\lz}      is quiet
+%   \message{\lz}              ! Forbidden control sequence found while
+%                                scanning text of \message.
+%
+% but only where the text is expanded AS IT IS READ. That is what divides
+% these primitives in two, and it is not what they eventually do with the
+% bytes:
+%
+%   expanded while read : \message, \errmessage, \special, \mark, \edef
+%   taken whole first   : \write (both \immediate and deferred), \toks,
+%                         \def, a macro's argument, \uppercase,
+%                         \lowercase, \scantokens, \unexpanded,
+%                         \detokenize
+%
+% So \message{\meaning\lz} is quiet and \immediate\write16{\meaning\lz} is
+% not, though both write the same bytes -- in the second the conversion is
+% never reached during the scan, and the \lz is met as a plain token.
+%
+% The fault names the primitive whose text it is: "text of \message",
+% "text of \write", "text of \errmessage".
+%
+% NOT YET: after the fault in a \write, the reference reads the leftover
+% \lz and the source's own } from the file, which draws "Too many }'s".
+% This engine bounds the write text's expansion and so meets the end of it
+% instead. And \errmessage with an emptied text prints one space fewer.
+%
+% trip line 382 is \message{\meaning\lo\noexpand\lo} where \lo is \outer.
+\tracingonline=1
+\outer\def\lz{Z}
+\message{[\meaning\lz]}
+\message{[\string\lz]}
+\message{[\noexpand\lz]}
+\edef\x{\meaning\lz}\message{[\x]}
+\special{\meaning\lz}
+\mark{\meaning\lz}
+\message{[quiet so far]}
+\toks0={\meaning\lz}                 % this one does fault
+\end
