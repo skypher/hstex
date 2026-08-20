@@ -1,0 +1,29 @@
+% A hyphen break inside a cascade of ligatures, in the trip font.
+%
+% Run from a directory holding trip.tfm (tests/trip/run-trip.sh builds one in
+% build/trip):
+%
+%   pdftex -ini -interaction=nonstopmode ligature-cascade-break.tex
+%   hstex --run-ini ligature-cascade-break.tex
+%
+% The reference breaks the word and shows a discretionary; HSTeX keeps the
+% whole cascade on one line.  See docs/DECISIONS.md,
+% a-break-inside-a-cascade-of-ligatures.
+%
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\font\rip=trip \rip
+% Pattern letters stand for digits: A=1, B=5, C=2.  Digits map to themselves
+% so the word's characters and the patterns' letters meet on the same codes.
+\lccode`A=`1 \lccode`B=`5 \lccode`C=`2
+\lccode`1=`1 \lccode`5=`5 \lccode`2=`2 \lccode`7=`7
+\language=0
+\patterns{AB1AC}
+\lefthyphenmin=1 \righthyphenmin=1
+\hyphenchar\rip=`-
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\hbadness=10000 \hfuzz=1000pt
+\setbox0=\vbox{\hsize=1pt \parindent=0pt \parfillskip=0pt
+\rightskip=0pt plus 1fil \pretolerance=-1 \tolerance=10000
+7 1512\par}
+\showbox0
+\end
