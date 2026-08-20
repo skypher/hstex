@@ -34213,14 +34213,19 @@ handle_token:
             return HSTEX_ENGINE_TOKEN;
         }
 
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(*token));
         /* Anything that is not a character ends the pair the ligature and
-           kerning program was waiting on. */
+           kerning program was waiting on -- but a control sequence that
+           stands for a character is a character, and goes on with the word
+           rather than ending it. See docs/DECISIONS.md,
+           a-chardef-inside-a-word. */
         if (engine->has_pending_character &&
+            meaning->command != HSTEX_COMMAND_CHAR_GIVEN &&
+            meaning->command != HSTEX_COMMAND_CHAR &&
             flush_pending_character(engine, error, error_capacity) != 0) {
             return HSTEX_ENGINE_ERROR;
         }
-        const struct hstex_meaning *meaning = hstex_engine_meaning(
-            engine, hstex_token_control_sequence_id(*token));
         if (engine->mode == HSTEX_MODE_VERTICAL &&
             !engine->pending_global && engine->pending_macro_flags == 0U &&
             command_starts_paragraph(meaning)) {
