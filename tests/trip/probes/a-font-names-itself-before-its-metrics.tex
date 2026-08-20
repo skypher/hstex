@@ -1,0 +1,22 @@
+% When \font binds its target.
+%
+% Measured against pdftex: the target names a font from the moment it is
+% read, BEFORE the file name and the `at' or `scaled' that follow. Those are
+% read with expansion, so if the target still meant a macro it would be
+% expanded while the engine looked for `at'.
+%
+% The discriminator: after `\def\ff{at2pt}\font\ff=cmr10 \ff', the font is
+% at its DESIGN size, not 2pt -- so the \ff the keyword scan met was already
+% a font and not the macro. A macro under a different name is expanded, and
+% does supply the `at'.
+%
+% This is why `\font\tt=cmr10 \tt' selects cmr10 after plain.tex, where \tt
+% is otherwise a macro for \fam\ttfam\tentt.
+%
+% What the target names until the metrics are in is \nullfont.
+\tracingonline=1
+\def\ff{at2pt}\font\ff=cmr10 \ff\message{[self=\the\fontdimen6\ff]}
+\def\qq{at2pt}\font\gg=cmr10 \qq\message{[other=\the\fontdimen6\gg]}
+\font\tt=cmr10 \tt\message{[tt=\fontname\font]}
+\font\hh=cmtt10 {\font\hh=cmr10 }\hh\message{[local=\fontname\font]}
+\end

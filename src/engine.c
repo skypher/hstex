@@ -3079,6 +3079,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     engine->math_stack = NULL;
     engine->math_depth = 0U;
     engine->math_capacity = 0U;
+    free(engine->group_kinds);
+    engine->group_kinds = NULL;
+    engine->group_kind_capacity = 0U;
     if (engine->display_rows != NULL) {
         free(engine->display_rows->node_identifiers);
         free(engine->display_rows);
@@ -9468,6 +9471,31 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
                          "font requires a control-sequence target");
     }
 
+    /* The target names a font from here on, before the file name and the
+       `at' or `scaled' that follow are read. That matters because those are
+       read with expansion: if the target still meant a macro, \font\tt
+       where \tt was plain's macro would expand it while looking for `at'
+       and leave \fam\ttfam\tentt behind. Measured: after
+       `\def\ff{at2pt}\font\ff=cmr10 \ff', the reference's font is at its
+       design size, so the \ff it read was already a font and not the
+       macro. What it names until the metrics are in is \nullfont. */
+    bool declared_global = assignment_is_global(engine, engine->pending_global);
+    uint32_t placeholder = 0U;
+    if (find_or_create_font(engine, "nullfont", INT32_C(10) * INT32_C(65536),
+                            &placeholder, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_meaning placeholder_meaning = {
+        .command = HSTEX_COMMAND_FONT_GIVEN,
+        .level = 0U,
+        .value = {.integer = (int32_t)placeholder},
+    };
+    if (set_meaning(engine, hstex_token_control_sequence_id(target),
+                    placeholder_meaning, declared_global, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+
     char *name = NULL;
     if (scan_input_filename(engine, &name, error, error_capacity) != 0) {
         return -1;
@@ -9581,8 +9609,9 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
                   "Font %s=%s%s not loadable: Metric (TFM) file not found",
                   target_name, name, shown);
         free(name);
-        if (find_or_create_font(engine, "nullfont", 0, &identifier, error,
-                                error_capacity) != 0) {
+        if (find_or_create_font(engine, "nullfont",
+                                INT32_C(10) * INT32_C(65536), &identifier,
+                                error, error_capacity) != 0) {
             return -1;
         }
         struct hstex_meaning null_meaning = {
@@ -9590,11 +9619,11 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
             .level = 0U,
             .value = {.integer = (int32_t)identifier},
         };
-        bool null_global = assignment_is_global(engine, engine->pending_global);
         engine->pending_global = false;
         engine->pending_macro_flags = 0U;
         return set_meaning(engine, hstex_token_control_sequence_id(target),
-                           null_meaning, null_global, error, error_capacity);
+                           null_meaning, declared_global, error,
+                           error_capacity);
     }
     free(name);
     /* A reused font is renamed to the control sequence that just declared it,
@@ -9608,11 +9637,10 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         .level = 0U,
         .value = {.integer = (int32_t)identifier},
     };
-    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, hstex_token_control_sequence_id(target), meaning,
-                       global, error, error_capacity);
+                       declared_global, error, error_capacity);
 }
 
 static int scan_font_dimen_assignment(struct hstex_engine *engine,
@@ -12326,16 +12354,25 @@ static int execute_set_box(struct hstex_engine *engine, char *error,
     engine->pending_macro_flags = 0U;
 
     int32_t register_index = 0;
-    if (scan_integer(engine, &register_index, error, error_capacity) != 0) {
+    if (scan_register_num(engine, &register_index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
-    }
-    if (register_index < 0 || (size_t)register_index >= engine->count_capacity) {
-        return set_error(error, error_capacity,
-                         "box register %d is outside 0..%zu", register_index,
-                         engine->count_capacity - 1U);
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0) {
         return -1;
+    }
+    /* An alignment that filled a display leaves no room for a \setbox
+       before the display closes, and the reference says so -- after
+       reading the register number and the `=', so that what would have
+       been the box is read as itself. It refuses one between \accent and
+       its character in the same words. */
+    if (engine->display_alignment) {
+        static const char *const help[] = {
+            "Sorry, \\setbox is not allowed after \\halign in a display,",
+            "or between \\accent and an accented character.", NULL};
+        tex_error(engine, help, "Improper \\setbox");
+        return 0;
     }
     struct hstex_box value;
     if (scan_box_operand(engine, &value, error, error_capacity) != 0) {
