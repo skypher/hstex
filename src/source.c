@@ -478,6 +478,13 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
     return 0;
 }
 
+void hstex_source_settle(struct hstex_source_stack *stack)
+{
+    if (stack != NULL) {
+        pop_exhausted_token_frames(stack);
+    }
+}
+
 bool hstex_source_at_boundary(const struct hstex_source_stack *stack)
 {
     return stack != NULL && stack->count != 0U &&

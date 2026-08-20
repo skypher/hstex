@@ -164,6 +164,11 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
    all: the reading is over, but the document is not. */
 bool hstex_source_at_boundary(const struct hstex_source_stack *stack);
 
+/* Drop the token-list frames that have been read to the end. Every push
+   does this first, so a caller that wants to note where the stack stands
+   before pushing has to do it too, or the push moves the floor under it. */
+void hstex_source_settle(struct hstex_source_stack *stack);
+
 /* Drop the frame on top, giving back whatever it holds. Used where an
    expansion is made only to be read off the stack again. */
 void hstex_source_pop(struct hstex_source_stack *stack);

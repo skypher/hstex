@@ -1,0 +1,19 @@
+% \showthe of a value whose scan left a token pushed back.
+%
+% \showthe finds what \the produced by noting where the source stack stood
+% before it and reading the frames above that. Every push first drops the
+% frames already read to the end -- so if one of those was sitting on top,
+% the push landed BELOW the mark and \showthe printed "> ." with nothing
+% in it.
+%
+% A scan that looks ahead and puts the token back leaves such a frame, and
+% a glue scan always does, since it has to look for `plus' and `minus'.
+% That is why \showthe\skip0 was empty while \showthe\count0 was fine.
+\tracingonline=1
+\dimen0=1pt\showthe\dimen0
+\skip0=3pt \showthe\skip0
+\skip0=3pt plus 1fil \showthe\skip0
+\muskip0=3mu \advance\muskip0 by 2mu \showthe\muskip0
+\count0=5 \showthe\count0
+\toks0={ab}\showthe\toks0
+\end

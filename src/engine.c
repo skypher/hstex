@@ -15374,6 +15374,10 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
     struct hstex_source_location location = {0};
+    /* What \the pushes is found by where the stack stood before it -- so
+       the frames already read to the end have to go first, or the push
+       drops the value in below the mark and nothing is shown. */
+    hstex_source_settle(&engine->sources);
     size_t base = engine->sources.count;
     if (expand_the_primitive(engine, location, error, error_capacity) != 0) {
         return -1;
