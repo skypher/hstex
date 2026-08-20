@@ -17,6 +17,7 @@
 #include <regex.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <time.h>
@@ -110,6 +111,9 @@ static void spec_touch(const struct hstex_engine *engine, const char *prefix,
                        int32_t page, const char *content);
 static void spec_chunk_stop(struct hstex_engine *engine);
 static void spec_finalize(struct hstex_engine *engine);
+static void spec_load_pages(struct hstex_engine *engine);
+static void spec_path(const struct hstex_engine *engine, char *room,
+                      size_t capacity, const char *prefix, int32_t page);
 
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
@@ -31660,10 +31664,43 @@ void hstex_engine_set_message_stream(struct hstex_engine *engine,
 static void hstex_engine_release_chunks(struct hstex_engine *engine);
 static void finish_a_chunk(struct hstex_engine *engine);
 
+/* The verifier lets the parked fleet go: down each chunk's named pipe goes
+   the patch, and the chunks begin reading the disk as it now stands. A pipe
+   with no reader is a chunk that died, and its range is simply never
+   validated. */
+static void spec_release_fleet(struct hstex_engine *engine)
+{
+    spec_load_pages(engine);
+    const char *patch = getenv("HSTEX_PATCH");
+    int32_t patch_length =
+        patch == NULL ? 0 : (int32_t)strlen(patch);
+    if (patch_length >= 4096) {
+        patch_length = 0;
+    }
+    for (size_t index = 0U; index < engine->spec_page_count; ++index) {
+        char gate_name[600];
+        spec_path(engine, gate_name, sizeof(gate_name), "go",
+                  engine->spec_pages[index]);
+        int gate = open(gate_name, O_WRONLY | O_NONBLOCK);
+        if (gate < 0) {
+            continue;
+        }
+        ssize_t wrote = write(gate, &patch_length, sizeof(patch_length));
+        if (patch_length > 0) {
+            wrote = write(gate, patch, (size_t)patch_length);
+        }
+        (void)wrote;
+        (void)close(gate);
+    }
+}
+
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity)
 {
+    if (engine->verifying) {
+        spec_release_fleet(engine);
+    }
     if (engine->parallel_chunk != 0) {
         int done[2];
         if (pipe(done) != 0) {
@@ -33365,8 +33402,16 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
     case HSTEX_NODE_LIST:
         digest_bytes(digest, &node->value.list.box_kind,
                      sizeof(node->value.list.box_kind));
-        digest_bytes(digest, &node->value.list.glue,
-                     sizeof(node->value.list.glue));
+        /* Field by field: the record is padded, and padding is whatever the
+           process left there. */
+        digest_bytes(digest, &node->value.list.glue.needed,
+                     sizeof(node->value.list.glue.needed));
+        digest_bytes(digest, &node->value.list.glue.total,
+                     sizeof(node->value.list.glue.total));
+        digest_bytes(digest, &node->value.list.glue.sign,
+                     sizeof(node->value.list.glue.sign));
+        digest_bytes(digest, &node->value.list.glue.order,
+                     sizeof(node->value.list.glue.order));
         digest_bytes(digest, &node->value.list.display,
                      sizeof(node->value.list.display));
         digest_node_run(digest, engine, node->value.list.node_start,
@@ -33611,6 +33656,7 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
         DIGEST_VALUE(insert->held);
         DIGEST_VALUE(insert->split);
     }
+    parts[4] = digest;
     /* Where the reading has got to in every file that is open. A token
        frame read to its end is a husk the next read will clear; when it is
        cleared is representation, not meaning -- but skipping husks is only
@@ -33631,12 +33677,24 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
                          strlen(frame->value.file->path));
             DIGEST_VALUE(frame->value.file->mouth.line_number);
             DIGEST_VALUE(frame->value.file->mouth.line_cursor);
+            /* And what the file still holds from the current line on: a
+               state is only the same as another if the text each will now
+               read is the same text. What was already consumed needs no
+               hash -- its effects are the rest of this digest -- and a file
+               not yet opened is read fresh from disk by whoever opens it,
+               so an edit refuses exactly the chunks that straddle it. */
+            const struct hstex_mouth *mouth = &frame->value.file->mouth;
+            if (mouth->data != NULL && mouth->line_start < mouth->length) {
+                size_t remaining = mouth->length - mouth->line_start;
+                DIGEST_VALUE(remaining);
+                digest_bytes(&digest, mouth->data + mouth->line_start,
+                             remaining);
+            }
         } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
             DIGEST_VALUE(frame->value.token_list.count);
             DIGEST_VALUE(frame->value.token_list.cursor);
         }
     }
-    parts[4] = digest;
     *semantic = digest;
     /* Where the output stands: the byte the file has reached, the number
        the next object will take, what the cross-reference tables hold, and
@@ -33702,6 +33760,8 @@ static void note_page_digest(const struct hstex_engine *engine)
                   (unsigned long long)parts[1],
                   (unsigned long long)parts[2],
                   (unsigned long long)parts[3]);
+    (void)fprintf(log, "part4 %d %016llx\n", engine->shipped_pages,
+                  (unsigned long long)parts[4]);
     maybe_dump_meanings(engine);
     (void)fflush(log);
 }
@@ -33953,26 +34013,70 @@ static void park_a_chunk(struct hstex_engine *engine)
                 break;
             }
         }
-        if (engine->parallel_patch[0] != '\0' &&
-            apply_state_patch(engine, engine->parallel_patch) != 0) {
-            _exit(1);
-        }
-        probe_and_leave(engine);
         const char *speculate = getenv("HSTEX_SPECULATE");
-        if (speculate != NULL && engine->parallel_patch[0] != '\0') {
+        if (speculate != NULL) {
+            /* A speculative chunk must not run yet: what it will read from
+               disk belongs to the run it will serve, which has not begun --
+               the document may be edited between the parking and the
+               serving. It reports in to the run that parked it, then parks
+               again on a named pipe only the serving run's verifier opens;
+               what comes down the pipe is the patch. */
             engine->speculating = 1;
             engine->spec_start = engine->shipped_pages;
             (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
                            speculate);
-            spec_write_state(engine, "entry", engine->spec_start);
-            /* The run that parked this fleet must not wait for verdicts
-               that will come from a run after it, so the chunk reports in
-               now rather than when it is done. */
             char done = 1;
             ssize_t said = write(engine->parallel_done_write, &done, 1);
             (void)said;
             (void)close(engine->parallel_done_write);
             engine->parallel_done_write = -1;
+            char gate_name[600];
+            spec_path(engine, gate_name, sizeof(gate_name), "go",
+                      engine->spec_start);
+            (void)mkfifo(gate_name, 0600);
+            int lane = open(gate_name, O_RDONLY);
+            if (lane < 0) {
+                _exit(1);
+            }
+            int32_t patch_length = 0;
+            size_t have = 0U;
+            while (have < sizeof(patch_length)) {
+                ssize_t got = read(lane, (char *)&patch_length + have,
+                                   sizeof(patch_length) - have);
+                if (got < 0 && errno == EINTR) {
+                    continue;
+                }
+                if (got <= 0) {
+                    _exit(0);
+                }
+                have += (size_t)got;
+            }
+            engine->parallel_patch[0] = '\0';
+            if (patch_length > 0 && (size_t)patch_length <
+                                        sizeof(engine->parallel_patch)) {
+                have = 0U;
+                while (have < (size_t)patch_length) {
+                    ssize_t got = read(lane, engine->parallel_patch + have,
+                                       (size_t)patch_length - have);
+                    if (got < 0 && errno == EINTR) {
+                        continue;
+                    }
+                    if (got <= 0) {
+                        _exit(0);
+                    }
+                    have += (size_t)got;
+                }
+                engine->parallel_patch[patch_length] = '\0';
+            }
+            (void)close(lane);
+        }
+        if (engine->parallel_patch[0] != '\0' &&
+            apply_state_patch(engine, engine->parallel_patch) != 0) {
+            _exit(1);
+        }
+        probe_and_leave(engine);
+        if (engine->speculating) {
+            spec_write_state(engine, "entry", engine->spec_start);
         }
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
@@ -34349,6 +34453,7 @@ static void probe_and_leave(struct hstex_engine *engine)
                       (unsigned long long)parts[1],
                       (unsigned long long)parts[2],
                       (unsigned long long)parts[3]);
+        (void)fprintf(out, "part4 %016llx\n", (unsigned long long)parts[4]);
         (void)fclose(out);
     }
     maybe_dump_meanings(engine);
@@ -34558,9 +34663,12 @@ static void spec_chunk_stop(struct hstex_engine *engine)
             }
             /* The chunk after this one began somewhere this run did not
                reach, so this run -- the true one, as it now knows -- takes
-               the baton and rewrites it. */
-            spec_touch(engine, "stale", engine->shipped_pages, NULL);
-            spec_wait(engine, "marker", engine->shipped_pages);
+               the baton and rewrites it. At the document's end there is no
+               chunk after: nothing to disown, nothing to wait for. */
+            if (spec_exists(engine, "entry", engine->shipped_pages)) {
+                spec_touch(engine, "stale", engine->shipped_pages, NULL);
+                spec_wait(engine, "marker", engine->shipped_pages);
+            }
             engine->spec_carrier = 1;
             engine->parallel_stop = 0;
             return;
