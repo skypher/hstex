@@ -21,10 +21,40 @@
 % with it, and why the groups it left open swallowed the \let\PAR from
 % line 404.
 %
-% NOT YET: braces the entry itself leaves open. The reference inserts the
-% } it needs and ends the entry -- `\halign{#\cr {A\cr}\cr}' draws
-% "Missing } inserted" and then "Misplaced \cr" -- where this engine
-% ignores the \cr and carries on.
+% NOT YET: braces the ENTRY itself leaves open. The reference puts in the
+% } the column wants and reads the tab or \cr again --
+%
+%   ! Missing } inserted.
+%   <inserted text>
+%                   }
+%   <to be read again>
+%                      &
+%   I've put in what seems to be necessary to fix
+%   the current column of the current alignment.
+%   Try to go on, since this might almost work.
+%
+% -- so `\halign{#&#\cr {A&B}\cr}' sets A and B in their own columns and
+% the source's own } is left over, drawing "Missing \cr inserted" and
+% then "Misplaced \cr" and then "Too many }'s". This engine ignores the
+% tab and carries on; the boxes come out the same, only the diagnostics
+% are missing.
+%
+% TRIED AND BACKED OUT: reporting it whenever the entry's brace count is
+% not zero. The count cannot bear that weight yet, for two reasons found
+% by measuring:
+%
+%   * A brace several scanners look at in turn is counted once per
+%     reading. \hbox reads its `{' THREE times -- once for each thing the
+%     token might have been -- so `\halign{#&#\cr \hbox{A}&B\cr}' thinks
+%     the entry has two braces open when it has none.
+%   * A nested alignment's braces are counted against the OUTER entry,
+%     since the entry being tracked is still the outer one while the
+%     inner preamble is read. That is what stopped gentle at its line
+%     1074 and testmath at 114.
+%
+% Counting each brace once, at its first reading, fixes the first and not
+% the second. The counter has to be right before anything can be reported
+% from it.
 \tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
 \font\tt=cmr10 \tt \def\l#1{[#1]}
 \setbox0=\vbox{\halign{\l{#}\cr A\cr}}\showbox0
