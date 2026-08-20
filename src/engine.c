@@ -7750,6 +7750,34 @@ static bool vector_has_suffix(const struct hstex_token_vector *vector,
     return true;
 }
 
+/* A \\par may stand in a non-\\long macro's argument only where it is part of
+   the delimiter being looked for. The reference takes one that continues the
+   match -- \\def\\maketable[#1]#2\\par is how a whole plain TeX book builds its
+   tables -- and reports a runaway argument for one that does not. See
+   docs/DECISIONS.md, a-paragraph-that-delimits. */
+static bool vector_tail_begins_delimiter(
+    const struct hstex_token_vector *vector, size_t base,
+    const hstex_token *delimiter, size_t delimiter_count)
+{
+    size_t available = vector->count - base;
+    size_t longest = delimiter_count < available ? delimiter_count : available;
+    for (size_t length = longest; length >= 1U; --length) {
+        size_t start = vector->count - length;
+        bool matched = true;
+        for (size_t index = 0U; index < length; ++index) {
+            if (normalize_one_shot_token(vector->data[start + index]) !=
+                normalize_one_shot_token(delimiter[index])) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void strip_single_outer_group(struct hstex_token_vector *argument,
                                     size_t base)
 {
@@ -7855,10 +7883,7 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                              "runaway delimited macro argument");
         }
         token = normalize_unexpanded_control_sequence(token);
-        if (!long_macro && token_is_paragraph(engine, token)) {
-            return set_error(error, error_capacity,
-                             "paragraph ended a non-long macro argument");
-        }
+        bool paragraph = !long_macro && token_is_paragraph(engine, token);
         if (vector_push(argument, token, error, error_capacity) != 0) {
             return -1;
         }
@@ -7867,6 +7892,13 @@ static int scan_delimited_argument(struct hstex_engine *engine,
             argument->count -= delimiter_count;
             strip_single_outer_group(argument, base);
             return 0;
+        }
+        if (paragraph &&
+            !(depth == 0U &&
+              vector_tail_begins_delimiter(argument, base, delimiter,
+                                           delimiter_count))) {
+            return set_error(error, error_capacity,
+                             "paragraph ended a non-long macro argument");
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
