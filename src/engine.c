@@ -38034,9 +38034,12 @@ handle_token:
         case HSTEX_COMMAND_FONT_NAME:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "expandable primitive escaped expansion");
-        case HSTEX_COMMAND_END_CS_NAME:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity, "extra endcsname");
+        case HSTEX_COMMAND_END_CS_NAME: {
+            static const char *const help[] = {
+                "I'm ignoring this, since I wasn't doing a \\csname.", NULL};
+            tex_error(engine, help, "Extra \\endcsname");
+            continue;
+        }
         case HSTEX_COMMAND_INPUT:
             if (execute_input(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;

@@ -1,0 +1,21 @@
+% \endcsname met where no \csname was open.
+%
+% Measured against pdftex: named and ignored --
+%
+%   ! Extra \endcsname.
+%   I'm ignoring this, since I wasn't doing a \csname.
+%
+% -- and what follows it is still set. Two in a row draw it twice. A
+% \csname that really is open is unaffected.
+%
+% This engine stopped, and it was the last fatal stop the engine test
+% still expected: the helper that asserted one is gone with it.
+%
+% trip line 403 writes \noalign\omit\endcsname, all three of them extra.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{A\endcsname B}\showbox0
+\endcsname\endcsname\message{[two of them]}
+\noalign\omit\endcsname\message{[trip's three]}
+\expandafter\def\csname zz\endcsname{Z}\message{[\csname zz\endcsname]}
+\end

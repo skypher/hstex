@@ -838,42 +838,6 @@ static int test_vsplit(void)
 }
 
 
-static int expect_failure(const char *source, const char *error_fragment)
-{
-    char path[64];
-    if (open_snippet(source, path) != 0) {
-        return 1;
-    }
-    char error[512] = {0};
-    struct hstex_engine engine;
-    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
-        (void)unlink(path);
-        return 1;
-    }
-    bool failed = false;
-    for (;;) {
-        hstex_token token = 0U;
-        struct hstex_source_location location;
-        enum hstex_engine_result result = hstex_engine_next_output(
-            &engine, &token, &location, error, sizeof(error));
-        if (result == HSTEX_ENGINE_ERROR) {
-            failed = true;
-            break;
-        }
-        if (result == HSTEX_ENGINE_EOF) {
-            break;
-        }
-    }
-    int status = !failed || strstr(error, error_fragment) == NULL;
-    if (status != 0) {
-        (void)fprintf(stderr, "missing expected failure '%s': %s\n",
-                      error_fragment, error);
-    }
-    hstex_engine_destroy(&engine);
-    (void)unlink(path);
-    return status;
-}
-
 /* A macro that redefines itself while its own body is being read: the body
    is read where it stands rather than copied, so the definition must last as
    long as the reading of it. */
@@ -14085,7 +14049,9 @@ int main(void)
                     "\\edef\\c{\\meaning\\savedover}"
                     "\\ifx\\b\\c T\\else F\\fi%",
                     "TT") != 0 ||
-        expect_failure("\\endcsname%", "extra endcsname") != 0 ||
+        /* An \endcsname with no \csname before it is reported -- "Extra
+           \\endcsname" -- and ignored, so what follows it is still set. */
+        run_snippet("\\endcsname after%", "after") != 0 ||
         /* An undefined control sequence is reported and forgotten, as the
            reference forgets it: what follows is still set. In a
            conditional it is gone rather than standing in as \relax, so
