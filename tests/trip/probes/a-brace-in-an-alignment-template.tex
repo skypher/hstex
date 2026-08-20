@@ -1,0 +1,37 @@
+% Braces in an alignment template, against braces in the entry itself.
+%
+% Measured against pdftex: they are not the same thing. What decides
+% whether a tab or a \cr ends the entry is the braces the ENTRY has
+% opened; the template's own do not count, even when one of them stays
+% open across the whole entry.
+%
+%   \def\l#1{[#1]}
+%   \halign{\l{#}\cr A\cr}      an ordinary alignment. The u part is
+%                               `\l{' and the v part `}', so the macro's
+%                               argument opens before the entry and closes
+%                               after it, and the \cr between still ends
+%                               the entry.
+%   \halign{{#}\cr A\cr}        the same, with no macro in it.
+%   \halign{#&#&\l{#}\cr ...}   three columns, the third of that shape --
+%                               which is trip's own preamble on line 407.
+%
+% This engine counted the template's braces as the entry's, so the \cr was
+% ignored, the entry ran on to the end of the file, and the run stopped.
+% That is why trip's line 407 alignment took the whole rest of the file
+% with it, and why the groups it left open swallowed the \let\PAR from
+% line 404.
+%
+% NOT YET: braces the entry itself leaves open. The reference inserts the
+% } it needs and ends the entry -- `\halign{#\cr {A\cr}\cr}' draws
+% "Missing } inserted" and then "Misplaced \cr" -- where this engine
+% ignores the \cr and carries on.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt \def\l#1{[#1]}
+\setbox0=\vbox{\halign{\l{#}\cr A\cr}}\showbox0
+\setbox1=\vbox{\halign{\l{#}\cr A\cr B\cr}}\showbox1
+\setbox2=\vbox{\halign{\l{#}&#\cr A&B\cr}}\showbox2
+\setbox3=\vbox{\halign{#&\l{#}\cr A&B\cr}}\showbox3
+\setbox4=\vbox{\halign{#&#&\l{#}\cr A&B&C\cr}}\showbox4
+\setbox5=\vbox{\halign{{#}\cr A\cr}}\showbox5
+\setbox6=\vbox{\halign{#{}\cr A\cr}}\showbox6
+\end

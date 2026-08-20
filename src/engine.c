@@ -3400,14 +3400,22 @@ static void note_files_closed(struct hstex_engine *engine)
 /* A file that runs out inserts \everyeof, once, before whatever follows it;
    see docs/DECISIONS.md, everyeof. */
 static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
-                                char *error, size_t error_capacity);
+                                bool from_template, char *error,
+                                size_t error_capacity);
 
 static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
 {
     if (hstex_source_take(&engine->sources, token, location)) {
-        int noted = note_alignment_token(engine, *token, error, error_capacity);
+        /* The frame it came from is still on top, so whether it is one of
+           an alignment template can be asked here and nowhere else. */
+        bool from_template =
+            engine->sources.top != NULL &&
+            engine->sources.top->source_kind ==
+                (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE;
+        int noted = note_alignment_token(engine, *token, from_template, error,
+                                         error_capacity);
         if (noted < 0) {
             return HSTEX_ENGINE_ERROR;
         }
@@ -3437,8 +3445,8 @@ static enum hstex_engine_result raw_next(
             if (result == HSTEX_MOUTH_EOF) {
                 return HSTEX_ENGINE_EOF;
             }
-            int noted =
-                note_alignment_token(engine, *token, error, error_capacity);
+            int noted = note_alignment_token(engine, *token, false, error,
+                                             error_capacity);
             if (noted < 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -32790,10 +32798,17 @@ static int end_alignment_entry(struct hstex_engine *engine,
    asked for it sees it. Returns 1 when the token ended the entry, so that
    the template's text after it is what the caller gets. */
 static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
-                                char *error, size_t error_capacity)
+                                bool from_template, char *error,
+                                size_t error_capacity)
 {
     struct hstex_align_entry *entry = engine->alignment_entry;
     if (entry == NULL || entry->after_pushed) {
+        return 0;
+    }
+    /* A brace of the template's own is not one of the entry's: measured,
+       `\halign{\l{#}\cr A\cr}' is an ordinary alignment, though the u part
+       leaves a brace open across the whole entry. */
+    if (from_template) {
         return 0;
     }
     if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
