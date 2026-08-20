@@ -8301,15 +8301,22 @@ static int match_parameter_prefix(struct hstex_engine *engine,
         if (result != HSTEX_ENGINE_TOKEN ||
             normalize_one_shot_token(actual) !=
                 normalize_one_shot_token(tokens[index])) {
-            char expected[128];
-            char found[128];
-            describe_token(engine, tokens[index], expected, sizeof(expected));
-            describe_token(engine, result == HSTEX_ENGINE_TOKEN ? actual : 0U,
-                           found, sizeof(found));
-            return set_error(error, error_capacity,
-                             "macro invocation does not match parameter text: "
-                             "expected %s, found %s",
-                             expected, found);
+            /* The reference names the macro, swallows what was written in
+               place of the parameter text, and drops the call. */
+            static const char *const help[] = {
+                "If you say, e.g., `\\def\\a1{...}', then you must always",
+                "put `1' after `\\a', since control sequence names are",
+                "made up of letters only. The macro here has not been",
+                "followed by the required stuff, so I'm ignoring it.", NULL};
+            char named[128];
+            describe_token(
+                engine,
+                hstex_token_control_sequence(engine->expanding_macro_cs),
+                named, sizeof(named));
+            tex_error(engine, help, "Use of %s doesn't match its definition",
+                      named);
+            engine->argument_abandoned = true;
+            return -1;
         }
     }
     return 0;

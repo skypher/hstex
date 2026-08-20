@@ -1,0 +1,16 @@
+% A macro call that does not match its parameter text.
+%
+% Measured against pdftex: "Use of \a doesn't match its definition", and
+% the call is dropped -- what was written in place of the parameter text is
+% swallowed with it, so `\def\a1{[X]}\hbox{\a2Z}' sets only the Z.
+%
+% trip line 366 calls \T, whose parameter text begins with a literal 12,
+% with something else after it.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\def\a1{[X]}
+\a2\message{[after a mismatch]}
+\a\relax\message{[a control sequence is no different]}
+\setbox0=\hbox{\a2Z}\showbox0        % the 2 goes with the call, the Z stays
+\a1\message{[a matching call is silent]}
+\end
