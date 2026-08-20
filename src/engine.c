@@ -30535,6 +30535,16 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
     engine->building_paragraph = true;
     engine->space_factor = 1000;
     engine->has_pending_character = false;
+    /* The reference starts a fresh level here rather than taking the old one
+       up again, so what is reported of the lines after a display is reported
+       against the line the display ended on. See docs/DECISIONS.md,
+       boxes-that-do-not-fit. */
+    if (engine->nest_count != 0U) {
+        const struct hstex_file_source *file =
+            hstex_source_current_file(&engine->sources);
+        engine->nest[engine->nest_count - 1U].line =
+            file == NULL ? 0U : file->mouth.line_number;
+    }
     /* The display counts as three lines of the paragraph it interrupted; see
        docs/DECISIONS.md, lines-carry-on-past-a-display. */
     engine->prev_graf += 3;
