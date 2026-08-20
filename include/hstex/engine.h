@@ -248,6 +248,10 @@ enum hstex_command {
     HSTEX_COMMAND_MATH_KERN,
     HSTEX_COMMAND_MATH_LIMITS,
     HSTEX_COMMAND_HALIGN,
+    /* \valign is \halign with the two directions exchanged: its
+       preamble describes rows, each \cr ends a column, and the columns
+       go side by side into a horizontal list. */
+    HSTEX_COMMAND_VALIGN,
     HSTEX_COMMAND_CR,
     HSTEX_COMMAND_NO_ALIGN,
     HSTEX_COMMAND_OMIT,

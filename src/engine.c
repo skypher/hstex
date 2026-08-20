@@ -2368,6 +2368,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"eqno", HSTEX_COMMAND_EQUATION_NUMBER, 0},
         {"leqno", HSTEX_COMMAND_EQUATION_NUMBER, 1},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
+        {"valign", HSTEX_COMMAND_VALIGN, 0},
         {"cr", HSTEX_COMMAND_CR, 0},
         {"crcr", HSTEX_COMMAND_CR, 1},
         {"noalign", HSTEX_COMMAND_NO_ALIGN, 0},
@@ -25723,6 +25724,27 @@ static int emit_parameter_glue(struct hstex_engine *engine,
     return append_hbox_node(engine, &node, error, error_capacity);
 }
 
+/* The same glue, in a vertical list: a \\valign keeps its \\tabskip between
+   the rows of a column rather than between the columns. */
+static int emit_parameter_glue_vertically(struct hstex_engine *engine,
+                                          struct hstex_glue glue,
+                                          int parameter, char *error,
+                                          size_t error_capacity)
+{
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_GLUE,
+        .width = glue.width,
+        .value.glue = {
+            .stretch = glue.stretch,
+            .shrink = glue.shrink,
+            .stretch_order = glue.stretch_order,
+            .shrink_order = glue.shrink_order,
+            .parameter = parameter < 0 ? 0U : (uint8_t)(parameter + 1),
+        },
+    };
+    return append_vbox_node(engine, &node, error, error_capacity);
+}
+
 static int emit_math_glue(struct hstex_engine *engine, struct hstex_glue glue,
                           char *error, size_t error_capacity)
 {
@@ -30078,10 +30100,11 @@ static int end_alignment_entry(struct hstex_engine *engine,
 /* Run one entry. The templates around it are pushed as token lists, so the
    entry sees exactly what the reference's u and v parts give it. \span
    carries on into the next column with the same box. */
-static int evaluate_align_cell(struct hstex_engine *engine,
+static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                                const struct hstex_align_column *columns,
                                size_t column_count, size_t first_column,
                                bool omit, struct hstex_hbox_builder *builder,
+                               struct hstex_vbox_builder *vertical_builder,
                                enum hstex_align_end *ending, uint32_t *span,
                                char *error, size_t error_capacity)
 {
@@ -30104,6 +30127,10 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     int32_t previous_space_factor = engine->space_factor;
     bool previous_has_pending = engine->has_pending_character;
     bool previous_building = engine->building_alignment;
+    struct hstex_vbox_builder *previous_vbox_builder =
+        engine->active_vbox_builder;
+    int32_t previous_depth = engine->prev_depth;
+    int32_t previous_graf = engine->prev_graf;
 
     if (begin_group(engine, error, error_capacity) != 0) {
         return -1;
@@ -30116,12 +30143,26 @@ static int evaluate_align_cell(struct hstex_engine *engine,
     engine->displayed_math = false;
     engine->building_paragraph = false;
     engine->paragraph_builder = NULL;
-    engine->active_hbox_builder = builder;
-    engine->mode = HSTEX_MODE_HORIZONTAL;
-    engine->inner_mode = true;
-    engine->space_factor = 1000;
-    engine->has_pending_character = false;
     engine->building_alignment = true;
+    if (vertical) {
+        /* An entry of a \\valign is a vertical list of its own, the way a
+           \\vbox body is: it starts its own paragraphs and its own
+           \\prevdepth. */
+        engine->active_hbox_builder = NULL;
+        engine->active_vbox_builder = vertical_builder;
+        engine->mode = HSTEX_MODE_VERTICAL;
+        engine->inner_mode = true;
+        engine->prev_depth = HSTEX_IGNORE_DEPTH;
+        if (normal_paragraph(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        engine->active_hbox_builder = builder;
+        engine->mode = HSTEX_MODE_HORIZONTAL;
+        engine->inner_mode = true;
+        engine->space_factor = 1000;
+        engine->has_pending_character = false;
+    }
 
     size_t column = first_column;
     *span = 1U;
@@ -30210,6 +30251,11 @@ static int evaluate_align_cell(struct hstex_engine *engine,
             }
             continue;
         }
+        if (vertical) {
+            status = handle_vertical_list_token(engine, token, location, error,
+                                                error_capacity);
+            continue;
+        }
         if (token_is_space(token)) {
             status = flush_pending_character(engine, error, error_capacity);
             if (status == 0) {
@@ -30228,11 +30274,19 @@ static int evaluate_align_cell(struct hstex_engine *engine,
         status = append_horizontal_character(
             engine, hstex_token_character_code(token), error, error_capacity);
     }
-    if (status == 0) {
+    /* A vertical entry ends any paragraph it was still filling, the way an
+       implied \\par would. */
+    if (status == 0 && vertical && engine->building_paragraph) {
+        status = finish_paragraph(engine, error, error_capacity);
+    }
+    if (status == 0 && !vertical) {
         status = flush_pending_character(engine, error, error_capacity);
     }
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
+    engine->active_vbox_builder = previous_vbox_builder;
+    engine->prev_depth = previous_depth;
+    engine->prev_graf = previous_graf;
     engine->active_hbox_builder = previous_builder;
     engine->mode = previous_mode;
     engine->inner_mode = previous_inner_mode;
@@ -30269,7 +30323,7 @@ static int evaluate_align_cell(struct hstex_engine *engine,
    several columns widens the last one it covers when it does not fit. Then
    every row becomes an hbox of tabskip, entry, tabskip, ... set to the width
    the whole alignment came to. */
-static int finish_alignment(struct hstex_engine *engine,
+static int finish_alignment(struct hstex_engine *engine, bool vertical,
                             struct hstex_align_column *columns,
                             size_t column_count, struct hstex_glue leading,
                             const struct hstex_align_row *rows,
@@ -30362,6 +30416,19 @@ static int finish_alignment(struct hstex_engine *engine,
                     engine->nodes[held - 1U].width == HSTEX_RUNNING_DIMEN) {
                     engine->nodes[held - 1U].width = (int32_t)final_width;
                 }
+                if (vertical) {
+                    /* Between the columns of a \\valign, \\noalign leaves
+                       horizontal material. */
+                    uint32_t held_item = rows[index].items[item];
+                    if (held_item != 0U &&
+                        (size_t)held_item <= engine->node_count &&
+                        append_hbox_node(engine,
+                                         &engine->nodes[held_item - 1U], error,
+                                         error_capacity) != 0) {
+                        return -1;
+                    }
+                    continue;
+                }
                 if (append_vbox_item(engine, rows[index].items[item], error,
                                      error_capacity) != 0) {
                     return -1;
@@ -30374,17 +30441,32 @@ static int finish_alignment(struct hstex_engine *engine,
             continue;
         }
         struct hstex_hbox_builder line = {0};
+        struct hstex_vbox_builder stack = {0};
         struct hstex_hbox_builder *previous = engine->active_hbox_builder;
+        struct hstex_vbox_builder *previous_stack = engine->active_vbox_builder;
         enum hstex_mode previous_mode = engine->mode;
-        engine->active_hbox_builder = &line;
-        engine->mode = HSTEX_MODE_HORIZONTAL;
+        int32_t previous_depth = engine->prev_depth;
+        if (vertical) {
+            engine->active_hbox_builder = NULL;
+            engine->active_vbox_builder = &stack;
+            engine->mode = HSTEX_MODE_VERTICAL;
+            engine->prev_depth = HSTEX_IGNORE_DEPTH;
+        } else {
+            engine->active_hbox_builder = &line;
+            engine->mode = HSTEX_MODE_HORIZONTAL;
+        }
         int status = 0;
         struct hstex_glue skip = leading;
         size_t column = 0U;
         for (size_t cell = 0U; status == 0 && cell < rows[index].cell_count;
              ++cell) {
-            status = emit_parameter_glue(engine, skip, HSTEX_GLUE_TAB_SKIP,
-                                         error, error_capacity);
+            status = vertical
+                         ? emit_parameter_glue_vertically(
+                               engine, skip, HSTEX_GLUE_TAB_SKIP, error,
+                               error_capacity)
+                         : emit_parameter_glue(engine, skip,
+                                               HSTEX_GLUE_TAB_SKIP, error,
+                                               error_capacity);
             if (status != 0) {
                 break;
             }
@@ -30414,8 +30496,19 @@ static int finish_alignment(struct hstex_engine *engine,
                 set.value.list.glue =
                     packing_glue_set(entry->width, (int32_t)width, &spare);
             }
-            set.width = (int32_t)width;
-            status = append_hbox_node(engine, &set, error, error_capacity);
+            if (vertical) {
+                /* The entry is set to the height its row came to, and is as
+                   wide as the column it stands in. A column is not a stack
+                   of baselines -- the \\tabskip between the rows is all the
+                   spacing there is -- so no interline glue comes with it. */
+                set.height = (int32_t)width;
+                set.depth = 0;
+                engine->prev_depth = HSTEX_IGNORE_DEPTH;
+                status = append_vbox_node(engine, &set, error, error_capacity);
+            } else {
+                set.width = (int32_t)width;
+                status = append_hbox_node(engine, &set, error, error_capacity);
+            }
             size_t last = column + entry->span - 1U;
             skip = last < column_count ? columns[last].tabskip : leading;
             column += entry->span;
@@ -30424,18 +30517,30 @@ static int finish_alignment(struct hstex_engine *engine,
            nothing of the columns it never reached; see docs/DECISIONS.md,
            a-row-that-stops-early. */
         if (status == 0) {
-            status = emit_parameter_glue(engine, skip, HSTEX_GLUE_TAB_SKIP,
-                                         error, error_capacity);
+            status = vertical
+                         ? emit_parameter_glue_vertically(
+                               engine, skip, HSTEX_GLUE_TAB_SKIP, error,
+                               error_capacity)
+                         : emit_parameter_glue(engine, skip,
+                                               HSTEX_GLUE_TAB_SKIP, error,
+                                               error_capacity);
         }
         struct hstex_box packed = {0};
         if (status == 0) {
-            status = finalize_hbox(engine, &line, true, false,
-                                   (int32_t)final_width, &packed, error,
-                                   error_capacity);
+            status = vertical
+                         ? finalize_vbox(engine, &stack, true, false,
+                                         (int32_t)final_width, &packed, error,
+                                         error_capacity)
+                         : finalize_hbox(engine, &line, true, false,
+                                         (int32_t)final_width, &packed, error,
+                                         error_capacity);
         }
         free(line.node_identifiers);
+        free(stack.node_identifiers);
         engine->active_hbox_builder = previous;
+        engine->active_vbox_builder = previous_stack;
         engine->mode = previous_mode;
+        engine->prev_depth = previous_depth;
         if (status != 0) {
             return -1;
         }
@@ -30451,10 +30556,36 @@ static int finish_alignment(struct hstex_engine *engine,
                 continue;
             }
             struct hstex_node *entry = &engine->nodes[identifier - 1U];
-            if (entry->kind == HSTEX_NODE_LIST) {
+            if (entry->kind != HSTEX_NODE_LIST) {
+                continue;
+            }
+            if (vertical) {
+                entry->width = packed.width;
+            } else {
                 entry->height = packed.height;
                 entry->depth = packed.depth;
             }
+        }
+        if (vertical) {
+            /* The columns go side by side into the list the alignment
+               joined, with nothing between them: a \\valign's \\tabskip is
+               inside each column rather than between them. */
+            struct hstex_node node = {
+                .kind = HSTEX_NODE_LIST,
+                .width = packed.width,
+                .height = packed.height,
+                .depth = packed.depth,
+                .value.list = {
+                    .node_start = packed.node_start,
+                    .node_count = packed.node_count,
+                    .box_kind = packed.kind,
+                    .glue = packed.glue,
+                },
+            };
+            if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
         }
         if (append_shifted_box_node(engine, &packed, shift, error,
                                     error_capacity) != 0) {
@@ -30529,15 +30660,22 @@ static int reserve_align_rows(struct hstex_align_row **rows, size_t *capacity,
    align and gather. The rows are then gathered aside so that the display's
    penalties and skips can be read at the closing $$; see
    docs/DECISIONS.md, display-alignments. */
-static int execute_halign(struct hstex_engine *engine, char *error,
-                          size_t error_capacity)
+static int execute_alignment(struct hstex_engine *engine, bool vertical,
+                             char *error, size_t error_capacity)
 {
     if (engine->pending_global || engine->pending_macro_flags != 0U) {
         return set_error(error, error_capacity,
                          "an alignment does not accept prefixes");
     }
     bool display = false;
-    if (engine->mode == HSTEX_MODE_MATH) {
+    if (vertical) {
+        /* \valign builds columns side by side, so it belongs where boxes
+           stand side by side. */
+        if (ensure_horizontal_mode(engine, error, error_capacity) != 0 ||
+            flush_pending_character(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else if (engine->mode == HSTEX_MODE_MATH) {
         const struct hstex_math_builder *list = current_math_list(engine);
         if (!engine->displayed_math || engine->reading_equation_number ||
             list == NULL || engine->math_depth != engine->math_floor + 1U) {
@@ -30746,17 +30884,24 @@ static int execute_halign(struct hstex_engine *engine, char *error,
                 break;
             }
             struct hstex_hbox_builder cell = {0};
+            struct hstex_vbox_builder vertical_cell = {0};
             enum hstex_align_end ending = HSTEX_ALIGN_END_CR;
             uint32_t span = 1U;
-            status = evaluate_align_cell(engine, columns, column_count, column,
-                                         omit, &cell, &ending, &span, error,
+            status = evaluate_align_cell(engine, vertical, columns,
+                                         column_count, column, omit, &cell,
+                                         &vertical_cell, &ending, &span, error,
                                          error_capacity);
             struct hstex_box box = {0};
             if (status == 0) {
-                status = finalize_hbox(engine, &cell, false, false, 0, &box,
-                                       error, error_capacity);
+                status = vertical ? finalize_vbox(engine, &vertical_cell,
+                                                  false, false, 0, &box, error,
+                                                  error_capacity)
+                                  : finalize_hbox(engine, &cell, false, false,
+                                                  0, &box, error,
+                                                  error_capacity);
             }
             free(cell.node_identifiers);
+            free(vertical_cell.node_identifiers);
             if (status != 0) {
                 break;
             }
@@ -30780,7 +30925,10 @@ static int execute_halign(struct hstex_engine *engine, char *error,
             }
             struct hstex_align_cell *entry = &row->cells[row->cell_count++];
             entry->box = identifier;
-            entry->width = box.width;
+            /* What the entry measures is the direction the alignment runs
+               across: a row's entries are measured by width, a column's by
+               how tall and deep they are together. */
+            entry->width = vertical ? box.height + box.depth : box.width;
             entry->span = span;
             column += span;
             if (ending == HSTEX_ALIGN_END_CR) {
@@ -30807,10 +30955,10 @@ static int execute_halign(struct hstex_engine *engine, char *error,
     }
     engine->building_alignment = previous_building;
     if (status == 0) {
-        status = finish_alignment(engine, columns, column_count, leading,
-                                  rows, row_count, matched_to, matched_spread,
-                                  requested_width, shift, display, error,
-                                  error_capacity);
+        status = finish_alignment(engine, vertical, columns, column_count,
+                                  leading, rows, row_count, matched_to,
+                                  matched_spread, requested_width, shift,
+                                  display, error, error_capacity);
         /* What the rows left \prevdepth at, which is what follows the
            display; see docs/DECISIONS.md, prevdepth-inside-noalign. */
         engine->display_prev_depth = engine->prev_depth;
@@ -33380,7 +33528,10 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_HALIGN:
-            if (execute_halign(engine, error, error_capacity) != 0) {
+        case HSTEX_COMMAND_VALIGN:
+            if (execute_alignment(engine,
+                                  meaning->command == HSTEX_COMMAND_VALIGN,
+                                  error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
