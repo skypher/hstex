@@ -9637,40 +9637,25 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                 current = hstex_token_parameter((uint8_t)(
                     hstex_token_character_code(following) - (uint8_t)'0'));
             } else {
-                vector_destroy(&parameter_text);
-                vector_destroy(&replacement);
-                enum hstex_symbol_kind target_kind;
-                const uint8_t *target_name = NULL;
-                size_t target_length = 0U;
-                if (hstex_symbol_name(&engine->lexical_state.symbols,
-                                      hstex_token_control_sequence_id(target),
-                                      &target_kind, &target_name,
-                                      &target_length) != 0) {
-                    target_name = (const uint8_t *)"?";
-                    target_length = 1U;
+                /* A number the macro has no parameter for: the reference
+                   takes it as the ## that was meant, reads what followed
+                   again, and goes on. */
+                static const char *const help[] = {
+                    "You meant to type ## instead of #, right?",
+                    "Or maybe a } was forgotten somewhere earlier, and things",
+                    "are all screwed up? I'm going to assume that you meant ##.",
+                    NULL};
+                char named[128];
+                describe_token(engine, target, named, sizeof(named));
+                if (push_one(engine, following, location, error,
+                             error_capacity) != 0) {
+                    vector_destroy(&parameter_text);
+                    vector_destroy(&replacement);
+                    return -1;
                 }
-                if (hstex_token_is_character(following)) {
-                    return set_error(
-                        error, error_capacity,
-                        "illegal macro parameter #%c in replacement text of "
-                        "\\%.*s, which has %u parameters",
-                        (char)hstex_token_character_code(following),
-                        (int)target_length, (const char *)target_name,
-                        (unsigned int)parameter_count);
-                }
-                enum hstex_symbol_kind kind;
-                const uint8_t *name = NULL;
-                size_t length = 0U;
-                if (hstex_symbol_name(&engine->lexical_state.symbols,
-                                      hstex_token_control_sequence_id(following),
-                                      &kind, &name, &length) == 0) {
-                    return set_error(error, error_capacity,
-                                     "illegal macro parameter #\\%.*s in "
-                                     "replacement text",
-                                     (int)length, (const char *)name);
-                }
-                return set_error(error, error_capacity,
-                                 "illegal macro parameter in replacement text");
+                tex_error(engine, help,
+                          "Illegal parameter number in definition of %s",
+                          named);
             }
         }
         if (vector_push(&replacement, current, error, error_capacity) != 0) {

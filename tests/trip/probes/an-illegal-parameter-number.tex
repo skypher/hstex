@@ -1,0 +1,15 @@
+% A # in a macro body followed by something the macro has no parameter for.
+%
+% Measured against pdftex: "Illegal parameter number in definition of \a",
+% and it takes the # as the ## that was meant -- a literal parameter
+% character -- reading what followed again. So `\def\a#1{[#2]}' comes out
+% with the body [##2], which \meaning shows.
+%
+% trip line 364 writes \def\a^^C1{...\l{#2}...} in a macro with one
+% parameter.
+\tracingonline=1
+\def\a#1{[#2]}\message{[a=\meaning\a]}
+\def\b{[#1]}\message{[b=\meaning\b]}
+\def\c#1{[#\relax]}\message{[c=\meaning\c]}
+\def\d#1{[##1]}\message{[d=\meaning\d]}   % a real ## is silent
+\end
