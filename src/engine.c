@@ -14146,6 +14146,23 @@ static int nest_push(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* A level whose mode is not one the engine stands in: an alignment's own
+   list, or a row of one. */
+static int nest_push_fixed(struct hstex_engine *engine, enum hstex_mode mode,
+                           char *error, size_t error_capacity)
+{
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_nest_level *level = &engine->nest[engine->nest_count - 1U];
+    level->mode = (uint8_t)mode;
+    level->inner = true;
+    level->fixed = true;
+    level->prev_depth = HSTEX_IGNORE_DEPTH;
+    level->space_factor = 1000;
+    return 0;
+}
+
 static void nest_pop(struct hstex_engine *engine)
 {
     if (engine->nest_count != 0U) {
@@ -14160,6 +14177,9 @@ static void nest_note(struct hstex_engine *engine)
         return;
     }
     struct hstex_nest_level *level = &engine->nest[engine->nest_count - 1U];
+    if (level->fixed) {
+        return;
+    }
     level->mode = (uint8_t)engine->mode;
     level->inner = engine->inner_mode;
     level->hbox = engine->active_hbox_builder;
@@ -30994,6 +31014,9 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     engine->building_paragraph = false;
     engine->paragraph_builder = NULL;
     engine->building_alignment = true;
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     if (vertical) {
         /* An entry of a \\valign is a vertical list of its own, the way a
            \\vbox body is: it starts its own paragraphs and its own
@@ -31142,6 +31165,7 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     if (status == 0 && !vertical) {
         status = flush_pending_character(engine, error, error_capacity);
     }
+    nest_pop(engine);
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
     engine->active_vbox_builder = previous_vbox_builder;
@@ -31586,6 +31610,13 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                          found);
     }
 
+    /* The alignment gathers its rows in a list of its own, which runs across
+       the direction its entries do. See docs/DECISIONS.md, showlists. */
+    if (nest_push_fixed(engine,
+                        vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL,
+                        error, error_capacity) != 0) {
+        return -1;
+    }
     uint32_t base_group_level = engine->group_level;
     /* The glue before the first column is \tabskip as it stood when the
        alignment began; the preamble's own assignments set the later ones. */
@@ -31716,6 +31747,13 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
         }
         struct hstex_align_row *row = &rows[row_count++];
         memset(row, 0, sizeof(*row));
+        if (nest_push_fixed(engine,
+                            vertical ? HSTEX_MODE_VERTICAL
+                                     : HSTEX_MODE_HORIZONTAL,
+                            error, error_capacity) != 0) {
+            status = -1;
+            break;
+        }
         size_t cell_capacity = 0U;
         size_t column = 0U;
         for (;;) {
@@ -31814,6 +31852,7 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                 row_depth = depth;
             }
         }
+        nest_pop(engine);
         status = insert_every_cr(engine, error, error_capacity);
     }
     engine->building_alignment = previous_building;
@@ -31826,6 +31865,7 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
            display; see docs/DECISIONS.md, prevdepth-inside-noalign. */
         engine->display_prev_depth = engine->prev_depth;
     }
+    nest_pop(engine);
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
     while (engine->group_level > base_group_level) {

@@ -1021,6 +1021,10 @@ struct hstex_vbox_builder;
 struct hstex_nest_level {
     uint8_t mode;
     bool inner;
+    /* An alignment's own list, and a row of one, are not modes the engine
+       ever stands in, so their levels say what they are once and are not
+       told again. */
+    bool fixed;
     uint32_t line;
     struct hstex_hbox_builder *hbox;
     struct hstex_vbox_builder *vbox;
