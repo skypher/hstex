@@ -11335,11 +11335,19 @@ static int execute_leaders(struct hstex_engine *engine, int32_t kind,
         if (result == HSTEX_ENGINE_ERROR) {
             return -1;
         }
-        char found[128];
-        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? glue_token : 0U,
-                       found, sizeof(found));
-        return set_error(error, error_capacity,
-                         "leaders must be followed by glue, found %s", found);
+        /* The reference drops the leaders and the box or rule it had
+           already taken, and reads the token again. Measured:
+           `A\leaders\vrule X' sets the A and the X and nothing between. */
+        static const char *const help[] = {
+            "You should say `\\leaders <box or rule><hskip or vskip>'.",
+            "I found the <box or rule>, but there's no suitable",
+            "<hskip or vskip>, so I'm ignoring these leaders.", NULL};
+        if (result == HSTEX_ENGINE_TOKEN &&
+            push_one(engine, glue_token, where, error, error_capacity) != 0) {
+            return -1;
+        }
+        tex_error(engine, help, "Leaders not followed by proper glue");
+        return 0;
     }
     int status = execute_glue(
         engine, glue_meaning->value.integer,

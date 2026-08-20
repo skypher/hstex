@@ -1,0 +1,31 @@
+% \leaders whose box or rule is not followed by \hskip or \vskip.
+%
+% Measured against pdftex: the fault is reported and RECOVERED from. Both
+% the leaders and the box or rule already taken are dropped, and the
+% offending token is read again:
+%
+%   ! Leaders not followed by proper glue.
+%   <to be read again>
+%                      \mskip
+%   You should say `\leaders <box or rule><hskip or vskip>'.
+%   I found the <box or rule>, but there's no suitable
+%   <hskip or vskip>, so I'm ignoring these leaders.
+%
+% So \hbox{A\leaders\vrule X} sets the A and the X and nothing between --
+% the rule is gone, not left behind as an ordinary rule. The token that
+% was in the way is not swallowed: the X is still set.
+%
+% \mskip does not count, even though it is glue: it is math glue, and the
+% rule is that the glue be \hskip or \vskip. \nonscript does not count
+% either, and neither does \relax.
+%
+% trip line 375 does it twice on one line, once with \mskip and once with
+% \nonscript, and both were stopping this engine.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{A\leaders\vrule X}\showbox0
+\setbox1=\hbox{A\leaders\vrule\hskip 10pt B}\showbox1   % the valid shape
+\setbox2=\hbox{Q}\setbox3=\hbox{A\leaders\box2 X}\showbox3
+\setbox4=\hbox{A\cleaders\vrule\hskip 10pt B}\showbox4
+\setbox5=\hbox{A\leaders\vrule\relax X}\showbox5
+\end
