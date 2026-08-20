@@ -7495,20 +7495,32 @@ static bool token_is_outer_macro(struct hstex_engine *engine,
    `\meaning\lz' draws no fault where a bare \lz draws one, and the same
    holds inside an \edef body. In a text that will not be expanded the
    conversion is never reached, so `\toks0={\meaning\lz}' does fault. */
-static bool token_reads_its_operand_plainly(const struct hstex_engine *engine,
-                                            hstex_token token)
+static unsigned int tokens_read_plainly_after(
+    const struct hstex_engine *engine, hstex_token token)
 {
     if (!hstex_token_is_control_sequence(token)) {
-        return false;
+        return 0U;
     }
     const struct hstex_meaning *meaning =
         hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
     if (meaning == NULL) {
-        return false;
+        return 0U;
     }
-    return meaning->command == HSTEX_COMMAND_MEANING ||
-           meaning->command == HSTEX_COMMAND_STRING ||
-           meaning->command == HSTEX_COMMAND_NO_EXPAND;
+    switch (meaning->command) {
+    case HSTEX_COMMAND_MEANING:
+    case HSTEX_COMMAND_STRING:
+    case HSTEX_COMMAND_NO_EXPAND:
+    case HSTEX_COMMAND_IF_DEFINED:
+        return 1U;
+    case HSTEX_COMMAND_IF_X:
+        /* Two of them, and either may be \outer. */
+        return 2U;
+    default:
+        /* \if and \ifcat expand what follows rather than taking it as it
+           stands, so an \outer macro there is met as a macro and does
+           draw the fault; so do \expandafter and \csname. Measured. */
+        return 0U;
+    }
 }
 
 static int scan_balanced_group(struct hstex_engine *engine,
@@ -7517,9 +7529,9 @@ static int scan_balanced_group(struct hstex_engine *engine,
                                size_t error_capacity)
 {
     size_t depth = 1U;
-    /* Set when the token just taken reads the next one plainly, so that the
-       next one goes unexamined. */
-    bool operand_follows = false;
+    /* How many tokens still to come are read plainly by what has already
+       been taken, and so go unexamined. */
+    unsigned int operands_left = 0U;
     while (depth != 0U) {
         /* Where what is being read is a list of tokens standing together,
            the group is looked at where it stands and taken in one go rather
@@ -7598,9 +7610,12 @@ static int scan_balanced_group(struct hstex_engine *engine,
            it, and reads the offending control sequence again. Measured for
            \toks, \uppercase, a definition and a macro's own argument --
            all the same words. */
-        bool exempt = operand_follows;
-        operand_follows =
-            expanded && token_reads_its_operand_plainly(engine, token);
+        bool exempt = operands_left != 0U;
+        if (exempt) {
+            --operands_left;
+        } else if (expanded) {
+            operands_left = tokens_read_plainly_after(engine, token);
+        }
         if (!exempt && hstex_token_is_control_sequence(token) &&
             token_is_outer_macro(engine, token)) {
             static const char *const help[] = {

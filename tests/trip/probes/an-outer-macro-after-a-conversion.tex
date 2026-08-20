@@ -1,8 +1,8 @@
 % Where an \outer macro may stand: after \meaning, \string or \noexpand,
 % in a text that is expanded as it is read.
 %
-% Measured against pdftex. The three conversions read the token after them
-% with the \outer check off, so
+% Measured against pdftex. Some primitives read the token after them with
+% the \outer check off, so
 %
 %   \message{\meaning\lz}      is quiet
 %   \message{\lz}              ! Forbidden control sequence found while
@@ -11,6 +11,15 @@
 % but only where the text is expanded AS IT IS READ. That is what divides
 % these primitives in two, and it is not what they eventually do with the
 % bytes:
+%
+% The ones that do, and how many tokens each takes that way:
+%
+%   \meaning \string \noexpand \ifdefined   one
+%   \ifx                                     two, and either may be \outer
+%
+% \if and \ifcat do NOT: they expand what follows rather than taking it
+% as it stands, so an \outer macro there is met as a macro and does draw
+% the fault. Neither do \expandafter and \csname.
 %
 %   expanded while read : \message, \errmessage, \special, \mark, \edef
 %   taken whole first   : \write (both \immediate and deferred), \toks,
@@ -39,6 +48,8 @@
 \edef\x{\meaning\lz}\message{[\x]}
 \special{\meaning\lz}
 \mark{\meaning\lz}
+\message{[\ifx\lz\lz same\else other\fi]}
+\message{[\ifdefined\lz defined\fi]}
 \message{[quiet so far]}
 \toks0={\meaning\lz}                 % this one does fault
 \end
