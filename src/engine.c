@@ -31138,6 +31138,15 @@ static int scan_align_preamble(struct hstex_engine *engine,
                                "input ended inside an alignment preamble");
             break;
         }
+        /* A template starts where the last one ended, and the spaces that
+           lay out the preamble across the page are no part of it: the
+           reference passes over a space where a template would begin, at the
+           opening brace and after every tab. A control space is a control
+           sequence and is kept. See docs/DECISIONS.md,
+           where-a-template-begins. */
+        if (!seen_marker && before.count == 0U && token_is_space(token)) {
+            continue;
+        }
         if (hstex_token_is_control_sequence(token)) {
             const struct hstex_meaning *meaning = hstex_engine_meaning(
                 engine, hstex_token_control_sequence_id(token));

@@ -1,0 +1,18 @@
+% Where an alignment template begins, and what is dropped there.
+%
+% Every one of these should come to the same width as the one with no space,
+% except the control space, which is a control sequence and is kept.
+%
+%   pdftex -interaction=nonstopmode \input where-a-template-begins \end
+%
+% See docs/DECISIONS.md, where-a-template-begins.
+%
+\tracingonline=1
+\def\try#1{\setbox1=\vbox{#1 a&b\cr}}\message{}
+\setbox1=\vbox{\halign{#\hfil& \quad #\hfil\cr a&b\cr}}\message{[A=\the\wd1]}
+\setbox1=\vbox{\halign{#\hfil&\quad #\hfil\cr a&b\cr}}\message{[B=\the\wd1]}
+\setbox1=\vbox{\halign{#\hfil& {}\quad #\hfil\cr a&b\cr}}\message{[C=\the\wd1]}
+\setbox1=\vbox{\halign{#\hfil&\quad\ #\hfil\cr a&b\cr}}\message{[D=\the\wd1]}
+\setbox1=\vbox{\halign{ #\hfil&\quad #\hfil\cr a&b\cr}}\message{[F=\the\wd1]}
+\setbox1=\vbox{\halign{#\hfil&&\quad #\hfil\cr a&b&c\cr}}\message{[I=\the\wd1]}
+\setbox1=\vbox{\halign{#\hfil& &\quad #\hfil\cr a&b&c\cr}}\message{[J=\the\wd1]}
