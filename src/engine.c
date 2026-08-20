@@ -9907,6 +9907,29 @@ static int scan_let(struct hstex_engine *engine, char *error,
                        global, error, error_capacity);
 }
 
+/* The token a lookahead finds where an alignment entry ends. The reference
+   has a frozen control sequence there; this makes the same one, once, under
+   a name no document can write. */
+static int end_template_token(struct hstex_engine *engine, hstex_token *token,
+                              char *error, size_t error_capacity)
+{
+    static const uint8_t name[] = "endtemplate";
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_meaning meaning = {0};
+    meaning.command = HSTEX_COMMAND_END_TEMPLATE;
+    if (set_meaning(engine, identifier, meaning, true, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    *token = hstex_token_control_sequence(identifier);
+    return 0;
+}
+
 static int scan_future_let(struct hstex_engine *engine, char *error,
                            size_t error_capacity)
 {
@@ -9921,10 +9944,22 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
     struct hstex_source_location first_location;
     struct hstex_source_location second_location;
     if (raw_next(engine, &first, &first_location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        raw_next(engine, &second, &second_location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN) {
+        HSTEX_ENGINE_TOKEN) {
         return set_error(error, error_capacity, "end of input in futurelet");
+    }
+    bool at_boundary = false;
+    if (raw_next(engine, &second, &second_location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        /* The end of an alignment entry is a token to look at, not the end
+           of everything: measured, \global\futurelet\x\relax& leaves \x
+           meaning \outer endtemplate:. The entry is left to end itself, so
+           only the token that was read is put back. */
+        if (!hstex_source_at_boundary(&engine->sources) ||
+            end_template_token(engine, &second, error, error_capacity) != 0) {
+            return set_error(error, error_capacity, "end of input in futurelet");
+        }
+        at_boundary = true;
+        second_location = first_location;
     }
 
     hstex_token source = normalize_one_shot_token(second);
@@ -9940,7 +9975,8 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
 
     struct hstex_token_vector replay = {0};
     if (vector_push(&replay, first, error, error_capacity) != 0 ||
-        vector_push(&replay, second, error, error_capacity) != 0) {
+        (!at_boundary &&
+         vector_push(&replay, second, error, error_capacity) != 0)) {
         vector_destroy(&replay);
         return -1;
     }
@@ -15446,8 +15482,11 @@ static int execute_show(struct hstex_engine *engine, char *error,
         free(bytes);
         return -1;
     }
-    if (after_prefix < count) {
-        /* What a macro is stands on one line and what it says on the next. */
+    if (after_prefix <= count) {
+        /* What a macro is stands on one line and what it says on the next,
+           even where it says nothing: what stands at the end of an
+           alignment entry has an empty second line, and the reference still
+           breaks before it. */
         print_bytes(engine, (const char *)bytes, after_prefix);
         print_line(engine);
         print_bytes(engine, (const char *)bytes + after_prefix,
@@ -21828,6 +21867,26 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                                          error_capacity) != 0) {
                 free(bytes);
                 return -1;
+            }
+        } else if (meaning->command == HSTEX_COMMAND_END_TEMPLATE) {
+            /* What stands at the end of an alignment entry shows as an
+               \outer macro would, but named for itself and with nothing
+               after the colon: "\outer endtemplate:". \show breaks the
+               line after the colon, as it breaks it for any macro, so what
+               follows is the terminating period alone. */
+            int32_t escape =
+                engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+            if ((escape >= 0 && escape <= 255 &&
+                 append_byte(&bytes, &count, &capacity, (uint8_t)escape, error,
+                             error_capacity) != 0) ||
+                append_text_bytes(&bytes, &count, &capacity,
+                                  "outer endtemplate:", error,
+                                  error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            if (after_prefix != NULL) {
+                *after_prefix = count;
             }
         } else if (meaning->command == HSTEX_COMMAND_MACRO &&
             meaning->value.macro_identifier != 0U &&
@@ -36824,6 +36883,12 @@ handle_token:
         bool immediate = engine->immediate_pending;
         engine->immediate_pending = false;
         switch (meaning->command) {
+        case HSTEX_COMMAND_END_TEMPLATE:
+            /* Only a lookahead ever sees this, and a lookahead puts it
+               nowhere: an entry ends at its own boundary here rather than
+               by a token being obeyed. Reached only if a document \let
+               something to what it looked at and then wrote that. */
+            continue;
         case HSTEX_COMMAND_RELAX:
             /* \relax stands between a prefix and what it prefixes without
                spending it: the reference carries \global past a \relax and

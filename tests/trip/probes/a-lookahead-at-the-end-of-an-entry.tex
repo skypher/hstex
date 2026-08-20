@@ -1,0 +1,33 @@
+% \futurelet looking at the token that ends an alignment entry.
+%
+% Measured against pdftex: there IS a token there, and its meaning is
+%
+%   \outer endtemplate:
+%
+% So `\global\futurelet\x\relax&' leaves \x meaning that, and so does the
+% same at a \cr. This engine met the end of its input instead and stopped.
+%
+% \show breaks the line after the colon, as it breaks it for any macro,
+% and what follows is the terminating period alone:
+%
+%   > \w=\outer endtemplate:
+%   .
+%
+% That break happens even though there is nothing after the colon, which
+% is one case further than "break where the body begins" reaches -- an
+% ordinary \def\a{} has `->' on the second line, so the second line is
+% never empty for a macro.
+%
+% The entry still ends itself: the lookahead puts nothing back, so the &
+% or \cr does its own work afterwards and the row comes out unchanged.
+%
+% trip line 408 writes \global\futurelet\endt\foo& inside an alignment and
+% then shows \endt.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\setbox0=\vbox{\halign{#&#\cr\global\futurelet\x\relax&B\cr}}\showbox0
+\message{[\meaning\x]}
+\setbox1=\vbox{\halign{#\cr\global\futurelet\y\relax\cr}}
+\message{[\meaning\y]}
+\setbox2=\vbox{\halign{#&#\cr\global\futurelet\w\relax&\show\w\cr}}
+\def\a{}\show\a
+\end

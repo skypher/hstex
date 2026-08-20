@@ -285,6 +285,10 @@ enum hstex_command {
     HSTEX_COMMAND_MARK_TEXT,
     HSTEX_COMMAND_INSERT,
     HSTEX_COMMAND_VADJUST,
+    /* What stands at the end of an alignment entry. It has no name a
+       document can write; it exists so that a lookahead reaching the end of
+       an entry sees a token there, as the reference's does. */
+    HSTEX_COMMAND_END_TEMPLATE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
