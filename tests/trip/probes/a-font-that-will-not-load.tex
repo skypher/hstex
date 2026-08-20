@@ -1,0 +1,21 @@
+% A \font whose metric file is missing, and an `at' size out of range.
+%
+% Measured against pdftex:
+%
+%   A missing TFM is reported -- "Font \mumble=mumble not loadable: Metric
+%   (TFM) file not found" -- and ignored: the control sequence is left
+%   meaning \nullfont and the run goes on. The name in the message repeats
+%   the request, so `at' size and `scaled' amount appear in it, and an
+%   active character prints as itself rather than with a backslash.
+%
+%   An `at' size outside 0pt..2048pt is reported and replaced by 10pt --
+%   and the replacement is what the "not loadable" message then shows.
+%
+% Because the scaled amount reaches the message, it must be read before the
+% metric file is opened.
+\tracingonline=1
+\font\mumble=mumble \mumble A\message{[after mumble]}\par
+{\catcode`?=13 \font?xyzzy at0pt\font ? xyzzy scaled1?}
+\font\f=cmr10 at0pt \message{[after at0]}
+\font\f=cmr10 at3000pt \message{[after at3000]}
+\end

@@ -9460,6 +9460,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         return -1;
     }
     int32_t size = 0;
+    int32_t scale = 0;
     bool matched_at = false;
     bool matched_scaled = false;
     if (try_keyword(engine, "at", &matched_at, error, error_capacity) != 0) {
@@ -9467,58 +9468,122 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         return -1;
     }
     if (matched_at) {
-        if (scan_dimension(engine, &size, error, error_capacity) != 0 ||
-            size <= 0) {
-            free(name);
-            return set_error(error, error_capacity,
-                             "invalid requested font size");
-        }
-    } else {
-        if (try_keyword(engine, "scaled", &matched_scaled, error,
-                        error_capacity) != 0) {
+        if (scan_dimension(engine, &size, error, error_capacity) != 0) {
             free(name);
             return -1;
         }
-        /* Without `at`, the font is used at its own design size, and
-           `scaled` is a thousandth part of that rather than of ten points. */
-        int32_t design = 0;
-        if (tfm_design_size(engine, name, &design, error, error_capacity) !=
-            0) {
-            free(name);
-            return -1;
-        }
-        size = design;
-        if (matched_scaled) {
+        /* The reference handles fonts at positive sizes under 2048pt and
+           says so, putting anything else at ten points. */
+        if (size <= 0 || size >= INT32_C(134217728)) {
             static const char *const help[] = {
-                "The magnification ratio must be between 1 and 32768.", NULL};
-            int32_t scale = 0;
-            if (scan_integer(engine, &scale, error, error_capacity) != 0) {
-                free(name);
-                return -1;
-            }
-            if (scale <= 0 || scale > 32768) {
-                tex_error(engine, help,
-                          "Illegal magnification has been changed to 1000 (%d)",
-                          scale);
-                scale = 1000;
-            }
-            int64_t scaled = ((int64_t)design * scale) / 1000;
-            if (scaled <= 0 || scaled > INT32_C(1073741823)) {
-                free(name);
-                return set_error(error, error_capacity,
-                                 "requested font size is outside range");
-            }
-            size = (int32_t)scaled;
+                "I can only handle fonts at positive sizes that are",
+                "less than 2048pt, so I've changed what you said to 10pt.",
+                NULL};
+            char shown[64];
+            (void)format_scaled_value(size, "pt", shown, sizeof(shown));
+            tex_error(engine, help,
+                      "Improper `at' size (%s), replaced by 10pt", shown);
+            size = INT32_C(655360);
+        }
+    } else if (try_keyword(engine, "scaled", &matched_scaled, error,
+                           error_capacity) != 0) {
+        free(name);
+        return -1;
+    } else if (matched_scaled) {
+        /* The amount is read before the metric file is opened, so that a
+           font that cannot be loaded is still named with the scale it
+           asked for. */
+        static const char *const help[] = {
+            "The magnification ratio must be between 1 and 32768.", NULL};
+        if (scan_integer(engine, &scale, error, error_capacity) != 0) {
+            free(name);
+            return -1;
+        }
+        if (scale <= 0 || scale > 32768) {
+            tex_error(engine, help,
+                      "Illegal magnification has been changed to 1000 (%d)",
+                      scale);
+            scale = 1000;
         }
     }
 
     uint32_t identifier = 0U;
-    int status = find_or_create_font(engine, name, size, &identifier, error,
-                                     error_capacity);
-    free(name);
-    if (status != 0) {
-        return -1;
+    int status = 0;
+    if (!matched_at) {
+        /* Without `at`, the font is used at its own design size, and
+           `scaled` is a thousandth part of that rather than of ten points. */
+        int32_t design = 0;
+        status = tfm_design_size(engine, name, &design, error, error_capacity);
+        if (status == 0) {
+            size = design;
+            if (matched_scaled) {
+                int64_t scaled = ((int64_t)design * scale) / 1000;
+                size = scaled <= 0 ? 1
+                                   : scaled > INT32_C(1073741823)
+                                         ? INT32_C(1073741823)
+                                         : (int32_t)scaled;
+            }
+        }
     }
+    if (status == 0) {
+        status = find_or_create_font(engine, name, size, &identifier, error,
+                                     error_capacity);
+    }
+    if (status != 0) {
+        /* A font whose metrics cannot be read is reported and ignored: the
+           control sequence is left meaning \nullfont, and the run goes on.
+           The reference names the font the way it was asked for -- with its
+           `at' size or its `scaled' amount -- so the message repeats them. */
+        static const char *const help[] = {
+            "I wasn't able to read the size data for this font,",
+            "so I will ignore the font specification.",
+            "[Wizards can fix TFM files using TFtoPL/PLtoTF.]",
+            "You might try inserting a different font spec;",
+            "e.g., type `I\\font<same font id>=<substitute font name>'.",
+            NULL};
+        char shown[64] = {0};
+        if (matched_at) {
+            char at[48];
+            (void)format_scaled_value(size, "pt", at, sizeof(at));
+            snprintf(shown, sizeof(shown), " at %s", at);
+        } else if (matched_scaled && scale != 1000) {
+            snprintf(shown, sizeof(shown), " scaled %d", scale);
+        }
+        char target_name[256] = {0};
+        uint8_t *target_bytes = NULL;
+        size_t target_count = 0U;
+        size_t target_capacity = 0U;
+        char ignored[128];
+        if (serialize_control_sequence(engine, target, &target_bytes,
+                                       &target_count, &target_capacity, false,
+                                       ignored, sizeof(ignored)) == 0) {
+            size_t room = target_count < sizeof(target_name) - 1U
+                              ? target_count
+                              : sizeof(target_name) - 1U;
+            memcpy(target_name, target_bytes, room);
+            target_name[room] = '\0';
+        }
+        free(target_bytes);
+        tex_error(engine, help,
+                  "Font %s=%s%s not loadable: Metric (TFM) file not found",
+                  target_name, name, shown);
+        free(name);
+        if (find_or_create_font(engine, "nullfont", 0, &identifier, error,
+                                error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_meaning null_meaning = {
+            .command = HSTEX_COMMAND_FONT_GIVEN,
+            .level = 0U,
+            .value = {.integer = (int32_t)identifier},
+        };
+        bool null_global = assignment_is_global(engine, engine->pending_global);
+        engine->pending_global = false;
+        engine->pending_macro_flags = 0U;
+        return set_meaning(engine, hstex_token_control_sequence_id(target),
+                           null_meaning, null_global, error, error_capacity);
+    }
+    free(name);
     /* A reused font is renamed to the control sequence that just declared it,
        so \the\font reports the most recent declaration. */
     struct hstex_font *declared = font_by_identifier(engine, identifier);
