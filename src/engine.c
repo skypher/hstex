@@ -8814,11 +8814,23 @@ static int expand_after(struct hstex_engine *engine,
     struct hstex_source_location first_location;
     struct hstex_source_location second_location;
     if (raw_next(engine, &first, &first_location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        raw_next(engine, &second, &second_location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN) {
+        HSTEX_ENGINE_TOKEN) {
         return set_error(error, error_capacity,
                          "end of input in expandafter");
+    }
+    if (raw_next(engine, &second, &second_location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        /* What stands at the end of an alignment entry is not expandable,
+           so the reference puts it straight back and the entry ends after
+           the token that was held. Here the entry ends at its own boundary,
+           which was never crossed, so only the held token goes back.
+           Measured: `A\expandafter\q&' sets the A and then \q's expansion,
+           and the row is unchanged. */
+        if (!hstex_source_at_boundary(&engine->sources)) {
+            return set_error(error, error_capacity,
+                             "end of input in expandafter");
+        }
+        return push_one(engine, first, first_location, error, error_capacity);
     }
     if (expand_token_once(engine, second, second_location, error,
                           error_capacity) != 0) {

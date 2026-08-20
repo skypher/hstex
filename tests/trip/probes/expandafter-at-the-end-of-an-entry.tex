@@ -1,0 +1,27 @@
+% \expandafter whose second token is the end of an alignment entry.
+%
+% Measured against pdftex: what stands there is not expandable, so it goes
+% straight back and the entry ends after the token \expandafter was
+% holding. `A\expandafter\q&' therefore sets the A and then \q's
+% expansion, and the row is exactly what it would have been without the
+% \expandafter at all.
+%
+% The reference shows the token it looked at in the error context of
+% anything that goes wrong nearby:
+%
+%   <template> \endtemplate
+%
+% This engine met the end of its input and stopped. The same held at a
+% \cr as at a tab, and whether the held token expanded to something, to
+% nothing, or was undefined.
+%
+% trip line 422 writes \e\e\e\err\e\e\e\endt\e\trap\cr with \e being
+% \expandafter, which walks off the end of the entry three times over.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt \def\q{Q}
+\setbox0=\vbox{\halign{#&#\cr A\expandafter\q&B\cr}}\showbox0
+\setbox1=\vbox{\halign{#\cr A\expandafter\q\cr}}\showbox1
+\setbox2=\vbox{\halign{#&#\cr A\expandafter\err&B\cr}}\showbox2
+\setbox3=\vbox{\halign{#&#\cr A\expandafter\relax&B\cr}}\showbox3
+\setbox4=\hbox{A\expandafter\q B}\showbox4
+\end
