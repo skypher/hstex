@@ -33679,6 +33679,18 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
 static int execute_accent(struct hstex_engine *engine, char *error,
                           size_t error_capacity)
 {
+    if (engine->mode == HSTEX_MODE_MATH) {
+        /* The reference reports before it reads anything, and then goes on
+           as \mathaccent -- which scans its own operands, so what follows
+           is read by that and not by this. */
+        static const char *const help[] = {
+            "I'm changing \\accent to \\mathaccent here; wish me luck.",
+            "(Accents are not the same in formulas as they are in text.)",
+            NULL};
+        tex_error(engine, help,
+                  "Please use \\mathaccent for accents in math mode");
+        return execute_math_accent(engine, error, error_capacity);
+    }
     int32_t code = 0;
     if (scan_integer(engine, &code, error, error_capacity) != 0) {
         return -1;

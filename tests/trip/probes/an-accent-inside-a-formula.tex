@@ -1,0 +1,26 @@
+% \accent met in math mode.
+%
+% Measured against pdftex: reported and then done as \mathaccent --
+%
+%   ! Please use \mathaccent for accents in math mode.
+%   <recently read> \accent
+%   I'm changing \accent to \mathaccent here; wish me luck.
+%   (Accents are not the same in formulas as they are in text.)
+%
+% The report comes BEFORE anything is read, and what follows is then
+% scanned by \mathaccent rather than by \accent -- so $\accent"7016 x$
+% builds the same box as $\mathaccent"7016 x$, an accent riding over the
+% x, and not the kern-and-character pair a text accent makes.
+%
+% This engine stopped instead, since \accent asked for horizontal mode.
+%
+% NOT YET: where \mathaccent's operand is missing, the reference says
+% "Missing { inserted" and this engine says "Missing $ inserted" and then
+% "Missing } inserted". The box comes out the same. trip line 396 writes
+% \accent\x\vfill, which is that shape.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{$\accent"7016 x$}\showbox0
+\setbox1=\hbox{$\mathaccent"7016 x$}\showbox1
+\setbox2=\hbox{\accent"16 x}\showbox2
+\end
