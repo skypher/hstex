@@ -1892,6 +1892,13 @@ struct hstex_engine {
     uint32_t group_stop_level;
     bool group_stop_armed;
     bool group_stop_hit;
+    /* What \splittopskip, \splitmaxdepth and \floatingpenalty were when
+       that group's closing brace was reached, before its bindings went back.
+       An insertion records the values in force inside its own braces; see
+       docs/DECISIONS.md, what-an-insertion-writes-down. */
+    struct hstex_glue closing_split_top_skip;
+    int32_t closing_split_max_depth;
+    int32_t closing_float_cost;
     /* \textfont, \scriptfont and \scriptscriptfont, by family, with the
        group level each was last set at so they restore like other registers. */
     uint32_t math_fonts[HSTEX_MATH_SIZE_COUNT][16];

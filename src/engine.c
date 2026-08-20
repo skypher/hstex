@@ -11277,11 +11277,22 @@ static int handle_vertical_list_token(struct hstex_engine *engine,
 /* `starting_depth` is what \prevdepth stands at as the list opens: a box's
    own list starts afresh, but \noalign material carries on from the row
    before it. See docs/DECISIONS.md, prevdepth-inside-noalign. */
+/* What an insertion records is read where the insertion's own list ends,
+   not where it began: plain TeX's \\vfootnote sets \\splittopskip,
+   \\splitmaxdepth and \\floatingpenalty inside the braces. See
+   docs/DECISIONS.md, what-an-insertion-writes-down. */
+struct hstex_insert_settings {
+    struct hstex_glue split_top_skip;
+    int32_t split_max_depth;
+    int32_t float_cost;
+};
+
 static int evaluate_vbox_contents(struct hstex_engine *engine,
                                   struct hstex_vbox_builder *builder,
                                   int32_t starting_depth,
-                                  int32_t *ending_depth, char *error,
-                                  size_t error_capacity)
+                                  int32_t *ending_depth,
+                                  struct hstex_insert_settings *settings,
+                                  char *error, size_t error_capacity)
 {
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
@@ -11384,6 +11395,11 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     }
     engine->paragraph_builder = previous_paragraph;
     engine->building_paragraph = previous_building_paragraph;
+    if (settings != NULL) {
+        settings->split_top_skip = engine->closing_split_top_skip;
+        settings->split_max_depth = engine->closing_split_max_depth;
+        settings->float_cost = engine->closing_float_cost;
+    }
     while (engine->group_level > base_group_level) {
         if (end_group(engine, error, error_capacity) != 0) {
             status = -1;
@@ -11478,7 +11494,7 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &builder,
-                                        HSTEX_IGNORE_DEPTH, NULL, error,
+                                        HSTEX_IGNORE_DEPTH, NULL, NULL, error,
                                         error_capacity);
     if (status == 0) {
         status = finalize_vbox(engine, &builder, matched_to, matched_spread,
@@ -29896,21 +29912,18 @@ static int execute_insert(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "\\insert requires a braced vertical list");
     }
-    struct hstex_glue split_top_skip =
-        engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
-    int32_t split_max_depth =
-        engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
-    int32_t float_cost =
-        engine->integer_parameters[HSTEX_INTEGER_FLOATING_PENALTY];
     struct hstex_vbox_builder builder = {0};
+    struct hstex_insert_settings settings = {0};
     int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
-                                        NULL, error, error_capacity);
+                                        NULL, &settings, error,
+                                        error_capacity);
     struct hstex_box packed = {0};
     if (status == 0) {
         /* The list is packed at its natural size, with the depth the
            insertion itself allows. */
         int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
-        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = split_max_depth;
+        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] =
+            settings.split_max_depth;
         status = finalize_vbox(engine, &builder, false, false, 0, &packed,
                                error, error_capacity);
         engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = limit;
@@ -29927,9 +29940,9 @@ static int execute_insert(struct hstex_engine *engine, char *error,
             .node_start = packed.node_start,
             .node_count = packed.node_count,
             .number = (uint16_t)number,
-            .split_top_skip = split_top_skip,
-            .split_max_depth = split_max_depth,
-            .float_cost = float_cost,
+            .split_top_skip = settings.split_top_skip,
+            .split_max_depth = settings.split_max_depth,
+            .float_cost = settings.float_cost,
         },
     };
     return append_current_list_node(engine, &node, error, error_capacity);
@@ -29950,7 +29963,7 @@ static int execute_vadjust(struct hstex_engine *engine, char *error,
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
-                                        NULL, error, error_capacity);
+                                        NULL, NULL, error, error_capacity);
     struct hstex_box packed = {0};
     if (status == 0) {
         status = finalize_vbox(engine, &builder, false, false, 0, &packed,
@@ -32157,7 +32170,7 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                 int32_t enclosing_depth = engine->prev_depth;
                 int32_t settled = row_depth;
                 status = evaluate_vbox_contents(engine, &between, row_depth,
-                                                &settled, error,
+                                                &settled, NULL, error,
                                                 error_capacity);
                 engine->prev_depth = enclosing_depth;
                 if (status == 0) {
@@ -34634,6 +34647,19 @@ handle_token:
                     engine->group_level == engine->group_stop_level + 1U &&
                     finish_paragraph(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
+                }
+                /* Read here, while the group's own bindings are still in
+                   force: an insertion records what these were inside its
+                   braces, not outside them. */
+                if (engine->group_stop_armed &&
+                    engine->group_level == engine->group_stop_level + 1U) {
+                    engine->closing_split_top_skip =
+                        engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
+                    engine->closing_split_max_depth =
+                        engine->dimen_parameters[HSTEX_DIMEN_SPLIT_MAX_DEPTH];
+                    engine->closing_float_cost =
+                        engine->integer_parameters
+                            [HSTEX_INTEGER_FLOATING_PENALTY];
                 }
                 if (end_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;

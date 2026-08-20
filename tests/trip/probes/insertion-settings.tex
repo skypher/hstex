@@ -1,0 +1,18 @@
+% Where an insertion reads \\splittopskip, \\splitmaxdepth and
+% \\floatingpenalty from.
+%
+% The outer values are 1pt, 2pt and 3; the first insertion sets 7pt, 8pt and 9
+% inside its own braces.  The reference records the inner values for the first
+% and the outer ones for the second.
+%
+%   pdftex -interaction=nonstopmode \\input insertion-settings \\end
+%
+% See docs/DECISIONS.md, what-an-insertion-writes-down.
+%
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\splittopskip=1pt \splitmaxdepth=2pt \floatingpenalty=3
+\setbox0=\vbox{\insert100{\splittopskip=7pt \splitmaxdepth=8pt
+\floatingpenalty=9 \hbox{}}}
+\showbox0
+\setbox1=\vbox{\insert100{\hbox{}}}
+\showbox1
