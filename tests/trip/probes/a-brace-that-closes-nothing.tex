@@ -1,0 +1,16 @@
+% A } with no group to close.
+%
+% Measured against pdftex: in a formula it says "Extra }, or forgotten $"
+% and deletes the brace; outside one it says "Too many }'s". Either way the
+% brace is simply gone -- no group ends, nothing is restored, and the run
+% goes on.
+%
+% trip line 249 writes one more } than it opened, inside a display.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$x{y}}z$\message{[after math]}\par
+$$x{{}}}$$\message{[after display]}\par
+{x}}\message{[after text]}\par
+}x\message{[after leading]}\par
+\count0=1 {\count0=2 }\message{[restored=\the\count0]}
+\end

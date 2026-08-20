@@ -11040,7 +11040,7 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->paragraph_builder = previous_paragraph;
     engine->building_paragraph = previous_building_paragraph;
     while (engine->group_level > base_group_level) {
-        if (end_group(engine, error, error_capacity) != 0) {
+        if (end_group(engine, error, error_capacity) < 0) {
             status = -1;
             break;
         }
@@ -11549,7 +11549,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
         settings->float_cost = engine->closing_float_cost;
     }
     while (engine->group_level > base_group_level) {
-        if (end_group(engine, error, error_capacity) != 0) {
+        if (end_group(engine, error, error_capacity) < 0) {
             status = -1;
             break;
         }
@@ -19720,7 +19720,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         status = -1;
     }
     engine->output_active = false;
-    if (end_group(engine, error, error_capacity) != 0) {
+    if (end_group(engine, error, error_capacity) < 0) {
         status = -1;
     }
     if (status == 0 && engine->boxes[255].kind != HSTEX_BOX_VOID) {
@@ -31040,7 +31040,7 @@ static int end_display_math(struct hstex_engine *engine, char *error,
                             error_capacity) != 0) {
         return -1;
     }
-    if (end_group(engine, error, error_capacity) != 0) {
+    if (end_group(engine, error, error_capacity) < 0) {
         return -1;
     }
     return resume_paragraph_after_display(engine, error, error_capacity);
@@ -31138,7 +31138,7 @@ static int end_display_alignment(struct hstex_engine *engine, char *error,
             HSTEX_GLUE_BELOW_DISPLAY_SKIP, error, error_capacity) != 0) {
         return -1;
     }
-    if (end_group(engine, error, error_capacity) != 0) {
+    if (end_group(engine, error, error_capacity) < 0) {
         return -1;
     }
     return resume_paragraph_after_display(engine, error, error_capacity);
@@ -31211,13 +31211,23 @@ static int begin_math_group(struct hstex_engine *engine, char *error,
     return push_math_list(engine, style, error, error_capacity);
 }
 
+/* Returns 1 when the brace closed nothing and was deleted, so that the
+   caller ends no group for it either; 0 when a group really closed. */
 static int finish_math_group(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
     struct hstex_math_builder *inner = current_math_list(engine);
     if (inner == NULL || engine->math_depth < engine->math_floor + 2U) {
-        return set_error(error, error_capacity,
-                         "a math group closed outside a formula");
+        /* The reference deletes a } that closes nothing and goes on.
+           trip line 249 writes one more } than it opened. */
+        static const char *const help[] = {
+            "I've deleted a group-closing symbol because it seems to be",
+            "spurious, as in `$x}$'. But perhaps the } is legitimate and",
+            "you forgot something else, as in `\\hbox{$x}'. In such cases",
+            "the way to recover is to insert both the forgotten and the",
+            "deleted material, e.g., by typing `I$}'.", NULL};
+        tex_error(engine, help, "Extra }, or forgotten $");
+        return 1;
     }
     struct hstex_math_builder *outer = &engine->math_stack[engine->math_depth - 2U];
     if (outer->choice_remaining != 0U) {
@@ -31357,7 +31367,8 @@ static int end_math(struct hstex_engine *engine, char *error,
     if (status != 0) {
         return -1;
     }
-    return end_group(engine, error, error_capacity);
+    /* A brace with no group to end is gone, and that is not a failure. */
+    return end_group(engine, error, error_capacity) < 0 ? -1 : 0;
 }
 
 /* \textfont, \scriptfont and \scriptscriptfont: a family number, then a font.
@@ -32067,7 +32078,7 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     engine->paragraph_builder = previous_paragraph;
     engine->building_paragraph = previous_building_paragraph;
     while (engine->group_level > base_group_level) {
-        if (end_group(engine, error, error_capacity) != 0) {
+        if (end_group(engine, error, error_capacity) < 0) {
             status = -1;
             break;
         }
@@ -32781,7 +32792,7 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
     while (engine->group_level > base_group_level) {
-        if (end_group(engine, error, error_capacity) != 0) {
+        if (end_group(engine, error, error_capacity) < 0) {
             status = -1;
             break;
         }
@@ -34359,11 +34370,16 @@ static int begin_group(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* Returns 1 when there was no group to end, so the brace is simply gone. */
 static int end_group(struct hstex_engine *engine, char *error,
                      size_t error_capacity)
 {
     if (engine->group_level == 0U) {
-        return set_error(error, error_capacity, "extra end-group token");
+        static const char *const help[] = {
+            "You've closed more groups than you opened.",
+            "Such booboos are generally harmless, so keep going.", NULL};
+        tex_error(engine, help, "Too many }'s");
+        return 1;
     }
     /* A character held back for the ligature program is taken into the list
        before anything is restored, so that it is set in the font it was read
@@ -35156,9 +35172,17 @@ handle_token:
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_END_GROUP)) {
-                if (engine->mode == HSTEX_MODE_MATH &&
-                    finish_math_group(engine, error, error_capacity) != 0) {
-                    return HSTEX_ENGINE_ERROR;
+                if (engine->mode == HSTEX_MODE_MATH) {
+                    int closed =
+                        finish_math_group(engine, error, error_capacity);
+                    if (closed < 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    /* A brace that closed nothing was deleted, so no group
+                       ends here either. */
+                    if (closed > 0) {
+                        continue;
+                    }
                 }
                 /* A brace that ends a box body ends the paragraph inside it
                    first, while the parameters that paragraph was set with
@@ -35181,7 +35205,7 @@ handle_token:
                         engine->integer_parameters
                             [HSTEX_INTEGER_FLOATING_PENALTY];
                 }
-                if (end_group(engine, error, error_capacity) != 0) {
+                if (end_group(engine, error, error_capacity) < 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 /* A box body is executed on the live input; when the group it
@@ -35384,7 +35408,7 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_END_GROUP:
-            if (end_group(engine, error, error_capacity) != 0) {
+            if (end_group(engine, error, error_capacity) < 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
