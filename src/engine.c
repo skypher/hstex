@@ -7446,9 +7446,28 @@ static bool token_is_paragraph(const struct hstex_engine *engine,
 
 /* Balanced text counts only explicit braces, the way the reference compares
    tokens; see docs/DECISIONS.md, implicit-braces. */
+/* Whether a control sequence was defined \outer. */
+static bool token_is_outer_macro(struct hstex_engine *engine,
+                                 hstex_token token)
+{
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (meaning->command != HSTEX_COMMAND_MACRO) {
+        return false;
+    }
+    if (meaning->value.macro_identifier == 0U ||
+        (size_t)meaning->value.macro_identifier > engine->macro_count) {
+        return false;
+    }
+    const struct hstex_macro *macro =
+        &engine->macros[meaning->value.macro_identifier - 1U];
+    return (macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U;
+}
+
 static int scan_balanced_group(struct hstex_engine *engine,
                                struct hstex_token_vector *argument, bool long_macro,
-                               char *error, size_t error_capacity)
+                               const char *scanning, char *error,
+                               size_t error_capacity)
 {
     size_t depth = 1U;
     while (depth != 0U) {
@@ -7524,6 +7543,43 @@ static int scan_balanced_group(struct hstex_engine *engine,
                              "runaway macro argument at end of input");
         }
         token = normalize_unexpanded_control_sequence(token);
+        /* An \outer macro may not stand in a balanced text. The reference
+           names what was being read, inserts the } that would have closed
+           it, and reads the offending control sequence again. Measured for
+           \toks, \uppercase, a definition and a macro's own argument --
+           all the same words. */
+        if (hstex_token_is_control_sequence(token) &&
+            token_is_outer_macro(engine, token)) {
+            static const char *const help[] = {
+                "I suspect you have forgotten a `}', causing me",
+                "to read past where you wanted me to stop.",
+                "I'll try to recover; but if the error is serious,",
+                "you'd better type `E' or `X' now and fix your file.", NULL};
+            hstex_token close = hstex_token_character(
+                (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+            if (push_one(engine, token, location, error, error_capacity) != 0 ||
+                push_one(engine, close, location, error, error_capacity) != 0) {
+                return -1;
+            }
+            char what[160];
+            if (scanning != NULL) {
+                (void)snprintf(what, sizeof(what), "%s", scanning);
+            } else if (engine->expanding_macro_cs != 0U) {
+                /* A macro's own argument is named by the call. */
+                char named[128];
+                describe_token(
+                    engine,
+                    hstex_token_control_sequence(engine->expanding_macro_cs),
+                    named, sizeof(named));
+                (void)snprintf(what, sizeof(what), "use of %s", named);
+            } else {
+                (void)snprintf(what, sizeof(what), "a text");
+            }
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning %s",
+                      what);
+            continue;
+        }
         if (!long_macro && token_is_paragraph(engine, token)) {
             {
             static const char *const help[] = {
@@ -7611,7 +7667,7 @@ static int execute_case_shift(struct hstex_engine *engine, size_t table,
     (void)opening_location;
 
     struct hstex_token_vector text = {0};
-    if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &text, true, "text of \\uppercase", error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
     }
@@ -7658,7 +7714,7 @@ static int expand_unexpanded_text(struct hstex_engine *engine,
                          "unexpanded requires a braced token list");
     }
     struct hstex_token_vector output = {0};
-    if (scan_balanced_group(engine, &output, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &output, true, "text of \\unexpanded", error, error_capacity) != 0) {
         vector_destroy(&output);
         return -1;
     }
@@ -7771,7 +7827,7 @@ static int expand_detokenize(struct hstex_engine *engine,
                          "detokenize requires a braced token list");
     }
     struct hstex_token_vector input = {0};
-    if (scan_balanced_group(engine, &input, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &input, true, "text of \\detokenize", error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
     }
@@ -8398,7 +8454,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                 continue;
             }
             if (token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
-                if (scan_balanced_group(engine, arena, long_macro, error,
+                if (scan_balanced_group(engine, arena, long_macro, NULL, error,
                                         error_capacity) != 0) {
                     goto cleanup;
                 }
@@ -20583,7 +20639,7 @@ static int scan_token_list_value(struct hstex_engine *engine,
                          "token-list assignment requires a register or braces");
     }
     struct hstex_token_vector tokens = {0};
-    if (scan_balanced_group(engine, &tokens, true, error, error_capacity) != 0 ||
+    if (scan_balanced_group(engine, &tokens, true, "text of \\toks", error, error_capacity) != 0 ||
         store_token_list(engine, &tokens, identifier, error, error_capacity) !=
             0) {
         vector_destroy(&tokens);
@@ -21827,7 +21883,7 @@ static int scan_expanded_general_text(struct hstex_engine *engine,
                          "write requires a braced token list");
     }
     struct hstex_token_vector text = {0};
-    if (scan_balanced_group(engine, &text, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &text, true, NULL, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
     }
@@ -21885,7 +21941,7 @@ static int scan_general_text(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "write requires a braced token list");
     }
-    if (scan_balanced_group(engine, text, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, text, true, NULL, error, error_capacity) != 0) {
         vector_destroy(text);
         return -1;
     }
@@ -22327,7 +22383,7 @@ static int expand_scan_tokens(struct hstex_engine *engine,
                          "scantokens requires a braced token list");
     }
     struct hstex_token_vector input = {0};
-    if (scan_balanced_group(engine, &input, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &input, true, "text of \\scantokens", error, error_capacity) != 0) {
         vector_destroy(&input);
         return -1;
     }
@@ -30947,7 +31003,7 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
                          "\\mark requires a braced token list");
     }
     struct hstex_token_vector raw = {0};
-    if (scan_balanced_group(engine, &raw, true, error, error_capacity) != 0) {
+    if (scan_balanced_group(engine, &raw, true, "text of \\mark", error, error_capacity) != 0) {
         vector_destroy(&raw);
         return -1;
     }

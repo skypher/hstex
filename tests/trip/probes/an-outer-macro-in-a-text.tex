@@ -1,0 +1,21 @@
+% An \outer macro standing in a balanced text.
+%
+% Measured against pdftex: it is forbidden, and the message names what was
+% being read -- "text of \toks", "text of \uppercase", "use of \q" for a
+% macro's own argument. The reference inserts the } that would have closed
+% the text and reads the offending control sequence again, so the run goes
+% on and the macro then does what it came to do.
+%
+% Using one where it is allowed is silent; only reading it INTO a text is
+% the fault. \outer was recorded here for \meaning's sake and never
+% checked.
+%
+% trip line 354 writes \tokens{\a^^@^^@a...} where \a was defined \outer.
+\tracingonline=1
+\outer\def\o{O}
+\toks0={\o}\message{[after a toks text]}
+\uppercase{\o}\message{[after uppercase]}
+\def\q#1{[#1]}\q{\o}\message{[after a macro argument]}
+\o\message{[but using it is fine]}
+\toks0={x}\message{[and an ordinary text is silent]}
+\end
