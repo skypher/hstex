@@ -3289,6 +3289,9 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
             return set_error(error, error_capacity,
                              "could not install everyjob tokens");
         }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_JOB);
     }
     return 0;
 }
@@ -3348,6 +3351,9 @@ static enum hstex_engine_result raw_next(
                             "could not install everyeof tokens");
             return HSTEX_ENGINE_ERROR;
         }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_EOF);
     }
 }
 
@@ -7986,6 +7992,9 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             if (room != NULL) {
                 copy_tokens(room, macro->replacement,
                             macro->replacement_count);
+                hstex_source_name_top(&engine->sources,
+                                      (uint8_t)HSTEX_TOKEN_SOURCE_MACRO,
+                                      engine->expanding_macro_cs);
                 status = 0;
                 goto cleanup;
             }
@@ -7997,6 +8006,9 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                 release_definition(engine, identifier);
                 goto cleanup;
             }
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_MACRO,
+                                  engine->expanding_macro_cs);
         }
         status = 0;
         goto cleanup;
@@ -8071,6 +8083,9 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             goto cleanup;
         }
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_MACRO,
+                          engine->expanding_macro_cs);
     status = 0;
 
 cleanup:
@@ -8272,6 +8287,7 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
             (macro->flags & (uint8_t)HSTEX_MACRO_PROTECTED) != 0U) {
             return push_one(engine, token, location, error, error_capacity);
         }
+        engine->expanding_macro_cs = hstex_token_control_sequence_id(token);
         return instantiate_macro(engine, meaning->value.macro_identifier, macro,
                                  location, error, error_capacity);
     }
@@ -8490,6 +8506,8 @@ enum hstex_engine_result hstex_engine_next_expanded(
                 engine->returned_unexpanded_executable = true;
                 return HSTEX_ENGINE_TOKEN;
             }
+            engine->expanding_macro_cs =
+                hstex_token_control_sequence_id(current);
             if (instantiate_macro(engine, meaning->value.macro_identifier,
                                   macro, *location, error,
                                   error_capacity) != 0) {
@@ -13136,6 +13154,72 @@ static void show_context_lines(struct hstex_engine *engine, const char *tag,
     }
 }
 
+/* The name a token parameter is written by, which an error uses to say
+   which of them it is reading. */
+static const char *token_parameter_name(uint32_t parameter)
+{
+    switch ((enum hstex_token_parameter)parameter) {
+    case HSTEX_TOKEN_OUTPUT:
+        return "output";
+    case HSTEX_TOKEN_EVERY_PAR:
+        return "everypar";
+    case HSTEX_TOKEN_EVERY_MATH:
+        return "everymath";
+    case HSTEX_TOKEN_EVERY_DISPLAY:
+        return "everydisplay";
+    case HSTEX_TOKEN_EVERY_HBOX:
+        return "everyhbox";
+    case HSTEX_TOKEN_EVERY_VBOX:
+        return "everyvbox";
+    case HSTEX_TOKEN_EVERY_JOB:
+        return "everyjob";
+    case HSTEX_TOKEN_EVERY_CR:
+        return "everycr";
+    case HSTEX_TOKEN_EVERY_EOF:
+        return "everyeof";
+    default:
+        return NULL;
+    }
+}
+
+/* What an error calls a frame: the reference's own names, and for a macro
+   its own name with `->' before what it has read. */
+static const char *token_frame_tag(struct hstex_engine *engine,
+                                   const struct hstex_token_source *list,
+                                   char *scratch, size_t capacity)
+{
+    switch ((enum hstex_token_source_kind)list->source_kind) {
+    case HSTEX_TOKEN_SOURCE_BACKED_UP:
+        return list->cursor < list->count ? "<to be read again> "
+                                          : "<recently read> ";
+    case HSTEX_TOKEN_SOURCE_TEMPLATE:
+        return "<template> ";
+    case HSTEX_TOKEN_SOURCE_ARGUMENT:
+        return "<argument> ";
+    case HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER: {
+        const char *name = token_parameter_name(list->frame_name);
+        if (name == NULL) {
+            return "<inserted text> ";
+        }
+        (void)snprintf(scratch, capacity, "<%s> ", name);
+        return scratch;
+    }
+    case HSTEX_TOKEN_SOURCE_MACRO: {
+        size_t length = 0U;
+        if (list->frame_name == 0U ||
+            token_display_text(engine,
+                               hstex_token_control_sequence(list->frame_name),
+                               scratch, capacity - 1U, &length) != 0) {
+            return "<inserted text> ";
+        }
+        scratch[length] = '\0';
+        return scratch;
+    }
+    default:
+        return "<inserted text> ";
+    }
+}
+
 /* A frame that holds tokens, written out as the reference writes one. */
 static void show_token_frame(struct hstex_engine *engine,
                              const struct hstex_token_source *list)
@@ -13144,6 +13228,47 @@ static void show_token_frame(struct hstex_engine *engine,
     char after[512];
     size_t before_length = 0U;
     size_t after_length = 0U;
+    /* The reference keeps the output routine's braces in the list it reads,
+       and has already read the opening one by the time it runs, so they
+       stand at the two ends of what it shows. */
+    bool braced = list->source_kind ==
+                      (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER &&
+                  list->frame_name == (uint32_t)HSTEX_TOKEN_OUTPUT;
+    if (braced) {
+        before[before_length++] = '{';
+    }
+    /* A macro's frame holds only its body; the reference shows the text it
+       matched and the `->' before it. */
+    if (list->source_kind == (uint8_t)HSTEX_TOKEN_SOURCE_MACRO) {
+        const struct hstex_meaning *meaning =
+            list->frame_name == 0U
+                ? NULL
+                : hstex_engine_meaning(engine, list->frame_name);
+        if (meaning != NULL && meaning->command == HSTEX_COMMAND_MACRO &&
+            meaning->value.macro_identifier != 0U &&
+            (size_t)meaning->value.macro_identifier <= engine->macro_count) {
+            const struct hstex_macro *macro =
+                &engine->macros[meaning->value.macro_identifier - 1U];
+            for (size_t index = 0U; index < macro->parameter_count_tokens;
+                 ++index) {
+                char one[256];
+                size_t length = 0U;
+                if (token_display_text(engine, macro->parameter_text[index],
+                                       one, sizeof(one), &length) != 0) {
+                    continue;
+                }
+                if (before_length + length > sizeof(before)) {
+                    length = sizeof(before) - before_length;
+                }
+                memcpy(before + before_length, one, length);
+                before_length += length;
+            }
+        }
+        if (before_length + 2U <= sizeof(before)) {
+            before[before_length++] = '-';
+            before[before_length++] = '>';
+        }
+    }
     for (uint32_t index = 0U; index < list->count; ++index) {
         char one[256];
         size_t length = 0U;
@@ -13160,9 +13285,12 @@ static void show_token_frame(struct hstex_engine *engine,
         memcpy(target + *filled, one, length);
         *filled += length;
     }
+    if (braced && after_length < sizeof(after)) {
+        after[after_length++] = '}';
+    }
+    char scratch[128];
     show_context_lines(engine,
-                       list->cursor < list->count ? "<to be read again> "
-                                                  : "<recently read> ",
+                       token_frame_tag(engine, list, scratch, sizeof(scratch)),
                        before, before_length, after, after_length);
 }
 
@@ -13184,17 +13312,11 @@ static void show_error_context(struct hstex_engine *engine)
             continue;
         }
         const struct hstex_token_source *list = &frame->value.token_list;
-        /* Only a list that was put back is named here. The reference names
-           every kind -- a macro body by its own name, \\output, a template,
-           an argument -- and HSTeX does not yet know which frame is which,
-           so the rest are passed over rather than named wrongly. See
-           docs/DECISIONS.md, error-context, open divergences. */
-        if (!list->backed_up) {
-            continue;
-        }
-        /* One that has been read to its end is passed over unless it is the
-           entry on top. */
-        if (shown != 0U && list->cursor >= list->count) {
+        /* A list that was put back and has been read to its end is passed
+           over unless it is the entry on top. */
+        if (shown != 0U &&
+            list->source_kind == (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP &&
+            list->cursor >= list->count) {
             continue;
         }
         if (shown != 0U && (int32_t)shown > room) {
@@ -18904,6 +19026,9 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         engine->output_active = false;
         return -1;
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_OUTPUT);
     status = 0;
     for (;;) {
         hstex_token token = 0U;
@@ -23243,6 +23368,9 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
         return set_error(error, error_capacity,
                          "could not install everypar tokens");
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_PAR);
     return 0;
 }
 
@@ -27414,6 +27542,9 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "could not install everydisplay tokens");
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_DISPLAY);
     return 0;
 }
 
@@ -29936,6 +30067,9 @@ static int begin_math(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "could not install everymath tokens");
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_MATH);
     return 0;
 }
 
@@ -30567,10 +30701,14 @@ static int end_alignment_entry(struct hstex_engine *engine,
     }
     if (!entry->omit && entry->column < entry->column_count &&
         entry->columns[entry->column].after_count != 0U) {
-        return hstex_source_push_tokens(
-            &engine->sources, entry->columns[entry->column].after,
-            entry->columns[entry->column].after_count, origin, error,
-            error_capacity);
+        if (hstex_source_push_tokens(
+                &engine->sources, entry->columns[entry->column].after,
+                entry->columns[entry->column].after_count, origin, error,
+                error_capacity) != 0) {
+            return -1;
+        }
+        hstex_source_name_top(&engine->sources,
+                              (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
     }
     return 0;
 }
@@ -30657,11 +30795,15 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     };
     struct hstex_align_entry *previous_entry = engine->alignment_entry;
     engine->alignment_entry = &entry;
-    if (!omit && column < column_count && columns[column].before_count != 0U &&
-        hstex_source_push_tokens(&engine->sources, columns[column].before,
-                                 columns[column].before_count, origin, error,
-                                 error_capacity) != 0) {
-        status = -1;
+    if (!omit && column < column_count && columns[column].before_count != 0U) {
+        if (hstex_source_push_tokens(&engine->sources, columns[column].before,
+                                     columns[column].before_count, origin,
+                                     error, error_capacity) != 0) {
+            status = -1;
+        } else {
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
+        }
     }
     while (status == 0 && !finished) {
         hstex_token token = 0U;
@@ -30720,12 +30862,18 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                 }
             }
             if (!segment_omit && column < column_count &&
-                columns[column].before_count != 0U &&
-                hstex_source_push_tokens(&engine->sources,
-                                         columns[column].before,
-                                         columns[column].before_count, origin,
-                                         error, error_capacity) != 0) {
-                status = -1;
+                columns[column].before_count != 0U) {
+                if (hstex_source_push_tokens(&engine->sources,
+                                             columns[column].before,
+                                             columns[column].before_count,
+                                             origin, error,
+                                             error_capacity) != 0) {
+                    status = -1;
+                } else {
+                    hstex_source_name_top(
+                        &engine->sources,
+                        (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
+                }
             }
             continue;
         }
@@ -31100,6 +31248,9 @@ static int insert_every_cr(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "could not install everycr tokens");
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)HSTEX_TOKEN_EVERY_CR);
     return 0;
 }
 

@@ -264,7 +264,8 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = 0U;
-    source->backed_up = false;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+    source->frame_name = 0U;
     note_top_frame(stack);
     return 0;
 }
@@ -300,7 +301,8 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_OWNS;
-    source->backed_up = false;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+    source->frame_name = 0U;
     note_top_frame(stack);
     return 0;
 }
@@ -327,7 +329,8 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
-    source->backed_up = true;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP;
+    source->frame_name = 0U;
     note_top_frame(stack);
     return 0;
 }
@@ -393,7 +396,8 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     source->definition = 0U;
     source->store_base = (uint32_t)stack->store_count;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE;
-    source->backed_up = false;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+    source->frame_name = 0U;
     stack->store_count += count;
     note_top_frame(stack);
     return 0;
@@ -437,9 +441,24 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     source->definition = definition;
     source->store_base = 0U;
     source->flags = 0U;
-    source->backed_up = false;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+    source->frame_name = 0U;
     note_top_frame(stack);
     return 0;
+}
+
+void hstex_source_name_top(struct hstex_source_stack *stack, uint8_t kind,
+                           uint32_t name)
+{
+    if (stack == NULL || stack->count == 0U) {
+        return;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
+    if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
+        return;
+    }
+    frame->value.token_list.source_kind = kind;
+    frame->value.token_list.frame_name = name;
 }
 
 int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,

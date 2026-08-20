@@ -52,10 +52,12 @@ struct hstex_token_source {
     uint32_t definition;
     uint32_t store_base;
     uint8_t flags;
-    /* What the frame is, for the lines an error shows above the file's:
-       true where it holds tokens put back to be read again, which is the
-       reference's backed_up list. See docs/DECISIONS.md, error-context. */
-    bool backed_up;
+    /* What the frame is, for the line an error shows above the file's. See
+       docs/DECISIONS.md, error-context. */
+    uint8_t source_kind;
+    /* For a macro, the control sequence it was called by; for a token
+       parameter, which parameter it is. */
+    uint32_t frame_name;
 };
 
 struct hstex_source_frame {
@@ -115,6 +117,20 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
                                    hstex_token *tokens, size_t count,
                                    struct hstex_source_location location,
                                    char *error, size_t error_capacity);
+/* What an error calls a frame it shows. */
+enum hstex_token_source_kind {
+    HSTEX_TOKEN_SOURCE_INSERTED = 0,
+    HSTEX_TOKEN_SOURCE_BACKED_UP,
+    HSTEX_TOKEN_SOURCE_MACRO,
+    HSTEX_TOKEN_SOURCE_TEMPLATE,
+    HSTEX_TOKEN_SOURCE_ARGUMENT,
+    HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER
+};
+
+/* Say what the frame just pushed is, so that an error can name it. */
+void hstex_source_name_top(struct hstex_source_stack *stack, uint8_t kind,
+                           uint32_t name);
+
 /* One token put back, which the frame holds itself. */
 int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
                           struct hstex_source_location location, char *error,

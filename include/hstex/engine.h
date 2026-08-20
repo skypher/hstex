@@ -1766,6 +1766,9 @@ struct hstex_engine {
     bool lig_right_hit;
     /* True while the last character of a word is being put in the list. */
     bool lig_last_of_word;
+    /* The control sequence whose macro is being expanded, so that an error
+       can name the frame its body is read from. */
+    uint32_t expanding_macro_cs;
     uint8_t pending_character;
     /* The character held back was read as the font's \hyphenchar, so an
        empty discretionary follows it into the paragraph; see
