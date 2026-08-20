@@ -1922,6 +1922,10 @@ struct hstex_engine {
     const char *expanded_definition_name;
     bool dump_requested;
     bool end_requested;
+    /* Set once a hundred faults have piled up inside one paragraph: the
+       reference gives up there, and everything after it goes unread and
+       unreported. */
+    bool gave_up;
     uint32_t output_group_floor;
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;

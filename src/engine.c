@@ -144,7 +144,6 @@ static int next_conditional_operand(struct hstex_engine *engine,
                                     size_t error_capacity);
 static int math_append_character(struct hstex_engine *engine, uint8_t code,
                                  char *error, size_t error_capacity);
-static bool too_many_errors(const struct hstex_engine *engine);
 /* The text of a run of nodes, and the nodes themselves, both wanted by the
    packer before either is defined. */
 static void show_short_display_of(struct hstex_engine *engine,
@@ -9025,6 +9024,9 @@ enum hstex_engine_result hstex_engine_next_expanded(
                         "invalid expanded-token request");
         return HSTEX_ENGINE_ERROR;
     }
+    if (engine->gave_up) {
+        return HSTEX_ENGINE_EOF;
+    }
     for (;;) {
         engine->returned_unexpanded = false;
         engine->returned_unexpanded_executable = false;
@@ -14338,6 +14340,9 @@ static void print_help(struct hstex_engine *engine, const char *const *help)
 static void tex_error_with_help(struct hstex_engine *engine,
                                 const char *const *help, const char *message)
 {
+    if (engine->gave_up) {
+        return;
+    }
     if (engine->interaction_mode == HSTEX_INTERACTION_ERROR_STOP) {
         /* Nothing here reads from a terminal, so the reference's own answer
            to a terminal that is not there is used: the run carries on as it
@@ -14354,14 +14359,18 @@ static void tex_error_with_help(struct hstex_engine *engine,
     print_byte(engine, '.');
     show_error_context(engine);
     print_help(engine, help);
-    if (too_many_errors(engine)) {
+    if (engine->error_count == HSTEX_ERROR_LIMIT) {
         /* A run this far gone is not worth going on with; the reference
-           gives up here and so does this. */
+           gives up here and so does this -- once, on the hundredth, not
+           on every error after it. The count is per paragraph: measured,
+           a hundred and twenty faults spread over real paragraphs are all
+           reported and draw no such message. */
         print_fresh_line(engine);
         print_text(engine, "(That makes 100 errors; please try again.)");
         print_line(engine);
         engine->history = 3;
         engine->end_requested = true;
+        engine->gave_up = true;
     }
 }
 
@@ -14374,13 +14383,6 @@ static void tex_error(struct hstex_engine *engine, const char *const *help,
     (void)vsnprintf(buffer, sizeof(buffer), format, arguments);
     va_end(arguments);
     tex_error_with_help(engine, help, buffer);
-}
-
-/* A run that has gone wrong a hundred times over is not worth going on with;
-   the reference gives up there and so does this. */
-static bool too_many_errors(const struct hstex_engine *engine)
-{
-    return engine->error_count >= HSTEX_ERROR_LIMIT;
 }
 
 static void show_scaled(struct hstex_engine *engine, int32_t value)
@@ -27150,6 +27152,9 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
         engine->paragraph_line = (int32_t)level->line;
     }
     nest_pop(engine);
+    /* The hundred-error limit counts within one paragraph, so ending one
+       forgives what went wrong inside it. */
+    engine->error_count = 0;
     if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0 ||
         normal_paragraph(engine, error, error_capacity) != 0) {
         return -1;
