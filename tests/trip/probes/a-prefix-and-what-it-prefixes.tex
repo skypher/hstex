@@ -1,0 +1,21 @@
+% \global, \long, \outer and \protected, and what may follow them.
+%
+% Measured against pdftex: a prefix wants a command it can prefix. Blanks
+% and \relax stand between WITHOUT spending it -- `\global\relax\count0=9'
+% assigns globally, and `\global\relax' on its own complains about whatever
+% comes after the \relax, not about the \relax.
+%
+% Anything else is named -- "You can't use a prefix with `\message'." -- the
+% prefix is forgotten, and the command is read again.
+%
+% An assignment spends the prefix, including a bare font selection:
+% `{\global\g}' leaves \g in force outside the group and leaves no prefix
+% behind for the } to trip over.
+\tracingonline=1
+\font\f=cmr10 \f \font\g=cmr10 at 20pt
+\global\par\message{[after a prefixed par]}
+\global\relax\count0=9 \message{[relax carried it: \the\count0]}
+\global A\message{[after a prefixed letter]}\par
+{\global\g}\dimen0=1em \message{[the font stayed: \the\dimen0]}
+\global\count0=1 \message{[an ordinary one is silent: \the\count0]}
+\end

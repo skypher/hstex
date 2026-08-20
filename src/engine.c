@@ -3475,6 +3475,11 @@ static int finish_assignment(struct hstex_engine *engine, int status,
     if (status != 0) {
         return -1;
     }
+    /* An assignment spends the prefix in front of it, whether or not the
+       routine that carried it out happened to say so. Every assignment
+       comes through here. */
+    engine->pending_global = false;
+    engine->pending_macro_flags = 0U;
     if (!engine->has_after_assignment) {
         return 0;
     }
@@ -20288,8 +20293,11 @@ static int scan_prev_depth_assignment(struct hstex_engine *engine,
         /* The reference says which mode you are in and reads nothing --
            not even the `=' -- so what was to be assigned is left to be
            typeset. Measured: \prevdepth=2pt in horizontal mode leaves
-           "=2pt" in the paragraph. */
+           "=2pt" in the paragraph. The prefix in front of it is spent
+           either way; leaving it pending made the next \par complain. */
         report_illegal_case(engine, engine->executing_token);
+        engine->pending_global = false;
+        engine->pending_macro_flags = 0U;
         return 0;
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0 ||
@@ -35652,6 +35660,35 @@ static enum hstex_engine_result next_output(
         }
 
 handle_token:
+        /* A prefix wants a command it can prefix. Blanks and \relax stand
+           between without spending it; anything else is named, the prefix
+           is forgotten, and the command is read again. */
+        if ((engine->pending_global || engine->pending_macro_flags != 0U) &&
+            !token_is_space(*token)) {
+            bool prefixable = false;
+            if (hstex_token_is_control_sequence(*token)) {
+                const struct hstex_meaning *after = hstex_engine_meaning(
+                    engine, hstex_token_control_sequence_id(*token));
+                prefixable = after->command == HSTEX_COMMAND_RELAX ||
+                             command_assigns(after->command);
+            }
+            if (!prefixable) {
+                static const char *const help[] = {
+                    "I'll pretend you didn't say \\long or \\outer or "
+                    "\\global or \\protected.", NULL};
+                char named[128];
+                describe_token(engine, *token, named, sizeof(named));
+                if (push_one(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                engine->pending_global = false;
+                engine->pending_macro_flags = 0U;
+                tex_error(engine, help, "You can't use a prefix with `%s'",
+                          named);
+                continue;
+            }
+        }
         /* An \accent waits here for its character, while the main loop
            carries out the assignments the reference allows in between. A
            blank is skipped, \relax and any assignment are obeyed and the
@@ -36070,8 +36107,9 @@ handle_token:
         engine->immediate_pending = false;
         switch (meaning->command) {
         case HSTEX_COMMAND_RELAX:
-            engine->pending_global = false;
-            engine->pending_macro_flags = 0U;
+            /* \relax stands between a prefix and what it prefixes without
+               spending it: the reference carries \global past a \relax and
+               complains about whatever comes after. */
             continue;
         case HSTEX_COMMAND_DEF:
             if (finish_assignment(
@@ -36577,6 +36615,8 @@ handle_token:
                 /* Nothing is read, so the value stands as text; see
                    scan_prev_depth_assignment. */
                 report_illegal_case(engine, engine->executing_token);
+                engine->pending_global = false;
+                engine->pending_macro_flags = 0U;
                 continue;
             }
             int32_t factor = 0;
@@ -36596,6 +36636,8 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             engine->space_factor = factor;
+            engine->pending_global = false;
+            engine->pending_macro_flags = 0U;
             continue;
         }
         case HSTEX_COMMAND_PREV_GRAF: {
@@ -36616,6 +36658,9 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             engine->prev_graf = lines;
+            /* The prefix this assignment may have carried is spent. */
+            engine->pending_global = false;
+            engine->pending_macro_flags = 0U;
             continue;
         }
         case HSTEX_COMMAND_REMOVE_LAST:
@@ -37201,11 +37246,6 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_PAR:
-            if (engine->pending_global || engine->pending_macro_flags != 0U) {
-                (void)set_error(error, error_capacity,
-                                "paragraph after definition prefix");
-                return HSTEX_ENGINE_ERROR;
-            }
             if (engine->building_paragraph) {
                 if (finish_paragraph(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
