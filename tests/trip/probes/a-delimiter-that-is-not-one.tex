@@ -1,0 +1,18 @@
+% Something that is not a delimiter where one belongs, and a \right or
+% \middle that closes nothing.
+%
+% Measured against pdftex: the offending token is read again and the null
+% delimiter -- which measures nothing -- stands in, with "Missing delimiter
+% (. inserted)". A \right or \middle with no matching \left is ignored,
+% with "Extra \right." or "Extra \middle.".
+%
+% The delimiter is read BEFORE the matching is checked, which is why trip
+% line 256's `$\right\relax' draws the missing-delimiter fault first and
+% the extra-\right fault second.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$\right\relax x$\message{[after right relax]}\par
+$x\right.$\message{[after extra right]}\par
+$x\middle.y$\message{[after extra middle]}\par
+$\left(x\middle|y\right)$\message{[a matched trio is silent]}\par
+\end

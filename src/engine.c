@@ -30085,10 +30085,22 @@ static int scan_delimiter(struct hstex_engine *engine, int32_t *code,
         }
     }
     if (value < 0 || value > 0x7FFFFFF) {
-        char found[128];
-        describe_token(engine, token, found, sizeof(found));
-        return set_error(error, error_capacity,
-                         "%s is not a delimiter", found);
+        /* The reference reads the offending token again and stands in the
+           null delimiter, which measures nothing. trip line 256 writes
+           `$\right\relax'. */
+        static const char *const help[] = {
+            "I was expecting to see something like `(' or `\\{' or",
+            "`\\}' here. If you typed, e.g., `{' instead of `\\{', you",
+            "should probably delete the `{' by typing `1' now, so that",
+            "braces don't get unbalanced. Otherwise just proceed.",
+            "Acceptable delimiters are characters whose \\delcode is",
+            "nonnegative, or you can use `\\delimiter <delimiter code>'.",
+            NULL};
+        if (push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        tex_error(engine, help, "Missing delimiter (. inserted)");
+        value = 0;
     }
     *code = value;
     return 0;
@@ -30143,9 +30155,16 @@ static int execute_left_right(struct hstex_engine *engine, int32_t kind,
         return 0;
     }
     if (!list->is_left_group || engine->math_depth <= engine->math_floor + 1U) {
-        return set_error(error, error_capacity,
-                         kind == 2 ? "\\middle has no matching \\left"
-                                   : "\\right has no matching \\left");
+        /* The reference ignores one that closes nothing and goes on. Its
+           delimiter has already been read, which is why trip line 256's
+           `$\right\relax' draws the missing-delimiter fault first. */
+        const char *name = kind == 2 ? "\\middle" : "\\right";
+        const char *help_line =
+            kind == 2 ? "I'm ignoring a \\middle that had no matching \\left."
+                      : "I'm ignoring a \\right that had no matching \\left.";
+        const char *const help[] = {help_line, NULL};
+        tex_error(engine, help, "Extra %s", name);
+        return 0;
     }
     if (kind == 2) {
         /* The delimiter cannot be made yet: it is as tall as the whole group
