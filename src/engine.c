@@ -6060,6 +6060,36 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
                                         value, error, error_capacity);
         }
     }
+    /* The unit may be an internal muglue rather than the word `mu'. The
+       reference takes that muglue's width as the unit and multiplies the
+       factor by it, which is how \\mkern-2\\dotsspace@ is written. See
+       docs/DECISIONS.md, a-muskip-used-as-a-unit. */
+    uint32_t possible_unit = 0U;
+    struct hstex_source_location possible_unit_location;
+    if (expanded_next_non_space(engine, &possible_unit, &possible_unit_location,
+                                error, error_capacity) != HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity,
+                         "end of input while scanning a math-glue unit");
+    }
+    if (hstex_token_is_control_sequence(possible_unit)) {
+        struct hstex_glue internal = {0};
+        int internal_result = math_glue_from_meaning(
+            engine,
+            hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(possible_unit)),
+            &internal, error, error_capacity);
+        if (internal_result < 0) {
+            return -1;
+        }
+        if (internal_result > 0) {
+            return scaled_internal_unit(&factor, internal.width, value, error,
+                                        error_capacity);
+        }
+    }
+    if (push_one(engine, possible_unit, possible_unit_location, error,
+                 error_capacity) != 0) {
+        return -1;
+    }
     if (try_keyword(engine, "mu", &matched, error, error_capacity) != 0) {
         return -1;
     }
