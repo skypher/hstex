@@ -784,6 +784,30 @@ struct hstex_lig_kern {
     uint8_t remainder;
 };
 
+/* What the ligature and kerning program says about a pair of characters.
+
+   A ligature operation names a character and says what becomes of the pair:
+   whether the left one stays, whether the right one stays, and how many of
+   the characters that result are finished with rather than looked at again.
+   The operation byte carries all three -- 4*advance + 2*keep_left +
+   keep_right -- which is the eight operations TFtoPL writes as =:, =:|,
+   |=:, |=:|, =:|>, |=:>, |=:|> and |=:|>>. See docs/DECISIONS.md,
+   ligature-operations. */
+enum hstex_lig_kern_kind {
+    HSTEX_LIG_KERN_NOTHING = 0,
+    HSTEX_LIG_KERN_KERN,
+    HSTEX_LIG_KERN_LIGATURE,
+};
+
+struct hstex_lig_kern_result {
+    enum hstex_lig_kern_kind kind;
+    int32_t kern;
+    uint8_t ligature;
+    bool keep_left;
+    bool keep_right;
+    uint8_t advance;
+};
+
 /* One recipe for building a delimiter too tall for any single character:
    the pieces to stack, bottom, middle and top, with `repeated` filling the
    gaps. A piece of zero is absent. */

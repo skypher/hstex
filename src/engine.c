@@ -9789,7 +9789,8 @@ static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
 static int drop_last_list_node(struct hstex_engine *engine, char *error,
                                size_t error_capacity);
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
-                                 bool ligature, char *error,
+                                 bool ligature, const uint8_t *originals,
+                                 uint8_t original_count, char *error,
                                  size_t error_capacity);
 static void advance_space_factor(struct hstex_engine *engine, uint8_t code);
 static int flush_pending_character(struct hstex_engine *engine, char *error,
@@ -9806,8 +9807,8 @@ static int append_horizontal_character(struct hstex_engine *engine,
 static int append_interword_glue(struct hstex_engine *engine, char *error,
                                  size_t error_capacity);
 static int font_lig_kern(const struct hstex_font *font, uint8_t left,
-                         uint8_t right, bool *kerned, int32_t *kern,
-                         bool *ligatured, uint8_t *ligature, char *error,
+                         uint8_t right,
+                         struct hstex_lig_kern_result *result, char *error,
                          size_t error_capacity);
 static int append_vbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
@@ -22282,18 +22283,20 @@ static int execute_indent(struct hstex_engine *engine, bool indent,
     return append_box_node(engine, &box, error, error_capacity);
 }
 
-/* Walk a font's ligature and kerning program for a pair of characters. On a
-   kern, *kern receives the amount; on a ligature, *ligature receives the
-   replacement. Only the plain `=:' ligature is handled — the seven variants
-   that keep one or both originals are refused rather than guessed; see
-   docs/DECISIONS.md, ligatures-and-kerning. */
+/* Walk a font's ligature and kerning program for a pair of characters, and
+   say what it has to say about them: nothing, a kern, or one of the eight
+   ligature operations. See docs/DECISIONS.md, ligature-operations. */
 static int font_lig_kern(const struct hstex_font *font, uint8_t left,
-                         uint8_t right, bool *kerned, int32_t *kern,
-                         bool *ligatured, uint8_t *ligature, char *error,
+                         uint8_t right,
+                         struct hstex_lig_kern_result *result, char *error,
                          size_t error_capacity)
 {
-    *kerned = false;
-    *ligatured = false;
+    result->kind = HSTEX_LIG_KERN_NOTHING;
+    result->kern = 0;
+    result->ligature = 0U;
+    result->keep_left = false;
+    result->keep_right = false;
+    result->advance = 0U;
     if (font->characters == NULL || font->lig_kern_count == 0U) {
         return 0;
     }
@@ -22324,17 +22327,23 @@ static int font_lig_kern(const struct hstex_font *font, uint8_t left,
                     return set_error(error, error_capacity,
                                      "font kern index is out of range");
                 }
-                *kerned = true;
-                *kern = font->kerns[index];
+                result->kind = HSTEX_LIG_KERN_KERN;
+                result->kern = font->kerns[index];
                 return 0;
             }
-            if (entry->operation != 0U) {
-                return set_error(error, error_capacity,
-                                 "ligature operation %u is not implemented",
-                                 (unsigned int)entry->operation);
+            /* 4*advance + 2*keep_left + keep_right. Only 0, 1, 2, 3, 5, 6, 7
+               and 11 are written by a font tool; anything else is taken as
+               the plain `=:', which is what the reference does with it. */
+            uint8_t operation = entry->operation;
+            if (operation > 11U || operation == 4U || operation == 8U ||
+                operation == 9U || operation == 10U) {
+                operation = 0U;
             }
-            *ligatured = true;
-            *ligature = entry->remainder;
+            result->kind = HSTEX_LIG_KERN_LIGATURE;
+            result->ligature = entry->remainder;
+            result->keep_right = (operation & 1U) != 0U;
+            result->keep_left = (operation & 2U) != 0U;
+            result->advance = (uint8_t)(operation >> 2);
             return 0;
         }
         if (entry->skip >= 128U) {
@@ -22431,7 +22440,8 @@ static int append_interword_glue(struct hstex_engine *engine, char *error,
 
 /* Put a character, or a ligature standing for several, into the list. */
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
-                                 bool ligature, char *error,
+                                 bool ligature, const uint8_t *originals,
+                                 uint8_t original_count, char *error,
                                  size_t error_capacity)
 {
     const struct hstex_font *font =
@@ -22455,12 +22465,95 @@ static int append_character_node(struct hstex_engine *engine, uint8_t code,
         },
     };
     if (ligature) {
+        uint8_t room = (uint8_t)sizeof(node.value.character.originals);
         node.value.character.original_count =
-            engine->pending_original_count;
-        memcpy(node.value.character.originals, engine->pending_originals,
-               sizeof(node.value.character.originals));
+            original_count < room ? original_count : room;
+        memcpy(node.value.character.originals, originals,
+               node.value.character.original_count);
     }
     return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* A character the font does not define is dropped before anything else sees
+   it -- it joins no list and no ligature -- and the reference says so where
+   \tracinglostchars asks. It has moved the space factor first. See
+   docs/DECISIONS.md, missing-characters. */
+static void char_warning(struct hstex_engine *engine,
+                         const struct hstex_font *font, uint8_t code)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_LOST_CHARS] <= 0) {
+        return;
+    }
+    print_fresh_line(engine);
+    print_text(engine, "Missing character: There is no ");
+    if (code < 32U || code == 127U) {
+        print_formatted(engine, "^^%c",
+                        (char)(code < 64U ? code + 64U : code - 64U));
+    } else {
+        print_byte(engine, (char)code);
+    }
+    print_formatted(engine, " in font %s!", font->name);
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
+/* One character on its way into a horizontal list, with what it was made of
+   if the ligature program made it. */
+struct hstex_lig_item {
+    uint8_t character;
+    bool is_ligature;
+    bool is_hyphen;
+    uint8_t originals[6];
+    uint8_t original_count;
+};
+
+static void lig_item_plain(struct hstex_lig_item *item, uint8_t code,
+                           bool hyphen)
+{
+    item->character = code;
+    item->is_ligature = false;
+    item->is_hyphen = hyphen;
+    item->original_count = 0U;
+    memset(item->originals, 0, sizeof(item->originals));
+}
+
+/* What a character is made of: itself, unless it is already a ligature, in
+   which case what that was made of. This is what a ligature built from it
+   inherits. */
+static void lig_item_append_originals(struct hstex_lig_item *target,
+                                      const struct hstex_lig_item *source)
+{
+    uint8_t room = (uint8_t)sizeof(target->originals);
+    if (!source->is_ligature) {
+        if (target->original_count < room) {
+            target->originals[target->original_count++] = source->character;
+        }
+        return;
+    }
+    for (uint8_t index = 0U; index < source->original_count; ++index) {
+        if (target->original_count < room) {
+            target->originals[target->original_count++] =
+                source->originals[index];
+        }
+    }
+}
+
+static int emit_lig_item(struct hstex_engine *engine,
+                         const struct hstex_lig_item *item, char *error,
+                         size_t error_capacity)
+{
+    int status = append_character_node(engine, item->character,
+                                       item->is_ligature, item->originals,
+                                       item->original_count, error,
+                                       error_capacity);
+    /* An explicit hyphen is followed into the paragraph by an empty
+       discretionary, so the line may break after it; see docs/DECISIONS.md,
+       the-discretionary-after-an-explicit-hyphen. */
+    if (status == 0 && item->is_hyphen) {
+        struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
+        status = append_hbox_node(engine, &node, error, error_capacity);
+    }
+    return status;
 }
 
 /* Put the held-back character into the list. Everything that is not another
@@ -22472,89 +22565,196 @@ static int flush_pending_character(struct hstex_engine *engine, char *error,
     if (!engine->has_pending_character) {
         return 0;
     }
-    uint8_t code = engine->pending_character;
-    bool ligature = engine->pending_is_ligature;
-    bool hyphen = engine->pending_is_hyphen;
+    struct hstex_lig_item item;
+    item.character = engine->pending_character;
+    item.is_ligature = engine->pending_is_ligature;
+    item.is_hyphen = engine->pending_is_hyphen;
+    item.original_count = engine->pending_original_count;
+    memcpy(item.originals, engine->pending_originals,
+           sizeof(item.originals));
     engine->has_pending_character = false;
     engine->pending_is_hyphen = false;
-    int status = append_character_node(engine, code, ligature, error,
-                                       error_capacity);
-    /* An explicit hyphen is followed into the paragraph by an empty
-       discretionary, so the line may break after it; see docs/DECISIONS.md,
-       the-discretionary-after-an-explicit-hyphen. */
-    if (status == 0 && hyphen) {
-        struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
-        status = append_hbox_node(engine, &node, error, error_capacity);
+    return emit_lig_item(engine, &item, error, error_capacity);
+}
+
+/* Where a character the program has finished with goes. The two callers put
+   it in different places -- a horizontal list, or an array of nodes a word
+   is being set again into -- so the walk hands each one out as it is made
+   rather than collecting them. */
+typedef int (*hstex_lig_emit)(void *context, const struct hstex_lig_item *item,
+                              bool is_kern, int32_t kern, char *error,
+                              size_t error_capacity);
+
+/* A program that neither finishes a character nor shortens the work list is
+   contradicting itself; the reference walks such a font for ever. The trip
+   font, which is built to stress this, reaches eight characters and 126
+   turns. */
+#define HSTEX_LIG_TURNS 4096U
+
+/* A pair the program has spoken about becomes at most three characters --
+   the left one if it is kept, the character the operation names, the right
+   one if it is kept -- and the walk then starts again at the first of them
+   that is not finished with. Each turn either finishes a character or
+   changes one, so the work list is short; the bound is there for a font
+   whose program contradicts itself. */
+#define HSTEX_LIG_WORK 64U
+
+/* Run the font's program over the work list until only one character is
+   left to be looked at beside whatever comes next, and leave everything it
+   has finished with in `out`. See docs/DECISIONS.md, ligature-operations. */
+static int lig_advance(const struct hstex_font *font,
+                       struct hstex_lig_item *work, size_t *count,
+                       hstex_lig_emit emit, void *context, char *error,
+                       size_t error_capacity)
+{
+    for (size_t turn = 0U; *count >= 2U; ++turn) {
+        if (turn == HSTEX_LIG_TURNS) {
+            return set_error(error, error_capacity,
+                             "the font's ligature program does not settle");
+        }
+        struct hstex_lig_kern_result step;
+        if (font_lig_kern(font, work[0].character, work[1].character, &step,
+                          error, error_capacity) != 0) {
+            return -1;
+        }
+        if (step.kind != HSTEX_LIG_KERN_LIGATURE) {
+            if (emit(context, &work[0], false, 0, error, error_capacity) != 0) {
+                return -1;
+            }
+            if (step.kind == HSTEX_LIG_KERN_KERN && step.kern != 0 &&
+                emit(context, NULL, true, step.kern, error,
+                     error_capacity) != 0) {
+                return -1;
+            }
+            memmove(&work[0], &work[1], (*count - 1U) * sizeof(work[0]));
+            --*count;
+            continue;
+        }
+        /* The character the operation names is a ligature made of whichever
+           of the pair it replaces: the left one where the left is not kept,
+           the right one where the right is not kept, and nothing at all
+           where both are kept and it is only inserted between them. */
+        struct hstex_lig_item made;
+        lig_item_plain(&made, step.ligature, false);
+        made.is_ligature = true;
+        if (!step.keep_left) {
+            lig_item_append_originals(&made, &work[0]);
+            made.is_hyphen = made.is_hyphen || work[0].is_hyphen;
+        }
+        if (!step.keep_right) {
+            lig_item_append_originals(&made, &work[1]);
+            made.is_hyphen = made.is_hyphen || work[1].is_hyphen;
+        }
+        struct hstex_lig_item built[3];
+        size_t built_count = 0U;
+        if (step.keep_left) {
+            built[built_count++] = work[0];
+        }
+        built[built_count++] = made;
+        if (step.keep_right) {
+            built[built_count++] = work[1];
+        }
+        size_t remaining = *count - 2U;
+        if (built_count + remaining > HSTEX_LIG_WORK) {
+            return set_error(error, error_capacity,
+                             "the font's ligature program does not settle");
+        }
+        memmove(&work[built_count], &work[2], remaining * sizeof(work[0]));
+        memcpy(work, built, built_count * sizeof(work[0]));
+        *count = built_count + remaining;
+        /* What the operation is finished with goes out now; the walk starts
+           again at the first character it is not finished with. */
+        size_t done = step.advance < *count ? step.advance : *count;
+        for (size_t index = 0U; index < done; ++index) {
+            if (emit(context, &work[index], false, 0, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+        }
+        if (done != 0U) {
+            memmove(&work[0], &work[done], (*count - done) * sizeof(work[0]));
+            *count -= done;
+        }
     }
-    return status;
+    return 0;
+}
+
+/* Into a horizontal list. */
+static int lig_emit_horizontal(void *context,
+                               const struct hstex_lig_item *item, bool is_kern,
+                               int32_t kern, char *error,
+                               size_t error_capacity)
+{
+    struct hstex_engine *engine = context;
+    if (is_kern) {
+        struct hstex_node node = {.kind = HSTEX_NODE_KERN, .width = kern};
+        return append_hbox_node(engine, &node, error, error_capacity);
+    }
+    return emit_lig_item(engine, item, error, error_capacity);
 }
 
 /* Take one character into the horizontal list, consulting the font's
-   ligature and kerning program against the character held back before it. */
+   ligature and kerning program against the character held back before it.
+   See docs/DECISIONS.md, ligature-operations. */
 static int append_horizontal_character(struct hstex_engine *engine,
                                        uint8_t code, char *error,
                                        size_t error_capacity)
 {
-    const struct hstex_font *current =
+    const struct hstex_font *font =
         font_by_identifier(engine, engine->current_font);
     /* Only a paragraph gets the discretionary; a character in a box is just
        a character. See docs/DECISIONS.md,
        the-discretionary-after-an-explicit-hyphen. */
-    bool hyphen = !engine->inner_mode && current != NULL &&
-                  current->hyphen_character == (int32_t)code;
+    bool hyphen = !engine->inner_mode && font != NULL &&
+                  font->hyphen_character == (int32_t)code;
     /* The space factor follows the characters as they are read, so a
        ligature leaves behind whatever the last of its parts said; see
        docs/DECISIONS.md, the-space-factor-of-a-ligature. */
     advance_space_factor(engine, code);
-    if (engine->has_pending_character) {
-        const struct hstex_font *font =
-            font_by_identifier(engine, engine->current_font);
-        bool kerned = false;
-        bool ligatured = false;
-        int32_t kern = 0;
-        uint8_t ligature = 0U;
-        if (font != NULL &&
-            font_lig_kern(font, engine->pending_character, code, &kerned,
-                          &kern, &ligatured, &ligature, error,
-                          error_capacity) != 0) {
-            return -1;
-        }
-        if (ligatured) {
-            /* The pair becomes one character, which may ligature again; what
-               it was made of is kept so that it can be named and taken
-               apart. See docs/DECISIONS.md, ligature-originals. */
-            if (!engine->pending_is_ligature) {
-                engine->pending_originals[0] = engine->pending_character;
-                engine->pending_original_count = 1U;
-            }
-            if (engine->pending_original_count <
-                sizeof(engine->pending_originals)) {
-                engine->pending_originals[engine->pending_original_count++] =
-                    code;
-            }
-            engine->pending_character = ligature;
-            engine->pending_is_ligature = true;
-            engine->pending_is_hyphen = engine->pending_is_hyphen || hyphen;
-            return 0;
-        }
-        if (flush_pending_character(engine, error, error_capacity) != 0) {
-            return -1;
-        }
-        if (kerned) {
-            struct hstex_node node = {
-                .kind = HSTEX_NODE_KERN,
-                .width = kern,
-            };
-            if (append_hbox_node(engine, &node, error, error_capacity) != 0) {
-                return -1;
-            }
-        }
+    if (font != NULL &&
+        (font->characters == NULL || font->characters[code].tag < 0)) {
+        char_warning(engine, font, code);
+        return 0;
     }
-    engine->has_pending_character = true;
-    engine->pending_is_ligature = false;
-    engine->pending_original_count = 0U;
-    engine->pending_character = code;
-    engine->pending_is_hyphen = hyphen;
+    if (!engine->has_pending_character || font == NULL) {
+        if (font == NULL &&
+            flush_pending_character(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->has_pending_character = true;
+        engine->pending_is_ligature = false;
+        engine->pending_original_count = 0U;
+        engine->pending_character = code;
+        engine->pending_is_hyphen = hyphen;
+        return 0;
+    }
+
+    struct hstex_lig_item work[HSTEX_LIG_WORK];
+    size_t count = 0U;
+    work[count].character = engine->pending_character;
+    work[count].is_ligature = engine->pending_is_ligature;
+    work[count].is_hyphen = engine->pending_is_hyphen;
+    work[count].original_count = engine->pending_original_count;
+    memcpy(work[count].originals, engine->pending_originals,
+           sizeof(work[count].originals));
+    ++count;
+    lig_item_plain(&work[count++], code, hyphen);
+    engine->has_pending_character = false;
+    engine->pending_is_hyphen = false;
+
+    if (lig_advance(font, work, &count, lig_emit_horizontal, engine, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if (count == 1U) {
+        engine->has_pending_character = true;
+        engine->pending_character = work[0].character;
+        engine->pending_is_ligature = work[0].is_ligature;
+        engine->pending_is_hyphen = work[0].is_hyphen;
+        engine->pending_original_count = work[0].original_count;
+        memcpy(engine->pending_originals, work[0].originals,
+               sizeof(engine->pending_originals));
+    }
     return 0;
 }
 
@@ -24125,6 +24325,58 @@ static int reserve_hyphenated_items(uint32_t **items, size_t *capacity,
     return 0;
 }
 
+/* Where a word being set again is written to. */
+struct reconstitution {
+    struct hstex_engine *engine;
+    const struct hstex_font *metrics;
+    uint32_t font;
+    uint32_t *identifiers;
+    size_t capacity;
+    size_t *written;
+};
+
+static int lig_emit_reconstituted(void *context,
+                                  const struct hstex_lig_item *item,
+                                  bool is_kern, int32_t kern, char *error,
+                                  size_t error_capacity)
+{
+    struct reconstitution *place = context;
+    struct hstex_node node = {0};
+    if (is_kern) {
+        node.kind = HSTEX_NODE_KERN;
+        node.width = kern;
+    } else {
+        uint8_t code = item->character;
+        if (place->metrics->characters[code].tag < 0) {
+            return 0;
+        }
+        const struct hstex_char_metric *metric =
+            &place->metrics->characters[code];
+        node.kind = item->is_ligature ? HSTEX_NODE_LIGATURE
+                                      : HSTEX_NODE_CHARACTER;
+        node.width = metric->width;
+        node.height = metric->height;
+        node.depth = metric->depth;
+        node.value.character.font = place->font;
+        node.value.character.character = code;
+        if (item->is_ligature) {
+            node.value.character.original_count = item->original_count;
+            memcpy(node.value.character.originals, item->originals,
+                   sizeof(node.value.character.originals));
+        }
+    }
+    if (*place->written == place->capacity) {
+        return set_error(error, error_capacity,
+                         "a word set again does not fit");
+    }
+    if (store_node(place->engine, &node, &place->identifiers[*place->written],
+                   error, error_capacity) != 0) {
+        return -1;
+    }
+    ++*place->written;
+    return 0;
+}
+
 /* Runs the font's ligature and kern program over a run of characters and
    leaves the nodes it makes in `identifiers`. This is how the two halves of
    a word are set again when the break falls inside a ligature; see
@@ -24141,82 +24393,33 @@ static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
         return set_error(error, error_capacity,
                          "a word cannot be set again without its font");
     }
-    bool pending = false;
-    uint8_t held = 0U;
-    bool held_is_ligature = false;
-    uint8_t originals[6];
-    uint8_t original_count = 0U;
-    memset(originals, 0, sizeof(originals));
-    for (size_t index = 0U; index <= count; ++index) {
-        bool last = index == count;
-        uint8_t code = last ? 0U : characters[index];
-        int32_t kern = 0;
-        bool kerned = false;
-        bool ligatured = false;
-        uint8_t ligature = 0U;
-        if (!last && pending &&
-            font_lig_kern(metrics, held, code, &kerned, &kern, &ligatured,
-                          &ligature, error, error_capacity) != 0) {
+    struct reconstitution place = {
+        .engine = engine,
+        .metrics = metrics,
+        .font = font,
+        .identifiers = identifiers,
+        .capacity = capacity,
+        .written = written,
+    };
+    struct hstex_lig_item work[HSTEX_LIG_WORK];
+    size_t work_count = 0U;
+    for (size_t index = 0U; index < count; ++index) {
+        if (work_count == HSTEX_LIG_WORK) {
+            return set_error(error, error_capacity,
+                             "a word set again does not fit");
+        }
+        lig_item_plain(&work[work_count++], characters[index], false);
+        if (lig_advance(metrics, work, &work_count, lig_emit_reconstituted,
+                        &place, error, error_capacity) != 0) {
             return -1;
         }
-        if (!last && pending && ligatured) {
-            if (!held_is_ligature) {
-                originals[0] = held;
-                original_count = 1U;
-            }
-            if (original_count < sizeof(originals)) {
-                originals[original_count++] = code;
-            }
-            held = ligature;
-            held_is_ligature = true;
-            continue;
-        }
-        if (pending) {
-            if (metrics->characters[held].tag >= 0) {
-                const struct hstex_char_metric *metric =
-                    &metrics->characters[held];
-                struct hstex_node node = {
-                    .kind = held_is_ligature ? HSTEX_NODE_LIGATURE
-                                             : HSTEX_NODE_CHARACTER,
-                    .width = metric->width,
-                    .height = metric->height,
-                    .depth = metric->depth,
-                    .value.character = {.font = font, .character = held},
-                };
-                if (held_is_ligature) {
-                    node.value.character.original_count = original_count;
-                    memcpy(node.value.character.originals, originals,
-                           sizeof(originals));
-                }
-                if (*written == capacity) {
-                    return set_error(error, error_capacity,
-                                     "a word set again does not fit");
-                }
-                if (store_node(engine, &node, &identifiers[*written], error,
-                               error_capacity) != 0) {
-                    return -1;
-                }
-                ++*written;
-            }
-            if (kerned && kern != 0) {
-                struct hstex_node node = {.kind = HSTEX_NODE_KERN,
-                                          .width = kern};
-                if (*written == capacity) {
-                    return set_error(error, error_capacity,
-                                     "a word set again does not fit");
-                }
-                if (store_node(engine, &node, &identifiers[*written], error,
-                               error_capacity) != 0) {
-                    return -1;
-                }
-                ++*written;
-            }
-        }
-        if (!last) {
-            pending = true;
-            held = code;
-            held_is_ligature = false;
-            original_count = 0U;
+    }
+    /* Nothing follows the word, so whatever is still held simply goes into
+       the list. */
+    for (size_t item = 0U; item < work_count; ++item) {
+        if (lig_emit_reconstituted(&place, &work[item], false, 0, error,
+                                   error_capacity) != 0) {
+            return -1;
         }
     }
     return 0;
@@ -24321,18 +24524,18 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                         (uint8_t)engine->nodes[hyphen - 1U]
                             .value.character.character;
                     bool joins = false;
-                    int32_t unused_kern = 0;
-                    uint8_t made = 0U;
-                    bool also_kerned = false;
+                    struct hstex_lig_kern_result step = {0};
                     if (metrics != NULL &&
                         (before->kind == HSTEX_NODE_CHARACTER ||
-                         before->kind == HSTEX_NODE_LIGATURE) &&
-                        font_lig_kern(metrics,
-                                      (uint8_t)before->value.character.character,
-                                      hyphen_code, &also_kerned, &unused_kern,
-                                      &joins, &made, error,
-                                      error_capacity) != 0) {
-                        status = -1;
+                         before->kind == HSTEX_NODE_LIGATURE)) {
+                        if (font_lig_kern(
+                                metrics,
+                                (uint8_t)before->value.character.character,
+                                hyphen_code, &step, error,
+                                error_capacity) != 0) {
+                            status = -1;
+                        }
+                        joins = step.kind == HSTEX_LIG_KERN_LIGATURE;
                     }
                     if (status == 0 && joins && written != 0U &&
                         result[written - 1U] == items[previous]) {
@@ -25405,28 +25608,57 @@ static int apply_math_ligatures(struct hstex_engine *engine,
             ++index;
             continue;
         }
-        bool kerned = false;
-        bool ligatured = false;
-        int32_t kern = 0;
-        uint8_t ligature = 0U;
+        struct hstex_lig_kern_result step;
         if (font_lig_kern(font, (uint8_t)left->nucleus.character,
-                          (uint8_t)right->nucleus.character, &kerned, &kern,
-                          &ligatured, &ligature, error, error_capacity) != 0) {
+                          (uint8_t)right->nucleus.character, &step, error,
+                          error_capacity) != 0) {
             return -1;
         }
-        if (ligatured) {
-            left->nucleus.character = ligature;
-            /* The pair became one character; whether that one is read as
-               part of a word depends on what follows it now, which the next
-               turn of this loop settles. See docs/DECISIONS.md,
-               math-text-characters. */
+        if (step.kind == HSTEX_LIG_KERN_LIGATURE) {
+            /* A formula keeps its characters in noads rather than in a
+               list, so the operation is carried out on the pair of noads:
+               the one it does not keep takes the character it names, or a
+               noad of its own is put between the two it keeps. An operation
+               that is finished with what it made is not looked at again.
+               See docs/DECISIONS.md, ligature-operations. */
             left->text_character = false;
-            memmove(&builder->noads[index + 1U], &builder->noads[index + 2U],
-                    (builder->count - index - 2U) * sizeof(*builder->noads));
-            --builder->count;
+            if (!step.keep_left) {
+                left->nucleus.character = step.ligature;
+            }
+            if (!step.keep_right) {
+                right->nucleus.character = step.ligature;
+            }
+            if (!step.keep_left && !step.keep_right) {
+                memmove(&builder->noads[index + 1U],
+                        &builder->noads[index + 2U],
+                        (builder->count - index - 2U) *
+                            sizeof(*builder->noads));
+                --builder->count;
+            } else if (step.keep_left && step.keep_right) {
+                if (reserve_noads(builder, builder->count + 1U, error,
+                                  error_capacity) != 0) {
+                    return -1;
+                }
+                left = &builder->noads[index];
+                struct hstex_noad inserted = builder->noads[index];
+                inserted.nucleus.character = step.ligature;
+                inserted.superscript.kind = (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+                inserted.subscript.kind = (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+                inserted.text_character = false;
+                memmove(&builder->noads[index + 2U],
+                        &builder->noads[index + 1U],
+                        (builder->count - index - 1U) *
+                            sizeof(*builder->noads));
+                builder->noads[index + 1U] = inserted;
+                ++builder->count;
+            }
+            if (step.advance != 0U) {
+                index += step.advance;
+            }
             continue;
         }
-        if (kerned) {
+        if (step.kind == HSTEX_LIG_KERN_KERN && step.kern != 0) {
+            int32_t kern = step.kern;
             struct hstex_node node = {
                 .kind = HSTEX_NODE_KERN,
                 .width = kern,
@@ -27291,17 +27523,14 @@ static int accent_skew(struct hstex_engine *engine,
     if (font->skew_character < 0 || font->skew_character > 255) {
         return 0;
     }
-    bool kerned = false;
-    bool ligatured = false;
-    int32_t kern = 0;
-    uint8_t ligature = 0U;
+    struct hstex_lig_kern_result step;
     if (font_lig_kern(font, (uint8_t)nucleus->character,
-                      (uint8_t)font->skew_character, &kerned, &kern,
-                      &ligatured, &ligature, error, error_capacity) != 0) {
+                      (uint8_t)font->skew_character, &step, error,
+                      error_capacity) != 0) {
         return -1;
     }
-    if (kerned) {
-        *skew = kern;
+    if (step.kind == HSTEX_LIG_KERN_KERN) {
+        *skew = step.kern;
     }
     return 0;
 }
