@@ -77,7 +77,7 @@ echo "oracle reported $oracle_total diagnostics"
 if [ "$status" -ne 0 ]; then
     echo "hstex stopped: $(cat hstex.err)"
 else
-    echo "hstex ran to the end of the file"
+    echo "hstex ran the whole file, to the \\dump on line 92"
 fi
 echo
 echo "--- diagnostics HSTeX reports, against the oracle's ---"

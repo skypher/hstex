@@ -252,6 +252,10 @@ enum hstex_command {
        preamble describes rows, each \cr ends a column, and the columns
        go side by side into a horizontal list. */
     HSTEX_COMMAND_VALIGN,
+    /* \setlanguage leaves a whatsit; \noboundary cancels the boundary
+       character before the next one. */
+    HSTEX_COMMAND_SET_LANGUAGE,
+    HSTEX_COMMAND_NO_BOUNDARY,
     HSTEX_COMMAND_CR,
     HSTEX_COMMAND_NO_ALIGN,
     HSTEX_COMMAND_OMIT,
@@ -824,6 +828,12 @@ struct hstex_extensible {
 
 struct hstex_font {
     char *name;
+    /* The character the program treats as standing beyond each end of a
+       word, and where the program for the left boundary begins. Both come
+       out of the lig/kern table's own first and last instructions; -1 where
+       the font names neither. See docs/DECISIONS.md, boundary-characters. */
+    int32_t boundary_character;
+    int32_t boundary_label;
     struct hstex_char_metric *characters;
     struct hstex_lig_kern *lig_kern;
     size_t lig_kern_count;
@@ -1219,6 +1229,9 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_START_LINK,
     HSTEX_WHATSIT_END_LINK,
     HSTEX_WHATSIT_ANNOT,
+    /* \setlanguage: the language the words after it are hyphenated in,
+       with the two hyphenmins as they stood. */
+    HSTEX_WHATSIT_LANGUAGE,
 };
 
 /* What a link or an outline entry does when it is followed. See
@@ -1741,6 +1754,9 @@ struct hstex_engine {
        empty discretionary follows it into the paragraph; see
        docs/DECISIONS.md, the-discretionary-after-an-explicit-hyphen. */
     bool pending_is_hyphen;
+    /* \noboundary was read, so the character that follows has no boundary
+       character before it. See docs/DECISIONS.md, boundary-characters. */
+    bool cancel_boundary;
     enum hstex_interaction_mode interaction_mode;
     /* A recoverable error is reported and then recovered from, the way the
        reference does it, so a document full of them still runs to its end.

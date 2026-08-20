@@ -1101,6 +1101,27 @@ static int load_tfm_parameters(struct hstex_engine *engine,
     font->kern_count = (size_t)fields[9];
     font->extensibles = extensibles;
     font->extensible_count = (size_t)fields[10];
+    /* The lig/kern table's own first and last instructions name the
+       boundary character and where its program begins: a first instruction
+       that skips past the table gives the right boundary character, and a
+       last one that does gives the address of the left boundary's program.
+       See docs/DECISIONS.md, boundary-characters. */
+    font->boundary_character = -1;
+    font->boundary_label = -1;
+    if (font->lig_kern_count != 0U) {
+        if (font->lig_kern[0].skip == 255U) {
+            font->boundary_character = (int32_t)font->lig_kern[0].next;
+        }
+        const struct hstex_lig_kern *last =
+            &font->lig_kern[font->lig_kern_count - 1U];
+        if (last->skip == 255U) {
+            size_t address =
+                (size_t)last->operation * 256U + (size_t)last->remainder;
+            if (address < font->lig_kern_count) {
+                font->boundary_label = (int32_t)address;
+            }
+        }
+    }
 
     size_t parameter_count = fields[11];
     size_t parameter_word =
@@ -2369,6 +2390,8 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"leqno", HSTEX_COMMAND_EQUATION_NUMBER, 1},
         {"halign", HSTEX_COMMAND_HALIGN, 0},
         {"valign", HSTEX_COMMAND_VALIGN, 0},
+        {"setlanguage", HSTEX_COMMAND_SET_LANGUAGE, 0},
+        {"noboundary", HSTEX_COMMAND_NO_BOUNDARY, 0},
         {"cr", HSTEX_COMMAND_CR, 0},
         {"crcr", HSTEX_COMMAND_CR, 1},
         {"noalign", HSTEX_COMMAND_NO_ALIGN, 0},
@@ -5187,36 +5210,49 @@ static int scan_decimal_factor(struct hstex_engine *engine,
         }
     }
 
-    bool saw_digit = false;
-    bool saw_decimal = false;
+    /* What stands before the unit is an integer constant, which may be
+       alphabetic, hexadecimal or octal as well as decimal, and only a
+       decimal one may be followed by a fraction. A factor that begins with
+       the point itself has nothing before it. See docs/DECISIONS.md,
+       dimension-factors. */
+    bool leading_point =
+        hstex_token_is_character(token) &&
+        (hstex_token_character_code(token) == (uint8_t)'.' ||
+         hstex_token_character_code(token) == (uint8_t)',');
+    bool decimal = leading_point || token_is_decimal_digit(token);
+    if (!leading_point) {
+        if (push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        int32_t whole = 0;
+        if (scan_integer(engine, &whole, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (whole < 0) {
+            factor->sign = -factor->sign;
+            factor->whole = (uint64_t)(-(int64_t)whole);
+        } else {
+            factor->whole = (uint64_t)whole;
+        }
+        if (!decimal) {
+            return 0;
+        }
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (result == HSTEX_ENGINE_EOF) {
+            return 0;
+        }
+        if (!hstex_token_is_character(token) ||
+            (hstex_token_character_code(token) != (uint8_t)'.' &&
+             hstex_token_character_code(token) != (uint8_t)',')) {
+            return push_one(engine, token, location, error, error_capacity);
+        }
+    }
     size_t fraction_digits = 0U;
     for (;;) {
-        if (token_is_decimal_digit(token)) {
-            saw_digit = true;
-            uint8_t digit = (uint8_t)(hstex_token_character_code(token) -
-                                      (uint8_t)'0');
-            if (!saw_decimal) {
-                if (factor->whole > (UINT64_MAX - digit) / 10U) {
-                    return set_error(error, error_capacity,
-                                     "dimension number overflow");
-                }
-                factor->whole = factor->whole * 10U + digit;
-            } else if (fraction_digits < HSTEX_DECIMAL_FRACTION_DIGITS) {
-                factor->fraction = factor->fraction * 10U + digit;
-                factor->denominator *= 10U;
-                ++fraction_digits;
-            }
-        } else if (!saw_decimal && hstex_token_is_character(token) &&
-                   (hstex_token_character_code(token) == (uint8_t)'.' ||
-                    hstex_token_character_code(token) == (uint8_t)',')) {
-            saw_decimal = true;
-        } else {
-            if (!token_is_effective_space(engine, token) &&
-                push_one(engine, token, location, error, error_capacity) != 0) {
-                return -1;
-            }
-            break;
-        }
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, &token, &location, error, error_capacity);
         if (result == HSTEX_ENGINE_EOF) {
@@ -5225,13 +5261,20 @@ static int scan_decimal_factor(struct hstex_engine *engine,
         if (result == HSTEX_ENGINE_ERROR) {
             return -1;
         }
-    }
-    if (!saw_digit) {
-        char found[128];
-        describe_token(engine, token, found, sizeof(found));
-        return set_error(error, error_capacity,
-                         "dimension requires a numeric factor, found %s",
-                         found);
+        if (!token_is_decimal_digit(token)) {
+            if (!token_is_effective_space(engine, token) &&
+                push_one(engine, token, location, error, error_capacity) != 0) {
+                return -1;
+            }
+            break;
+        }
+        if (fraction_digits < HSTEX_DECIMAL_FRACTION_DIGITS) {
+            factor->fraction =
+                factor->fraction * 10U +
+                (uint64_t)(hstex_token_character_code(token) - (uint8_t)'0');
+            factor->denominator *= 10U;
+            ++fraction_digits;
+        }
     }
     return 0;
 }
@@ -13247,6 +13290,13 @@ static void show_whatsit(struct hstex_engine *engine,
                          const struct hstex_node *node)
 {
     uint8_t kind = node->value.whatsit.kind;
+    if (kind == (uint8_t)HSTEX_WHATSIT_LANGUAGE) {
+        print_formatted(engine, "\\setlanguage%d (hyphenmin %u,%u)",
+                        node->value.whatsit.number,
+                        (unsigned int)node->value.whatsit.stream,
+                        (unsigned int)node->value.whatsit.action);
+        return;
+    }
     if (kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
         static const char *const actions[4] = {"push", "pop", "set",
                                                "current"};
@@ -31221,6 +31271,51 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
 
 /* \special is expanded where it stands, and only its writing waits for the
    page; see docs/DECISIONS.md, whatsits. */
+/* The reference keeps a hyphenmin between one and sixty-three, whatever the
+   parameter says. */
+static uint8_t normalised_hyphen_min(int32_t value)
+{
+    if (value <= 0) {
+        return 1U;
+    }
+    return value >= 63 ? 63U : (uint8_t)value;
+}
+
+/* \setlanguage: the words after it are hyphenated in the language it names,
+   with the two hyphenmins as they stand here rather than as they stand when
+   the paragraph is broken. A language outside 0..255 means language 0. See
+   docs/DECISIONS.md, setlanguage. */
+static int execute_set_language(struct hstex_engine *engine, char *error,
+                                size_t error_capacity)
+{
+    int32_t language = 0;
+    if (scan_integer(engine, &language, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
+    }
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (language <= 0 || language > 255) {
+        language = 0;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {
+            .kind = (uint8_t)HSTEX_WHATSIT_LANGUAGE,
+            .stream = normalised_hyphen_min(
+                engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN]),
+            .action = normalised_hyphen_min(
+                engine->integer_parameters[HSTEX_INTEGER_RIGHT_HYPHEN_MIN]),
+            .number = language,
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
 static int execute_special(struct hstex_engine *engine, char *error,
                            size_t error_capacity)
 {
@@ -33526,6 +33621,15 @@ handle_token:
                                         error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
+            continue;
+        case HSTEX_COMMAND_SET_LANGUAGE:
+            if (execute_set_language(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_NO_BOUNDARY:
+            /* The next character has no boundary before it. */
+            engine->cancel_boundary = true;
             continue;
         case HSTEX_COMMAND_HALIGN:
         case HSTEX_COMMAND_VALIGN:
