@@ -16,6 +16,12 @@ See docs/DECISIONS.md, a-break-inside-a-cascade-of-ligatures.
 """
 import subprocess, re, os, sys
 
+# The engine, wherever this is run from -- and it must be run from a
+# directory holding trip.tfm, which is not the repository root.
+ENGINE = os.environ.get('HSTEX') or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), 'build', 'hstex')
+
 HEAD = (r'\catcode`\{=1 \catcode`\}=2 \catcode`\#=6' '\n'
         r'\font\rip=trip \rip' '\n'
         r'\lccode`A=`1 \lccode`B=`5 \lccode`C=`2' '\n'
@@ -47,6 +53,11 @@ def discretionary(path):
             return out
     return ['(no discretionary)']
 
+if not os.path.exists('trip.tfm'):
+    sys.exit("no trip.tfm here: run from a directory holding one, such as "
+             "build/trip after tests/trip/run-trip.sh. Without it both "
+             "engines fail the same way and every case reads as agreeing.")
+
 bad = 0
 for patterns, word, what in CASES:
     body = HEAD + '\\patterns{%s}\n' % patterns + TAIL
@@ -59,7 +70,7 @@ for patterns, word, what in CASES:
     subprocess.run(['pdftex', '-ini', '-interaction=nonstopmode', 'cb.tex'],
                    capture_output=True)
     with open('cb-hstex.log', 'w') as out:
-        subprocess.run(['./build/hstex', '--run-ini', 'cb.tex'], stdout=out,
+        subprocess.run([ENGINE, '--run-ini', 'cb.tex'], stdout=out,
                        stderr=subprocess.STDOUT)
     reference, hstex = discretionary('cb.log'), discretionary('cb-hstex.log')
     if reference == hstex:
