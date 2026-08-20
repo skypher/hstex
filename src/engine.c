@@ -34839,7 +34839,7 @@ static void spec_touch(const struct hstex_engine *engine, const char *prefix,
                        int32_t page, const char *content)
 {
     char name[600];
-    char temporary[600];
+    char temporary[640];
     spec_path(engine, name, sizeof(name), prefix, page);
     (void)snprintf(temporary, sizeof(temporary), "%s.tmp", name);
     FILE *out = fopen(temporary, "w");
