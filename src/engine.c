@@ -8021,9 +8021,35 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
     }
     token = normalize_frozen_control_sequence(token);
     if (hstex_token_is_character(token)) {
-        (void)snprintf(buffer, capacity, "character '%c' of category %u",
-                       (char)hstex_token_character_code(token),
-                       (unsigned int)hstex_token_category(token));
+        /* The names the reference uses for a character, so that a message
+           built from this reads as its does: "alignment tab character &",
+           "macro parameter character #", "the letter A". */
+        static const struct {
+            uint8_t category;
+            const char *name;
+        } names[] = {
+            {(uint8_t)HSTEX_CAT_BEGIN_GROUP, "begin-group character"},
+            {(uint8_t)HSTEX_CAT_END_GROUP, "end-group character"},
+            {(uint8_t)HSTEX_CAT_MATH_SHIFT, "math shift character"},
+            {(uint8_t)HSTEX_CAT_ALIGNMENT_TAB, "alignment tab character"},
+            {(uint8_t)HSTEX_CAT_PARAMETER, "macro parameter character"},
+            {(uint8_t)HSTEX_CAT_SUPERSCRIPT, "superscript character"},
+            {(uint8_t)HSTEX_CAT_SUBSCRIPT, "subscript character"},
+            {(uint8_t)HSTEX_CAT_SPACE, "blank space"},
+            {(uint8_t)HSTEX_CAT_LETTER, "the letter"},
+            {(uint8_t)HSTEX_CAT_OTHER, "the character"},
+        };
+        uint8_t category = hstex_token_category(token);
+        const char *name = "the character";
+        for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]);
+             ++index) {
+            if (names[index].category == category) {
+                name = names[index].name;
+                break;
+            }
+        }
+        (void)snprintf(buffer, capacity, "%s %c", name,
+                       (char)hstex_token_character_code(token));
         return;
     }
     if (hstex_token_is_control_sequence(token)) {
@@ -35542,6 +35568,39 @@ static int report_single_shift_closing_display(
     return 0;
 }
 
+static const char *const misplaced_tab_help[] = {
+    "I can't figure out why you would want to use a tab mark",
+    "or \\cr or \\span just now. If something like a right brace",
+    "up above has ended a previous alignment prematurely,",
+    "you're probably due for more error messages, and you",
+    "might try typing `S' now just to see what is salvageable.", NULL};
+
+static const char *const misplaced_ampersand_help[] = {
+    "I can't figure out why you would want to use a tab mark",
+    "here. If you just want an ampersand, the remedy is",
+    "simple: Just type `I\\&' now. But if some right brace",
+    "up above has ended a previous alignment prematurely,",
+    "you're probably due for more error messages, and you",
+    "might try typing `S' now just to see what is salvageable.", NULL};
+
+static const char *const misplaced_noalign_help[] = {
+    "I expect to see \\noalign only after the \\cr of",
+    "an alignment. Proceed, and I'll ignore this case.", NULL};
+
+static const char *const misplaced_omit_help[] = {
+    "I expect to see \\omit only after tab marks or the \\cr of",
+    "an alignment. Proceed, and I'll ignore this case.", NULL};
+
+/* Anything that belongs to an alignment, met outside one: the reference
+   names it and ignores it. */
+static void report_misplaced(struct hstex_engine *engine, hstex_token token,
+                             const char *const *help)
+{
+    char named[128];
+    describe_token(engine, token, named, sizeof(named));
+    tex_error(engine, help, "Misplaced %s", named);
+}
+
 static enum hstex_engine_result next_output(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
@@ -35695,14 +35754,23 @@ handle_token:
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
-            if (token_is_category(*token, HSTEX_CAT_ALIGNMENT_TAB) &&
-                engine->alignment_entry != NULL &&
-                !engine->alignment_entry->after_pushed) {
-                if (end_alignment_entry(engine, HSTEX_ALIGN_END_TAB, error,
-                                        error_capacity) != 0) {
-                    return HSTEX_ENGINE_ERROR;
+            if (token_is_category(*token, HSTEX_CAT_ALIGNMENT_TAB)) {
+                if (engine->alignment_entry != NULL &&
+                    !engine->alignment_entry->after_pushed) {
+                    if (end_alignment_entry(engine, HSTEX_ALIGN_END_TAB, error,
+                                            error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
                 }
-                continue;
+                /* A tab with no alignment to divide is named and ignored,
+                   in words of its own -- the reference offers `I\&' there,
+                   which it has no reason to offer for \cr or \span. */
+                if (!engine->building_alignment) {
+                    report_misplaced(engine, *token,
+                                     misplaced_ampersand_help);
+                    continue;
+                }
             }
             if (token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
                 /* An alignment that stood in for a whole display leaves the
@@ -36325,30 +36393,19 @@ handle_token:
                 continue;
             }
             if (!engine->building_alignment) {
-                char misplaced[128];
-                describe_token(engine, *token, misplaced, sizeof(misplaced));
-                uint32_t line = 0U;
-                const char *origin = current_source_line(engine, &line);
-                (void)set_error(error, error_capacity,
-                                "%s is only allowed inside an alignment, at "
-                                "%s:%u",
-                                misplaced, origin, (unsigned int)line);
-                return HSTEX_ENGINE_ERROR;
+                report_misplaced(engine, *token, misplaced_tab_help);
+                continue;
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_NO_ALIGN:
         case HSTEX_COMMAND_OMIT:
             /* These belong to an alignment, which reads them itself. */
             if (!engine->building_alignment) {
-                char misplaced[128];
-                describe_token(engine, *token, misplaced, sizeof(misplaced));
-                uint32_t line = 0U;
-                const char *origin = current_source_line(engine, &line);
-                (void)set_error(error, error_capacity,
-                                "%s is only allowed inside an alignment, at "
-                                "%s:%u",
-                                misplaced, origin, (unsigned int)line);
-                return HSTEX_ENGINE_ERROR;
+                report_misplaced(engine, *token,
+                                 meaning->command == HSTEX_COMMAND_NO_ALIGN
+                                     ? misplaced_noalign_help
+                                     : misplaced_omit_help);
+                continue;
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_MATH_LIMITS: {

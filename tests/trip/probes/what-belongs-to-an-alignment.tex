@@ -1,0 +1,18 @@
+% \cr, \span, \noalign, \omit and a tab character, met outside an alignment.
+%
+% Measured against pdftex: each is named and ignored, and the run goes on.
+% The names are the reference's own -- a tab reads "Misplaced alignment tab
+% character &", not a description of its category -- and there are three
+% different helps: \cr and \span share one, & has its own (it offers `I\&'),
+% and \noalign and \omit have one each.
+%
+% trip line 333 writes \cr inside a preamble that has already ended.
+\tracingonline=1
+\font\tt=cmr10 \tt
+A\cr B\message{[after cr]}\par
+A& B\message{[after a tab]}\par
+A\noalign{} B\message{[after noalign]}\par
+A\omit B\message{[after omit]}\par
+A\span B\message{[after span]}\par
+\halign{#&#\cr A&B\cr}\message{[a real alignment is silent]}\par
+\end
