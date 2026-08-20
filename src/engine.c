@@ -12928,9 +12928,12 @@ static int execute_else(struct hstex_engine *engine, char *error,
     struct hstex_conditional *conditional =
         &engine->conditionals[engine->conditional_count - 1U];
     if (conditional->else_seen) {
-        return set_error(error, error_capacity,
-                         "second else in the conditional opened at %s:%u",
-                         conditional->origin, (unsigned int)conditional->line);
+        /* The reference names it and reads on, so `\iffalse A\else B\else
+           C\fi' sets both B and C. */
+        static const char *const help[] = {
+            "I'm ignoring this; it doesn't match any \\if.", NULL};
+        tex_error(engine, help, "Extra \\else");
+        return 0;
     }
     conditional->else_seen = true;
     return skip_conditional(engine, engine->conditional_count - 1U, false,
@@ -12949,8 +12952,10 @@ static int execute_or(struct hstex_engine *engine, char *error,
     size_t target = engine->conditional_count - 1U;
     struct hstex_conditional *conditional = &engine->conditionals[target];
     if (!conditional->case_conditional || conditional->else_seen) {
-        return set_error(error, error_capacity,
-                         "or outside an active ifcase branch");
+        static const char *const help[] = {
+            "I'm ignoring this; it doesn't match any \\if.", NULL};
+        tex_error(engine, help, "Extra \\or");
+        return 0;
     }
     return skip_case_remainder(engine, target, error, error_capacity);
 }
@@ -34682,15 +34687,16 @@ static int skip_conditional(struct hstex_engine *engine, size_t target,
                 struct hstex_conditional *nested =
                     &engine->conditionals[engine->conditional_count - 1U];
                 if (nested->else_seen) {
-                    return set_error(error, error_capacity,
-                                     "second else in nested conditional");
+                    continue;
                 }
                 nested->else_seen = true;
                 continue;
             }
             if (!stop_at_else) {
-                return set_error(error, error_capacity,
-                                 "second else in one conditional");
+                /* Nothing in skipped text is obeyed or reported, an \else
+                   past the first no more than anything else: measured,
+                   `\iftrue A\else B\else C\fi' sets the A in silence. */
+                continue;
             }
             engine->conditionals[target].else_seen = true;
             return 0;

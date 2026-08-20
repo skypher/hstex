@@ -1,0 +1,35 @@
+% An \else past the first, and an \or where no \ifcase branch is open.
+%
+% Measured against pdftex, and the answer differs by which side of the
+% conditional the extra one falls on:
+%
+%   \iftrue A\else B\else C\fi     sets A, in silence. Everything after
+%                                  the first \else is skipped, and nothing
+%                                  in skipped text is obeyed or reported,
+%                                  an \else no more than anything else.
+%   \iffalse A\else B\else C\fi    sets B and C, and says "! Extra \else."
+%                                  for the second one, which is met while
+%                                  the branch is being read rather than
+%                                  skipped. It is ignored and the text
+%                                  carries on.
+%   \ifcase1 A\else B\or C\fi      "! Extra \or." for the same reason.
+%
+% Both messages come with "I'm ignoring this; it doesn't match any \if.",
+% the same help an \else with no \if at all draws.
+%
+% Three \else's do the same thing twice: the true side is silent, the
+% false side says it twice.
+%
+% All of these stopped this engine. trip line 389 writes
+% \if\span\else\else\else\fi, whose extra \else's are all on the skipped
+% side and so draw nothing at all.
+\tracingonline=1
+\message{[\iftrue A\else B\else C\fi]}
+\message{[\iffalse A\else B\else C\fi]}
+\message{[\iftrue A\else B\else C\else D\fi]}
+\message{[\iffalse A\else B\else C\else D\fi]}
+\message{[\ifcase1 A\else B\or C\fi]}
+\message{[\iftrue A\or B\fi]}
+\message{[\iftrue A\else\iffalse\else\else\fi B\fi]}
+\message{[\if\span\else\else\else\fi]}
+\end
