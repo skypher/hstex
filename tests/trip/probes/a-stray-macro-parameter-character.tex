@@ -1,0 +1,21 @@
+% A macro parameter character where no definition or preamble wants one.
+%
+% Measured against pdftex: it is named and ignored -- "You can't use `macro
+% parameter character #' in <mode> mode" -- in every mode. The name is the
+% reference's own, not just the character.
+%
+% This applies wherever the # REACHES THE LIST, however it got there: typed
+% directly, doubled, or arriving as the single # that ## in a macro body
+% leaves behind. `\def\hash#1{##1:#1}\hash Z' sets 1:Z and says so.
+%
+% The # characters \meaning and \message write are ordinary characters of
+% category 12, not this, and are set: \meaning of that macro reads
+% macro:#1->##1#1 and every # in it appears.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+#A\message{[after one in vertical mode]}\par
+A##B\message{[two draw two]}\par
+$x#y$\message{[and one in a formula]}\par
+\def\hash#1{##1:#1}\setbox0=\hbox{\hash Z}\showbox0
+\message{[but a message writes it: \hash Z]}
+\end

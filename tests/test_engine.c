@@ -13718,7 +13718,12 @@ int main(void)
                     "\\expandafter\\a\\b\\a%",
                     "AB") != 0 ||
         run_snippet("\\def\\a{A}\\noexpand\\a\\a%", "A") != 0 ||
-        run_snippet("\\def\\hash#1{##1:#1}\\hash Z%", "#1:Z") != 0 ||
+        /* ## in a body makes one # in the replacement, and a # that reaches
+           the list is refused by the reference the same as any other:
+           `\hash Z' sets 1:Z and says so. \message writes it doubled --
+           that is the token, not the typesetting. */
+        run_snippet("\\def\\hash#1{##1:#1}\\hash Z%", "1:Z") != 0 ||
+        run_snippet("\\def\\hash#1{##1:#1}\\message{\\hash Z}%", "") != 0 ||
         run_snippet("\\long\\def\\a#1{X}\\a{one\n\n two}%", "X") != 0 ||
         run_snippet("\\ifnum2<1F\\else T\\fi%", "T") != 0 ||
         run_snippet("\\ifdim1pt<2pt T\\else F\\fi"
@@ -13955,10 +13960,13 @@ int main(void)
                     "\\edef\\saved{\\unexpanded{\\a}}"
                     "\\def\\a{B}\\saved\\unexpanded{\\a}%",
                     "BB") != 0 ||
+        /* The # tokens survive \unexpanded and \the intact, which is what
+           this checks; what reaches the list is then refused by the
+           reference the same as any other stray #, so 1/2 is set. */
         run_snippet("\\edef\\saved{\\unexpanded{#1}}\\saved/"
                     "\\toks0={#2}\\edef\\fromtoks{\\the\\toks0}"
                     "\\fromtoks%",
-                    "#1/#2") != 0 ||
+                    "1/2") != 0 ||
         run_snippet("\\def\\a{A}\\unexpanded\\expanded{{\\a}}%",
                     "A") != 0 ||
         run_snippet("\\lowercase{AB}\\uppercase{ab}"
@@ -14217,8 +14225,10 @@ int main(void)
         test_the_final_break_is_hyphenated() != 0 ||
         /* A parameter-category character is displayed doubled, so that the
            display reads back as the same token. */
+        /* The # from ## is refused where it reaches the list, and the ones
+           \meaning writes are ordinary characters and are set. */
         run_snippet("\\def\\s#1{##1#1}[\\s{Q}][\\meaning\\s]%",
-                    "[#1Q][macro:#1->##1#1]") != 0 ||
+                    "[1Q][macro:#1->##1#1]") != 0 ||
         run_snippet("[\\pdfescapestring{a b(c)\\string\\\\}]"
                     "[\\pdfescapename{a b}][\\pdfescapehex{AB}]"
                     "[\\pdfunescapehex{4142}][\\the\\pdfpxdimen]%",

@@ -14915,7 +14915,10 @@ static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
         memcpy(scratch, bytes, room);
         scratch[room] = '\0';
     } else if (hstex_token_is_character(token)) {
-        scratch[0] = (char)hstex_token_character_code(token);
+        /* A character is named the way the reference names it -- "macro
+           parameter character #", not just "#" -- which is what
+           describe_token already does. */
+        describe_token(engine, token, scratch, sizeof(scratch));
     }
     free(bytes);
     tex_error(engine, help, "You can't use `%s' in %s", scratch,
@@ -35816,6 +35819,13 @@ handle_token:
                 }
                 continue;
             }
+        }
+        /* A macro parameter character has no meaning outside a definition
+           or an alignment preamble: the reference names it and ignores it.
+           Measured in every mode, and for ## as well as #. */
+        if (token_is_category(*token, HSTEX_CAT_PARAMETER)) {
+            report_illegal_case(engine, *token);
+            continue;
         }
         /* A script mark belongs to a formula too. */
         if (engine->mode != HSTEX_MODE_MATH &&
