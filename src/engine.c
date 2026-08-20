@@ -34657,6 +34657,37 @@ static bool command_wants_a_dollar(const struct hstex_meaning *meaning)
     }
 }
 
+/* A command that only a formula can hold. Met outside one, the reference
+   puts a $ in front of it and reads it again, in the same words it uses for
+   a vertical command met inside one -- so `A\mathchar"141' opens a formula
+   rather than stopping. Measured, command by command, against pdftex:
+   every math command here does it, while \discretionary, which is
+   horizontal, does not, and \eqno is refused by name instead. */
+static bool command_needs_a_formula(enum hstex_command command)
+{
+    switch (command) {
+    case HSTEX_COMMAND_MATH_CHAR:
+    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
+    case HSTEX_COMMAND_MATH_CLASS:
+    case HSTEX_COMMAND_MATH_LIMITS:
+    case HSTEX_COMMAND_MATH_STYLE:
+    case HSTEX_COMMAND_MATH_CHOICE:
+    case HSTEX_COMMAND_MATH_ACCENT:
+    case HSTEX_COMMAND_MATH_SKIP:
+    case HSTEX_COMMAND_MATH_KERN:
+    case HSTEX_COMMAND_FRACTION:
+    case HSTEX_COMMAND_LEFT_RIGHT:
+    case HSTEX_COMMAND_RADICAL:
+    case HSTEX_COMMAND_DELIMITER:
+    case HSTEX_COMMAND_NON_SCRIPT:
+    case HSTEX_COMMAND_VCENTER:
+    case HSTEX_COMMAND_OVER_UNDER_LINE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static int insert_math_shift(struct hstex_engine *engine, hstex_token offending,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity)
@@ -35437,20 +35468,34 @@ static enum hstex_engine_result next_output(
         }
 
 handle_token:
-        /* A vertical command inside a formula closes it first. Without this
-           an unclosed display never ends: \end would be met again and
-           again with the formula still open. */
-        if (engine->mode == HSTEX_MODE_MATH &&
-            hstex_token_is_control_sequence(*token)) {
-            const struct hstex_meaning *vertical = hstex_engine_meaning(
+        /* A vertical command inside a formula closes it first, and a math
+           command outside one opens it: both put a $ in front of the
+           command and read it again. Without the first an unclosed display
+           never ends -- \end would be met again and again with the formula
+           still open. */
+        if (hstex_token_is_control_sequence(*token)) {
+            const struct hstex_meaning *across = hstex_engine_meaning(
                 engine, hstex_token_control_sequence_id(*token));
-            if (command_wants_a_dollar(vertical)) {
+            bool crosses = engine->mode == HSTEX_MODE_MATH
+                               ? command_wants_a_dollar(across)
+                               : command_needs_a_formula(across->command);
+            if (crosses) {
                 if (insert_math_shift(engine, *token, *location, error,
                                       error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
             }
+        }
+        /* A script mark belongs to a formula too. */
+        if (engine->mode != HSTEX_MODE_MATH &&
+            (token_is_category(*token, HSTEX_CAT_SUPERSCRIPT) ||
+             token_is_category(*token, HSTEX_CAT_SUBSCRIPT))) {
+            if (insert_math_shift(engine, *token, *location, error,
+                                  error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         }
         /* An alignment that filled a display admits only $$, an assignment
            and \relax before the display closes; anything else closes it
@@ -36134,10 +36179,14 @@ handle_token:
                 builder->count == 0U ||
                 builder->noads[builder->count - 1U].atom_class !=
                     (uint8_t)HSTEX_ATOM_OP) {
-                (void)set_error(error, error_capacity,
-                                "limit placement is only allowed after a "
-                                "large operator");
-                return HSTEX_ENGINE_ERROR;
+                /* The reference ignores one that follows no operator.
+                   trip line 276 writes \displaylimits after a fraction. */
+                static const char *const help[] = {
+                    "I'm ignoring this misplaced \\limits or \\nolimits command.",
+                    NULL};
+                tex_error(engine, help,
+                          "Limit controls must follow a math operator");
+                continue;
             }
             /* The primitives are numbered nolimits, limits, displaylimits;
                the noad keeps 0 for the last of those, which is what an

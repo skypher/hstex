@@ -1,0 +1,27 @@
+% A command that only a formula can hold, met outside one.
+%
+% Measured against pdftex: it puts a $ in front of the command and reads it
+% again -- "Missing $ inserted" -- so the formula opens and the command
+% does what it came to do. This is the mirror of what a vertical command
+% met INSIDE a formula gets, and the words and help are the same.
+%
+% Every math command does it: \mathchar and a \mathchardef'd token,
+% \mathord and its class relatives, \limits \nolimits \displaylimits,
+% \displaystyle and its relatives, \mathchoice, \mathaccent, \mskip,
+% \mkern, \over and its fraction relatives, \left and \right, \radical,
+% \delimiter, \nonscript, \vcenter, \overline, \underline, and a bare ^ or
+% _. \discretionary does NOT -- it is horizontal. \eqno does not either:
+% it is refused by name.
+%
+% A misplaced \limits is separately ignored, with "Limit controls must
+% follow a math operator" -- which is what trip line 276 draws once the
+% formula it needs is open.
+\tracingonline=1
+\font\tt=cmr10 \tt
+A\mathchar"141 \message{[after mathchar]}\par
+A^x\message{[after a bare script]}\par
+A\over B\message{[after over]}\par
+A\discretionary{}{}{}\message{[a discretionary stays horizontal]}\par
+$x\displaylimits$\message{[a misplaced limit is ignored]}\par
+$\mathop{X}\limits^a$\message{[after an operator it is not]}\par
+\end
