@@ -28851,14 +28851,17 @@ static int extensible_box(struct hstex_engine *engine,
                           int32_t wanted, struct hstex_box *box, char *error,
                           size_t error_capacity)
 {
-    if (recipe->repeated == 0U ||
-        font->characters[recipe->repeated].tag < 0) {
-        return set_error(error, error_capacity,
-                         "an extensible delimiter has no repeated piece");
+    /* A recipe whose repeater is missing reaches only as far as its fixed
+       pieces do. The reference builds what it can and says nothing; trip's
+       own font leaves one such recipe behind. */
+    bool has_repeater = recipe->repeated != 0U &&
+                        font->characters[recipe->repeated].tag >= 0;
+    int64_t step = 0;
+    if (has_repeater) {
+        const struct hstex_char_metric *piece =
+            &font->characters[recipe->repeated];
+        step = (int64_t)piece->height + piece->depth;
     }
-    const struct hstex_char_metric *piece =
-        &font->characters[recipe->repeated];
-    int64_t step = (int64_t)piece->height + piece->depth;
     int64_t reach = 0;
     uint8_t fixed[3] = {recipe->bottom, recipe->middle, recipe->top};
     for (size_t index = 0U; index < 3U; ++index) {
@@ -28962,7 +28965,23 @@ static int extensible_box(struct hstex_engine *engine,
     }
     packed.height = top_height;
     packed.depth = (int32_t)(total - top_height);
-    packed.width = piece->width + piece->italic;
+    /* The width is the repeater's, or -- when there is none -- that of
+       whichever fixed piece the recipe does have. */
+    uint8_t widest = has_repeater ? recipe->repeated : 0U;
+    if (widest == 0U) {
+        uint8_t order[3] = {recipe->bottom, recipe->middle, recipe->top};
+        for (size_t index = 0U; index < 3U; ++index) {
+            if (order[index] != 0U &&
+                font->characters[order[index]].tag >= 0) {
+                widest = order[index];
+                break;
+            }
+        }
+    }
+    if (widest != 0U) {
+        const struct hstex_char_metric *shape = &font->characters[widest];
+        packed.width = shape->width + shape->italic;
+    }
     *box = packed;
     return 0;
 }

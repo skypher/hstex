@@ -1,0 +1,23 @@
+% An extensible recipe whose repeated piece is absent.
+%
+% trip.pl gives character M a VARCHAR with (MID C A) (BOT C B) (REP O 0) --
+% no top and no repeater, since 0 is how a TFM says a piece is absent. The
+% reference builds what it can and reports nothing.
+%
+% NOT DIRECTLY COMPARED YET. Reaching that recipe needs math family 2, and
+% the trip font has fewer fontdimens than a symbol family needs, so the
+% reference deletes the whole formula first ("Math formula deleted:
+% Insufficient symbol fonts") -- a recovery this engine does not have. What
+% is checked here instead is that the ordinary path, with a repeater, is
+% untouched: cmex10's recipes are what testmath in the corpus exercises,
+% and it stays 14/14 on boxes.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\rip=trip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\delcode`M="04D04D
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\setbox0=\hbox{$\left M A \right M$}
+\showbox0
+\end
