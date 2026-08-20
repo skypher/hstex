@@ -8,6 +8,10 @@
 % A preamble that begins with & is not this: that marks the point the
 % preamble repeats from, and `\halign{&#\cr A\cr}' is silent.
 %
+% Too MANY is the other half: "Only one # is allowed per tab", one message
+% per extra #, and the first is the one that counts. trip line 333 writes
+% \d#\d, which comes to ## once the glue scan on that line has expanded it.
+%
 % trip line 331 opens `\halign spread-12.truedd{&#\span\iftrue\A\span...'.
 \tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
 \font\tt=cmr10 \tt
@@ -15,4 +19,6 @@
 \setbox1=\vbox{\halign{&\cr A\cr}}\showbox1
 \setbox2=\vbox{\halign{#&y\cr A&B\cr}}\showbox2
 \setbox3=\vbox{\halign{&#\cr A\cr}}\showbox3   % a repeat marker, and silent
+\setbox4=\vbox{\halign{##\cr A\cr}}\showbox4
+\setbox5=\vbox{\halign{###\cr A\cr}}\showbox5  % two extras, two messages
 \end

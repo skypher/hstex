@@ -31995,10 +31995,16 @@ static int scan_align_preamble(struct hstex_engine *engine,
         if (token_is_effective_category(engine, token,
                                         (uint8_t)HSTEX_CAT_PARAMETER)) {
             if (seen_marker) {
-                status = set_error(error, error_capacity,
-                                   "only one # is allowed per alignment "
-                                   "column");
-                break;
+                /* The reference keeps the first and drops the rest, one
+                   message per extra #. trip line 333 writes \d#\d, which
+                   comes to ## once the glue scan on that line has expanded
+                   it. */
+                static const char *const help[] = {
+                    "There should be exactly one # between &'s, when an",
+                    "\\halign or \\valign is being set up. In this case you had",
+                    "more than one, so I'm ignoring all but the first.", NULL};
+                tex_error(engine, help, "Only one # is allowed per tab");
+                continue;
             }
             seen_marker = true;
             continue;
