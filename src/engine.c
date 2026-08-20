@@ -128,6 +128,37 @@ static int expand_pdf_color_stack_init(struct hstex_engine *engine,
                                        struct hstex_source_location location,
                                        char *error, size_t error_capacity);
 static bool conditional_test_pending(const struct hstex_engine *engine);
+/* Reporting an error the run recovers from; defined with the diagnostic
+   printer further down, and used all over the scanner. */
+static void tex_error(struct hstex_engine *engine, const char *const *help,
+                      const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
+static bool too_many_errors(const struct hstex_engine *engine);
+/* The text of a meaning and the name of a control sequence, both wanted by
+   the show diagnostics before either is defined. */
+static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
+                         uint8_t **bytes_out, size_t *count_out,
+                         size_t *capacity_out, char *error,
+                         size_t error_capacity);
+static int serialize_control_sequence(struct hstex_engine *engine,
+                                      hstex_token token, uint8_t **bytes,
+                                      size_t *count, size_t *capacity,
+                                      bool terminate_control_word, char *error,
+                                      size_t error_capacity);
+/* The reference's range-checked scanners. Each reports a value it will not
+   accept, says what it is doing instead, and hands back zero, so that a
+   document which asks for an impossible code still runs. */
+static int scan_char_num(struct hstex_engine *engine, int32_t *value,
+                         char *error, size_t error_capacity);
+static int scan_fifteen_bit_int(struct hstex_engine *engine, int32_t *value,
+                                char *error, size_t error_capacity);
+static int scan_twenty_seven_bit_int(struct hstex_engine *engine,
+                                     int32_t *value, char *error,
+                                     size_t error_capacity);
+static int scan_four_bit_int(struct hstex_engine *engine, int32_t *value,
+                             char *error, size_t error_capacity);
+static int scan_register_num(struct hstex_engine *engine, int32_t *value,
+                             int32_t limit, char *error,
+                             size_t error_capacity);
 static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity);
@@ -2326,6 +2357,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"nonscript", HSTEX_COMMAND_NON_SCRIPT, 0},
         {"shipout", HSTEX_COMMAND_SHIP_OUT, 0},
         {"showbox", HSTEX_COMMAND_SHOW_BOX, 0},
+        {"show", HSTEX_COMMAND_SHOW, 0},
+        {"showthe", HSTEX_COMMAND_SHOW_THE, 0},
+        {"showlists", HSTEX_COMMAND_SHOW_LISTS, 0},
         {"parshape", HSTEX_COMMAND_PAR_SHAPE, 0},
         {"leftmarginkern", HSTEX_COMMAND_MARGIN_KERN,
          (int32_t)HSTEX_MARGIN_KERN_LEFT},
@@ -4075,13 +4109,12 @@ static int scan_font_identifier(struct hstex_engine *engine,
     if (meaning->command == HSTEX_COMMAND_MATH_FONT) {
         int32_t size = meaning->value.integer;
         int32_t family = 0;
-        if (scan_integer(engine, &family, error, error_capacity) != 0) {
+        if (scan_four_bit_int(engine, &family, error, error_capacity) != 0) {
             return -1;
         }
-        if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT || family < 0 ||
-            family > 15) {
+        if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT) {
             return set_error(error, error_capacity,
-                             "math family %d is outside 0..15", family);
+                             "math size %d is outside its range", size);
         }
         uint32_t assigned = engine->math_fonts[size][family];
         if (font_by_identifier(engine, assigned) == NULL) {
@@ -4391,7 +4424,30 @@ static int integer_from_control_sequence(
     default:
         break;
     }
-    return set_error(error, error_capacity, "missing integer");
+    /* Not an internal integer at all -- which is not a failure but the
+       reference's "Missing number" case, and is told apart from the failures
+       above so that a primitive HSTeX has not finished still reports itself.
+       See docs/DECISIONS.md, recoverable-errors. */
+    return 1;
+}
+
+/* back_error with "Missing number": the token that was not a number is put
+   back where it stood, the reference's complaint is made, and the scan hands
+   back zero. */
+static int missing_number(struct hstex_engine *engine, hstex_token token,
+                          struct hstex_source_location location, int32_t *value,
+                          char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A number should have been here; I inserted `0'.",
+        "(If you can't figure out why I needed to see a number,",
+        "look up `weird error' in the index to The TeXbook.)", NULL};
+    if (push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing number, treated as zero");
+    *value = 0;
+    return 0;
 }
 
 static bool token_is_decimal_digit(hstex_token token)
@@ -4552,8 +4608,14 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
     } else if (hstex_token_is_control_sequence(token)) {
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(token));
-        if (integer_from_control_sequence(engine, meaning, &magnitude, error,
-                                          error_capacity) != 0) {
+        int internal = integer_from_control_sequence(engine, meaning,
+                                                     &magnitude, error,
+                                                     error_capacity);
+        if (internal > 0) {
+            return missing_number(engine, token, location, value, error,
+                                  error_capacity);
+        }
+        if (internal != 0) {
             /* Name the control sequence: an integer scan that fails on a
                control sequence is usually a primitive HSTeX has not
                implemented, and the name is what identifies it. */
@@ -4576,7 +4638,8 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
             return -1;
         }
     } else {
-        return set_error(error, error_capacity, "missing integer");
+        return missing_number(engine, token, location, value, error,
+                              error_capacity);
     }
 
     int64_t signed_value = sign > 0 ? (int64_t)magnitude : -(int64_t)magnitude;
@@ -5110,7 +5173,8 @@ static int scan_decimal_factor(struct hstex_engine *engine,
             int32_t integer = 0;
             if (integer_from_control_sequence(engine, meaning, &integer, error,
                                               error_capacity) != 0) {
-                return -1;
+                return set_error(error, error_capacity,
+                                 "internal integer expected");
             }
             if (integer < 0) {
                 factor->sign = -factor->sign;
@@ -5298,8 +5362,11 @@ static int scan_infinite_order(struct hstex_engine *engine, bool *matched,
             return 0;
         }
         if (*order >= 3U) {
-            return set_error(error, error_capacity,
-                             "infinite glue order beyond filll");
+            static const char *const help[] = {
+                "I dddon't go any higher than filll.", NULL};
+            tex_error(engine, help,
+                      "Illegal unit of measure (replaced by filll)");
+            continue;
         }
         ++*order;
     }
@@ -6811,14 +6878,14 @@ static int expand_the_primitive(struct hstex_engine *engine,
             if (meaning->command == HSTEX_COMMAND_MATH_FONT) {
                 int32_t size = meaning->value.integer;
                 int32_t family = 0;
-                if (scan_integer(engine, &family, error, error_capacity) != 0) {
+                if (scan_four_bit_int(engine, &family, error,
+                                      error_capacity) != 0) {
                     return -1;
                 }
-                if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT ||
-                    family < 0 || family > 15) {
+                if (size < 0 || size >= (int32_t)HSTEX_MATH_SIZE_COUNT) {
                     return set_error(error, error_capacity,
-                                     "math family %d is outside 0..15",
-                                     family);
+                                     "math size %d is outside its range",
+                                     size);
                 }
                 font_identifier = engine->math_fonts[size][family];
             } else {
@@ -9158,12 +9225,18 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         }
         size = design;
         if (matched_scaled) {
+            static const char *const help[] = {
+                "The magnification ratio must be between 1 and 32768.", NULL};
             int32_t scale = 0;
-            if (scan_integer(engine, &scale, error, error_capacity) != 0 ||
-                scale <= 0 || scale > 32768) {
+            if (scan_integer(engine, &scale, error, error_capacity) != 0) {
                 free(name);
-                return set_error(error, error_capacity,
-                                 "invalid font scale");
+                return -1;
+            }
+            if (scale <= 0 || scale > 32768) {
+                tex_error(engine, help,
+                          "Illegal magnification has been changed to 1000 (%d)",
+                          scale);
+                scale = 1000;
             }
             int64_t scaled = ((int64_t)design * scale) / 1000;
             if (scaled <= 0 || scaled > INT32_C(1073741823)) {
@@ -11886,10 +11959,8 @@ static int scan_char_definition(struct hstex_engine *engine, char *error,
     int32_t value = 0;
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &value, error, error_capacity) != 0 || value < 0 ||
-        value > 255) {
-        return set_error(error, error_capacity,
-                         "chardef value outside 0..255");
+        scan_char_num(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid chardef");
     }
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_CHAR_GIVEN,
@@ -11910,10 +11981,8 @@ static int scan_math_char_definition(struct hstex_engine *engine, char *error,
     int32_t value = 0;
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &value, error, error_capacity) != 0 || value < 0 ||
-        value > 32767) {
-        return set_error(error, error_capacity,
-                         "mathchardef value outside 0..32767");
+        scan_fifteen_bit_int(engine, &value, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid mathchardef");
     }
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_MATH_CHAR_GIVEN,
@@ -11935,10 +12004,8 @@ static int scan_register_definition(struct hstex_engine *engine,
     int32_t index = 0;
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        index >= 32768) {
-        return set_error(error, error_capacity,
-                         "register definition outside supported range");
+        scan_register_num(engine, &index, 32767, error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid register definition");
     }
     struct hstex_meaning meaning = {
         .command = register_command,
@@ -11959,10 +12026,9 @@ static int scan_count_definition(struct hstex_engine *engine, char *error,
     int32_t index = 0;
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &index, error, error_capacity) != 0 || index < 0 ||
-        (size_t)index >= engine->count_capacity) {
-        return set_error(error, error_capacity,
-                         "countdef register outside supported range");
+        scan_register_num(engine, &index, (int32_t)engine->count_capacity - 1,
+                          error, error_capacity) != 0) {
+        return set_error(error, error_capacity, "invalid countdef");
     }
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_COUNT_REGISTER,
@@ -12153,25 +12219,58 @@ static int finish_hyphen_item(struct hstex_engine *engine, bool patterns,
     return status;
 }
 
+/* scan_left_brace: the `{' that must be there. Spaces and \relax before it
+   are passed over, and one that is not there at all is reported and then
+   supplied, the offending token being put back to be read again. */
+static int scan_left_brace(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A left brace was mandatory here, so I've put one in.",
+        "You might want to delete and/or insert some corrections",
+        "so that I will find a matching right brace soon.",
+        "(If you're confused by all this, try typing `I}' now.)", NULL};
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    for (;;) {
+        if (expanded_next_non_space_unrestricted(engine, &token, &location,
+                                                 error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input where a { was expected");
+        }
+        if (hstex_token_is_control_sequence(token)) {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_RELAX) {
+                continue;
+            }
+        }
+        break;
+    }
+    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+        return 0;
+    }
+    if (push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing { inserted");
+    return 0;
+}
+
 static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
                             char *error, size_t error_capacity)
 {
-    hstex_token opening = 0U;
-    struct hstex_source_location location;
-    if (expanded_next_non_space_unrestricted(
-            engine, &opening, &location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
-        return set_error(error, error_capacity,
-                         patterns ? "patterns requires a braced list"
-                                  : "hyphenation requires a braced list");
+    struct hstex_source_location location = {0};
+    if (scan_left_brace(engine, error, error_capacity) != 0) {
+        return -1;
     }
+    /* The reference takes a \language outside 0..255 to mean language 0
+       rather than complaining about it. */
     int32_t language_value =
         engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
-    if (language_value < 0 ||
-        (size_t)language_value >= engine->count_capacity) {
-        return set_error(error, error_capacity,
-                         "hyphenation language outside supported range");
+    if (language_value <= 0 || language_value > 255) {
+        language_value = 0;
     }
     uint32_t language = (uint32_t)language_value;
     uint8_t letters[HSTEX_MAX_HYPHEN_PATTERN_LENGTH];
@@ -12211,8 +12310,33 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
             continue;
         }
         if (!hstex_token_is_character(token)) {
-            return set_error(error, error_capacity,
-                             "control sequence remained in hyphenation data");
+            /* A control sequence that stands for a character counts as that
+               character here: \char and anything \chardef'd or \let to
+               one. Anything else is not a letter, which the reference
+               reports and then ignores. */
+            static const char *const help[] = {
+                "Letters in \\hyphenation words must have \\lccode>0.",
+                "Proceed; I'll ignore the character I just read.", NULL};
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+                hstex_token_is_character(meaning->value.token)) {
+                token = meaning->value.token;
+            } else if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN) {
+                token = hstex_token_character(
+                    (uint8_t)HSTEX_CAT_OTHER,
+                    (uint8_t)meaning->value.integer);
+            } else if (meaning->command == HSTEX_COMMAND_CHAR) {
+                int32_t code = 0;
+                if (scan_char_num(engine, &code, error, error_capacity) != 0) {
+                    return -1;
+                }
+                token = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                              (uint8_t)code);
+            } else {
+                tex_error(engine, help, "Not a letter");
+                continue;
+            }
         }
         uint8_t character = hstex_token_character_code(token);
         if (patterns && character >= (uint8_t)'0' &&
@@ -12406,6 +12530,133 @@ static int scan_catcode_assignment(struct hstex_engine *engine, char *error,
                           requested_global, error, error_capacity);
 }
 
+/* scan_char_num: a character code, which the reference forgives when it is
+   out of range and goes on with zero. */
+static int scan_char_num(struct hstex_engine *engine, int32_t *value,
+                         char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A character number must be between 0 and 255.",
+        "I changed this one to zero.", NULL};
+    if (scan_integer(engine, value, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*value < 0 || *value > 255) {
+        tex_error(engine, help, "Bad character code (%d)", *value);
+        *value = 0;
+    }
+    return 0;
+}
+
+/* The largest value each code table will hold, and whether a negative one is
+   forgiven -- the reference lets \delcode be negative and nothing else. */
+/* scan_fifteen_bit_int: a \mathchardef value. */
+static int scan_fifteen_bit_int(struct hstex_engine *engine, int32_t *value,
+                                char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A mathchar number must be between 0 and 32767.",
+        "I changed this one to zero.", NULL};
+    if (scan_integer(engine, value, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*value < 0 || *value > 32767) {
+        tex_error(engine, help, "Bad mathchar (%d)", *value);
+        *value = 0;
+    }
+    return 0;
+}
+
+/* scan_twenty_seven_bit_int: a numeric delimiter. */
+static int scan_twenty_seven_bit_int(struct hstex_engine *engine,
+                                     int32_t *value, char *error,
+                                     size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A numeric delimiter code must be between 0 and 2^{27}-1.",
+        "I changed this one to zero.", NULL};
+    if (scan_integer(engine, value, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*value < 0 || *value > 0x7FFFFFF) {
+        tex_error(engine, help, "Bad delimiter code (%d)", *value);
+        *value = 0;
+    }
+    return 0;
+}
+
+/* scan_four_bit_int: a math family. */
+static int scan_four_bit_int(struct hstex_engine *engine, int32_t *value,
+                             char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "Since I expected to read a number between 0 and 15,",
+        "I changed this one to zero.", NULL};
+    if (scan_integer(engine, value, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*value < 0 || *value > 15) {
+        tex_error(engine, help, "Bad number (%d)", *value);
+        *value = 0;
+    }
+    return 0;
+}
+
+/* scan_eight_bit_int, widened: a register number. The reference stops at 255
+   and the extended engines this one follows stop at 32767, so the limit is
+   the caller's; what is the same is that going past it is forgiven. */
+static int scan_register_num(struct hstex_engine *engine, int32_t *value,
+                             int32_t limit, char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A register number must be between 0 and 255.",
+        "I changed this one to zero.", NULL};
+    if (scan_integer(engine, value, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*value < 0 || *value > limit) {
+        tex_error(engine, help, "Bad register code (%d)", *value);
+        *value = 0;
+    }
+    return 0;
+}
+
+static int32_t code_table_maximum(int table)
+{
+    switch (table) {
+    case 0:
+        return 32767; /* \sfcode */
+    case 1:
+    case 2:
+        return 255; /* \lccode, \uccode */
+    case 3:
+        return 32768; /* \mathcode */
+    default:
+        return 0xFFFFFF; /* \delcode */
+    }
+}
+
+/* def_code's range check: out of range is reported and becomes zero. */
+static void check_code_value(struct hstex_engine *engine, int table,
+                             int32_t *value)
+{
+    static const char *const help[] = {
+        "I'm going to use 0 instead of that illegal code value.", NULL};
+    int32_t maximum = code_table_maximum(table);
+    bool delimiter = table == 4;
+    if ((*value < 0 && !delimiter) || *value > maximum) {
+        if (delimiter) {
+            tex_error(engine, help, "Invalid code (%d), should be at most %d",
+                      *value, maximum);
+        } else {
+            tex_error(engine, help,
+                      "Invalid code (%d), should be in the range 0..%d",
+                      *value, maximum);
+        }
+        *value = 0;
+    }
+}
+
 static int scan_code_assignment(struct hstex_engine *engine,
                                 enum hstex_command command, char *error,
                                 size_t error_capacity)
@@ -12413,19 +12664,14 @@ static int scan_code_assignment(struct hstex_engine *engine,
     int table = code_table_index(command);
     int32_t character = 0;
     int32_t value = 0;
-    if (table < 0 || scan_integer(engine, &character, error, error_capacity) != 0 ||
+    if (table < 0 ||
+        scan_char_num(engine, &character, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_integer(engine, &value, error, error_capacity) != 0 ||
-        character < 0 || character > 255) {
+        scan_integer(engine, &value, error, error_capacity) != 0) {
         return set_error(error, error_capacity,
                          "invalid code-table assignment");
     }
-    if ((command == HSTEX_COMMAND_LC_CODE ||
-         command == HSTEX_COMMAND_UC_CODE) &&
-        (value < 0 || value > 255)) {
-        return set_error(error, error_capacity,
-                         "case code outside 0..255");
-    }
+    check_code_value(engine, table, &value);
     bool requested_global = engine->pending_global;
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
@@ -12713,6 +12959,142 @@ static void print_fresh_line(struct hstex_engine *engine)
     if (engine->message_column > 0) {
         print_byte(engine, '\n');
     }
+}
+
+/* A recoverable error. The reference does not stop for one of these: it says
+   what went wrong, shows the line it was reading, says what it did about it,
+   and goes on with a value it names. Everything that is diagnosed this way
+   here follows that shape, so that a document which is wrong in a way TeX
+   forgives runs to its end and produces the pages TeX produces. See
+   docs/DECISIONS.md, recoverable-errors. */
+
+#define HSTEX_ERROR_LIMIT 100
+
+/* TeX's half_error_line and error_line: the line an error shows is broken
+   after the point it had reached, and each half is trimmed to fit. */
+#define HSTEX_HALF_ERROR_LINE 50
+#define HSTEX_ERROR_LINE 79
+
+/* The line the topmost file stands on, broken where its reading had got to.
+   TeX shows the whole input stack; what is shown here is the file, which is
+   what names a place a person can go and look at. */
+static void show_error_context(struct hstex_engine *engine)
+{
+    struct hstex_file_source *file =
+        hstex_source_current_file(&engine->sources);
+    if (file == NULL) {
+        return;
+    }
+    const struct hstex_mouth *mouth = &file->mouth;
+    /* A line that has been read to its end is still the line the error is
+       on: the mouth keeps where it stood until it loads the next one, so
+       what is shown is that line with the reading at its end. */
+    if (mouth->line_number == 0U || mouth->data == NULL) {
+        return;
+    }
+    const char *line = (const char *)mouth->data + mouth->line_start;
+    size_t length = mouth->line_content_length;
+    size_t cursor = mouth->line_cursor;
+    if (cursor > length) {
+        cursor = length;
+    }
+    char tag[32];
+    int tag_length =
+        snprintf(tag, sizeof(tag), "l.%u ", (unsigned)mouth->line_number);
+    if (tag_length < 0) {
+        return;
+    }
+    /* Before the cursor, trimmed at the front to half a line; after it,
+       trimmed at the back to what is left. */
+    size_t before = cursor;
+    size_t trimmed = 0U;
+    size_t indent = (size_t)tag_length + before;
+    if (indent > (size_t)HSTEX_HALF_ERROR_LINE) {
+        trimmed = indent - (size_t)HSTEX_HALF_ERROR_LINE + 3U;
+        before -= trimmed;
+        indent = (size_t)HSTEX_HALF_ERROR_LINE;
+    }
+    print_fresh_line(engine);
+    print_bytes(engine, tag, (size_t)tag_length);
+    if (trimmed != 0U) {
+        print_text(engine, "...");
+    }
+    print_bytes(engine, line + trimmed, before);
+    print_line(engine);
+    for (size_t index = 0U; index < indent; ++index) {
+        print_byte(engine, ' ');
+    }
+    size_t after = length - cursor;
+    bool clipped = after + indent > (size_t)HSTEX_ERROR_LINE;
+    if (clipped) {
+        after = (size_t)HSTEX_ERROR_LINE - indent - 3U;
+    }
+    print_bytes(engine, line + cursor, after);
+    if (clipped) {
+        print_text(engine, "...");
+    }
+}
+
+/* The help text of an error: the lines the reference prints under it, given
+   as a null-terminated run of strings, and then a blank line. */
+static void print_help(struct hstex_engine *engine, const char *const *help)
+{
+    if (help != NULL) {
+        for (size_t index = 0U; help[index] != NULL; ++index) {
+            print_fresh_line(engine);
+            print_text(engine, help[index]);
+        }
+    }
+    print_line(engine);
+    print_line(engine);
+}
+
+static void tex_error_with_help(struct hstex_engine *engine,
+                                const char *const *help, const char *message)
+{
+    if (engine->interaction_mode == HSTEX_INTERACTION_ERROR_STOP) {
+        /* Nothing here reads from a terminal, so the reference's own answer
+           to a terminal that is not there is used: the run carries on as it
+           would in \scrollmode. */
+        engine->interaction_mode = HSTEX_INTERACTION_SCROLL;
+    }
+    if (engine->history < 2) {
+        engine->history = 2;
+    }
+    ++engine->error_count;
+    print_fresh_line(engine);
+    print_text(engine, "! ");
+    print_text(engine, message);
+    print_byte(engine, '.');
+    show_error_context(engine);
+    print_help(engine, help);
+    if (too_many_errors(engine)) {
+        /* A run this far gone is not worth going on with; the reference
+           gives up here and so does this. */
+        print_fresh_line(engine);
+        print_text(engine, "(That makes 100 errors; please try again.)");
+        print_line(engine);
+        engine->history = 3;
+        engine->end_requested = true;
+    }
+}
+
+static void tex_error(struct hstex_engine *engine, const char *const *help,
+                      const char *format, ...)
+{
+    char buffer[512];
+    va_list arguments;
+    va_start(arguments, format);
+    (void)vsnprintf(buffer, sizeof(buffer), format, arguments);
+    va_end(arguments);
+    tex_error_with_help(engine, help, buffer);
+}
+
+/* A run that has gone wrong a hundred times over is not worth going on with;
+   the reference gives up there and so does this. */
+static bool too_many_errors(const struct hstex_engine *engine)
+{
+    return engine->error_count >= HSTEX_ERROR_LIMIT;
 }
 
 static void show_scaled(struct hstex_engine *engine, int32_t value)
@@ -13295,6 +13677,184 @@ static void show_node_list(struct hstex_engine *engine,
 /* \showbox writes a register's contents the way the reference writes them,
    which is what makes a box comparable against it; see docs/DECISIONS.md,
    showbox. */
+/* The end of a diagnostic that shows something: the reference finishes the
+   line with a period, shows where it was reading, and leaves a blank line.
+   It goes through error() there, but does not count as one. */
+static void tex_show_end(struct hstex_engine *engine)
+{
+    print_byte(engine, '.');
+    show_error_context(engine);
+    print_help(engine, NULL);
+    if (engine->history < 1) {
+        engine->history = 1;
+    }
+}
+
+/* One token as the reference prints it in a diagnostic. A control word read
+   as a value keeps the space that ends it, the way print_cs writes one; the
+   name \show puts before the `=' does not, the way sprint_cs writes it. */
+static int print_one_token(struct hstex_engine *engine, hstex_token token,
+                           bool terminate_control_word, char *error,
+                           size_t error_capacity)
+{
+    if (hstex_token_is_character(token)) {
+        print_byte(engine, (char)hstex_token_character_code(token));
+        return 0;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    if (serialize_control_sequence(engine, token, &bytes, &count, &capacity,
+                                   terminate_control_word, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    print_bytes(engine, (const char *)bytes, count);
+    free(bytes);
+    return 0;
+}
+
+/* \showlists: the reference walks its whole semantic nest and prints every
+   list being built, innermost first. What is printed here is the mode the
+   engine stands in and nothing below it, because the nest HSTeX keeps is
+   not yet the reference's. The diagnostic is honest about being partial by
+   showing only what it knows, and it does not stop the run, which is what
+   \showlists is for. See docs/DECISIONS.md, recoverable-errors. */
+static int execute_show_lists(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    (void)error;
+    (void)error_capacity;
+    static const char *const modes[] = {"vertical mode", "horizontal mode",
+                                        "math mode"};
+    size_t index = (size_t)engine->mode;
+    print_fresh_line(engine);
+    print_formatted(engine, "### %s",
+                    index < sizeof(modes) / sizeof(modes[0])
+                        ? modes[index]
+                        : "unknown mode");
+    print_line(engine);
+    print_fresh_line(engine);
+    print_text(engine, "! OK");
+    tex_show_end(engine);
+    (void)fflush(diagnostic_stream(engine));
+    return 0;
+}
+
+/* report_illegal_case: a command that cannot be obeyed where the run stands.
+   The reference says so, pretends it was not asked for, and carries on. */
+static const char *mode_name(const struct hstex_engine *engine)
+{
+    switch (engine->mode) {
+    case HSTEX_MODE_HORIZONTAL:
+        return engine->inner_mode ? "restricted horizontal mode"
+                                  : "horizontal mode";
+    case HSTEX_MODE_MATH:
+        return engine->inner_mode ? "math mode" : "display math mode";
+    default:
+        return engine->inner_mode ? "internal vertical mode" : "vertical mode";
+    }
+}
+
+static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
+{
+    static const char *const help[] = {
+        "Sorry, but I'm not programmed to handle this case;",
+        "I'll just pretend that you didn't ask for it.",
+        "If you're in the wrong mode, you might be able to",
+        "return to the right one by typing `I}' or `I$' or `I\\par'.", NULL};
+    char scratch[256] = {0};
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    char ignored[256];
+    if (hstex_token_is_control_sequence(token) &&
+        serialize_control_sequence(engine, token, &bytes, &count, &capacity,
+                                   false, ignored, sizeof(ignored)) == 0) {
+        size_t room = count < sizeof(scratch) - 1U ? count
+                                                   : sizeof(scratch) - 1U;
+        memcpy(scratch, bytes, room);
+        scratch[room] = '\0';
+    } else if (hstex_token_is_character(token)) {
+        scratch[0] = (char)hstex_token_character_code(token);
+    }
+    free(bytes);
+    tex_error(engine, help, "You can't use `%s' in %s", scratch,
+              mode_name(engine));
+}
+
+/* \show: the meaning of the token that follows, whatever it is. */
+static int execute_show(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location location;
+    if (raw_next(engine, &subject, &location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input after show");
+    }
+    print_fresh_line(engine);
+    print_text(engine, "> ");
+    if (hstex_token_is_control_sequence(subject)) {
+        if (print_one_token(engine, subject, false, error,
+                            error_capacity) != 0) {
+            return -1;
+        }
+        print_byte(engine, '=');
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, error,
+                      error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    print_bytes(engine, (const char *)bytes, count);
+    free(bytes);
+    tex_show_end(engine);
+    (void)fflush(diagnostic_stream(engine));
+    return 0;
+}
+
+/* \showthe: what \the would have produced, printed rather than read. The
+   expansion is made the usual way and then taken off the input again, which
+   is what keeps the two answers the same one. */
+static int execute_show_the(struct hstex_engine *engine, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_source_location location = {0};
+    size_t base = engine->sources.count;
+    if (expand_the_primitive(engine, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    print_fresh_line(engine);
+    print_text(engine, "> ");
+    int status = 0;
+    for (size_t index = base; index < engine->sources.count; ++index) {
+        struct hstex_source_frame *frame = &engine->sources.frames[index];
+        if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
+            continue;
+        }
+        const struct hstex_token_source *list = &frame->value.token_list;
+        for (uint32_t cursor = list->cursor;
+             cursor < list->count && status == 0; ++cursor) {
+            status = print_one_token(engine, list->tokens[cursor], true, error,
+                                     error_capacity);
+        }
+    }
+    while (engine->sources.count > base) {
+        hstex_source_pop(&engine->sources);
+    }
+    if (status != 0) {
+        return -1;
+    }
+    tex_show_end(engine);
+    (void)fflush(diagnostic_stream(engine));
+    return 0;
+}
+
 static int execute_show_box(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
@@ -19516,17 +20076,13 @@ static int append_character_meaning(struct hstex_engine *engine,
                        error_capacity);
 }
 
-static int expand_meaning(struct hstex_engine *engine,
-                          struct hstex_source_location location, char *error,
-                          size_t error_capacity)
+/* The text of a token's meaning: what \meaning expands to, and what \show
+   prints after the `='. */
+static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
+                         uint8_t **bytes_out, size_t *count_out,
+                         size_t *capacity_out, char *error,
+                         size_t error_capacity)
 {
-    hstex_token subject = 0U;
-    struct hstex_source_location subject_location;
-    if (raw_next(engine, &subject, &subject_location, error, error_capacity) !=
-        HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity, "end of input after meaning");
-    }
-    (void)subject_location;
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
@@ -19686,6 +20242,31 @@ static int expand_meaning(struct hstex_engine *engine,
                          "internal token after meaning");
     }
 
+    *bytes_out = bytes;
+    *count_out = count;
+    *capacity_out = capacity;
+    return 0;
+}
+
+static int expand_meaning(struct hstex_engine *engine,
+                          struct hstex_source_location location, char *error,
+                          size_t error_capacity)
+{
+    hstex_token subject = 0U;
+    struct hstex_source_location subject_location;
+    if (raw_next(engine, &subject, &subject_location, error, error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
+        return set_error(error, error_capacity, "end of input after meaning");
+    }
+    (void)subject_location;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, error,
+                      error_capacity) != 0) {
+        return -1;
+    }
+    (void)capacity;
     struct hstex_token_vector expansion = {0};
     for (size_t index = 0U; index < count; ++index) {
         uint8_t category = bytes[index] == (uint8_t)' '
@@ -28052,12 +28633,8 @@ static int execute_radical(struct hstex_engine *engine, char *error,
                          "\\radical met where a field was expected");
     }
     int32_t code = 0;
-    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+    if (scan_twenty_seven_bit_int(engine, &code, error, error_capacity) != 0) {
         return -1;
-    }
-    if (code < 0 || code > 0x7FFFFFF) {
-        return set_error(error, error_capacity,
-                         "radical %d is outside 0..134217727", code);
     }
     struct hstex_noad noad = {
         .kind = (uint8_t)HSTEX_NOAD_RADICAL,
@@ -28809,12 +29386,8 @@ static int execute_math_font(struct hstex_engine *engine, int32_t size,
                              char *error, size_t error_capacity)
 {
     int32_t family = 0;
-    if (scan_integer(engine, &family, error, error_capacity) != 0) {
+    if (scan_four_bit_int(engine, &family, error, error_capacity) != 0) {
         return -1;
-    }
-    if (family < 0 || family > 15) {
-        return set_error(error, error_capacity,
-                         "math family %d is outside 0..15", family);
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0) {
         return -1;
@@ -28932,12 +29505,8 @@ static int execute_delimiter(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
     int32_t code = 0;
-    if (scan_integer(engine, &code, error, error_capacity) != 0) {
+    if (scan_twenty_seven_bit_int(engine, &code, error, error_capacity) != 0) {
         return -1;
-    }
-    if (code < 0 || code > 0x7FFFFFF) {
-        return set_error(error, error_capacity,
-                         "delimiter %d is outside 0..134217727", code);
     }
     if (engine->mode != HSTEX_MODE_MATH) {
         return set_error(error, error_capacity,
@@ -33354,6 +33923,21 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_SHOW:
+            if (execute_show(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SHOW_THE:
+            if (execute_show_the(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_SHOW_LISTS:
+            if (execute_show_lists(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_SHIP_OUT: {
             struct hstex_box shipped = {0};
             if (scan_box_operand(engine, &shipped, error, error_capacity) !=
@@ -33488,25 +34072,13 @@ handle_token:
         case HSTEX_COMMAND_INPUT_LINE_NUMBER:
         case HSTEX_COMMAND_INTEGER_CONSTANT:
         case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "integer primitive used outside an integer context");
         case HSTEX_COMMAND_NUM_EXPR:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "numexpr used outside an integer context");
         case HSTEX_COMMAND_DIM_EXPR:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "dimexpr used outside a dimension context");
         case HSTEX_COMMAND_GLUE_EXPR:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "glueexpr used outside a glue context");
         case HSTEX_COMMAND_MU_EXPR:
-            return (enum hstex_engine_result)set_error(
-                error, error_capacity,
-                "muexpr used outside a math-glue context");
+            /* A quantity, met where a command was expected. */
+            report_illegal_case(engine, *token);
+            continue;
         case HSTEX_COMMAND_MATH_GROUP:
         case HSTEX_COMMAND_LANGUAGE:
         case HSTEX_COMMAND_PENALTY_ARRAY:

@@ -1397,6 +1397,41 @@ static int test_whatsits(void)
     return status;
 }
 
+/* The errors the reference recovers from rather than stopping for: it says
+   what was wrong, shows the line it was reading with the reading marked, says
+   what it did instead, and goes on. The wording, the two-line context and the
+   help are the reference's own; see docs/DECISIONS.md, recoverable-errors. */
+static int test_recoverable_errors(void)
+{
+    return run_document(
+        "\\nonstopmode\n"
+        "\\lccode256=0\n"
+        "\\mathchardef\\aa=\"8000\n"
+        "\\showthe\\hsize\n"
+        "\\show\\relax\n"
+        "\\end\n",
+        "! Bad character code (256).\n"
+        "l.2 \\lccode256=\n"
+        "               0\n"
+        "A character number must be between 0 and 255.\n"
+        "I changed this one to zero.\n"
+        "\n"
+        "! Bad mathchar (32768).\n"
+        "l.3 \\mathchardef\\aa=\"8000\n"
+        "                         \n"
+        "A mathchar number must be between 0 and 32767.\n"
+        "I changed this one to zero.\n"
+        "\n"
+        "> 0.0pt.\n"
+        "l.4 \\showthe\\hsize\n"
+        "                  \n"
+        "\n"
+        "> \\relax=\\relax.\n"
+        "l.5 \\show\\relax\n"
+        "               \n"
+        "\n");
+}
+
 /* \discretionary and \- leave a node that offers the line breaker a third
    choice; see docs/DECISIONS.md, discretionaries. */
 static int test_discretionaries(void)
@@ -12711,11 +12746,14 @@ int main(void)
                        "undefined control sequence: \\unknown") != 0 ||
         expect_failure("\\ifcat\\missing\\relax T\\else F\\fi%",
                        "undefined control sequence: \\missing") != 0 ||
-        expect_failure("\\expanded{\\number}%", "missing integer") != 0 ||
+        /* A number that is not there is the reference's "Missing number",
+           which is recovered from with zero rather than stopping the run. */
+        run_snippet("\\expanded{\\number}%", "0") != 0 ||
         expect_failure("\\baselineskip=1\\relax%",
                        "illegal unit of measure") != 0 ||
-        expect_failure("\\skip1=1pt plus2fillll%",
-                       "infinite glue order beyond filll") != 0 ||
+        /* An order past filll is reported and taken as filll. */
+        run_snippet("\\skip1=1pt plus2fillll\\relax\\the\\skip1%",
+                    "1.0pt plus 2.0filll") != 0 ||
         run_snippet("\\dimen0=1ptpt\\dimen1=1inch%", "ptch") != 0 ||
         expect_failure("\\def\\why{expanded}"
                        "\\errmessage{ERRMESSAGE: \\why}%",
@@ -12886,7 +12924,7 @@ int main(void)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_showbox() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_showbox() != 0 || test_recoverable_errors() != 0 ||
         test_paragraph_display() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||

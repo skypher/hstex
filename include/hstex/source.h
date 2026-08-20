@@ -144,6 +144,9 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
    all: the reading is over, but the document is not. */
 bool hstex_source_at_boundary(const struct hstex_source_stack *stack);
 
+/* Drop the frame on top, giving back whatever it holds. Used where an
+   expansion is made only to be read off the stack again. */
+void hstex_source_pop(struct hstex_source_stack *stack);
 int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
                               size_t error_capacity);
 int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
@@ -191,5 +194,9 @@ static inline bool hstex_source_take(struct hstex_source_stack *stack,
     }
 }
 const char *hstex_source_current_name(const struct hstex_source_stack *stack);
+/* The file being read, for the line an error names. Null where nothing on
+   the stack is a file. */
+struct hstex_file_source *hstex_source_current_file(
+    const struct hstex_source_stack *stack);
 
 #endif

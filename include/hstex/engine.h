@@ -267,6 +267,11 @@ enum hstex_command {
     HSTEX_COMMAND_NON_SCRIPT,
     HSTEX_COMMAND_SHIP_OUT,
     HSTEX_COMMAND_SHOW_BOX,
+    /* The diagnostics that print a meaning or a value and then the line
+       they were read on. */
+    HSTEX_COMMAND_SHOW,
+    HSTEX_COMMAND_SHOW_THE,
+    HSTEX_COMMAND_SHOW_LISTS,
     /* \mark and \marks, and the five texts they leave behind. */
     HSTEX_COMMAND_MARK,
     HSTEX_COMMAND_MARK_TEXT,
@@ -1709,6 +1714,13 @@ struct hstex_engine {
        docs/DECISIONS.md, the-discretionary-after-an-explicit-hyphen. */
     bool pending_is_hyphen;
     enum hstex_interaction_mode interaction_mode;
+    /* A recoverable error is reported and then recovered from, the way the
+       reference does it, so a document full of them still runs to its end.
+       The count is what stops a run that has gone wrong beyond use, and the
+       history is what the exit status is made of. See docs/DECISIONS.md,
+       recoverable-errors. */
+    int32_t error_count;
+    int32_t history;
     bool inner_mode;
     hstex_token after_assignment_token;
     struct hstex_source_location after_assignment_location;

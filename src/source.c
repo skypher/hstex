@@ -460,6 +460,13 @@ bool hstex_source_at_boundary(const struct hstex_source_stack *stack)
            stack->frames[stack->count - 1U].kind == HSTEX_SOURCE_BOUNDARY;
 }
 
+void hstex_source_pop(struct hstex_source_stack *stack)
+{
+    if (stack != NULL && stack->count != 0U) {
+        pop_frame(stack);
+    }
+}
+
 int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
                               size_t error_capacity)
 {
@@ -535,6 +542,18 @@ enum hstex_mouth_result hstex_source_next(
         return result;
     }
     return HSTEX_MOUTH_EOF;
+}
+
+struct hstex_file_source *hstex_source_current_file(
+    const struct hstex_source_stack *stack)
+{
+    if (stack == NULL || stack->count == 0U) {
+        return NULL;
+    }
+    if (stack->file_top != 0U && stack->file_top <= stack->count) {
+        return stack->frames[stack->file_top - 1U].value.file;
+    }
+    return NULL;
 }
 
 const char *hstex_source_current_name(const struct hstex_source_stack *stack)
