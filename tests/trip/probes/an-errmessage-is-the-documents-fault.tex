@@ -1,0 +1,19 @@
+% \errmessage.
+%
+% Measured against pdftex: it reports what the document said -- "! <text>."
+% -- and carries on. It is a fault of the document's, not the end of the
+% run, and the text after it is still set.
+%
+% Its help is \errhelp when that holds anything, and otherwise the
+% reference's own four lines ("...Pretend that you're Hercule Poirot..."),
+% so an \errhelp set inside a group goes back with the group.
+%
+% An empty message is not a bug: LaTeX's \GenericError prints its diagnosis
+% itself and then raises an \errmessage with nothing in it. trip line 328
+% writes exactly that, with \errhelp{all is lost}.
+\tracingonline=1
+\errmessage{boom}\message{[after a plain one]}
+{\errhelp{all is lost}\errmessage{}}\message{[after an empty one]}
+\errmessage{boom}\message{[the errhelp went back with the group]}
+\def\why{expanded}\errmessage{ERRMESSAGE: \why}\message{[the text is expanded]}
+\end

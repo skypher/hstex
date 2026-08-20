@@ -14093,9 +14093,11 @@ int main(void)
         run_snippet("\\skip1=1pt plus2fillll\\relax\\the\\skip1%",
                     "1.0pt plus 2.0filll") != 0 ||
         run_snippet("\\dimen0=1ptpt\\dimen1=1inch%", "ptch") != 0 ||
-        expect_failure("\\def\\why{expanded}"
-                       "\\errmessage{ERRMESSAGE: \\why}%",
-                       "ERRMESSAGE: expanded") != 0 ||
+        /* \errmessage is a fault of the document's, which the reference
+           reports and carries on from -- the text after it is still set. */
+        run_snippet("\\def\\why{expanded}"
+                    "\\errmessage{ERRMESSAGE: \\why}after%",
+                    "after") != 0 ||
         expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
                        "non-long macro argument") != 0 ||
         test_a_definition_read_while_it_is_replaced() != 0 ||
