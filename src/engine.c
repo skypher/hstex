@@ -6202,8 +6202,15 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
         return -1;
     }
     if (direct_dimen) {
-        return set_error(error, error_capacity,
-                         "ordinary dimension used as a math-glue component");
+        /* An ordinary dimension where mu belongs: the reference reports it
+           and takes the number as it stands, so 3mu advanced by 2pt comes
+           to 5mu. */
+        static const char *const help[] = {
+            "I'm going to assume that 1mu=1pt when they're mixed.", NULL};
+        tex_error(engine, help, "Incompatible glue units");
+        *value = direct_value;
+        *order = 0U;
+        return 0;
     }
     *order = 0U;
     bool matched = false;
@@ -6363,11 +6370,26 @@ static int scan_glue(struct hstex_engine *engine, struct hstex_glue *glue,
         status = set_error(error, error_capacity,
                            "end of input while scanning glue");
     } else if (hstex_token_is_control_sequence(token)) {
-        int internal_result = glue_from_meaning(
-            engine,
-            hstex_engine_meaning(engine,
-                                 hstex_token_control_sequence_id(token)),
-            glue, error, error_capacity);
+        const struct hstex_meaning *internal = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        int internal_result =
+            glue_from_meaning(engine, internal, glue, error, error_capacity);
+        if (internal_result == 0) {
+            /* A math glue where ordinary glue belongs: the reference
+               reports it and takes the numbers as they stand, so 3pt
+               advanced by 2mu comes to 5pt. */
+            int math_result = math_glue_from_meaning(engine, internal, glue,
+                                                     error, error_capacity);
+            if (math_result < 0) {
+                internal_result = -1;
+            } else if (math_result > 0) {
+                static const char *const help[] = {
+                    "I'm going to assume that 1mu=1pt when they're mixed.",
+                    NULL};
+                tex_error(engine, help, "Incompatible glue units");
+                internal_result = 1;
+            }
+        }
         if (internal_result < 0) {
             status = -1;
         } else if (internal_result > 0) {

@@ -1,0 +1,23 @@
+% Ordinary glue and math glue mixed.
+%
+% Measured against pdftex: "Incompatible glue units", with the help "I'm
+% going to assume that 1mu=1pt when they're mixed" -- and that is exactly
+% what it does. The numbers are taken as they stand and the unit of the
+% thing being assigned to is kept:
+%
+%   3mu advanced by 2pt  ->  5.0mu
+%   3pt advanced by 2mu  ->  5.0pt
+%
+% Both directions report; neither converts.
+%
+% A unit written out rather than taken from a register is a different
+% fault, already handled: `\muskip0=3pt' draws "Illegal unit of measure
+% (mu inserted)".
+%
+% trip line 369 writes \advance\shmip by \shkip.
+\tracingonline=1
+\muskip0=3mu \skip0=2pt \advance\muskip0 by \skip0 \message{[mu=\the\muskip0]}
+\skip1=3pt \muskip1=2mu \advance\skip1 by \muskip1 \message{[pt=\the\skip1]}
+\skip2=\muskip1 \message{[assigned=\the\skip2]}
+\muskip0=3mu \advance\muskip0 by 2mu \message{[matching units are silent=\the\muskip0]}
+\end
