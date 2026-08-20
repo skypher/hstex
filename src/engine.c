@@ -10862,7 +10862,7 @@ static void report_packing(struct hstex_engine *engine,
     /* The reference says nothing about an empty box, nor about one whose
        glue is infinite: only a box set with ordinary glue can be too tight
        or too loose in a way worth reporting. */
-    if (count == 0U) {
+    if (count == 0U || engine->packing_quietly) {
         return;
     }
     if (excess > 0 && total->shrink_order == 0U &&
@@ -31696,6 +31696,10 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         }
         struct hstex_box packed = {0};
         if (status == 0) {
+            /* The reference sets the glue of an alignment's boxes itself
+               rather than packing them, so nothing is reported of them. */
+            bool previous_quiet = engine->packing_quietly;
+            engine->packing_quietly = true;
             status = vertical
                          ? finalize_vbox(engine, &stack, true, false,
                                          (int32_t)final_width, &packed, error,
@@ -31703,6 +31707,7 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                          : finalize_hbox(engine, &line, true, false,
                                          (int32_t)final_width, &packed, error,
                                          error_capacity);
+            engine->packing_quietly = previous_quiet;
         }
         free(line.node_identifiers);
         free(stack.node_identifiers);

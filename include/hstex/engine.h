@@ -1809,6 +1809,11 @@ struct hstex_engine {
        what an over- or underfull box is reported against. Zero where a box
        is being packed on its own. See docs/DECISIONS.md, boxes-that-do-not-fit. */
     int32_t pack_begin_line;
+    /* True while a list is being packed for a reason the reference does not
+       pack one at all -- setting an alignment's unset boxes, or measuring
+       something it will pack again -- so that nothing is reported of it. See
+       docs/DECISIONS.md, boxes-that-do-not-fit. */
+    bool packing_quietly;
     /* The semantic nest, outermost first. */
     struct hstex_nest_level *nest;
     size_t nest_count;
