@@ -1805,6 +1805,10 @@ struct hstex_engine {
        the reference ends a run with. See docs/DECISIONS.md,
        what-a-run-says-at-its-end. */
     char *output_name;
+    /* The line a paragraph or an alignment being packed began on, which is
+       what an over- or underfull box is reported against. Zero where a box
+       is being packed on its own. See docs/DECISIONS.md, boxes-that-do-not-fit. */
+    int32_t pack_begin_line;
     /* The semantic nest, outermost first. */
     struct hstex_nest_level *nest;
     size_t nest_count;
@@ -1833,6 +1837,8 @@ struct hstex_engine {
     int32_t paragraph_language;
     uint8_t paragraph_left_min;
     uint8_t paragraph_right_min;
+    /* The line the paragraph being broken began on. */
+    int32_t paragraph_line;
     enum hstex_interaction_mode interaction_mode;
     /* A recoverable error is reported and then recovered from, the way the
        reference does it, so a document full of them still runs to its end.

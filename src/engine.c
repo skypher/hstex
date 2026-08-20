@@ -133,6 +133,18 @@ static bool conditional_test_pending(const struct hstex_engine *engine);
 static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static bool too_many_errors(const struct hstex_engine *engine);
+/* The text of a run of nodes, and the nodes themselves, both wanted by the
+   packer before either is defined. */
+static void show_short_display_of(struct hstex_engine *engine,
+                                  const uint32_t *items, size_t count);
+static void show_list_at_top(struct hstex_engine *engine,
+                             const uint32_t *items, size_t count);
+/* The diagnostic printer, wanted by the packer above it. */
+static void print_fresh_line(struct hstex_engine *engine);
+static void print_text(struct hstex_engine *engine, const char *text);
+static void show_scaled(struct hstex_engine *engine, int32_t value);
+static void print_formatted(struct hstex_engine *engine, const char *format,
+                            ...) HSTEX_PRINTF_FORMAT(2, 3);
 /* The brackets the reference puts around the file it is reading. */
 static void note_file_open(struct hstex_engine *engine, const char *path);
 static void note_files_closed(struct hstex_engine *engine);
@@ -10829,6 +10841,88 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     return status;
 }
 
+/* What the reference says about a box that did not fit: how much it is over
+   or how bad it is, where it was being packed, the text of it, and then the
+   box itself. See docs/DECISIONS.md, boxes-that-do-not-fit. */
+static void report_packing(struct hstex_engine *engine,
+                           const struct hstex_box *box, int64_t natural,
+                           const struct hstex_glue *total, bool vertical,
+                           const uint32_t *items, size_t count)
+{
+    const char *kind = vertical ? "\\vbox" : "\\hbox";
+    int32_t badness_limit =
+        engine->integer_parameters[vertical ? HSTEX_INTEGER_VBADNESS
+                                            : HSTEX_INTEGER_HBADNESS];
+    int32_t fuzz =
+        engine->dimen_parameters[vertical ? HSTEX_DIMEN_VFUZZ
+                                          : HSTEX_DIMEN_HFUZZ];
+    int32_t target = vertical ? box->height : box->width;
+    int64_t excess = natural - (int64_t)target;
+    bool reported = false;
+    /* The reference says nothing about an empty box, nor about one whose
+       glue is infinite: only a box set with ordinary glue can be too tight
+       or too loose in a way worth reporting. */
+    if (count == 0U) {
+        return;
+    }
+    if (excess > 0 && total->shrink_order == 0U &&
+        excess - (int64_t)total->shrink > 0) {
+        int64_t over = excess - (int64_t)total->shrink;
+        if (over > (int64_t)fuzz || badness_limit < 100) {
+            print_line(engine);
+            print_fresh_line(engine);
+            print_formatted(engine, "Overfull %s (", kind);
+            show_scaled(engine, (int32_t)over);
+            print_text(engine, vertical ? "pt too high" : "pt too wide");
+            reported = true;
+        }
+    } else if (excess <= 0 && total->stretch_order == 0U &&
+               engine->badness > badness_limit) {
+        print_line(engine);
+        print_fresh_line(engine);
+        print_formatted(engine, "%s %s (badness %d",
+                        engine->badness > 100 ? (excess > 0 ? "Tight" : "Underfull")
+                                              : (excess > 0 ? "Tight" : "Loose"),
+                        kind, engine->badness);
+        reported = true;
+    }
+    if (!reported) {
+        return;
+    }
+    if (engine->output_active) {
+        print_text(engine, ") has occurred while \\output is active");
+    } else if (engine->pack_begin_line != 0) {
+        print_text(engine, engine->pack_begin_line > 0
+                               ? ") in paragraph at lines "
+                               : ") in alignment at lines ");
+        int32_t began = engine->pack_begin_line < 0 ? -engine->pack_begin_line
+                                                    : engine->pack_begin_line;
+        uint32_t here = 0U;
+        (void)current_source_line(engine, &here);
+        print_formatted(engine, "%d--%u", began, (unsigned)here);
+    } else {
+        uint32_t here = 0U;
+        (void)current_source_line(engine, &here);
+        print_formatted(engine, ") detected at line %u", (unsigned)here);
+    }
+    print_line(engine);
+    /* Then the text of it, and then the box. */
+    show_short_display_of(engine, items, count);
+    print_line(engine);
+    print_line(engine);
+    print_formatted(engine, "%s(", kind);
+    show_scaled(engine, box->height);
+    print_byte(engine, '+');
+    show_scaled(engine, box->depth);
+    print_byte(engine, ')');
+    print_text(engine, "x");
+    show_scaled(engine, box->width);
+    show_list_at_top(engine, items, count);
+    print_line(engine);
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
 static int finalize_hbox(struct hstex_engine *engine,
                          struct hstex_hbox_builder *builder,
                          bool matched_to, bool matched_spread,
@@ -10859,6 +10953,8 @@ static int finalize_hbox(struct hstex_engine *engine,
         list_total_glue(engine, builder->node_identifiers, builder->count);
     engine->badness = packing_badness(builder->width, box->width, &total);
     box->glue = packing_glue_set(builder->width, box->width, &total);
+    report_packing(engine, box, builder->width, &total, false,
+                   builder->node_identifiers, builder->count);
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
         box->node_count = (uint32_t)builder->count;
@@ -24295,6 +24391,37 @@ static void trace_short_display(struct hstex_engine *engine,
         }
     }
 }
+/* The text of a run of nodes, as an over- or underfull box is reported
+   with, and then the nodes themselves. */
+static void show_short_display_of(struct hstex_engine *engine,
+                                  const uint32_t *items, size_t count)
+{
+    struct hstex_break_trace trace = {0};
+    trace_short_display(engine, &trace, items, 0U, count);
+}
+
+static void show_list_at_top(struct hstex_engine *engine,
+                             const uint32_t *items, size_t count)
+{
+    int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
+    int32_t breadth = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
+    if (breadth <= 0) {
+        breadth = 5;
+    }
+    if (threshold < 0) {
+        threshold = 0;
+    }
+    if (threshold > 255) {
+        threshold = 255;
+    }
+    char prefix[256];
+    memset(prefix, '.', sizeof(prefix));
+    /* The nodes stand inside the box, so they are shown one level under
+       it. */
+    show_node_list(engine, items, count, prefix, 1U, (size_t)threshold,
+                   (size_t)breadth, '.');
+}
+
 
 /* The command that stands at a breakpoint, as the trace names it. */
 static const char *trace_break_name(const struct hstex_engine *engine,
@@ -24941,9 +25068,14 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
         }
         struct hstex_box box = {0};
         if (status == 0) {
+            /* A line of a paragraph is reported against the line the
+               paragraph began on. */
+            int32_t previous_pack = engine->pack_begin_line;
+            engine->pack_begin_line = engine->paragraph_line;
             status = finalize_hbox(engine, &builder, true, false,
                                    line_width_for(engine, numbered), &box,
                                    error, error_capacity);
+            engine->pack_begin_line = previous_pack;
         }
         free(builder.node_identifiers);
         engine->active_hbox_builder = previous;
@@ -25897,6 +26029,7 @@ static int finish_paragraph(struct hstex_engine *engine, char *error,
         engine->paragraph_language = level->language;
         engine->paragraph_left_min = level->left_hyphen_min;
         engine->paragraph_right_min = level->right_hyphen_min;
+        engine->paragraph_line = (int32_t)level->line;
     }
     nest_pop(engine);
     if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0 ||
