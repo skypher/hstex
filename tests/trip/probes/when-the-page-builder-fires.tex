@@ -1,0 +1,35 @@
+% When the output routine is entered.
+%
+% Every paragraph here is two lines long and ends at a blank line.  The
+% reference enters \output at the line where the \par that filled the page
+% stands; HSTeX enters it a paragraph later.  The pages themselves come out
+% identical -- only the moment differs, and with it \inputlineno and the
+% current font.
+%
+%   pdftex -interaction=nonstopmode \input when-the-page-builder-fires \end
+%
+% Reference: [out@11] [out@16] [out@20].  HSTeX: [out@13] [out@16] [out@22].
+%
+% See docs/DECISIONS.md, when-the-page-builder-fires.
+%
+\tracingonline=1
+\output={\message{[out@\the\inputlineno]}\plainoutput}
+\vsize=40pt \hsize=120pt \parindent=10pt
+\par (1) word word word word
+more words here
+
+\par (2) word word word word
+more words here
+
+\par (3) word word word word
+more words here
+
+\par (4) word word word word
+more words here
+
+\par (5) word word word word
+more words here
+
+\par (6) word word word word
+more words here
+
