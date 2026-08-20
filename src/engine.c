@@ -24023,10 +24023,9 @@ static int execute_indent(struct hstex_engine *engine, bool indent,
     if (engine->mode == HSTEX_MODE_VERTICAL) {
         return start_paragraph(engine, indent, error, error_capacity);
     }
-    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
-        return set_error(error, error_capacity,
-                         "indentation is not supported in math mode");
-    }
+    /* A formula takes them too: measured, \indent puts the same empty box
+       in the math list and \noindent puts nothing, neither drawing a
+       word. */
     if (!indent) {
         return 0;
     }

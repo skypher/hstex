@@ -1,0 +1,18 @@
+% \indent and \noindent inside a formula.
+%
+% Measured against pdftex: both are allowed and neither draws a word.
+% \indent puts the same empty box of width \parindent in the math list
+% that it puts in a horizontal one, and \noindent puts nothing:
+%
+%   $\indent x$   ->  \mathon | \hbox(0.0+0.0)x7.0 | \teni x | \mathoff
+%   $\noindent x$ ->  \mathon | \teni x | \mathoff
+%
+% This engine refused both. trip line 394 writes $\indent\mark{twain}.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt \parindent=7pt
+\setbox0=\hbox{$\indent x$}\showbox0
+\setbox1=\hbox{$\noindent x$}\showbox1
+\setbox2=\hbox{\indent x}\showbox2
+\setbox3=\vbox{\indent x}\showbox3
+\setbox4=\vbox{a$$\indent x$$}\showbox4
+\end
