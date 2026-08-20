@@ -219,7 +219,13 @@ comparison, a short body copied rather than held (1.5% for all of it, which
 is the interesting part; see below).
 
 Memory went from 1.26 GB to 161 MB in the same round, and to 128 MB once a
-definition stopped asking for four times the tokens it holds. Nodes and the lists
+definition stopped asking for four times the tokens it holds. The room those
+bodies are kept in now comes from free lists of the engine's own -- one for
+each power of two -- rather than from the allocator: a block is handed on
+from the vector that read it to the macro record or input frame that keeps
+it, and given back from there by length alone, which took the run from 29.5
+million calls on the allocator to 8.2 million and 3.3 per cent off the time.
+See docs/DECISIONS.md, where-a-body-is-kept. Nodes and the lists
 that hold them were made and never unmade, and most of what that kept was
 not the pages but the sub-formulas -- kept for the lifetime of the run, with
 every box each had been set as, although nothing outside the formula it

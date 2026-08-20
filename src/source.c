@@ -85,7 +85,14 @@ static void pop_frame(struct hstex_source_stack *stack)
            in the stack's own store -- and asking the library to give nothing
            back is 48 million calls over the corpus. */
         if ((source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_OWNS) != 0U) {
-            free((hstex_token *)(uintptr_t)(const void *)source->tokens);
+            hstex_token *own =
+                (hstex_token *)(uintptr_t)(const void *)source->tokens;
+            if (stack->tokens_release != NULL) {
+                stack->tokens_release(stack->definition_owner, own,
+                                      source->count);
+            } else {
+                free(own);
+            }
         }
         if ((source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE) != 0U) {
             stack->store_count = source->store_base;

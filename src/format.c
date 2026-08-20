@@ -119,12 +119,45 @@ static void transfer_array(struct format_stream *stream, void **base,
     transfer(stream, *base, *count * size);
 }
 
+/* A body read from a format is put in the room the engine's own pool would
+   have given it -- the least power of two that holds it, never fewer than
+   eight -- so that when nothing holds it any more it can go back on the
+   list its length names. See docs/DECISIONS.md, where-a-body-is-kept. */
 static void transfer_tokens(struct format_stream *stream, hstex_token **tokens,
                             size_t *count)
 {
-    void *base = stream->writing ? (void *)*tokens : NULL;
-    transfer_array(stream, &base, count, NULL, sizeof(**tokens), false);
-    *tokens = base;
+    if (stream->writing) {
+        void *base = (void *)*tokens;
+        transfer_array(stream, &base, count, NULL, sizeof(**tokens), false);
+        *tokens = base;
+        return;
+    }
+    TRANSFER_VALUE(stream, *count);
+    if (stream->failed) {
+        return;
+    }
+    *tokens = NULL;
+    if (*count == 0U) {
+        return;
+    }
+    size_t capacity = 8U;
+    while (capacity < *count) {
+        if (capacity > SIZE_MAX / 2U) {
+            stream->failed = true;
+            return;
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(**tokens)) {
+        stream->failed = true;
+        return;
+    }
+    *tokens = malloc(capacity * sizeof(**tokens));
+    if (*tokens == NULL) {
+        stream->failed = true;
+        return;
+    }
+    transfer(stream, *tokens, *count * sizeof(**tokens));
 }
 
 /* What one font was loaded as: its name, its metrics, and the programs the

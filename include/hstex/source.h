@@ -74,6 +74,11 @@ struct hstex_source_stack {
     /* What to tell when a frame lets go of the definition it was reading. */
     void *definition_owner;
     void (*definition_release)(void *owner, uint32_t definition);
+    /* What to give a frame's own tokens back to. The engine keeps free
+       lists of token blocks, and a frame that owns its tokens holds one of
+       them; giving it back to the library instead would take it out of the
+       pool for good. Null where they are to be given back the plain way. */
+    void (*tokens_release)(void *owner, hstex_token *tokens, size_t count);
     /* Room the stack keeps for the expansions it is reading, given back in
        the order it was taken; an expansion that does not fit finds its own.
        The store only grows while nothing stands in it. */

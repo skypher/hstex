@@ -265,9 +265,116 @@ static int code_table_index(enum hstex_command command)
     }
 }
 
+/* Token arrays are taken and given back about eight million times over the
+   corpus -- one for the body of nearly every definition it makes -- in sizes
+   that are nearly all a few tokens. They come from free lists of their own,
+   one for each power of two, so that making a definition costs a pointer
+   read rather than a walk into the allocator and back.
+
+   A block is an ordinary allocation, and the list is threaded through the
+   first eight bytes of a free one, so anything that leaves the pool for good
+   can still be given back to the library in the usual way. The lists belong
+   to the process rather than to any one engine, which is what lets a body
+   given back where the engine is known be taken again where it is not. */
+#define HSTEX_TOKEN_POOL_LEAST 8U
+#define HSTEX_TOKEN_POOL_CLASSES 12U
+#define HSTEX_TOKEN_POOL_MOST \
+    (HSTEX_TOKEN_POOL_LEAST << (HSTEX_TOKEN_POOL_CLASSES - 1U))
+
+static hstex_token *token_pool[HSTEX_TOKEN_POOL_CLASSES];
+
+/* The block a run of `count` tokens is kept in: the least power of two that
+   holds it, and never fewer than eight. A vector's own capacity is arrived
+   at the same way, so a body may be given back knowing only how long it is. */
+static size_t token_pool_capacity(size_t count)
+{
+    size_t capacity = HSTEX_TOKEN_POOL_LEAST;
+    while (capacity < count) {
+        capacity *= 2U;
+    }
+    return capacity;
+}
+
+static unsigned token_pool_class(size_t capacity)
+{
+    unsigned found = 0U;
+    size_t size = HSTEX_TOKEN_POOL_LEAST;
+    while (size < capacity) {
+        size *= 2U;
+        ++found;
+    }
+    return found;
+}
+
+static hstex_token *token_pool_take(size_t capacity)
+{
+    if (capacity > (size_t)HSTEX_TOKEN_POOL_MOST) {
+        return NULL;
+    }
+    unsigned found = token_pool_class(capacity);
+    hstex_token *block = token_pool[found];
+    if (block == NULL) {
+        return NULL;
+    }
+    hstex_token *next = NULL;
+    memcpy(&next, block, sizeof(next));
+    token_pool[found] = next;
+    return block;
+}
+
+/* True where the pool has taken the block; false where it is too big for any
+   of the lists and belongs to the library instead. */
+static bool token_pool_give(hstex_token *block, size_t capacity)
+{
+    if (block == NULL) {
+        return true;
+    }
+    if (capacity > (size_t)HSTEX_TOKEN_POOL_MOST) {
+        return false;
+    }
+    unsigned found = token_pool_class(capacity);
+    hstex_token *next = token_pool[found];
+    memcpy(block, &next, sizeof(next));
+    token_pool[found] = block;
+    return true;
+}
+
+/* Room for a run of tokens, from the pool where it has any. Everything that
+   may later be given back by length alone -- a definition's body, the tokens
+   a frame owns -- must be asked for here, so that what is given back is
+   always at least as big as the list it goes on. */
+static hstex_token *token_block_alloc(size_t count)
+{
+    size_t capacity = token_pool_capacity(count);
+    hstex_token *block = token_pool_take(capacity);
+    if (block != NULL) {
+        return block;
+    }
+    if (capacity > SIZE_MAX / sizeof(*block)) {
+        return NULL;
+    }
+    return malloc(capacity * sizeof(*block));
+}
+
+/* What a definition's body is given back to when nothing holds it any more.
+   How long it is says which list it belongs on, because that is how the
+   room for it was arrived at. */
+static void token_block_free(hstex_token *block, size_t count)
+{
+    if (block == NULL) {
+        return;
+    }
+    if (!token_pool_give(block, token_pool_capacity(count))) {
+        free(block);
+    }
+}
+
 static void vector_destroy(struct hstex_token_vector *vector)
 {
-    free(vector->data);
+    if (vector->data != NULL && !token_pool_give(vector->data,
+                                                 vector->capacity)) {
+        free(vector->data);
+    }
     memset(vector, 0, sizeof(*vector));
 }
 
@@ -294,6 +401,19 @@ static int vector_reserve(struct hstex_token_vector *vector, size_t required,
     if (capacity > SIZE_MAX / sizeof(*vector->data)) {
         return set_error(error, error_capacity,
                          "token-vector allocation overflow");
+    }
+    hstex_token *taken = token_pool_take(capacity);
+    if (taken != NULL) {
+        if (vector->count != 0U) {
+            memcpy(taken, vector->data, vector->count * sizeof(*taken));
+        }
+        if (vector->data != NULL &&
+            !token_pool_give(vector->data, vector->capacity)) {
+            free(vector->data);
+        }
+        vector->data = taken;
+        vector->capacity = capacity;
+        return 0;
     }
     void *allocation = realloc(vector->data, capacity * sizeof(*vector->data));
     if (allocation == NULL) {
@@ -1118,8 +1238,8 @@ static void release_definition(struct hstex_engine *engine,
     if (macro->references == 0U || --macro->references != 0U) {
         return;
     }
-    free(macro->parameter_text);
-    free(macro->replacement);
+    token_block_free(macro->parameter_text, macro->parameter_count_tokens);
+    token_block_free(macro->replacement, macro->replacement_count);
     memset(macro, 0, sizeof(*macro));
     macro->next_free = engine->macro_free_list;
     engine->macro_free_list = identifier;
@@ -1130,6 +1250,15 @@ static void release_definition(struct hstex_engine *engine,
 static void release_input_definition(void *owner, uint32_t identifier)
 {
     release_definition(owner, identifier);
+}
+
+/* And what it tells when a frame is done with tokens of its own, so that the
+   block goes back on the list its length names rather than to the library. */
+static void release_input_tokens(void *owner, hstex_token *tokens,
+                                 size_t count)
+{
+    (void)owner;
+    token_block_free(tokens, count);
 }
 
 static void retain_macro(struct hstex_engine *engine,
@@ -1768,6 +1897,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
     engine->sources.definition_owner = engine;
     engine->sources.definition_release = release_input_definition;
+    engine->sources.tokens_release = release_input_tokens;
     /* Whether this run is being asked whether the list of places that can
        still name a node is complete; see docs/DECISIONS.md,
        what-a-page-leaves-behind. */
@@ -2962,6 +3092,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     hstex_source_stack_init(&engine->sources, &engine->lexical_state);
     engine->sources.definition_owner = engine;
     engine->sources.definition_release = release_input_definition;
+    engine->sources.tokens_release = release_input_tokens;
     for (size_t index = 0U; index < 16U; ++index) {
         if (engine->write_streams[index] != NULL) {
             (void)fclose(engine->write_streams[index]);
@@ -30838,7 +30969,7 @@ static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                           (const uint8_t *)"relax", 5U, &relax) != 1) {
         return set_error(error, error_capacity, "relax is not defined");
     }
-    hstex_token *pair = malloc(2U * sizeof(*pair));
+    hstex_token *pair = token_block_alloc(2U);
     if (pair == NULL) {
         return set_error(error, error_capacity,
                          "conditional relax allocation failed");
