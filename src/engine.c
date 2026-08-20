@@ -25871,7 +25871,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 size_t made_after = 0U;
                 if (reconstitute_characters(engine, word.font, taken,
                                             count_before,
-                                            previous == word_start, false,
+                                            previous == word_start, true,
                                             behind, room, &made_before, error,
                                             error_capacity) != 0 ||
                     reconstitute_characters(engine, word.font,
