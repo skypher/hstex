@@ -133,6 +133,12 @@ static bool conditional_test_pending(const struct hstex_engine *engine);
 static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static bool too_many_errors(const struct hstex_engine *engine);
+static uint8_t normalised_hyphen_min(int32_t value);
+/* The semantic nest \showlists walks. */
+static int nest_push(struct hstex_engine *engine, char *error,
+                     size_t error_capacity);
+static void nest_pop(struct hstex_engine *engine);
+static void nest_note(struct hstex_engine *engine);
 /* The `{' a box body or a list must begin with. */
 static int scan_left_brace(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
@@ -2084,6 +2090,10 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         engine->page_builder == NULL || engine->contribution_builder == NULL) {
         (void)set_error(error, error_capacity,
                         "register allocation failed");
+        hstex_engine_destroy(engine);
+        return -1;
+    }
+    if (nest_push(engine, error, error_capacity) != 0) {
         hstex_engine_destroy(engine);
         return -1;
     }
@@ -10670,6 +10680,9 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     engine->displayed_math = false;
     engine->building_paragraph = false;
     engine->paragraph_builder = NULL;
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     engine->active_hbox_builder = builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = true;
@@ -10727,6 +10740,7 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         status = set_error(error, error_capacity,
                            "input ended inside an hbox");
     }
+    nest_pop(engine);
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
 
@@ -11081,6 +11095,9 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->displayed_math = false;
     engine->building_paragraph = false;
     engine->paragraph_builder = NULL;
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     engine->active_hbox_builder = NULL;
     engine->active_vbox_builder = builder;
     engine->mode = HSTEX_MODE_VERTICAL;
@@ -11115,6 +11132,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     if (status == 0 && !engine->group_stop_hit) {
         status = set_error(error, error_capacity, "input ended inside a vbox");
     }
+    nest_pop(engine);
     engine->active_hbox_builder = previous_hbox_builder;
     engine->active_vbox_builder = previous_vbox_builder;
     engine->mode = previous_mode;
@@ -14082,26 +14100,153 @@ static int print_one_token(struct hstex_engine *engine, hstex_token token,
     return 0;
 }
 
-/* \showlists: the reference walks its whole semantic nest and prints every
-   list being built, innermost first. What is printed here is the mode the
-   engine stands in and nothing below it, because the nest HSTeX keeps is
-   not yet the reference's. The diagnostic is honest about being partial by
-   showing only what it knows, and it does not stop the run, which is what
-   \showlists is for. See docs/DECISIONS.md, recoverable-errors. */
+/* A list being built, shown the way \showlists shows one: at the outermost
+   level, with no dots before its nodes. */
+static void show_builder_list(struct hstex_engine *engine,
+                              const uint32_t *items, size_t count,
+                              char *prefix, size_t threshold, size_t breadth)
+{
+    if (items == NULL || count == 0U) {
+        return;
+    }
+    show_node_list(engine, items, count, prefix, 0U, threshold, breadth, '.');
+}
+
+/* A level of the nest is pushed where a list starts being built and popped
+   where it is finished with, so that \showlists can walk them. */
+static int nest_push(struct hstex_engine *engine, char *error,
+                     size_t error_capacity)
+{
+    /* The level being left keeps what it had, so that \showlists can report
+       it from underneath. */
+    nest_note(engine);
+    if (engine->nest_count == engine->nest_capacity) {
+        size_t next = engine->nest_capacity == 0U ? 16U
+                                                  : engine->nest_capacity * 2U;
+        void *grown = realloc(engine->nest, next * sizeof(*engine->nest));
+        if (grown == NULL) {
+            return set_error(error, error_capacity, "nest allocation failed");
+        }
+        engine->nest = grown;
+        engine->nest_capacity = next;
+    }
+    struct hstex_nest_level *level = &engine->nest[engine->nest_count++];
+    memset(level, 0, sizeof(*level));
+    const struct hstex_file_source *file =
+        hstex_source_current_file(&engine->sources);
+    level->line = file == NULL ? 0U : file->mouth.line_number;
+    return 0;
+}
+
+static void nest_pop(struct hstex_engine *engine)
+{
+    if (engine->nest_count != 0U) {
+        --engine->nest_count;
+    }
+}
+
+/* What the level holds now, which is what \showlists reports for it. */
+static void nest_note(struct hstex_engine *engine)
+{
+    if (engine->nest_count == 0U) {
+        return;
+    }
+    struct hstex_nest_level *level = &engine->nest[engine->nest_count - 1U];
+    level->mode = (uint8_t)engine->mode;
+    level->inner = engine->inner_mode;
+    level->hbox = engine->active_hbox_builder;
+    level->vbox = engine->active_vbox_builder;
+    level->prev_depth = engine->prev_depth;
+    level->space_factor = engine->space_factor;
+    level->prev_graf = engine->prev_graf;
+    level->language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
+}
+
+static const char *nest_mode_name(const struct hstex_nest_level *level)
+{
+    switch ((enum hstex_mode)level->mode) {
+    case HSTEX_MODE_HORIZONTAL:
+        return level->inner ? "restricted horizontal mode" : "horizontal mode";
+    case HSTEX_MODE_MATH:
+        return level->inner ? "math mode" : "display math mode";
+    default:
+        return level->inner ? "internal vertical mode" : "vertical mode";
+    }
+}
+
+/* \showlists: every list the engine is building, innermost first, each with
+   the mode it is being built in, where that began, and what the mode keeps
+   beside the list. See docs/DECISIONS.md, showlists. */
 static int execute_show_lists(struct hstex_engine *engine, char *error,
                               size_t error_capacity)
 {
     (void)error;
     (void)error_capacity;
-    static const char *const modes[] = {"vertical mode", "horizontal mode",
-                                        "math mode"};
-    size_t index = (size_t)engine->mode;
+    nest_note(engine);
+    int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
+    int32_t breadth = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
+    if (breadth <= 0) {
+        breadth = 5;
+    }
+    if (threshold < 0) {
+        threshold = 0;
+    }
+    if (threshold > 255) {
+        threshold = 255;
+    }
+    char prefix[256];
+    memset(prefix, '.', sizeof(prefix));
     print_fresh_line(engine);
-    print_formatted(engine, "### %s",
-                    index < sizeof(modes) / sizeof(modes[0])
-                        ? modes[index]
-                        : "unknown mode");
     print_line(engine);
+    for (size_t index = engine->nest_count; index != 0U; --index) {
+        const struct hstex_nest_level *level = &engine->nest[index - 1U];
+        print_fresh_line(engine);
+        print_formatted(engine, "### %s entered at line %u",
+                        nest_mode_name(level), (unsigned)level->line);
+        if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL && !level->inner) {
+            int32_t language = level->language;
+            if (language < 0 || language > 255) {
+                language = 0;
+            }
+            print_formatted(
+                engine, " (language%d:hyphenmin%d,%d)", language,
+                (int)normalised_hyphen_min(
+                    engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN]),
+                (int)normalised_hyphen_min(
+                    engine->integer_parameters
+                        [HSTEX_INTEGER_RIGHT_HYPHEN_MIN]));
+        }
+        if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
+            if (level->hbox != NULL) {
+                show_builder_list(engine, level->hbox->node_identifiers,
+                                  level->hbox->count, prefix,
+                                  (size_t)threshold, (size_t)breadth);
+            }
+            print_fresh_line(engine);
+            print_formatted(engine, "spacefactor %d", level->space_factor);
+            if (!level->inner && level->language > 0) {
+                print_formatted(engine, ", current language %d",
+                                level->language);
+            }
+            continue;
+        }
+        if (level->mode == (uint8_t)HSTEX_MODE_VERTICAL && level->vbox != NULL) {
+            show_builder_list(engine, level->vbox->node_identifiers,
+                              level->vbox->count, prefix, (size_t)threshold,
+                              (size_t)breadth);
+        }
+        print_fresh_line(engine);
+        print_text(engine, "prevdepth ");
+        if (level->prev_depth <= HSTEX_IGNORE_DEPTH) {
+            print_text(engine, "ignored");
+        } else {
+            show_scaled(engine, level->prev_depth);
+        }
+        if (level->prev_graf != 0) {
+            print_formatted(engine, ", prevgraf %d line%s", level->prev_graf,
+                            level->prev_graf == 1 ? "" : "s");
+        }
+    }
     print_fresh_line(engine);
     print_text(engine, "! OK");
     tex_show_end(engine);
@@ -23359,6 +23504,12 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
     engine->paragraph_builder->width = 0;
     engine->paragraph_builder->height = 0;
     engine->paragraph_builder->depth = 0;
+    /* A paragraph is a list of its own, above the vertical one it will
+       join, so it is a level of the nest of its own. A paragraph resumed
+       after a display already has one and does not take another. */
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     engine->active_hbox_builder = engine->paragraph_builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = false;
@@ -25511,6 +25662,7 @@ static int normal_paragraph(struct hstex_engine *engine, char *error,
 static int finish_paragraph(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
+    nest_pop(engine);
     if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0 ||
         normal_paragraph(engine, error, error_capacity) != 0) {
         return -1;

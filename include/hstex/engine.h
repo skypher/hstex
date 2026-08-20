@@ -1012,6 +1012,24 @@ enum hstex_math_field_kind {
 
 /* One column of an alignment preamble: the token lists that surround the
    entry, and the glue that follows the column. */
+struct hstex_hbox_builder;
+struct hstex_vbox_builder;
+
+/* One level of the semantic nest: a list being built, the mode it is being
+   built in, and where that began. \showlists walks these innermost first.
+   See docs/DECISIONS.md, showlists. */
+struct hstex_nest_level {
+    uint8_t mode;
+    bool inner;
+    uint32_t line;
+    struct hstex_hbox_builder *hbox;
+    struct hstex_vbox_builder *vbox;
+    int32_t prev_depth;
+    int32_t space_factor;
+    int32_t language;
+    int32_t prev_graf;
+};
+
 struct hstex_align_column {
     hstex_token *before;
     size_t before_count;
@@ -1766,6 +1784,10 @@ struct hstex_engine {
     bool lig_right_hit;
     /* True while the last character of a word is being put in the list. */
     bool lig_last_of_word;
+    /* The semantic nest, outermost first. */
+    struct hstex_nest_level *nest;
+    size_t nest_count;
+    size_t nest_capacity;
     /* The control sequence whose macro is being expanded, so that an error
        can name the frame its body is read from. */
     uint32_t expanding_macro_cs;
