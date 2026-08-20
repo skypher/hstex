@@ -1,0 +1,23 @@
+% An \outer macro standing in the text a conditional skips, and an \else,
+% \or or \fi that matches no \if.
+%
+% Measured against pdftex: an \outer macro in skipped text is taken as a
+% sign the \fi was forgotten. "Incomplete \iffalse; all text was ignored
+% after line N" -- naming the \if that was open and the line it stood on --
+% a \fi inserted, and the macro read again. All three ways of skipping do
+% it: past a false branch, past an \else, and past an \ifcase's branches.
+%
+% A stray \else, \or or \fi is named and ignored -- "Extra \fi.", "I'm
+% ignoring this; it doesn't match any \if." -- rather than ending the run,
+% which is what the inserted \fi above then meets.
+%
+% trip line 363 writes \ifcase3 \lo where \lo was defined \outer on 356.
+\tracingonline=1
+\outer\def\o{O}
+\iffalse\o\fi\message{[after a false branch]}
+\iftrue A\else\o\fi\message{[after an else]}
+\ifcase3 \o\fi\message{[after an ifcase]}
+\ifcase0 A\or\o\fi\message{[after an or]}
+\fi\message{[a stray fi is ignored]}
+\iftrue A\fi\message{[an ordinary conditional is silent]}
+\end

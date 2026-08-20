@@ -135,6 +135,10 @@ static void tex_error(struct hstex_engine *engine, const char *const *help,
 static void report_improper_aux(struct hstex_engine *engine,
                                 const char *name);
 static void report_undefined_control_sequence(struct hstex_engine *engine);
+static int report_forbidden_in_skipped_text(struct hstex_engine *engine,
+                                            size_t target, hstex_token token,
+                                            char *error,
+                                            size_t error_capacity);
 static int next_conditional_operand(struct hstex_engine *engine,
                                     hstex_token *token, char *error,
                                     size_t error_capacity);
@@ -8903,6 +8907,15 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_FONT_NAME) {
         return expand_font_name(engine, location, error, error_capacity);
     }
+    /* Which \if this is, for a message the skipped text may draw later.
+       A conditional is expandable, so the main loop's own token is stale
+       by the time one is opened. */
+    if (command_starts_conditional(meaning->command)) {
+        engine->conditional_opener =
+            hstex_token_is_control_sequence(token)
+                ? hstex_token_control_sequence_id(token)
+                : 0U;
+    }
     if (meaning->command == HSTEX_COMMAND_IF_NUM) {
         return scan_if_num(engine, error, error_capacity);
     }
@@ -9017,6 +9030,11 @@ enum hstex_engine_result hstex_engine_next_expanded(
         *token = current;
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(current));
+        /* Which \if this is, for a message the skipped text may draw. */
+        if (command_starts_conditional(meaning->command)) {
+            engine->conditional_opener =
+                hstex_token_control_sequence_id(current);
+        }
         if (meaning->command == HSTEX_COMMAND_MACRO) {
             if (meaning->value.macro_identifier == 0U ||
                 (size_t)meaning->value.macro_identifier > engine->macro_count) {
@@ -12780,7 +12798,10 @@ static int execute_else(struct hstex_engine *engine, char *error,
                         size_t error_capacity)
 {
     if (engine->conditional_count == 0U) {
-        return set_error(error, error_capacity, "extra else");
+        static const char *const help[] = {
+            "I'm ignoring this; it doesn't match any \\if.", NULL};
+        tex_error(engine, help, "Extra \\else");
+        return 0;
     }
     struct hstex_conditional *conditional =
         &engine->conditionals[engine->conditional_count - 1U];
@@ -12798,7 +12819,10 @@ static int execute_or(struct hstex_engine *engine, char *error,
                       size_t error_capacity)
 {
     if (engine->conditional_count == 0U) {
-        return set_error(error, error_capacity, "extra or");
+        static const char *const help[] = {
+            "I'm ignoring this; it doesn't match any \\if.", NULL};
+        tex_error(engine, help, "Extra \\or");
+        return 0;
     }
     size_t target = engine->conditional_count - 1U;
     struct hstex_conditional *conditional = &engine->conditionals[target];
@@ -12812,8 +12836,13 @@ static int execute_or(struct hstex_engine *engine, char *error,
 static int execute_fi(struct hstex_engine *engine, char *error,
                       size_t error_capacity)
 {
+    (void)error;
+    (void)error_capacity;
     if (engine->conditional_count == 0U) {
-        return set_error(error, error_capacity, "extra fi");
+        static const char *const help[] = {
+            "I'm ignoring this; it doesn't match any \\if.", NULL};
+        tex_error(engine, help, "Extra \\fi");
+        return 0;
     }
     --engine->conditional_count;
     return 0;
@@ -34447,6 +34476,13 @@ static int skip_conditional(struct hstex_engine *engine, size_t target,
                 continue;
             }
         }
+        if (token_is_outer_macro(engine, token)) {
+            if (report_forbidden_in_skipped_text(engine, target, token, error,
+                                                 error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
         enum hstex_command command =
             hstex_engine_meaning(engine,
                                  hstex_token_control_sequence_id(token))
@@ -34517,6 +34553,13 @@ static int skip_case_to_branch(struct hstex_engine *engine, size_t target,
         if (!hstex_token_is_control_sequence(token)) {
             continue;
         }
+        if (token_is_outer_macro(engine, token)) {
+            if (report_forbidden_in_skipped_text(engine, target, token, error,
+                                                 error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
         enum hstex_command command =
             hstex_engine_meaning(engine,
                                  hstex_token_control_sequence_id(token))
@@ -34557,6 +34600,40 @@ static int skip_case_to_branch(struct hstex_engine *engine, size_t target,
     }
 }
 
+/* An \outer macro in skipped text: the reference takes it as a sign the
+   \fi was forgotten, inserts one, and reads the macro again. */
+static int report_forbidden_in_skipped_text(struct hstex_engine *engine,
+                                            size_t target, hstex_token token,
+                                            char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A forbidden control sequence occurred in skipped text.",
+        "This kind of error happens when you say `\\if...' and forget",
+        "the matching `\\fi'. I've inserted a `\\fi'; this might work.", NULL};
+    const struct hstex_conditional *opened = &engine->conditionals[target];
+    char named[128] = "\\if";
+    if (opened->opener != 0U) {
+        describe_token(engine, hstex_token_control_sequence(opened->opener),
+                       named, sizeof(named));
+    }
+    static const uint8_t fi_name[] = "fi";
+    hstex_cs_id fi = 0U;
+    struct hstex_source_location where = {0};
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, fi_name,
+                            sizeof(fi_name) - 1U, &fi, error,
+                            error_capacity) != 0 ||
+        push_one(engine, token, where, error, error_capacity) != 0 ||
+        push_one(engine, hstex_token_control_sequence(fi), where, error,
+                 error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help,
+              "Incomplete %s; all text was ignored after line %u", named,
+              (unsigned int)opened->line);
+    return 0;
+}
+
 static int skip_case_remainder(struct hstex_engine *engine, size_t target,
                                char *error, size_t error_capacity)
 {
@@ -34576,6 +34653,13 @@ static int skip_case_remainder(struct hstex_engine *engine, size_t target,
         }
         token = normalize_unexpanded_control_sequence(token);
         if (!hstex_token_is_control_sequence(token)) {
+            continue;
+        }
+        if (token_is_outer_macro(engine, token)) {
+            if (report_forbidden_in_skipped_text(engine, target, token, error,
+                                                 error_capacity) != 0) {
+                return -1;
+            }
             continue;
         }
         enum hstex_command command =
@@ -34640,6 +34724,7 @@ static int push_conditional(struct hstex_engine *engine, size_t *index,
     entry->negate = engine->negate_next_conditional;
     entry->evaluated = false;
     entry->origin = current_source_line(engine, &entry->line);
+    entry->opener = engine->conditional_opener;
     engine->negate_next_conditional = false;
     return 0;
 }

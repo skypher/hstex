@@ -1545,6 +1545,9 @@ struct hstex_conditional {
        can say which one it belongs to. */
     uint32_t line;
     const char *origin;
+    /* Which \if it was, for the message an \outer macro in the skipped
+       text draws: "Incomplete \ifcase", not just "Incomplete \if". */
+    hstex_cs_id opener;
 };
 
 enum hstex_mode {
@@ -1911,6 +1914,8 @@ struct hstex_engine {
     bool returned_unexpanded_executable;
     bool inhibit_protected_expansion;
     bool negate_next_conditional;
+    /* The \if last expanded, which the conditional it opens remembers. */
+    hstex_cs_id conditional_opener;
     bool dump_requested;
     bool end_requested;
     uint32_t output_group_floor;
