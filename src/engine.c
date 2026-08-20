@@ -3598,8 +3598,13 @@ static int append_byte(uint8_t **bytes, size_t *count, size_t *capacity,
     return 0;
 }
 
+/* With allow_empty, a name that is not there is not a fault: *filename is
+   left NULL and the caller decides. \input wants that -- measured, an
+   \input with nothing after it is passed over in silence and the file
+   carries on -- and nothing else does. */
 static int scan_input_filename(struct hstex_engine *engine, char **filename,
-                               char *error, size_t error_capacity)
+                               bool allow_empty, char *error,
+                               size_t error_capacity)
 {
     hstex_token token = 0U;
     struct hstex_source_location location;
@@ -3644,6 +3649,23 @@ static int scan_input_filename(struct hstex_engine *engine, char **filename,
                 return -1;
             }
         } else {
+            /* The token that ends the name is read again -- with one
+               exception. Measured: `\\input fj\\endinput' does not end the
+               file that wrote it, where `\\input fj \\endinput' does. What
+               the reference backs up after a file name is not where an
+               \\endinput can take hold, and an \\endinput has no other
+               effect, so it is simply dropped here. */
+            bool ends_input = false;
+            if (hstex_token_is_control_sequence(token)) {
+                const struct hstex_meaning *meaning = hstex_engine_meaning(
+                    engine, hstex_token_control_sequence_id(token));
+                ends_input =
+                    meaning != NULL &&
+                    meaning->command == HSTEX_COMMAND_END_INPUT;
+            }
+            if (!braced && ends_input) {
+                break;
+            }
             if (!braced &&
                 push_one(engine, token, location, error, error_capacity) == 0) {
                 break;
@@ -3673,10 +3695,18 @@ static int scan_input_filename(struct hstex_engine *engine, char **filename,
         return set_error(error, error_capacity,
                          "unterminated quote in filename");
     }
-    if (count == 0U || append_byte(&bytes, &count, &capacity, 0U, error,
-                                   error_capacity) != 0) {
+    if (count == 0U) {
         free(bytes);
+        if (allow_empty) {
+            *filename = NULL;
+            return 0;
+        }
         return set_error(error, error_capacity, "empty input filename");
+    }
+    if (append_byte(&bytes, &count, &capacity, 0U, error, error_capacity) !=
+        0) {
+        free(bytes);
+        return -1;
     }
     *filename = (char *)bytes;
     return 0;
@@ -4133,8 +4163,12 @@ static int execute_input(struct hstex_engine *engine, char *error,
                          size_t error_capacity)
 {
     char *filename = NULL;
-    if (scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+    if (scan_input_filename(engine, &filename, true, error,
+                            error_capacity) != 0) {
         return -1;
+    }
+    if (filename == NULL) {
+        return 0;
     }
     char *path = resolve_input_path(engine, filename);
     if (path == NULL) {
@@ -7067,7 +7101,8 @@ static int expand_pdf_file_size(struct hstex_engine *engine,
                                 char *error, size_t error_capacity)
 {
     char *filename = NULL;
-    if (scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+    if (scan_input_filename(engine, &filename, false, error,
+                            error_capacity) != 0) {
         return -1;
     }
     char *path = resolve_input_path(engine, filename);
@@ -10041,7 +10076,8 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
     }
 
     char *name = NULL;
-    if (scan_input_filename(engine, &name, error, error_capacity) != 0) {
+    if (scan_input_filename(engine, &name, false, error,
+                            error_capacity) != 0) {
         return -1;
     }
     int32_t size = 0;
@@ -21548,7 +21584,8 @@ static int execute_open_out(struct hstex_engine *engine, bool immediate,
     char *filename = NULL;
     if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        scan_input_filename(engine, &filename, false, error,
+                            error_capacity) != 0) {
         free(filename);
         return -1;
     }
@@ -34329,7 +34366,8 @@ static int execute_open_in(struct hstex_engine *engine, char *error,
     char *filename = NULL;
     if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_input_filename(engine, &filename, error, error_capacity) != 0) {
+        scan_input_filename(engine, &filename, false, error,
+                            error_capacity) != 0) {
         free(filename);
         return -1;
     }

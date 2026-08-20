@@ -529,10 +529,12 @@ int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
         if (frame->kind != HSTEX_SOURCE_FILE) {
             continue;
         }
+        /* The file ends after the line \endinput was written on, not at
+           the \endinput: measured, `\message{[A]}\endinput\message{[B]}'
+           prints both. So only the lines to come are taken away; the one
+           in hand is left to be read out. */
         struct hstex_mouth *mouth = &frame->value.file->mouth;
         mouth->next_line_offset = mouth->length;
-        mouth->line_loaded = false;
-        mouth->has_end_line_byte = false;
         return 0;
     }
     return set_error(error, error_capacity,

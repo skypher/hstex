@@ -1,0 +1,28 @@
+% \endinput, and \input with no name at all.
+%
+% Measured against pdftex:
+%
+%   * \endinput ends the file after the LINE it stands on, not at itself.
+%     `\message{[A]}\endinput\message{[B]}' prints both, and only the
+%     lines below are lost. This engine dropped the rest of the line too.
+%
+%   * It takes hold the same way from inside a macro or a group.
+%
+%   * But `\input fj\endinput' does NOT end the file that wrote it, where
+%     `\input fj \endinput' -- one space more -- does. The difference is
+%     that without the space the \endinput is the token that ended the
+%     file name, and what the reference backs up after a file name is not
+%     where an \endinput can take hold. Since an \endinput has no other
+%     effect, this engine drops that one rather than reading it again.
+%     Any other terminator is still read again: `\input fj\message{[D]}'
+%     prints D.
+%
+%   * \input with no name -- `\input' at the end of a line, with only a
+%     comment after it -- does nothing at all, in silence, and the file
+%     carries on. This engine stopped.
+%
+% trip line 424 writes \expandafter\stopinput\input tripos\endinput\input
+% with a comment after, which is all three of these at once.
+\tracingonline=1
+\message{[A]}\endinput\message{[B]}
+\message{[never read]}

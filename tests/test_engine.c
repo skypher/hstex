@@ -1205,7 +1205,10 @@ static int test_input_primitive(void)
         (void)unlink(child_path);
         return 1;
     }
-    int status = run_snippet(source, "CI");
+    /* \\endinput ends the file after the line it stands on, so the \\def
+       after it on the same line does take effect: measured against the
+       reference, which answers CF here and not CI. */
+    int status = run_snippet(source, "CF");
     (void)unlink(child_path);
     return status;
 }
