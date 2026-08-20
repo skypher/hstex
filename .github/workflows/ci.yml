@@ -26,5 +26,7 @@ jobs:
         run: meson compile -C build
       - name: Test
         run: meson test -C build --no-rebuild --print-errorlogs
-      - name: Verify benchmark snapshot
-        run: tests/corpus/check_manifests.sh
+      - name: Verify vendored benchmark input
+        run: benchmarks/check_manifests.sh
+      - name: Verify document corpus digests
+        run: tests/corpus/run-corpus.sh --fetch-only

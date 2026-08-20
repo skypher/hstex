@@ -3,9 +3,9 @@
 ## Goal
 
 Build a clean-room, pdfTeX-compatible typesetting engine in C with substantially
-lower wall-clock latency on the pinned `document.tex` benchmark. The first
-end-to-end milestone requires both correct reproduction and at least a 5×
-speedup over the local pdfTeX baseline.
+lower wall-clock latency than pdfTeX. The first end-to-end milestone requires
+both correct reproduction of a real document corpus and at least a 5× speedup
+over the local pdfTeX baseline.
 
 ## Clean-room boundary
 
@@ -38,9 +38,10 @@ speedup over the local pdfTeX baseline.
 
 ## Benchmark rules
 
-- Treat `tests/corpus-manifest.sha256` as the immutable milestone-one
-  corpus identity.
-- Never modify the source snapshot to make the engine pass.
+- Treat `tests/corpus/documents.tsv` as the corpus identity: every document is
+  pinned by digest and fetched, never vendored.
+- Never modify a corpus document to make the engine pass. A document that
+  fails is a finding, not a defect in the document.
 - Correctness is evaluated semantically: auxiliary state, page geometry,
   line/page breaking, glyph placement, destinations, links, bookmarks, text,
   and rendered pages. Raw PDF byte identity is not required.

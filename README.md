@@ -3,19 +3,28 @@
 HSTeX is a clean-room TeX engine written in C17 for low-latency pdfTeX-compatible
 typesetting on modern CPUs.
 
-The first end-to-end target is the pinned `document.tex` corpus in
-`tests/corpus`. Success requires semantically correct PDF and auxiliary
-outputs together with at least a 5× median wall-clock speedup over pdfTeX on a
-fresh TeX → BibTeX → TeX → TeX build.
+The first end-to-end target is the public document corpus in `tests/corpus`:
+freely distributable TeX documents, pinned by digest, typeset by both engines
+and compared on what the reference says about the document. Success requires
+semantically correct PDF and auxiliary outputs together with at least a 5×
+median wall-clock speedup over pdfTeX.
 
 ## Current status
 
-The repository contains the clean-room contract, benchmark snapshot and oracle
-runner, plus the first engine substrate: regular-file loading, packed tokens,
-mutable catcodes, stable control-sequence interning, a line-aware TeX mouth,
-nested file/token sources, and a runtime-dispatched scalar/AVX2 lexical-boundary
-scanner. The expansion core supports ordinary and delimited macros, local and
-global definitions, `let`, definition prefixes, `expandafter`, and `noexpand`.
+The results below were measured against a legacy benchmark document that
+served as the milestone-one corpus. That document has been removed from the
+repository, so "the corpus" in this section means it, and these figures can no
+longer be reproduced from a clone. They are kept because they record what was
+actually measured. The corpus that ships now is the public one in
+`tests/corpus`; `docs/BENCHMARK_CONTRACT.md` records what changed with it.
+
+The repository contains the clean-room contract, the public document corpus and
+its comparison runner, plus the first engine substrate: regular-file loading,
+packed tokens, mutable catcodes, stable control-sequence interning, a
+line-aware TeX mouth, nested file/token sources, and a runtime-dispatched
+scalar/AVX2 lexical-boundary scanner. The expansion core supports ordinary and
+delimited macros, local and global definitions, `let`, definition prefixes,
+`expandafter`, and `noexpand`.
 The executor supports mutable catcodes and integer/count state, character and
 count definitions, nested integer and meaning conditionals, scoped restoration,
 and nested file input. It currently bootstraps the installed `latex.ltx` through
@@ -45,12 +54,12 @@ already on the line, a `\showbox` starts one of its own, a shipped page
 announces itself by its counts -- and what is missing is the file-open
 notation and everything downstream of the page builder.
 
-The benchmark corpus loads its full package stack — `geometry`, `amsmath`,
+A LaTeX document loads its full package stack — `geometry`, `amsmath`,
 `amssymb`, `mathtools`, `microtype`, `hyperref`, `xr`, `cleveref` and their
 73-file dependency graph — on the same command:
 
 ```sh
-./build/hstex --run-latex "$(kpsewhich latex.ltx)" tests/corpus/document.tex
+./build/hstex --run-latex "$(kpsewhich latex.ltx)" document.tex
 ```
 
 That needed pdfTeX's regular-expression and string-escape primitives and the
@@ -353,8 +362,8 @@ meson test -C build --no-rebuild
 
 A build to measure with is built from a profile of the engine's own work,
 which `tools/build-pgo.sh` takes in one command. The profile comes from
-building the format and from `benchmarks/training/train.tex`, never from the
-milestone corpus:
+building the format and from `benchmarks/training/train.tex`, never from a
+corpus document:
 
 ```sh
 tools/build-pgo.sh
@@ -364,14 +373,14 @@ Inspect the selected scanner and probe an input file:
 
 ```sh
 ./build/hstex --cpu-features
-./build/hstex --probe-input tests/corpus/document.tex
-./build/hstex --mouth-stats-latex tests/corpus/document.tex
+./build/hstex --probe-input build/corpus/src/testmath.tex
+./build/hstex --mouth-stats-latex build/corpus/src/testmath.tex
 ```
 
-Generate a fresh pdfTeX oracle build in an ignored output directory:
+Run the public document corpus against the reference engine:
 
 ```sh
-tests/corpus/run_pdftex_oracle.sh
+tests/corpus/run-corpus.sh
 ```
 
 See `CLEANROOM.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and

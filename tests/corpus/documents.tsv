@@ -1,0 +1,14 @@
+# The public document corpus, run as black-box comparisons against the
+# reference engine.  One document per line:
+#
+#   name <TAB> format <TAB> ctan-path <TAB> sha256 <TAB> description
+#
+# format is `plain' (run under plain TeX) or `latex'.  Documents are fetched
+# from CTAN and pinned by digest rather than vendored: they are test input,
+# not engine source, and the repository should not carry copies of documents
+# whose licences let them be fetched.  See CLEANROOM.md.
+story	plain	systems/knuth/dist/lib/story.tex	592939f339e78d7faca19c75017ec338db7c9efdea085c4374e5b13909cc8ec6	Knuth's canonical plain TeX sample
+gentle	plain	info/gentle/gentle.tex	b3e1acf4a6feb6a13b0ace279a5be7f1546ac2198452188f6fb22b4eb590ba3f	Doob, A Gentle Introduction to TeX, a 97-page plain TeX book
+small2e	latex	macros/latex/base/small2e.tex	6995024e85f537d32eef704a81d7f53b84aa06cb23361559d3fea3b6c5653627	LaTeX's own minimal sample document
+sample2e	latex	macros/latex/base/sample2e.tex	f135855f870c31f1101001bdb75b11e94a23c2605f7ab5dffa1299d53b1977cc	LaTeX's own feature sample: sections, math, tabular, verbatim
+testmath	latex	macros/latex/required/amsmath/testmath.tex	9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5	The AMS amsmath test document, 41 pages of displayed mathematics
