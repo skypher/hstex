@@ -1,0 +1,23 @@
+% The two ways \insert is refused.
+%
+% Measured against pdftex:
+%
+%   Class 255 is the page builder's own: "You can't \insert255." and class
+%   0 is used instead. Past 255 -- or below zero -- is an ordinary bad
+%   register code, also recovered with class 0. This corrects an earlier
+%   reading here that put the limit at 254.
+%
+%   The class's own box is where the insertion ends up, so it may not
+%   already hold an hbox: "Insertions can only be added to a vbox." The
+%   reference says so once the insertion has been READ -- its log shows
+%   `<recently read> }' -- and throws the box's present contents away
+%   rather than the insertion, leaving the register void.
+%
+% trip line 262 writes \insert255.
+\tracingonline=1
+\insert255{\penalty999}\message{[after 255]}
+\insert256{}\message{[after 256]}
+\setbox0=\hbox{}\insert0{\penalty7}\showbox0   % box 0 comes back void
+\setbox0=\vbox{}\insert0{}\message{[a vbox is fine]}
+\insert254{}\message{[254 is an ordinary class]}
+\end

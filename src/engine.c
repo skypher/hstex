@@ -30451,11 +30451,18 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
 static int execute_insert(struct hstex_engine *engine, char *error,
                           size_t error_capacity)
 {
-    /* An insertion class stops at 254 whatever the register width, 255
-       being the page builder's own; going past it is forgiven. */
+    /* An insertion class stops at 255 whatever the register width, and 255
+       itself is the page builder's own: past 255 is a bad register code,
+       255 is refused by name. Both are forgiven, and both give class 0. */
     int32_t number = 0;
-    if (scan_register_num(engine, &number, 254, error, error_capacity) != 0) {
+    if (scan_register_num(engine, &number, 255, error, error_capacity) != 0) {
         return -1;
+    }
+    if (number == 255) {
+        static const char *const help[] = {
+            "I'm changing to \\insert0; box 255 is special.", NULL};
+        tex_error(engine, help, "You can't \\insert255");
+        number = 0;
     }
     hstex_token opening = 0U;
     struct hstex_source_location location;
@@ -30485,6 +30492,23 @@ static int execute_insert(struct hstex_engine *engine, char *error,
     free(builder.node_identifiers);
     if (status != 0) {
         return -1;
+    }
+    /* The class's own box is where the insertion will end up, so it may
+       not already hold an hbox. The reference says so once the insertion
+       has been read -- its log shows `<recently read> }' -- and throws the
+       box's present contents away rather than the insertion. */
+    if (number >= 0 && (size_t)number < engine->count_capacity &&
+        engine->boxes[(size_t)number].kind == HSTEX_BOX_HLIST) {
+        static const char *const help[] = {
+            "Tut tut: You're trying to \\insert into a",
+            "\\box register that now contains an \\hbox.",
+            "Proceed, and I'll discard its present contents.", NULL};
+        tex_error(engine, help, "Insertions can only be added to a vbox");
+        struct hstex_box empty = {0};
+        if (assign_box(engine, (uint32_t)number, empty, true, error,
+                       error_capacity) != 0) {
+            return -1;
+        }
     }
     struct hstex_node node = {
         .kind = HSTEX_NODE_INSERT,
