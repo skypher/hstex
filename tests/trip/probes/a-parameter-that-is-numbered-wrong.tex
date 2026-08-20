@@ -1,0 +1,21 @@
+% The two faults a macro's parameter text can have.
+%
+% Measured against pdftex:
+%
+%   A digit out of order draws "Parameters must be numbered consecutively",
+%   the digit that SHOULD have been there is used, and what was written is
+%   read again -- as ordinary parameter text, so `\def\q#1#3{...}' ends up
+%   with two parameters and a literal 3 between them.
+%
+%   A tenth draws "You already have nine parameters", and the # and the
+%   token after it are both dropped.
+%
+% trip line 356 writes \edef\lo#1#2U3#4#5#6#7#8#8#99#{\relax}, which has
+% one of each.
+\tracingonline=1
+\def\q#1#3{[#1]}\message{[after a wrong digit]}
+\def\r#1#2#3#4#5#6#7#8#9#9{X}\message{[after a tenth]}
+\long\edef\lo#1#2U3#4#5#6#7#8#8#99#{\relax}\message{[after trip's own]}
+\def\s#1#2{[#1#2]}\s AB\message{[an ordinary one is silent]}
+\def\t#1#{[#1]}\message{[and so is #{ ]}
+\end

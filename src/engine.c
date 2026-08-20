@@ -9461,28 +9461,30 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                 hash_brace = number;
                 break;
             }
+            if (parameter_count >= HSTEX_MAX_PARAMETERS) {
+                /* The reference drops the # and whatever followed it, and
+                   goes on with the nine it has. */
+                static const char *const help[] = {
+                    "I'm going to ignore the # sign you just used,",
+                    "as well as the token that followed it.", NULL};
+                tex_error(engine, help, "You already have nine parameters");
+                continue;
+            }
             if (!hstex_token_is_character(number) ||
                 hstex_token_character_code(number) !=
-                    (uint8_t)('1' + parameter_count) ||
-                parameter_count >= HSTEX_MAX_PARAMETERS) {
-                vector_destroy(&parameter_text);
-                enum hstex_symbol_kind kind;
-                const uint8_t *name = NULL;
-                size_t length = 0U;
-                char found[128];
-                describe_token(engine, number, found, sizeof(found));
-                if (hstex_symbol_name(&engine->lexical_state.symbols,
-                                      hstex_token_control_sequence_id(target),
-                                      &kind, &name, &length) == 0) {
-                    return set_error(
-                        error, error_capacity,
-                        "parameter %u of \\%.*s should be #%u, found %s",
-                        (unsigned int)parameter_count + 1U, (int)length,
-                        (const char *)name,
-                        (unsigned int)parameter_count + 1U, found);
+                    (uint8_t)('1' + parameter_count)) {
+                /* The digit that should have been there is put in, and what
+                   was there is read again -- as ordinary parameter text. */
+                static const char *const help[] = {
+                    "I've inserted the digit you should have used after the #.",
+                    "Type `1' to delete what you did use.", NULL};
+                if (push_one(engine, number, location, error,
+                             error_capacity) != 0) {
+                    vector_destroy(&parameter_text);
+                    return -1;
                 }
-                return set_error(error, error_capacity,
-                                 "macro parameters must be numbered consecutively");
+                tex_error(engine, help,
+                          "Parameters must be numbered consecutively");
             }
             ++parameter_count;
             current = hstex_token_parameter(parameter_count);
