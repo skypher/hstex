@@ -1811,6 +1811,15 @@ struct hstex_engine {
        reference builds its trie there and will not take another pattern
        afterwards. See docs/DECISIONS.md, hyphenation-diagnostics. */
     bool hyphen_trie_settled;
+    /* The language and the two hyphenmins in force where the word being
+       hyphenated stands. See docs/DECISIONS.md, hyphenation-minima. */
+    int32_t hyphenating_language;
+    size_t hyphenating_left_min;
+    size_t hyphenating_right_min;
+    /* What the paragraph now being broken was entered with. */
+    int32_t paragraph_language;
+    uint8_t paragraph_left_min;
+    uint8_t paragraph_right_min;
     enum hstex_interaction_mode interaction_mode;
     /* A recoverable error is reported and then recovered from, the way the
        reference does it, so a document full of them still runs to its end.

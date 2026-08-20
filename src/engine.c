@@ -12530,12 +12530,11 @@ static uint32_t find_hyphen_child(const struct hstex_engine *engine,
 static void apply_hyphen_minima(const struct hstex_engine *engine,
                                 uint8_t *break_before, size_t length)
 {
-    int32_t left_value =
-        engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN];
-    int32_t right_value =
-        engine->integer_parameters[HSTEX_INTEGER_RIGHT_HYPHEN_MIN];
-    size_t left = left_value > 0 ? (size_t)left_value : 0U;
-    size_t right = right_value > 0 ? (size_t)right_value : 0U;
+    /* The two minima are the ones in force where the word stands: the
+       paragraph's own to begin with, and whatever a \\setlanguage passed on
+       the way has said since. See docs/DECISIONS.md, hyphenation-minima. */
+    size_t left = engine->hyphenating_left_min;
+    size_t right = engine->hyphenating_right_min;
     for (size_t index = 1U; index < length; ++index) {
         if (index < left || length - index < right) {
             break_before[index] = 0U;
@@ -25213,10 +25212,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
     /* The reference builds its trie here, the first time a paragraph asks
        to be hyphenated, and will not take a pattern afterwards. */
     engine->hyphen_trie_settled = true;
-    int32_t language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
+    int32_t language = engine->paragraph_language;
     if (language < 0 || (size_t)language >= engine->count_capacity) {
         language = 0;
     }
+    engine->hyphenating_left_min = engine->paragraph_left_min;
+    engine->hyphenating_right_min = engine->paragraph_right_min;
     size_t capacity = count + 16U;
     uint32_t *result = calloc(capacity, sizeof(*result));
     if (result == NULL) {
@@ -25240,6 +25241,20 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         if (identifier != 0U && (size_t)identifier <= engine->node_count &&
             engine->nodes[identifier - 1U].kind == HSTEX_NODE_MATH) {
             breaking = engine->nodes[identifier - 1U].value.math.after;
+        }
+        /* A \\setlanguage passed on the way says what the words after it are
+           hyphenated by. */
+        if (identifier != 0U && (size_t)identifier <= engine->node_count &&
+            engine->nodes[identifier - 1U].kind == HSTEX_NODE_WHATSIT &&
+            engine->nodes[identifier - 1U].value.whatsit.kind ==
+                (uint8_t)HSTEX_WHATSIT_LANGUAGE) {
+            const struct hstex_node *at = &engine->nodes[identifier - 1U];
+            language = at->value.whatsit.number;
+            if (language < 0 || (size_t)language >= engine->count_capacity) {
+                language = 0;
+            }
+            engine->hyphenating_left_min = at->value.whatsit.stream;
+            engine->hyphenating_right_min = at->value.whatsit.action;
         }
         if (!breaking || identifier == 0U ||
             (size_t)identifier > engine->node_count ||
@@ -25702,6 +25717,15 @@ static int normal_paragraph(struct hstex_engine *engine, char *error,
 static int finish_paragraph(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
+    /* What the paragraph was entered with is what its first words are
+       hyphenated by; the level holding it goes away here. */
+    if (engine->nest_count != 0U) {
+        const struct hstex_nest_level *level =
+            &engine->nest[engine->nest_count - 1U];
+        engine->paragraph_language = level->language;
+        engine->paragraph_left_min = level->left_hyphen_min;
+        engine->paragraph_right_min = level->right_hyphen_min;
+    }
     nest_pop(engine);
     if (finish_paragraph_line(engine, NULL, error, error_capacity) != 0 ||
         normal_paragraph(engine, error, error_capacity) != 0) {
