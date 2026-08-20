@@ -32689,9 +32689,10 @@ static int extend_align_columns(struct hstex_align_column **columns,
         return 0;
     }
     if (loop_start == SIZE_MAX || loop_start >= preamble_count) {
-        return set_error(error, error_capacity,
-                         "an alignment row has more entries than the "
-                         "preamble has columns");
+        /* There is no repeating part to draw another column from, so the
+           row has asked for one that cannot exist. The caller reports it
+           and ends the row. */
+        return 1;
     }
     /* The period is the preamble's own repeating part, not what the
        columns have grown to. */
@@ -33683,6 +33684,36 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                                    "input ended inside an alignment row");
                 break;
             }
+            /* Whether the column exists is settled before anything of the
+               entry is read, so that where it does not the row ends with
+               nothing taken. */
+            int extended = extend_align_columns(&columns, &column_count,
+                                                &column_capacity, loop_start,
+                                                preamble_columns, column,
+                                                error, error_capacity);
+            if (extended < 0) {
+                status = -1;
+                break;
+            }
+            if (extended > 0) {
+                /* The reference turns the tab that asked for it into a \cr,
+                   so the row ends here and what follows begins the next
+                   one. */
+                static const char *const help[] = {
+                    "You have given more \\span or & marks than there were",
+                    "in the preamble to the \\halign or \\valign now in "
+                    "progress.",
+                    "So I'll assume that you meant to type \\cr instead.",
+                    NULL};
+                if (push_one(engine, first, start, error, error_capacity) !=
+                    0) {
+                    status = -1;
+                    break;
+                }
+                tex_error(engine, help,
+                          "Extra alignment tab has been changed to \\cr");
+                break;
+            }
             bool omit = false;
             if (hstex_token_is_control_sequence(first) &&
                 hstex_engine_meaning(engine,
@@ -33691,13 +33722,6 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                 omit = true;
             } else if (push_one(engine, first, start, error, error_capacity) !=
                        0) {
-                status = -1;
-                break;
-            }
-            if (extend_align_columns(&columns, &column_count,
-                                     &column_capacity, loop_start,
-                                     preamble_columns, column, error,
-                                     error_capacity) != 0) {
                 status = -1;
                 break;
             }

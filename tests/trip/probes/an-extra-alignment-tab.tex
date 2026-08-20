@@ -1,0 +1,36 @@
+% A row with more entries than the preamble has columns.
+%
+% Measured against pdftex: the tab that asked for the column it has not
+% got is turned into a \cr --
+%
+%   ! Extra alignment tab has been changed to \cr.
+%   You have given more \span or & marks than there were
+%   in the preamble to the \halign or \valign now in progress.
+%   So I'll assume that you meant to type \cr instead.
+%
+% -- so `\halign{#&#\cr A&B&C\cr}' sets two rows: A B, and then C. What
+% follows the extra tab begins the next row rather than being lost.
+%
+% A preamble with a && repeating part has no such limit: it grows another
+% column instead and says nothing.
+%
+% This engine stopped. Whether the column exists is now settled before
+% any of the entry is read, so where it does not the row ends with
+% nothing taken -- an \omit after the extra tab belongs to the next row.
+%
+% NOT YET: \span in a row does not advance the column here as it does in
+% the reference, so `\halign{#&#\cr A\span B\span C\cr}' draws the fault
+% there and not here, and makes one cell of all three. That is the
+% \span-cell-width difference already known.
+%
+% trip line 408 has five tabs against a three-column preamble.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\vbox{\halign{#&#\cr A&B&C\cr}}\showbox0
+\setbox1=\vbox{\halign{#\cr A&B\cr}}\showbox1
+\setbox2=\vbox{\halign{#\cr A&B&C\cr}}\showbox2
+\setbox3=\vbox{\halign{#&&#\cr A&B&C&D\cr}}\showbox3
+\setbox4=\hbox{\valign{#\cr A&B\cr}}\showbox4
+\setbox5=\vbox{\halign{#\cr A&\omit B\cr}}\showbox5
+\setbox6=\vbox{\halign{#&#\cr A&B\cr}}\showbox6
+\end
