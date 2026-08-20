@@ -1901,6 +1901,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     /* Whether this run is being asked whether the list of places that can
        still name a node is complete; see docs/DECISIONS.md,
        what-a-page-leaves-behind. */
+    engine->hyphen_dispatch_language = -1;
     const char *dead_nodes = getenv("HSTEX_DEAD_NODES");
     if (dead_nodes != NULL && strcmp(dead_nodes, "trace") == 0) {
         engine->dead_node_check = HSTEX_DEAD_NODES_TRACED;
@@ -12170,6 +12171,32 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
     }
 }
 
+/* Every walk of the patterns starts at the language's root, and the root
+   has far more children than any node under it, so its list is scanned once
+   and spread by character instead of scanned at every position of every
+   word. */
+static uint32_t find_hyphen_root_child(struct hstex_engine *engine,
+                                       int32_t language, uint8_t character)
+{
+    if (engine->hyphen_dispatch_language != language ||
+        engine->hyphen_dispatch_nodes != engine->hyphen_node_count) {
+        memset(engine->hyphen_dispatch, 0, sizeof(engine->hyphen_dispatch));
+        uint32_t current = engine->hyphen_roots == NULL
+                               ? 0U
+                               : engine->hyphen_roots[(size_t)language];
+        while (current != 0U &&
+               (size_t)current <= engine->hyphen_node_count) {
+            const struct hstex_hyphen_trie_node *node =
+                &engine->hyphen_nodes[current - 1U];
+            engine->hyphen_dispatch[node->character] = current;
+            current = node->next_sibling;
+        }
+        engine->hyphen_dispatch_language = language;
+        engine->hyphen_dispatch_nodes = engine->hyphen_node_count;
+    }
+    return engine->hyphen_dispatch[character];
+}
+
 static uint32_t find_hyphen_child(const struct hstex_engine *engine,
                                   uint32_t first, uint8_t character)
 {
@@ -12201,7 +12228,7 @@ static void apply_hyphen_minima(const struct hstex_engine *engine,
     }
 }
 
-int hstex_engine_hyphenate_word(const struct hstex_engine *engine,
+int hstex_engine_hyphenate_word(struct hstex_engine *engine,
                                 int32_t language, const uint8_t *word,
                                 size_t length, uint8_t *break_before,
                                 size_t break_capacity, char *error,
@@ -12256,10 +12283,13 @@ int hstex_engine_hyphenate_word(const struct hstex_engine *engine,
     augmented[length + 1U] = (uint8_t)'.';
     size_t augmented_length = length + 2U;
     for (size_t start = 0U; start < augmented_length; ++start) {
-        uint32_t siblings = engine->hyphen_roots[(size_t)language];
+        uint32_t siblings = 0U;
         for (size_t cursor = start; cursor < augmented_length; ++cursor) {
             uint32_t identifier =
-                find_hyphen_child(engine, siblings, augmented[cursor]);
+                cursor == start
+                    ? find_hyphen_root_child(engine, language,
+                                             augmented[cursor])
+                    : find_hyphen_child(engine, siblings, augmented[cursor]);
             if (identifier == 0U) {
                 break;
             }
@@ -33556,9 +33586,20 @@ enum hstex_engine_result hstex_engine_next_output(
     size_t error_capacity)
 {
     if (engine->output_depth == 0U &&
-        engine->shipped_pages != engine->compacted_pages) {
-        engine->compacted_pages = engine->shipped_pages;
-        compact_nodes(engine);
+        engine->shipped_pages != engine->last_page_boundary) {
+        /* What nothing can reach is given back every eighth page rather
+           than every page: what one page leaves behind is half a megabyte,
+           and walking everything that is still alive costs the same however
+           little is dead. A run that is being asked whether the walk's list
+           of roots is complete walks at every page, as it always did, so
+           the answer means what it meant. */
+        int32_t stride =
+            engine->dead_node_check == HSTEX_DEAD_NODES_GIVEN_BACK ? 8 : 1;
+        engine->last_page_boundary = engine->shipped_pages;
+        if (engine->shipped_pages - engine->compacted_pages >= stride) {
+            engine->compacted_pages = engine->shipped_pages;
+            compact_nodes(engine);
+        }
         note_page_digest(engine);
         take_up_elsewhere(engine);
         park_a_chunk(engine);

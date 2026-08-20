@@ -1871,6 +1871,10 @@ struct hstex_engine {
     /* How many pages had been shipped when the node arenas were last given
        back; see docs/DECISIONS.md, what-a-page-leaves-behind. */
     int32_t compacted_pages;
+    /* The page the boundary work last ran for: digests, checkpoints and
+       parked chunks happen at every page, while compaction takes a stride
+       of its own. */
+    int32_t last_page_boundary;
     /* Which nodes the last walk over the roots did not reach, kept only
        while a run is being asked whether that list of roots is complete. */
     uint8_t *dead_nodes;
@@ -1911,6 +1915,13 @@ struct hstex_engine {
     int32_t parallel_pages[256];
     uint64_t parallel_stride_ns;
     uint64_t parallel_parked_at;
+    /* The children of one language's trie root, spread by character: every
+       walk starts at the root, and the root has the most children, so the
+       list scan is paid once and remembered. Rebuilt when the trie grows or
+       the language changes. */
+    uint32_t hyphen_dispatch[256];
+    int32_t hyphen_dispatch_language;
+    size_t hyphen_dispatch_nodes;
     /* Where in the file this chunk's own bytes begin, and the file it writes
        them into. A chunk inherits the byte count the run had reached where
        it was parked, which is exactly where the chunk before it stops. */
@@ -1946,7 +1957,7 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
 int hstex_engine_set_output_directory(struct hstex_engine *engine,
                                       const char *path, char *error,
                                       size_t error_capacity);
-int hstex_engine_hyphenate_word(const struct hstex_engine *engine,
+int hstex_engine_hyphenate_word(struct hstex_engine *engine,
                                 int32_t language, const uint8_t *word,
                                 size_t length, uint8_t *break_before,
                                 size_t break_capacity, char *error,
