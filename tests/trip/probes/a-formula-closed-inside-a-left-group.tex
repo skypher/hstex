@@ -1,0 +1,21 @@
+% A $ that closes a formula while a \left group is still open.
+%
+% Measured against pdftex: it puts `\right.' in front of the closing token
+% and reads it again -- "Missing \right. inserted" -- once per open \left,
+% so two nested \left groups draw two messages before the formula closes.
+%
+% \left opens no group of its own, only an inner math list, so it is asked
+% about separately from the { groups that off_save already handles: `$x{y$'
+% still draws "Missing } inserted".
+%
+% Its closer is two tokens where every other group's is one.
+%
+% trip line 298 writes \left(\over\left( and then $$.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$\left(x$\message{[after one left]}\par
+$\left(\left[x$\message{[after two]}\par
+$$\left(\over\left(x$$\message{[trip's own shape]}\par
+$x{y$\message{[a brace is still a brace]}\par
+$\left(x\right)$\message{[a matched pair is silent]}\par
+\end

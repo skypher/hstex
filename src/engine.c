@@ -34821,6 +34821,42 @@ static int insert_display_close(struct hstex_engine *engine,
     return 0;
 }
 
+/* A formula closed while a \left group is still open. The reference puts
+   `\right.' in front of the closing token and reads it again, one such
+   insertion per open \left, until the formula's own list is on top. The
+   closer is two tokens, where every other group's is one. */
+static int insert_right_delimiter(struct hstex_engine *engine,
+                                  hstex_token offending,
+                                  struct hstex_source_location location,
+                                  char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I've inserted something that you may have forgotten.",
+        "(See the <inserted text> above.)",
+        "With luck, this will get me unwedged. But if you",
+        "really didn't forget anything, try typing `2' now; then",
+        "my insertion and my current dilemma will both disappear.", NULL};
+    static const uint8_t name[] = "right";
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_token stop =
+        hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'.');
+    /* Read back out as \right, then the ., then the token that was too
+       early -- so they go in the other order. */
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, stop, location, error, error_capacity) != 0 ||
+        push_one(engine, hstex_token_control_sequence(identifier), location,
+                 error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing \\right. inserted");
+    return 0;
+}
+
 static int off_save(struct hstex_engine *engine, hstex_token offending,
                     struct hstex_source_location location, char *error,
                     size_t error_capacity)
@@ -35669,6 +35705,16 @@ handle_token:
                     if (current_group_kind(engine) != HSTEX_GROUP_MATH_SHIFT) {
                         if (off_save(engine, *token, *location, error,
                                      error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
+                        continue;
+                    }
+                    /* A \left opens no group of its own, only an inner math
+                       list, so it is asked about separately. */
+                    if (engine->math_depth > engine->math_floor + 1U) {
+                        if (insert_right_delimiter(engine, *token, *location,
+                                                   error, error_capacity) !=
+                            0) {
                             return HSTEX_ENGINE_ERROR;
                         }
                         continue;
