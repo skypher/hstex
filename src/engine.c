@@ -3396,12 +3396,22 @@ static void note_files_closed(struct hstex_engine *engine)
 
 /* A file that runs out inserts \everyeof, once, before whatever follows it;
    see docs/DECISIONS.md, everyeof. */
+static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
+                                char *error, size_t error_capacity);
+
 static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
 {
     if (hstex_source_take(&engine->sources, token, location)) {
-        return HSTEX_ENGINE_TOKEN;
+        int noted = note_alignment_token(engine, *token, error, error_capacity);
+        if (noted < 0) {
+            return HSTEX_ENGINE_ERROR;
+        }
+        if (noted == 0) {
+            return HSTEX_ENGINE_TOKEN;
+        }
+        return raw_next(engine, token, location, error, error_capacity);
     }
     for (;;) {
         size_t ended_before = engine->sources.file_end_count;
@@ -3421,8 +3431,18 @@ static enum hstex_engine_result raw_next(
         note_files_closed(engine);
         if (engine->sources.file_end_count == ended_before ||
             engine->token_parameters[HSTEX_TOKEN_EVERY_EOF] == 0U) {
-            return result == HSTEX_MOUTH_EOF ? HSTEX_ENGINE_EOF
-                                             : HSTEX_ENGINE_TOKEN;
+            if (result == HSTEX_MOUTH_EOF) {
+                return HSTEX_ENGINE_EOF;
+            }
+            int noted =
+                note_alignment_token(engine, *token, error, error_capacity);
+            if (noted < 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            if (noted != 0) {
+                continue;
+            }
+            return HSTEX_ENGINE_TOKEN;
         }
         /* The token just read belongs after the inserted list, so it goes
            back first. */
@@ -32324,6 +32344,52 @@ static int end_alignment_entry(struct hstex_engine *engine,
     }
     return 0;
 }
+
+/* What an alignment entry makes of a token as it is read, before whoever
+   asked for it sees it. Returns 1 when the token ended the entry, so that
+   the template's text after it is what the caller gets. */
+static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
+                                char *error, size_t error_capacity)
+{
+    struct hstex_align_entry *entry = engine->alignment_entry;
+    if (entry == NULL || entry->after_pushed) {
+        return 0;
+    }
+    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+        ++entry->nesting;
+        return 0;
+    }
+    if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+        if (entry->nesting != 0) {
+            --entry->nesting;
+        }
+        return 0;
+    }
+    if (entry->nesting != 0) {
+        return 0;
+    }
+    enum hstex_align_end ending;
+    if (token_is_category(token, HSTEX_CAT_ALIGNMENT_TAB)) {
+        ending = HSTEX_ALIGN_END_TAB;
+    } else if (hstex_token_is_control_sequence(token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        if (meaning->command == HSTEX_COMMAND_CR) {
+            ending = HSTEX_ALIGN_END_CR;
+        } else if (meaning->command == HSTEX_COMMAND_SPAN) {
+            ending = HSTEX_ALIGN_END_SPAN;
+        } else {
+            return 0;
+        }
+    } else {
+        return 0;
+    }
+    if (end_alignment_entry(engine, ending, error, error_capacity) != 0) {
+        return -1;
+    }
+    return 1;
+}
+
 
 /* Run one entry. The templates around it are pushed as token lists, so the
    entry sees exactly what the reference's u and v parts give it. \span

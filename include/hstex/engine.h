@@ -1079,6 +1079,12 @@ struct hstex_align_entry {
     const struct hstex_align_column *columns;
     size_t column_count;
     size_t column;
+    /* How deep in braces the entry has been read. A tab or \cr ends the
+       entry only at nesting zero, and the reference tests that inside its
+       token reader, so that a macro argument or a number scan running
+       within an entry meets the template's own text rather than swallowing
+       the \cr. */
+    int32_t nesting;
     bool omit;
     bool after_pushed;
     uint8_t ending;

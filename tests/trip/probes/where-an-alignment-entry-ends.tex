@@ -1,0 +1,24 @@
+% Where a tab or \cr ends an alignment entry.
+%
+% Measured against pdftex: in its TOKEN READER, at brace nesting zero --
+% not in the main loop. Anything that reads tokens without going through
+% the main loop therefore meets the template's own text after the entry
+% rather than swallowing the \cr:
+%
+%   \def\d#1\d{#1#1}\halign{\hss\d#\d\cr A\cr}
+%
+% builds a box of two A's, because \d is in the u-part and its delimiter
+% is in the v-part that the reader inserts when it reaches the \cr. Read
+% from the main loop instead, the argument scan never sees the v-part and
+% runs away.
+%
+% The nesting matters: a tab inside braces belongs to whatever the braces
+% are, not to the alignment.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\def\d#1\d{#1#1}
+\setbox0=\vbox{\halign{\hss\d#\d\cr A\cr}}\showbox0
+\setbox1=\vbox{\halign{#&#\cr A&B\cr C&D\cr}}\showbox1    % ordinary, unchanged
+\setbox2=\vbox{\halign{X#Y\cr A\cr}}\showbox2             % the run still crosses
+\setbox3=\vbox{\halign{#\cr A\cr\noalign{\kern2pt}B\cr}}\showbox3
+\end
