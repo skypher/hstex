@@ -23116,9 +23116,17 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
         return set_error(error, error_capacity,
                          "box %d cannot be unboxed into this list", index);
     }
+    /* Unboxing puts a list where it stands and says nothing about what
+       should be set against what: the reference leaves \\prevdepth where it
+       found it, however deep the last box inside was. Plain TeX's \\+ turns
+       on this -- it unboxes its row and takes it back with \\lastbox, and the
+       glue in front of it is measured from the line before the table. See
+       docs/DECISIONS.md, unboxing-says-nothing-about-depth. */
+    int32_t depth_before_unboxing = engine->prev_depth;
     for (uint32_t offset = 0U; offset < box.node_count; ++offset) {
         size_t slot = (size_t)box.node_start + offset;
         if (slot >= engine->list_item_count) {
+            engine->prev_depth = depth_before_unboxing;
             return set_error(error, error_capacity,
                              "box %d refers outside the list arena", index);
         }
@@ -23129,9 +23137,11 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                          : append_hbox_item(engine, identifier, error,
                                             error_capacity);
         if (status != 0) {
+            engine->prev_depth = depth_before_unboxing;
             return -1;
         }
     }
+    engine->prev_depth = depth_before_unboxing;
     if (keep) {
         return 0;
     }

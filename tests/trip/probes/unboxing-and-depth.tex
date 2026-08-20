@@ -1,0 +1,21 @@
+% Unboxing says nothing about what should be set against what.
+%
+% \prevdepth is 1.94444 (the line above) before the \unvbox.  The reference
+% still reports 1.94444 straight after it, however deep the box's own last
+% line was; the glue in front of the box \lastbox takes back is measured from
+% that.  This is what plain TeX's \+ turns on.
+%
+%   pdftex -interaction=nonstopmode \input unboxing-and-depth \end
+%
+% See docs/DECISIONS.md, unboxing-says-nothing-about-depth.
+%
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=0
+\output={\showbox255 \plainoutput}
+\hsize=5.5in \parindent=0pt
+\noindent will produce the table
+\vskip\baselineskip
+\message{[pd0=\the\prevdepth]}
+\setbox0=\vbox{\hbox{A}}\unvbox0 \message{[pd1=\the\prevdepth]}\lastbox
+\message{[pd2=\the\prevdepth]}
+\setbox0=\vbox{\hbox{p}}\unvbox0 \message{[pd3=\the\prevdepth]}\lastbox
+\message{[pd4=\the\prevdepth]}
