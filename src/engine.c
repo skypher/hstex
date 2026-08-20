@@ -33440,7 +33440,12 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
         digest_token_list(&digest, engine, engine->token_parameters[index]);
     }
     parts[3] = digest;
-    /* Where the reading has got to in every file that is open. */
+    /* Where the reading has got to in every file that is open. A token
+       frame read to its end looks like a husk whose popping is mere
+       representation, and treating it as one was tried: the relay then
+       validated a chunk whose pages came out wrong, because whatever that
+       husk's timing correlates with is real and nothing else in this digest
+       sees it. Strictness here is load-bearing; err toward stale. */
     for (size_t index = 0U; index < engine->sources.count; ++index) {
         const struct hstex_source_frame *frame = &engine->sources.frames[index];
         DIGEST_VALUE(frame->kind);
@@ -34047,6 +34052,23 @@ static void maybe_dump_meanings(const struct hstex_engine *engine)
     DUMP_SCALAR(engine->math_fonts);
     DUMP_SCALAR(engine->lexical_state.catcodes);
 #undef DUMP_SCALAR
+    for (size_t index = 0U; index < engine->sources.count; ++index) {
+        const struct hstex_source_frame *frame = &engine->sources.frames[index];
+        if (frame->kind == HSTEX_SOURCE_FILE) {
+            (void)fprintf(out, "0000000000000000 9 SOURCE[%zu]: file %s line %u cursor %zu\n",
+                          index, frame->value.file->path,
+                          frame->value.file->mouth.line_number,
+                          frame->value.file->mouth.line_cursor);
+        } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+            (void)fprintf(out, "0000000000000000 9 SOURCE[%zu]: tokens count=%u cursor=%u definition=%u flags=%u\n",
+                          index, frame->value.token_list.count,
+                          frame->value.token_list.cursor,
+                          frame->value.token_list.definition,
+                          frame->value.token_list.flags);
+        } else {
+            (void)fprintf(out, "0000000000000000 9 SOURCE[%zu]: boundary\n", index);
+        }
+    }
     for (hstex_cs_id identifier = 1U;
          (size_t)identifier <= engine->meaning_capacity; ++identifier) {
         uint64_t hash = canonical_meaning_hash(engine, identifier);
