@@ -1,0 +1,25 @@
+% A macro argument scan that reaches the end of an alignment entry.
+%
+% Measured against pdftex: it stops there. The reference puts a frozen
+% control sequence at the end of a template, and a macro argument may not
+% swallow it -- "Forbidden control sequence found while scanning use of \d",
+% a \par inserted, and the call abandoned, so the cell keeps only what it
+% had. Both a delimited and an undelimited argument stop the same way.
+%
+% NOT YET RIGHT, and the reason is structural: the reference inserts the
+% template's v-part from inside its token reader, when it sees a tab or \cr
+% with the alignment nesting at zero. This engine inserts it from the main
+% loop instead, so a macro argument scan running inside an entry never sees
+% it and swallows the \cr. That is why
+%   \def\d#1\d{#1#1}\halign{\hss\d#\d\cr A\cr}
+% builds a box of two A's in the reference and runs away here: its \d is in
+% the u-part, and its delimiter is in the v-part that the reader would have
+% inserted.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\def\d#1\d{#1#1}
+\setbox0=\vbox{\halign{#\d\cr A\cr}}\showbox0
+\def\u#1{<#1>}
+\setbox1=\vbox{\halign{#\u\cr A\cr}}\showbox1
+\setbox2=\vbox{\halign{#\cr\u A\cr}}\showbox2   % an ordinary use, and silent
+\end

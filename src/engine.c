@@ -8020,6 +8020,14 @@ static int scan_delimited_argument(struct hstex_engine *engine,
         enum hstex_engine_result result = raw_next(
             engine, &token, &location, error, error_capacity);
         if (result != HSTEX_ENGINE_TOKEN) {
+            /* The end of an alignment entry stops the scan: the reference
+               puts a frozen control sequence there, and a macro argument
+               may not swallow it. Reading stops AT the boundary, so this
+               is where it shows. */
+            if (hstex_source_at_boundary(&engine->sources)) {
+                engine->argument_at_boundary = true;
+                return -1;
+            }
             return set_error(error, error_capacity,
                              "runaway delimited macro argument");
         }
@@ -8242,6 +8250,10 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             enum hstex_engine_result result = raw_next_non_space(
                 engine, &first, &location, error, error_capacity);
             if (result != HSTEX_ENGINE_TOKEN) {
+                if (hstex_source_at_boundary(&engine->sources)) {
+                    engine->argument_at_boundary = true;
+                    goto cleanup;
+                }
                 (void)set_error(error, error_capacity,
                                 "runaway undelimited macro argument");
                 goto cleanup;
@@ -8392,6 +8404,24 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
 
 cleanup:
     arena->count = arena_base;
+    if (engine->argument_at_boundary) {
+        /* The reference names the macro whose argument ran into the end of
+           the entry, inserts a \par, and abandons the call -- the cell
+           keeps only what it had. */
+        static const char *const help[] = {
+            "I suspect you have forgotten a `}', causing me",
+            "to read past where you wanted me to stop.",
+            "I'll try to recover; but if the error is serious,",
+            "you'd better type `E' or `X' now and fix your file.", NULL};
+        char named[128];
+        describe_token(engine, hstex_token_control_sequence(identifier), named,
+                       sizeof(named));
+        engine->argument_at_boundary = false;
+        tex_error(engine, help,
+                  "Forbidden control sequence found while scanning use of %s",
+                  named);
+        status = 0;
+    }
     return status;
 }
 

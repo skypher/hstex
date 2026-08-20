@@ -1884,6 +1884,10 @@ struct hstex_engine {
         bool present;
     } pending_accent;
     bool accent_pending;
+    /* A macro argument scan that ran into the end of an alignment entry.
+       The reference stops one there, since the template's own end is a
+       control sequence a macro argument may not swallow. */
+    bool argument_at_boundary;
     /* What closes each open group, indexed by level - 1. */
     uint8_t *group_kinds;
     size_t group_kind_capacity;
