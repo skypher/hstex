@@ -23897,6 +23897,16 @@ static int start_paragraph(struct hstex_engine *engine, bool indent,
         if (append_vbox_node(engine, &node, error, error_capacity) != 0) {
             return -1;
         }
+        /* Glue on the outermost list is somewhere the page may break, and
+           the reference looks at it the moment it is there: a page already
+           full is shipped out here, before a word of the paragraph that
+           follows has been read. What the output routine can see -- the
+           current font, \\inputlineno -- depends on its being entered here
+           rather than a paragraph later. See docs/DECISIONS.md,
+           when-the-page-builder-fires. */
+        if (contribute_page(engine, error, error_capacity) != 0) {
+            return -1;
+        }
     }
     engine->paragraph_builder->count = 0U;
     engine->paragraph_builder->width = 0;
