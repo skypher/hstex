@@ -52,6 +52,10 @@ struct hstex_token_source {
     uint32_t definition;
     uint32_t store_base;
     uint8_t flags;
+    /* What the frame is, for the lines an error shows above the file's:
+       true where it holds tokens put back to be read again, which is the
+       reference's backed_up list. See docs/DECISIONS.md, error-context. */
+    bool backed_up;
 };
 
 struct hstex_source_frame {

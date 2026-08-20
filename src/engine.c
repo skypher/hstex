@@ -133,6 +133,9 @@ static bool conditional_test_pending(const struct hstex_engine *engine);
 static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static bool too_many_errors(const struct hstex_engine *engine);
+/* The `{' a box body or a list must begin with. */
+static int scan_left_brace(struct hstex_engine *engine, char *error,
+                           size_t error_capacity);
 /* The text of a meaning and the name of a control sequence, both wanted by
    the show diagnostics before either is defined. */
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
@@ -10810,23 +10813,10 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
         }
     }
 
-    hstex_token opening = 0U;
-    struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
-        engine, &opening, &location, error, error_capacity);
-    if (result != HSTEX_ENGINE_TOKEN ||
-        !token_is_effective_begin_group(engine, opening)) {
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-        char found[128];
-        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
-                       found, sizeof(found));
-        uint32_t line = 0U;
-        const char *origin = current_source_line(engine, &line);
-        return set_error(error, error_capacity,
-                         "hbox requires a braced token list, found %s at %s:%u",
-                         found, origin, (unsigned int)line);
+    /* The `{' that must be there; one that is not is reported and
+       supplied. See docs/DECISIONS.md, recoverable-errors. */
+    if (scan_left_brace(engine, error, error_capacity) != 0) {
+        return -1;
     }
     struct hstex_hbox_builder builder = {0};
     int status = evaluate_hbox_contents(engine, &builder, error,
@@ -11221,23 +11211,10 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
         }
     }
 
-    hstex_token opening = 0U;
-    struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
-        engine, &opening, &location, error, error_capacity);
-    if (result != HSTEX_ENGINE_TOKEN ||
-        !token_is_effective_begin_group(engine, opening)) {
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-        char found[128];
-        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
-                       found, sizeof(found));
-        uint32_t line = 0U;
-        const char *origin = current_source_line(engine, &line);
-        return set_error(error, error_capacity,
-                         "vbox requires a braced token list, found %s at %s:%u",
-                         found, origin, (unsigned int)line);
+    /* The `{' that must be there; one that is not is reported and
+       supplied. See docs/DECISIONS.md, recoverable-errors. */
+    if (scan_left_brace(engine, error, error_capacity) != 0) {
+        return -1;
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &builder,
@@ -12313,7 +12290,9 @@ static int scan_left_brace(struct hstex_engine *engine, char *error,
         }
         break;
     }
-    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+    /* A control sequence \\let to a `{' opens the group just as the
+       character does. */
+    if (token_is_effective_begin_group(engine, token)) {
         return 0;
     }
     if (push_one(engine, token, location, error, error_capacity) != 0) {
@@ -13087,10 +13066,149 @@ static void print_fresh_line(struct hstex_engine *engine)
 /* The line the topmost file stands on, broken where its reading had got to.
    TeX shows the whole input stack; what is shown here is the file, which is
    what names a place a person can go and look at. */
+/* One token as text, the way the reference writes it in a context line: a
+   control word keeps the space that ends it. */
+static int token_display_text(struct hstex_engine *engine, hstex_token token,
+                              char *buffer, size_t capacity, size_t *length)
+{
+    *length = 0U;
+    if (hstex_token_is_character(token)) {
+        if (capacity == 0U) {
+            return -1;
+        }
+        buffer[0] = (char)hstex_token_character_code(token);
+        *length = 1U;
+        return 0;
+    }
+    if (!hstex_token_is_control_sequence(token)) {
+        return -1;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t room = 0U;
+    char ignored[256];
+    if (serialize_control_sequence(engine, token, &bytes, &count, &room, true,
+                                   ignored, sizeof(ignored)) != 0) {
+        free(bytes);
+        return -1;
+    }
+    if (count > capacity) {
+        count = capacity;
+    }
+    memcpy(buffer, bytes, count);
+    *length = count;
+    free(bytes);
+    return 0;
+}
+
+/* One of the two lines an entry shows: what stands before the reading, and
+   what stands after it, broken by the two widths. `tag` is what names the
+   entry and stands at the head of the first line. */
+static void show_context_lines(struct hstex_engine *engine, const char *tag,
+                               const char *before, size_t before_length,
+                               const char *after, size_t after_length)
+{
+    size_t tag_length = strlen(tag);
+    size_t trimmed = 0U;
+    size_t indent = tag_length + before_length;
+    if (indent > (size_t)HSTEX_HALF_ERROR_LINE) {
+        trimmed = indent - (size_t)HSTEX_HALF_ERROR_LINE + 3U;
+        before_length -= trimmed;
+        indent = (size_t)HSTEX_HALF_ERROR_LINE;
+    }
+    print_fresh_line(engine);
+    print_bytes(engine, tag, tag_length);
+    if (trimmed != 0U) {
+        print_text(engine, "...");
+    }
+    print_bytes(engine, before + trimmed, before_length);
+    print_line(engine);
+    for (size_t index = 0U; index < indent; ++index) {
+        print_byte(engine, ' ');
+    }
+    bool clipped = after_length + indent > (size_t)HSTEX_ERROR_LINE;
+    if (clipped) {
+        after_length = (size_t)HSTEX_ERROR_LINE - indent - 3U;
+    }
+    print_bytes(engine, after, after_length);
+    if (clipped) {
+        print_text(engine, "...");
+    }
+}
+
+/* A frame that holds tokens, written out as the reference writes one. */
+static void show_token_frame(struct hstex_engine *engine,
+                             const struct hstex_token_source *list)
+{
+    char before[512];
+    char after[512];
+    size_t before_length = 0U;
+    size_t after_length = 0U;
+    for (uint32_t index = 0U; index < list->count; ++index) {
+        char one[256];
+        size_t length = 0U;
+        if (token_display_text(engine, list->tokens[index], one, sizeof(one),
+                               &length) != 0) {
+            continue;
+        }
+        char *target = index < list->cursor ? before : after;
+        size_t *filled = index < list->cursor ? &before_length : &after_length;
+        size_t room = sizeof(before) - *filled;
+        if (length > room) {
+            length = room;
+        }
+        memcpy(target + *filled, one, length);
+        *filled += length;
+    }
+    show_context_lines(engine,
+                       list->cursor < list->count ? "<to be read again> "
+                                                  : "<recently read> ",
+                       before, before_length, after, after_length);
+}
+
+/* Where the reading stands, as the reference shows it: the entry on top of
+   the input stack, the line of the file at the bottom, and `...` for
+   whatever lies between that \errorcontextlines does not ask for. See
+   docs/DECISIONS.md, error-context. */
 static void show_error_context(struct hstex_engine *engine)
 {
-    struct hstex_file_source *file =
-        hstex_source_current_file(&engine->sources);
+    struct hstex_source_stack *stack = &engine->sources;
+    size_t file_index = stack->file_top;
+    size_t shown = 0U;
+    bool omitted = false;
+    int32_t room =
+        engine->integer_parameters[HSTEX_INTEGER_ERROR_CONTEXT_LINES];
+    for (size_t index = stack->count; index > file_index; --index) {
+        const struct hstex_source_frame *frame = &stack->frames[index - 1U];
+        if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
+            continue;
+        }
+        const struct hstex_token_source *list = &frame->value.token_list;
+        /* Only a list that was put back is named here. The reference names
+           every kind -- a macro body by its own name, \\output, a template,
+           an argument -- and HSTeX does not yet know which frame is which,
+           so the rest are passed over rather than named wrongly. See
+           docs/DECISIONS.md, error-context, open divergences. */
+        if (!list->backed_up) {
+            continue;
+        }
+        /* One that has been read to its end is passed over unless it is the
+           entry on top. */
+        if (shown != 0U && list->cursor >= list->count) {
+            continue;
+        }
+        if (shown != 0U && (int32_t)shown > room) {
+            omitted = true;
+            continue;
+        }
+        show_token_frame(engine, list);
+        ++shown;
+    }
+    if (omitted) {
+        print_fresh_line(engine);
+        print_text(engine, "...");
+    }
+    struct hstex_file_source *file = hstex_source_current_file(stack);
     if (file == NULL) {
         return;
     }
@@ -13113,35 +13231,8 @@ static void show_error_context(struct hstex_engine *engine)
     if (tag_length < 0) {
         return;
     }
-    /* Before the cursor, trimmed at the front to half a line; after it,
-       trimmed at the back to what is left. */
-    size_t before = cursor;
-    size_t trimmed = 0U;
-    size_t indent = (size_t)tag_length + before;
-    if (indent > (size_t)HSTEX_HALF_ERROR_LINE) {
-        trimmed = indent - (size_t)HSTEX_HALF_ERROR_LINE + 3U;
-        before -= trimmed;
-        indent = (size_t)HSTEX_HALF_ERROR_LINE;
-    }
-    print_fresh_line(engine);
-    print_bytes(engine, tag, (size_t)tag_length);
-    if (trimmed != 0U) {
-        print_text(engine, "...");
-    }
-    print_bytes(engine, line + trimmed, before);
-    print_line(engine);
-    for (size_t index = 0U; index < indent; ++index) {
-        print_byte(engine, ' ');
-    }
-    size_t after = length - cursor;
-    bool clipped = after + indent > (size_t)HSTEX_ERROR_LINE;
-    if (clipped) {
-        after = (size_t)HSTEX_ERROR_LINE - indent - 3U;
-    }
-    print_bytes(engine, line + cursor, after);
-    if (clipped) {
-        print_text(engine, "...");
-    }
+    show_context_lines(engine, tag, line, cursor, line + cursor,
+                       length - cursor);
 }
 
 /* The help text of an error: the lines the reference prints under it, given

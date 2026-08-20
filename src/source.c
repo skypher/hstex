@@ -264,6 +264,7 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = 0U;
+    source->backed_up = false;
     note_top_frame(stack);
     return 0;
 }
@@ -299,6 +300,7 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_OWNS;
+    source->backed_up = false;
     note_top_frame(stack);
     return 0;
 }
@@ -325,6 +327,7 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     source->definition = 0U;
     source->store_base = 0U;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
+    source->backed_up = true;
     note_top_frame(stack);
     return 0;
 }
@@ -390,6 +393,7 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     source->definition = 0U;
     source->store_base = (uint32_t)stack->store_count;
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_FROM_STORE;
+    source->backed_up = false;
     stack->store_count += count;
     note_top_frame(stack);
     return 0;
@@ -433,6 +437,7 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     source->definition = definition;
     source->store_base = 0U;
     source->flags = 0U;
+    source->backed_up = false;
     note_top_frame(stack);
     return 0;
 }
