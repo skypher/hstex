@@ -1906,6 +1906,11 @@ struct hstex_engine {
     int parallel_done_read;
     int parallel_done_write;
     int parallel_workers;
+    /* Where each chunk was parked, so the release can tell each one where
+       the next begins; and the clock that parks by time. */
+    int32_t parallel_pages[256];
+    uint64_t parallel_stride_ns;
+    uint64_t parallel_parked_at;
     /* Where in the file this chunk's own bytes begin, and the file it writes
        them into. A chunk inherits the byte count the run had reached where
        it was parked, which is exactly where the chunk before it stops. */

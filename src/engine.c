@@ -1911,9 +1911,16 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     const char *chunked = getenv("HSTEX_PARALLEL");
     if (chunked != NULL) {
-        long pages = strtol(chunked, NULL, 10);
-        if (pages > 0L && pages < 100000L) {
-            engine->parallel_chunk = (int32_t)pages;
+        /* Chunks of so many pages, or -- `ms:N` -- of so much time: the
+           pages are not all the same price, and a fleet is as slow as its
+           dearest chunk, so parking by the clock evens what parking by the
+           count cannot. */
+        bool by_time = strncmp(chunked, "ms:", 3U) == 0;
+        long asked = strtol(by_time ? chunked + 3 : chunked, NULL, 10);
+        if (asked > 0L && asked < 100000L) {
+            engine->parallel_chunk = by_time ? 1 : (int32_t)asked;
+            engine->parallel_stride_ns =
+                by_time ? (uint64_t)asked * 1000000ULL : 0ULL;
         }
     }
     const char *checkpoint = getenv("HSTEX_CHECKPOINT");
@@ -33287,9 +33294,25 @@ static void park_a_chunk(struct hstex_engine *engine)
         }
         return;
     }
-    if (engine->shipped_pages == 0 ||
-        engine->shipped_pages % engine->parallel_chunk != 0 ||
-        engine->parallel_workers >= 256) {
+    if (engine->shipped_pages == 0 || engine->parallel_workers >= 256) {
+        return;
+    }
+    if (engine->parallel_stride_ns != 0ULL) {
+        struct timespec now;
+        (void)clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t at = (uint64_t)now.tv_sec * 1000000000ULL +
+                      (uint64_t)now.tv_nsec;
+        if (engine->parallel_parked_at == 0ULL) {
+            /* The first boundary starts the clock rather than parks: what
+               came before it is the preamble, not a chunk. */
+            engine->parallel_parked_at = at;
+            return;
+        }
+        if (at - engine->parallel_parked_at < engine->parallel_stride_ns) {
+            return;
+        }
+        engine->parallel_parked_at = at;
+    } else if (engine->shipped_pages % engine->parallel_chunk != 0) {
         return;
     }
     long reached[16];
@@ -33305,7 +33328,6 @@ static void park_a_chunk(struct hstex_engine *engine)
     }
     if (child == 0) {
         engine->parallel_is_worker = 1;
-        engine->parallel_stop = engine->shipped_pages + engine->parallel_chunk;
         engine->parallel_gate_read = gate[0];
         (void)close(gate[1]);
         (void)close(engine->parallel_done_read);
@@ -33344,14 +33366,24 @@ static void park_a_chunk(struct hstex_engine *engine)
            to do the work itself. The fleet therefore serves one run after
            another rather than one only. */
         for (;;) {
-            char go = 0;
-            ssize_t got;
-            do {
-                got = read(engine->parallel_gate_read, &go, 1);
-            } while (got < 0 && errno == EINTR);
-            if (got <= 0) {
-                _exit(0);
+            /* What comes down the gate is where this chunk is to stop: the
+               page the chunk after it was parked at, or zero for the last,
+               which runs to the end. Only the run above knows, because a
+               chunk parked by the clock does not know where the next fell. */
+            int32_t stop = 0;
+            size_t have = 0U;
+            while (have < sizeof(stop)) {
+                ssize_t got = read(engine->parallel_gate_read,
+                                   (char *)&stop + have, sizeof(stop) - have);
+                if (got < 0 && errno == EINTR) {
+                    continue;
+                }
+                if (got <= 0) {
+                    _exit(0);
+                }
+                have += (size_t)got;
             }
+            engine->parallel_stop = stop;
             pid_t again = fork();
             if (again < 0) {
                 break;
@@ -33372,6 +33404,7 @@ static void park_a_chunk(struct hstex_engine *engine)
         engine->parallel_first_offset = engine->pdf_written;
     }
     (void)close(gate[0]);
+    engine->parallel_pages[engine->parallel_workers] = engine->shipped_pages;
     engine->parallel_gates[engine->parallel_workers++] = gate[1];
 }
 
@@ -33438,13 +33471,15 @@ static void lay_out_the_fleet_file(struct hstex_engine *engine)
 
 static void release_them_once(struct hstex_engine *engine)
 {
-    lay_out_the_fleet_file(engine);
     struct timespec before;
     struct timespec after;
     (void)clock_gettime(CLOCK_MONOTONIC, &before);
     for (int index = 0; index < engine->parallel_workers; ++index) {
-        char go = 1;
-        ssize_t wrote = write(engine->parallel_gates[index], &go, 1);
+        int32_t stop = index + 1 < engine->parallel_workers
+                           ? engine->parallel_pages[index + 1]
+                           : 0;
+        ssize_t wrote =
+            write(engine->parallel_gates[index], &stop, sizeof(stop));
         (void)wrote;
     }
     /* Counted back rather than waited for: a chunk's replacement is a child
@@ -33477,6 +33512,10 @@ static void hstex_engine_release_chunks(struct hstex_engine *engine)
     if (engine->parallel_is_worker || engine->parallel_workers == 0) {
         return;
     }
+    /* The file the chunks write into is laid out once. Every release
+       rewrites every page deterministically, so laying it out again would
+       only copy fifty megabytes to say what is already there. */
+    lay_out_the_fleet_file(engine);
     const char *asked = getenv("HSTEX_PARALLEL_ROUNDS");
     long rounds = asked == NULL ? 1L : strtol(asked, NULL, 10);
     if (rounds < 1L || rounds > 100L) {
