@@ -1,0 +1,22 @@
+% A second fraction in one list, and a dimension with no unit.
+%
+% Measured against pdftex:
+%
+%   A list may hold one fraction. A second draws "Ambiguous; you need
+%   another { and }" and is IGNORED -- the first one stands. The operands
+%   are read first: `\abovewithdelims.?' reports its delimiter and its
+%   thickness before the ambiguity, which is the order trip line 257's log
+%   shows.
+%
+%   A factor with no unit after it draws "Illegal unit of measure (pt
+%   inserted)" and is taken as points, reading nothing -- so the ? that
+%   was not a unit is left to be set.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$A\over B\over C$\message{[after two fractions]}\par
+$\left.A\over A\abovewithdelims.?\right.$\message{[after trip's line]}\par
+\dimen0=5 \message{[no unit=\the\dimen0]}
+\dimen0=2.5 \message{[fraction=\the\dimen0]}
+\dimen0=-3 \message{[negative=\the\dimen0]}
+\skip0=5 \message{[glue=\the\skip0]}
+\end

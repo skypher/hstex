@@ -14085,8 +14085,10 @@ int main(void)
         /* A number that is not there is the reference's "Missing number",
            which is recovered from with zero rather than stopping the run. */
         run_snippet("\\expanded{\\number}%", "0") != 0 ||
-        expect_failure("\\baselineskip=1\\relax%",
-                       "illegal unit of measure") != 0 ||
+        /* A unit that is not there is reported and taken as points, as the
+           reference does: \baselineskip=1\relax comes out 1.0pt. */
+        run_snippet("\\baselineskip=1\\relax\\the\\baselineskip%",
+                    "1.0pt") != 0 ||
         /* An order past filll is reported and taken as filll. */
         run_snippet("\\skip1=1pt plus2fillll\\relax\\the\\skip1%",
                     "1.0pt plus 2.0filll") != 0 ||

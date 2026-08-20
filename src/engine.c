@@ -5740,7 +5740,19 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
         return finish_scaled(engine, factor.whole, factor.sign < 0, value, error,
                              error_capacity);
     }
-    return set_error(error, error_capacity, "illegal unit of measure");
+    /* No unit at all: the reference says so and takes the factor as points,
+       reading nothing. Measured on trip line 257's `\abovewithdelims.?',
+       where the ? is left to be set. */
+    static const char *const help[] = {
+        "Dimensions can be in units of em, ex, in, pt, pc,",
+        "cm, mm, dd, cc, nd, nc, bp, or sp; but yours is a new one!",
+        "I'll assume that you meant to say pt, for printer's points.",
+        "To recover gracefully from this error, it's best to",
+        "delete the erroneous units; e.g., type `2' to delete",
+        "two letters. (See Chapter 27 of The TeXbook.)", NULL};
+    tex_error(engine, help, "Illegal unit of measure (pt inserted)");
+    return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1),
+                                value, error, error_capacity);
 }
 
 static int scan_dimension(struct hstex_engine *engine, int32_t *value,
@@ -30762,10 +30774,6 @@ static int execute_fraction(struct hstex_engine *engine, int32_t subtype,
         return set_error(error, error_capacity,
                          "a fraction is only allowed in a formula");
     }
-    if (list->has_fraction) {
-        return set_error(error, error_capacity,
-                         "a list may hold only one fraction; brace one of them");
-    }
     bool delimited = subtype >= 3;
     int32_t kind = subtype % 3;
     int32_t left = 0;
@@ -30779,6 +30787,20 @@ static int execute_fraction(struct hstex_engine *engine, int32_t subtype,
     if (kind == 2 &&
         scan_dimension(engine, &thickness, error, error_capacity) != 0) {
         return -1;
+    }
+    /* The operands are read before the list is asked whether it already
+       holds a fraction: the reference reports the delimiters and the
+       thickness first and the ambiguity last, and then ignores this
+       specification rather than the earlier one. trip line 257 writes
+       `\left.A\over A\abovewithdelims.?'. */
+    if (list->has_fraction) {
+        static const char *const help[] = {
+            "I'm ignoring this fraction specification, since I don't",
+            "know whether a construction like `x \\over y \\over z'",
+            "means `{x \\over y} \\over z' or `x \\over {y \\over z}'.",
+            NULL};
+        tex_error(engine, help, "Ambiguous; you need another { and }");
+        return 0;
     }
     list->has_fraction = true;
     list->fraction_at = list->count;
