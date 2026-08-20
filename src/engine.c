@@ -12732,6 +12732,9 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
 
 /* \raise and \lower displace a box in a horizontal list, \moveleft and
    \moveright in a vertical one. */
+static void report_illegal_case(struct hstex_engine *engine,
+                                hstex_token token);
+
 static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
                              char *error, size_t error_capacity)
 {
@@ -12743,10 +12746,10 @@ static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
                     subtype == (int32_t)HSTEX_SHIFT_MOVE_RIGHT;
     if (vertical ? engine->mode != HSTEX_MODE_VERTICAL
                  : engine->mode == HSTEX_MODE_VERTICAL) {
-        return set_error(error, error_capacity,
-                         vertical
-                             ? "moveleft and moveright require vertical mode"
-                             : "raise and lower require horizontal mode");
+        /* Named and dropped whole: the reference does not go on to read the
+           dimension or the box, so what follows is met on its own. */
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
     }
     int32_t amount = 0;
     if (scan_dimension(engine, &amount, error, error_capacity) != 0) {

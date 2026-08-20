@@ -1,0 +1,26 @@
+% \moveleft or \moveright outside a vertical list, \raise or \lower inside
+% one.
+%
+% Measured against pdftex: named in the ordinary words for a command in
+% the wrong mode, and dropped whole --
+%
+%   ! You can't use `\moveleft' in math mode.
+%   Sorry, but I'm not programmed to handle this case;
+%   I'll just pretend that you didn't ask for it.
+%   If you're in the wrong mode, you might be able to
+%   return to the right one by typing `I}' or `I$' or `I\par'.
+%
+% -- dropped whole meaning the dimension and the box after it are NOT
+% read. They are met on their own afterwards, which is why trip's
+% `\moveleft\lastbox' draws a second fault for the \lastbox.
+%
+% This engine stopped instead. trip line 395 writes \moveleft\lastbox in
+% math mode.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{$\moveleft2pt\hbox{x}y$}\showbox0
+\setbox1=\hbox{a\moveleft2pt\hbox{x}b}\showbox1
+\setbox2=\vbox{\raise2pt\hbox{x}}\showbox2
+\setbox3=\hbox{a\raise2pt\hbox{x}b}\showbox3     % the working shapes
+\setbox4=\vbox{\moveleft2pt\hbox{x}}\showbox4
+\end
