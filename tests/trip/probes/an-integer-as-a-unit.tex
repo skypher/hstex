@@ -1,0 +1,16 @@
+% An internal integer standing where a unit of measure belongs.
+%
+% Measured against pdftex: the integer's value is taken as that many scaled
+% points. The reference never widens an integer into a dimension, so no
+% factor of 65536 enters -- \count1=7 makes `2\count1' fourteen scaled
+% points, and \mag of 1000 makes `.5\mag' five hundred.
+%
+% trip line 160 builds a unit this way, inside a conditional that is
+% expanded while the factor's digits are still being read.
+\tracingonline=1
+\count1=7 \dimen0=2\count1 \showthe\dimen0
+\count1=-7 \dimen0=2\count1 \showthe\dimen0
+\dimen0=.5\mag \showthe\dimen0
+\dimen0=1\mag \showthe\dimen0
+\dimendef\varunit=222 \varunit=+1,001\ifdim.5\mag>0cc0\fi1pt \showthe\varunit
+\end

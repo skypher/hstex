@@ -5586,6 +5586,24 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return scaled_internal_unit(engine, &factor, internal_unit, value, error,
                                         error_capacity);
         }
+        /* An internal integer standing where a unit belongs is that many
+           scaled points -- the reference never widens an integer into a
+           dimension, so its value is taken as it stands. Measured:
+           \count1=7 makes `2\count1' fourteen scaled points, and \mag of
+           1000 makes `.5\mag' five hundred. trip builds a unit this way on
+           line 160. */
+        int32_t internal_integer = 0;
+        int integer_result = integer_from_control_sequence(
+            engine, hstex_engine_meaning(
+                        engine, hstex_token_control_sequence_id(possible_unit)),
+            &internal_integer, error, error_capacity);
+        if (integer_result < 0) {
+            return -1;
+        }
+        if (integer_result == 0) {
+            return scaled_internal_unit(engine, &factor, internal_integer, value,
+                                        error, error_capacity);
+        }
     }
     if (push_one(engine, possible_unit, possible_unit_location, error,
                  error_capacity) != 0) {
