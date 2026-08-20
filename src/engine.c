@@ -10865,6 +10865,7 @@ static void report_packing(struct hstex_engine *engine,
     if (count == 0U || engine->packing_quietly) {
         return;
     }
+    (void)items;
     if (excess > 0 && total->shrink_order == 0U &&
         excess - (int64_t)total->shrink > 0) {
         int64_t over = excess - (int64_t)total->shrink;
@@ -10906,7 +10907,13 @@ static void report_packing(struct hstex_engine *engine,
         print_formatted(engine, ") detected at line %u", (unsigned)here);
     }
     print_line(engine);
-    /* Then the text of it, and then the box. */
+    /* Then the text of it, and then the box. An alignment's preamble is not
+       a list HSTeX keeps, so there is nothing to show for it. */
+    if (items == NULL) {
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
+        return;
+    }
     show_short_display_of(engine, items, count);
     print_line(engine);
     print_line(engine);
@@ -31572,6 +31579,39 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         return set_error(error, error_capacity,
                          "alignment width exceeds TeX's dimension range");
     }
+    /* The reference packs the preamble once, to settle the tabskip glue,
+       and that is the one packing of an alignment it reports -- against the
+       line the alignment began on. Its rows and entries it sets rather than
+       packs, and says nothing of them. See docs/DECISIONS.md,
+       boxes-that-do-not-fit. */
+    if (matched_to || matched_spread) {
+        struct hstex_glue preamble = leading;
+        for (size_t index = 0U; index < column_count; ++index) {
+            struct hstex_glue skip = columns[index].tabskip;
+            preamble.stretch += skip.stretch;
+            preamble.shrink += skip.shrink;
+            if (skip.stretch_order > preamble.stretch_order) {
+                preamble.stretch_order = skip.stretch_order;
+                preamble.stretch = skip.stretch;
+            }
+            if (skip.shrink_order > preamble.shrink_order) {
+                preamble.shrink_order = skip.shrink_order;
+                preamble.shrink = skip.shrink;
+            }
+        }
+        struct hstex_box whole = {0};
+        whole.width = (int32_t)final_width;
+        engine->badness =
+            packing_badness(natural, (int32_t)final_width, &preamble);
+        int32_t previous_pack = engine->pack_begin_line;
+        engine->pack_begin_line = -engine->alignment_line;
+        bool previous_quiet = engine->packing_quietly;
+        engine->packing_quietly = false;
+        report_packing(engine, &whole, natural, &preamble, false, NULL,
+                       column_count);
+        engine->packing_quietly = previous_quiet;
+        engine->pack_begin_line = previous_pack;
+    }
 
     for (size_t index = 0U; index < row_count; ++index) {
         if (rows[index].noalign) {
@@ -31907,6 +31947,8 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                         error, error_capacity) != 0) {
         return -1;
     }
+    engine->alignment_line =
+        (int32_t)engine->nest[engine->nest_count - 1U].line;
     uint32_t base_group_level = engine->group_level;
     /* The glue before the first column is \tabskip as it stood when the
        alignment began; the preamble's own assignments set the later ones. */

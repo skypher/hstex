@@ -1814,6 +1814,8 @@ struct hstex_engine {
        something it will pack again -- so that nothing is reported of it. See
        docs/DECISIONS.md, boxes-that-do-not-fit. */
     bool packing_quietly;
+    /* The line the alignment being finished began on. */
+    int32_t alignment_line;
     /* The semantic nest, outermost first. */
     struct hstex_nest_level *nest;
     size_t nest_count;
