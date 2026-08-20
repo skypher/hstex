@@ -166,8 +166,8 @@ static int scan_left_brace(struct hstex_engine *engine, char *error,
    the show diagnostics before either is defined. */
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
-                         size_t *capacity_out, char *error,
-                         size_t error_capacity);
+                         size_t *capacity_out, size_t *after_prefix,
+                         char *error, size_t error_capacity);
 static int serialize_control_sequence(struct hstex_engine *engine,
                                       hstex_token token, uint8_t **bytes,
                                       size_t *count, size_t *capacity,
@@ -14666,12 +14666,21 @@ static int execute_show(struct hstex_engine *engine, char *error,
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
-    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, error,
-                      error_capacity) != 0) {
+    size_t after_prefix = SIZE_MAX;
+    if (meaning_bytes(engine, subject, &bytes, &count, &capacity,
+                      &after_prefix, error, error_capacity) != 0) {
         free(bytes);
         return -1;
     }
-    print_bytes(engine, (const char *)bytes, count);
+    if (after_prefix < count) {
+        /* What a macro is stands on one line and what it says on the next. */
+        print_bytes(engine, (const char *)bytes, after_prefix);
+        print_line(engine);
+        print_bytes(engine, (const char *)bytes + after_prefix,
+                    count - after_prefix);
+    } else {
+        print_bytes(engine, (const char *)bytes, count);
+    }
     free(bytes);
     tex_show_end(engine);
     (void)fflush(diagnostic_stream(engine));
@@ -20964,8 +20973,8 @@ static int append_character_meaning(struct hstex_engine *engine,
    prints after the `='. */
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
-                         size_t *capacity_out, char *error,
-                         size_t error_capacity)
+                         size_t *capacity_out, size_t *after_prefix,
+                         char *error, size_t error_capacity)
 {
     uint8_t *bytes = NULL;
     size_t count = 0U;
@@ -21034,6 +21043,12 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                                   error_capacity) != 0) {
                 free(bytes);
                 return -1;
+            }
+            /* \\show breaks the line here, between what the macro is and
+               what it says. \\meaning does not; see docs/DECISIONS.md,
+               where-show-breaks-a-macro. */
+            if (after_prefix != NULL) {
+                *after_prefix = count;
             }
             for (size_t index = 0U; index < macro->parameter_count_tokens;
                  ++index) {
@@ -21146,7 +21161,7 @@ static int expand_meaning(struct hstex_engine *engine,
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
-    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, error,
+    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, NULL, error,
                       error_capacity) != 0) {
         return -1;
     }
