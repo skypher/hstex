@@ -1,0 +1,15 @@
+% What each stream-taking command does with a number outside 0..15.
+%
+% Measured against pdftex: \openout, \openin, \closein and \ifeof say
+% "Bad number (N)" and carry on with stream 0; \write and \closeout say
+% nothing and clamp -- they build the same size of node in the reference,
+% and the routine that builds it picks its scan by that size.
+\tracingonline=1
+\immediate\openout-7=x \message{[after openout neg]}
+\immediate\openout20=x \message{[after openout big]}
+\immediate\closeout-7 \immediate\closeout20 \message{[closeout is silent]}
+\immediate\write-1{hi}\immediate\write20{hi}\message{[write is silent]}
+\openin-7=x \openin20=x \message{[after openin]}
+\closein-7 \closein20 \message{[after closein]}
+\ifeof-7 \message{[T]}\else\message{[F]}\fi
+\end

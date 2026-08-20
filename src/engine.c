@@ -20532,13 +20532,36 @@ static int execute_arithmetic(struct hstex_engine *engine,
     }
 }
 
-static int scan_stream_number(struct hstex_engine *engine, int32_t *stream,
-                              char *error, size_t error_capacity)
+/* The streams that clamp rather than complain. The reference reads \write's
+   and \closeout's stream with the same unrestricted scan -- they build the
+   same size of node, and the routine that builds it chooses by size -- and
+   sends anything out of range to the log alone (16) or to the log only when
+   nothing is being written (17). Measured: \closeout-7 and \closeout20 are
+   silent, where \openout of either says "Bad number". */
+static int scan_write_stream_number(struct hstex_engine *engine, int32_t *stream,
+                                    char *error, size_t error_capacity)
 {
-    if (scan_integer(engine, stream, error, error_capacity) != 0 || *stream < -1 ||
-        *stream > 17) {
-        return set_error(error, error_capacity,
-                         "stream number outside supported range -1..17");
+    if (scan_integer(engine, stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*stream < 0) {
+        *stream = 17;
+    } else if (*stream > 15) {
+        *stream = 16;
+    }
+    return 0;
+}
+
+/* \read's stream clamps too, and out of range means the terminal. Measured:
+   \read-7, \read20 and \read16 all stop the same way with no file open. */
+static int scan_read_stream_number(struct hstex_engine *engine, int32_t *stream,
+                                   char *error, size_t error_capacity)
+{
+    if (scan_integer(engine, stream, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (*stream < 0 || *stream > 15) {
+        *stream = 16;
     }
     return 0;
 }
@@ -20655,7 +20678,7 @@ static int execute_open_out(struct hstex_engine *engine, bool immediate,
 {
     int32_t stream = 0;
     char *filename = NULL;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+    if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_input_filename(engine, &filename, error, error_capacity) != 0) {
         free(filename);
@@ -20680,7 +20703,7 @@ static int execute_close_out(struct hstex_engine *engine, bool immediate,
                              char *error, size_t error_capacity)
 {
     int32_t stream = 0;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+    if (scan_write_stream_number(engine, &stream, error, error_capacity) != 0) {
         return -1;
     }
     if (immediate) {
@@ -33167,7 +33190,7 @@ static int execute_open_in(struct hstex_engine *engine, char *error,
 {
     int32_t stream = 0;
     char *filename = NULL;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+    if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_input_filename(engine, &filename, error, error_capacity) != 0) {
         free(filename);
@@ -33194,7 +33217,7 @@ static int execute_close_in(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
     int32_t stream = 0;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+    if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0) {
         return -1;
     }
     if (stream >= 0 && stream < 16 &&
@@ -33325,7 +33348,7 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
                              char *error, size_t error_capacity)
 {
     int32_t stream = 0;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0 ||
+    if (scan_read_stream_number(engine, &stream, error, error_capacity) != 0 ||
         scan_keyword_to(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -33380,7 +33403,7 @@ static int scan_if_eof(struct hstex_engine *engine, char *error,
         return -1;
     }
     int32_t stream = 0;
-    if (scan_stream_number(engine, &stream, error, error_capacity) != 0) {
+    if (scan_four_bit_int(engine, &stream, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
     }
