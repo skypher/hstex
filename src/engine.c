@@ -5663,8 +5663,19 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
     if (expanded_next_non_space(engine, &possible_unit,
                                 &possible_unit_location, error,
                                 error_capacity) != HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity,
-                         "end of input while scanning a dimension unit");
+        /* No unit because there is nothing left to read -- the end of an
+           alignment entry, say. The reference says the same as for a unit
+           that is not one, and takes the factor as points. */
+        static const char *const help[] = {
+            "Dimensions can be in units of em, ex, in, pt, pc,",
+            "cm, mm, dd, cc, nd, nc, bp, or sp; but yours is a new one!",
+            "I'll assume that you meant to say pt, for printer's points.",
+            "To recover gracefully from this error, it's best to",
+            "delete the erroneous units; e.g., type `2' to delete",
+            "two letters. (See Chapter 27 of The TeXbook.)", NULL};
+        tex_error(engine, help, "Illegal unit of measure (pt inserted)");
+        return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1),
+                                    value, error, error_capacity);
     }
     if (hstex_token_is_control_sequence(possible_unit)) {
         int32_t internal_unit = 0;

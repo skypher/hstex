@@ -12,6 +12,10 @@
 %   inserted)" and is taken as points, reading nothing -- so the ? that
 %   was not a unit is left to be set. Math glue says "(mu inserted)"
 %   instead, and takes the factor as mu.
+%
+%   Nothing left to read at all is the same fault in the same words --
+%   `\halign{#\kern1\cr A\cr}' runs out at the end of the entry and the
+%   kern comes to one point.
 \tracingonline=1
 \font\tt=cmr10 \tt
 $A\over B\over C$\message{[after two fractions]}\par
@@ -21,4 +25,5 @@ $\left.A\over A\abovewithdelims.?\right.$\message{[after trip's line]}\par
 \dimen0=-3 \message{[negative=\the\dimen0]}
 \skip0=5 \message{[glue=\the\skip0]}
 $x\mskip1A y$\message{[after a mu that was not one]}\par
+\setbox9=\vbox{\halign{#\kern1\cr A\cr}}\showbox9  % no unit, and nothing left
 \end
