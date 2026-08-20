@@ -1,0 +1,13 @@
+% What happens past the largest dimension.
+%
+% Measured against pdftex: too large a size is reported, not fatal, and the
+% engine carries on with the largest it has, keeping the sign that was asked
+% for. Every unit reaches the same place -- pt, in, cm, em, true, and sp.
+\tracingonline=1
+\vsize=16383.99999237060546875pt \showthe\vsize
+\vsize=-16383.99999237060546875pt \showthe\vsize
+\vsize=300in \showthe\vsize
+\vsize=100000em \showthe\vsize
+\vsize=1073741824sp \showthe\vsize
+\vsize=16383.99998pt \showthe\vsize % the largest, and no fault
+\end

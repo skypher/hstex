@@ -5410,12 +5410,30 @@ static uint64_t scaled_fraction(const struct decimal_factor *factor)
     return quotient;
 }
 
-static int finish_scaled(uint64_t magnitude, bool negative, int32_t *value,
-                         char *error, size_t error_capacity)
+static const char *const dimension_too_large_help[] = {
+    "I can't work with sizes bigger than about 19 feet.",
+    "Continue and I'll use the largest value I can.", NULL};
+
+/* Too large a dimension is a fault the reference recovers from: it says so
+   and uses the largest size it has, keeping the sign the factor asked for.
+   Measured on trip's `\global\vsize=16383.99999237060546875pt`, which the
+   reference reports and then retains as 16383.99998pt. */
+static int report_dimension_too_large(struct hstex_engine *engine,
+                                      bool negative, int32_t *value)
 {
+    tex_error(engine, dimension_too_large_help, "Dimension too large");
+    *value = negative ? -HSTEX_MAX_DIMEN : HSTEX_MAX_DIMEN;
+    return 0;
+}
+
+static int finish_scaled(struct hstex_engine *engine, uint64_t magnitude,
+                         bool negative, int32_t *value, char *error,
+                         size_t error_capacity)
+{
+    (void)error;
+    (void)error_capacity;
     if (magnitude > (uint64_t)HSTEX_MAX_DIMEN) {
-        return set_error(error, error_capacity,
-                         "dimension exceeds TeX's maximum");
+        return report_dimension_too_large(engine, negative, value);
     }
     *value = negative ? (int32_t)(-(int64_t)magnitude) : (int32_t)magnitude;
     return 0;
@@ -5426,14 +5444,14 @@ static int finish_scaled(uint64_t magnitude, bool negative, int32_t *value,
    fractional halves are converted separately. Deriving the conversion from
    the exact decimal instead would drift by several scaled points on ordinary
    values such as `0.3cm`; see docs/DECISIONS.md, dimension-unit-arithmetic. */
-static int scaled_physical_unit(const struct decimal_factor *factor,
+static int scaled_physical_unit(struct hstex_engine *engine,
+                                const struct decimal_factor *factor,
                                 uint64_t numerator, uint64_t denominator,
                                 int32_t *value, char *error,
                                 size_t error_capacity)
 {
     if (factor->whole > (uint64_t)HSTEX_MAX_DIMEN) {
-        return set_error(error, error_capacity,
-                         "dimension exceeds TeX's maximum");
+        return report_dimension_too_large(engine, factor->sign < 0, value);
     }
     uint64_t fraction = scaled_fraction(factor);
     uint64_t scaled_whole = factor->whole * numerator;
@@ -5441,30 +5459,30 @@ static int scaled_physical_unit(const struct decimal_factor *factor,
         (scaled_whole / denominator) * UINT64_C(65536) +
         (numerator * fraction + UINT64_C(65536) * (scaled_whole % denominator)) /
             denominator;
-    return finish_scaled(magnitude, factor->sign < 0, value, error,
+    return finish_scaled(engine, magnitude, factor->sign < 0, value, error,
                          error_capacity);
 }
 
 /* Convert a decimal factor that multiplies an internal dimension, such as
    `2.5\parindent`, `1.5em`, or a glue component. The quantized fraction
    scales the unit and truncates, matching the observed reference values. */
-static int scaled_internal_unit(const struct decimal_factor *factor,
+static int scaled_internal_unit(struct hstex_engine *engine,
+                                const struct decimal_factor *factor,
                                 int32_t unit, int32_t *value, char *error,
                                 size_t error_capacity)
 {
     if (factor->whole > (uint64_t)HSTEX_MAX_DIMEN) {
-        return set_error(error, error_capacity,
-                         "dimension exceeds TeX's maximum");
+        return report_dimension_too_large(engine, factor->sign < 0, value);
     }
     uint64_t fraction = scaled_fraction(factor);
     uint64_t magnitude = unit < 0 ? (uint64_t)(-(int64_t)unit) : (uint64_t)unit;
     uint64_t product = factor->whole * magnitude;
     if (product > (uint64_t)HSTEX_MAX_DIMEN) {
-        return set_error(error, error_capacity,
-                         "dimension exceeds TeX's maximum");
+        return report_dimension_too_large(
+            engine, (factor->sign < 0) != (unit < 0), value);
     }
     product += magnitude * fraction / UINT64_C(65536);
-    return finish_scaled(product, (factor->sign < 0) != (unit < 0), value,
+    return finish_scaled(engine, product, (factor->sign < 0) != (unit < 0), value,
                          error, error_capacity);
 }
 
@@ -5541,7 +5559,7 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return -1;
         }
         if (matched) {
-            return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1),
+            return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1),
                                         value, error, error_capacity);
         }
     }
@@ -5565,7 +5583,7 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return -1;
         }
         if (internal_result > 0) {
-            return scaled_internal_unit(&factor, internal_unit, value, error,
+            return scaled_internal_unit(engine, &factor, internal_unit, value, error,
                                         error_capacity);
         }
     }
@@ -5602,7 +5620,7 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
         if (skip_optional_space(engine, error, error_capacity) != 0) {
             return -1;
         }
-        return scaled_internal_unit(&factor, unit, value, error,
+        return scaled_internal_unit(engine, &factor, unit, value, error,
                                     error_capacity);
     }
 
@@ -5621,8 +5639,8 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
         }
         if (magnification != 1000) {
             if (factor.whole > (uint64_t)HSTEX_MAX_DIMEN) {
-                return set_error(error, error_capacity,
-                                 "dimension exceeds TeX's maximum");
+                return report_dimension_too_large(engine, factor.sign < 0,
+                                                  value);
             }
             uint64_t magnitude = (uint64_t)magnification;
             uint64_t scaled_whole = factor.whole * UINT64_C(1000);
@@ -5653,7 +5671,7 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             if (skip_optional_space(engine, error, error_capacity) != 0) {
                 return -1;
             }
-            return scaled_physical_unit(&factor,
+            return scaled_physical_unit(engine, &factor,
                                         hstex_physical_units[index].numerator,
                                         hstex_physical_units[index].denominator,
                                         value, error, error_capacity);
@@ -5668,7 +5686,7 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
         if (skip_optional_space(engine, error, error_capacity) != 0) {
             return -1;
         }
-        return finish_scaled(factor.whole, factor.sign < 0, value, error,
+        return finish_scaled(engine, factor.whole, factor.sign < 0, value, error,
                              error_capacity);
     }
     return set_error(error, error_capacity, "illegal unit of measure");
@@ -6056,7 +6074,7 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
             return -1;
         }
         if (matched) {
-            return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1),
+            return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1),
                                         value, error, error_capacity);
         }
     }
@@ -6082,7 +6100,7 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
             return -1;
         }
         if (internal_result > 0) {
-            return scaled_internal_unit(&factor, internal.width, value, error,
+            return scaled_internal_unit(engine, &factor, internal.width, value, error,
                                         error_capacity);
         }
     }
@@ -6100,7 +6118,7 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
     if (skip_optional_space(engine, error, error_capacity) != 0) {
         return -1;
     }
-    return scaled_physical_unit(&factor, UINT64_C(1), UINT64_C(1), value, error,
+    return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1), value, error,
                                 error_capacity);
 }
 
