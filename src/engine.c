@@ -132,6 +132,8 @@ static bool conditional_test_pending(const struct hstex_engine *engine);
    printer further down, and used all over the scanner. */
 static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
+static void report_improper_aux(struct hstex_engine *engine,
+                                const char *name);
 static bool too_many_errors(const struct hstex_engine *engine);
 /* The text of a run of nodes, and the nodes themselves, both wanted by the
    packer before either is defined. */
@@ -4375,9 +4377,9 @@ static int integer_from_control_sequence(
         }
     case HSTEX_COMMAND_SPACE_FACTOR:
         if (engine->mode != HSTEX_MODE_HORIZONTAL) {
-            return set_error(error, error_capacity,
-                             "spacefactor is only available in horizontal "
-                             "mode");
+            report_improper_aux(engine, "\\spacefactor");
+            *value = 0;
+            return 0;
         }
         *value = engine->space_factor;
         return 0;
@@ -4998,6 +5000,20 @@ static int handle_vertical_list_token(struct hstex_engine *engine,
                                       struct hstex_source_location location,
                                       char *error, size_t error_capacity);
 
+/* Reading \spacefactor outside horizontal mode, or \prevdepth outside
+   vertical mode, is a fault the reference recovers from with zero. It says
+   so in the same words for both, and what it hands back is an integer --
+   \the\prevdepth in horizontal mode reads "0", not "0.0pt". */
+static void report_improper_aux(struct hstex_engine *engine, const char *name)
+{
+    static const char *const help[] = {
+        "You can refer to \\spacefactor only in horizontal mode;",
+        "you can refer to \\prevdepth only in vertical mode; and",
+        "neither of these is meaningful inside \\write. So",
+        "I'm forgetting what you said and using zero instead.", NULL};
+    tex_error(engine, help, "Improper %s", name);
+}
+
 static int dimen_from_meaning(struct hstex_engine *engine,
                               const struct hstex_meaning *meaning,
                               int32_t *value, char *error,
@@ -5005,8 +5021,9 @@ static int dimen_from_meaning(struct hstex_engine *engine,
 {
     if (meaning->command == HSTEX_COMMAND_PREV_DEPTH) {
         if (engine->mode != HSTEX_MODE_VERTICAL) {
-            return set_error(error, error_capacity,
-                             "prevdepth is only available in vertical mode");
+            report_improper_aux(engine, "\\prevdepth");
+            *value = 0;
+            return 1;
         }
         *value = engine->prev_depth;
         return 1;
@@ -7051,6 +7068,16 @@ static int expand_the_primitive(struct hstex_engine *engine,
         if (result > 0) {
             return push_glue_expansion(engine, &glue, true, location, error,
                                        error_capacity);
+        }
+        /* \prevdepth read outside vertical mode is a fault whose recovery
+           hands back an integer rather than a dimension: the reference
+           prints "0", not "0.0pt". \spacefactor is already an integer, so
+           it needs no such turn. */
+        if (meaning->command == HSTEX_COMMAND_PREV_DEPTH &&
+            engine->mode != HSTEX_MODE_VERTICAL) {
+            report_improper_aux(engine, "\\prevdepth");
+            return push_integer_expansion(engine, 0, location, error,
+                                          error_capacity);
         }
         int32_t dimension = 0;
         result = dimen_from_meaning(engine, meaning, &dimension, error,
@@ -20014,8 +20041,12 @@ static int scan_prev_depth_assignment(struct hstex_engine *engine,
 {
     int32_t value = 0;
     if (engine->mode != HSTEX_MODE_VERTICAL) {
-        return set_error(error, error_capacity,
-                         "prevdepth is only assignable in vertical mode");
+        /* The reference says which mode you are in and reads nothing --
+           not even the `=' -- so what was to be assigned is left to be
+           typeset. Measured: \prevdepth=2pt in horizontal mode leaves
+           "=2pt" in the paragraph. */
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
     }
     if (scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_dimension(engine, &value, error, error_capacity) != 0) {
@@ -35651,10 +35682,10 @@ handle_token:
             continue;
         case HSTEX_COMMAND_SPACE_FACTOR: {
             if (engine->mode != HSTEX_MODE_HORIZONTAL) {
-                (void)set_error(error, error_capacity,
-                                "spacefactor is only assignable in horizontal "
-                                "mode");
-                return HSTEX_ENGINE_ERROR;
+                /* Nothing is read, so the value stands as text; see
+                   scan_prev_depth_assignment. */
+                report_illegal_case(engine, engine->executing_token);
+                continue;
             }
             int32_t factor = 0;
             if (finish_assignment(

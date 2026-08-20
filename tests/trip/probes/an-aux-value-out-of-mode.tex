@@ -1,0 +1,18 @@
+% \spacefactor outside horizontal mode, \prevdepth outside vertical mode.
+%
+% Measured against pdftex, and the two behave alike in both directions:
+%
+%   Assigning says "You can't use `\spacefactor' in vertical mode" and reads
+%   nothing at all -- not even the `=' -- so what was to be assigned stands
+%   as text and starts a paragraph.
+%
+%   Reading says "Improper \spacefactor." and hands back zero as an INTEGER:
+%   \the\prevdepth in horizontal mode reads "0", not "0.0pt".
+\tracingonline=1
+\font\tt=cmr10 \tt
+\message{[sf=\the\spacefactor]}       % improper, 0
+\message{[pd=\the\prevdepth]}         % proper in vertical mode
+\setbox0=\hbox{\message{[pd=\the\prevdepth]}}  % improper, 0 not 0.0pt
+\setbox0=\vbox{\message{[pd=\the\prevdepth]}}  % proper again
+\spacefactor=2000 \message{[mode=\ifhmode H\else V\fi]}\par
+\end
