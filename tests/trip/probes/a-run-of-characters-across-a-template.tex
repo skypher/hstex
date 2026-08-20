@@ -1,0 +1,21 @@
+% Whether an alignment template's text joins the entry's run of characters.
+%
+% Measured against pdftex: it does, on BOTH sides. The u-part before the
+% entry and the v-part after it are one run with the entry, so kerns and
+% ligatures are made across both joins:
+%
+%   \halign{X#Y\cr A\cr}   kerns A against Y, exactly as \hbox{XAY} does
+%   \halign{#i\cr f\cr}    makes the fi ligature
+%   \halign{f#i\cr\cr}     makes it even with nothing between them
+%
+% The u-part side already worked here. The v-part side did not, because the
+% \cr or tab that ends the entry was ending the run of characters first --
+% and it must not, since the template's own text follows it.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\vbox{\halign{X#Y\cr A\cr}}\showbox0
+\setbox1=\vbox{\halign{#i\cr f\cr}}\showbox1
+\setbox2=\vbox{\halign{f#i\cr\cr}}\showbox2
+\setbox3=\vbox{\halign{V#&#Y\cr A&A\cr}}\showbox3
+\setbox4=\hbox{XAY}\showbox4              % the same list, without the alignment
+\end

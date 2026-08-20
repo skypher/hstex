@@ -36144,7 +36144,16 @@ handle_token:
            stands for a character is a character, and goes on with the word
            rather than ending it. See docs/DECISIONS.md,
            a-chardef-inside-a-word. */
-        if (engine->has_pending_character &&
+        /* A tab or \cr that ends an alignment entry does not end the run of
+           characters: the template's own text after the entry carries on
+           from it, so `\halign{#Y\cr A\cr}' kerns the A against the Y just
+           as `\hbox{AY}' does. */
+        bool ends_an_entry =
+            (meaning->command == HSTEX_COMMAND_CR ||
+             meaning->command == HSTEX_COMMAND_SPAN) &&
+            engine->alignment_entry != NULL &&
+            !engine->alignment_entry->after_pushed;
+        if (engine->has_pending_character && !ends_an_entry &&
             meaning->command != HSTEX_COMMAND_CHAR_GIVEN &&
             meaning->command != HSTEX_COMMAND_CHAR &&
             /* \\noboundary ends the word itself, and without the character
