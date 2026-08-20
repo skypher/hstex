@@ -1,0 +1,25 @@
+% \unhbox or \unvbox of a box whose list is the wrong kind, and either of
+% them in math mode.
+%
+% Measured against pdftex: named and ignored, and the register keeps its
+% contents --
+%
+%   ! Incompatible list can't be unboxed.
+%   Sorry, Pandora. (You sneaky devil.)
+%   I refuse to unbox an \hbox in vertical mode or vice versa.
+%   And I can't open any boxes in math mode.
+%
+% A void register is not a fault in any mode and does nothing at all,
+% which is why trip's \unhbox234 passes in silence and its \unhcopy3 does
+% not.
+%
+% Both of these stopped this engine. trip line 396 is
+% \unhbox234\unhcopy3 in math mode.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox3=\hbox{Q}\setbox0=\hbox{$\unhcopy3 y$}\showbox0\showbox3
+\setbox3=\hbox{Q}\setbox1=\vbox{\unvcopy3}\showbox1\showbox3
+\setbox3=\vbox{\hbox{Q}}\setbox2=\hbox{a\unhcopy3 b}\showbox2
+\setbox4=\hbox{$\unhcopy234 y$}\showbox4          % void: silent
+\setbox3=\hbox{Q}\setbox5=\hbox{a\unhbox3 b}\showbox5\showbox3
+\end

@@ -23967,15 +23967,20 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
     if (box.kind == HSTEX_BOX_VOID) {
         return 0;
     }
+    static const char *const mismatch_help[] = {
+        "Sorry, Pandora. (You sneaky devil.)",
+        "I refuse to unbox an \\hbox in vertical mode or vice versa.",
+        "And I can't open any boxes in math mode.", NULL};
     if (formula) {
-        return set_error(error, error_capacity,
-                         "box %d cannot be unboxed into a formula", index);
+        /* Named and ignored; the box keeps its contents. */
+        tex_error(engine, mismatch_help, "Incompatible list can't be unboxed");
+        return 0;
     }
     enum hstex_box_kind wanted =
         vertical ? HSTEX_BOX_VLIST : HSTEX_BOX_HLIST;
     if (box.kind != wanted) {
-        return set_error(error, error_capacity,
-                         "box %d cannot be unboxed into this list", index);
+        tex_error(engine, mismatch_help, "Incompatible list can't be unboxed");
+        return 0;
     }
     /* Unboxing puts a list where it stands and says nothing about what
        should be set against what: the reference leaves \\prevdepth where it
