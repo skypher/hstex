@@ -1,0 +1,16 @@
+% A space factor does not leave the list it was set in.
+%
+% Each box sets the space factor to 1250 with a comma, then puts something
+% holding a period -- which would set 3000 -- and asks again.  An \insert, a
+% \vadjust and a \mark all leave it at 1250; a box sets it to 1000, which is
+% the box being appended rather than anything its contents did.
+%
+%   pdftex -interaction=nonstopmode \input space-factor-does-not-leave \end
+%
+% See docs/DECISIONS.md, a-space-factor-does-not-leave-its-list.
+%
+\tracingonline=1
+\setbox0=\hbox{ab,\message{[ins-before=\the\spacefactor]}\insert100{x.}\message{[ins-after=\the\spacefactor]}}
+\setbox1=\hbox{ab,\message{[adj-before=\the\spacefactor]}\vadjust{x.}\message{[adj-after=\the\spacefactor]}}
+\setbox2=\hbox{ab,\message{[box-before=\the\spacefactor]}\hbox{x.}\message{[box-after=\the\spacefactor]}}
+\setbox3=\hbox{ab,\message{[mark-before=\the\spacefactor]}\mark{x.}\message{[mark-after=\the\spacefactor]}}

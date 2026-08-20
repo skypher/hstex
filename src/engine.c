@@ -11311,6 +11311,12 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     uint32_t previous_stop_level = engine->group_stop_level;
     bool previous_stop_armed = engine->group_stop_armed;
     bool previous_stop_hit = engine->group_stop_hit;
+    /* The space factor belongs to the horizontal list this vertical one was
+       written in, and nothing set inside gets out: what an \\insert or a
+       \\vadjust holds leaves the enclosing line's spacing where it was. A box
+       does set it to 1000, but the code that appends the box does that. See
+       docs/DECISIONS.md, a-space-factor-does-not-leave-its-list. */
+    int32_t previous_space_factor = engine->space_factor;
     size_t previous_math_depth = engine->math_depth;
     size_t previous_math_floor = engine->math_floor;
     bool previous_displayed = engine->displayed_math;
@@ -11382,6 +11388,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->group_stop_level = previous_stop_level;
     engine->group_stop_armed = previous_stop_armed;
     engine->group_stop_hit = previous_stop_hit;
+    engine->space_factor = previous_space_factor;
     while (engine->math_depth > previous_math_depth) {
         pop_math_list(engine);
     }
