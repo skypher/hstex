@@ -9834,8 +9834,8 @@ static int drop_last_list_node(struct hstex_engine *engine, char *error,
                                size_t error_capacity);
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
                                  bool ligature, const uint8_t *originals,
-                                 uint8_t original_count, char *error,
-                                 size_t error_capacity);
+                                 uint8_t original_count, uint8_t boundary,
+                                 char *error, size_t error_capacity);
 static void advance_space_factor(struct hstex_engine *engine, uint8_t code);
 static int flush_pending_character(struct hstex_engine *engine, char *error,
                                    size_t error_capacity);
@@ -9850,6 +9850,10 @@ static int append_horizontal_character(struct hstex_engine *engine,
                                        size_t error_capacity);
 static int append_interword_glue(struct hstex_engine *engine, char *error,
                                  size_t error_capacity);
+static int font_lig_kern_from(const struct hstex_font *font, uint8_t left,
+                              uint8_t right, bool from_boundary,
+                              struct hstex_lig_kern_result *result,
+                              char *error, size_t error_capacity);
 static int font_lig_kern(const struct hstex_font *font, uint8_t left,
                          uint8_t right,
                          struct hstex_lig_kern_result *result, char *error,
@@ -13667,11 +13671,19 @@ static void show_node(struct hstex_engine *engine,
     case HSTEX_NODE_LIGATURE:
         show_character(engine, node);
         print_text(engine, " (ligature ");
+        /* A boundary character that took part is written `|' on the side it
+           stood; see docs/DECISIONS.md, boundary-characters. */
+        if ((node->value.character.boundary & 2U) != 0U) {
+            print_byte(engine, '|');
+        }
         for (uint8_t index = 0U;
              index < node->value.character.original_count &&
              index < sizeof(node->value.character.originals);
              ++index) {
             show_ascii(engine, node->value.character.originals[index]);
+        }
+        if ((node->value.character.boundary & 1U) != 0U) {
+            print_byte(engine, '|');
         }
         print_byte(engine, ')');
         return;
@@ -22410,10 +22422,10 @@ static int execute_indent(struct hstex_engine *engine, bool indent,
 /* Walk a font's ligature and kerning program for a pair of characters, and
    say what it has to say about them: nothing, a kern, or one of the eight
    ligature operations. See docs/DECISIONS.md, ligature-operations. */
-static int font_lig_kern(const struct hstex_font *font, uint8_t left,
-                         uint8_t right,
-                         struct hstex_lig_kern_result *result, char *error,
-                         size_t error_capacity)
+static int font_lig_kern_from(const struct hstex_font *font, uint8_t left,
+                              uint8_t right, bool from_boundary,
+                              struct hstex_lig_kern_result *result,
+                              char *error, size_t error_capacity)
 {
     result->kind = HSTEX_LIG_KERN_NOTHING;
     result->kern = 0;
@@ -22424,11 +22436,21 @@ static int font_lig_kern(const struct hstex_font *font, uint8_t left,
     if (font->characters == NULL || font->lig_kern_count == 0U) {
         return 0;
     }
-    const struct hstex_char_metric *metric = &font->characters[left];
-    if (metric->tag != 1) {
-        return 0;
+    size_t step = 0U;
+    if (from_boundary) {
+        /* The program for what stands beyond the left end of a word, which
+           the table's last instruction points at. */
+        if (font->boundary_label < 0) {
+            return 0;
+        }
+        step = (size_t)font->boundary_label;
+    } else {
+        const struct hstex_char_metric *metric = &font->characters[left];
+        if (metric->tag != 1) {
+            return 0;
+        }
+        step = (size_t)metric->remainder;
     }
-    size_t step = (size_t)metric->remainder;
     if (step >= font->lig_kern_count) {
         return 0;
     }
@@ -22565,8 +22587,8 @@ static int append_interword_glue(struct hstex_engine *engine, char *error,
 /* Put a character, or a ligature standing for several, into the list. */
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
                                  bool ligature, const uint8_t *originals,
-                                 uint8_t original_count, char *error,
-                                 size_t error_capacity)
+                                 uint8_t original_count, uint8_t boundary,
+                                 char *error, size_t error_capacity)
 {
     const struct hstex_font *font =
         font_by_identifier(engine, engine->current_font);
@@ -22594,8 +22616,30 @@ static int append_character_node(struct hstex_engine *engine, uint8_t code,
             original_count < room ? original_count : room;
         memcpy(node.value.character.originals, originals,
                node.value.character.original_count);
+        node.value.character.boundary = boundary;
     }
     return append_hbox_node(engine, &node, error, error_capacity);
+}
+
+/* Whether a token will put a character in the list: a letter or other
+   character, or a control sequence that stands for one. */
+static bool character_follows(struct hstex_engine *engine, hstex_token token)
+{
+    if (hstex_token_is_character(token)) {
+        return token_is_category(token, HSTEX_CAT_LETTER) ||
+               token_is_category(token, HSTEX_CAT_OTHER);
+    }
+    if (!hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN ||
+        meaning->command == HSTEX_COMMAND_CHAR) {
+        return true;
+    }
+    return meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+           hstex_token_is_character(meaning->value.token);
 }
 
 /* A character the font does not define is dropped before anything else sees
@@ -22627,6 +22671,10 @@ struct hstex_lig_item {
     uint8_t character;
     bool is_ligature;
     bool is_hyphen;
+    /* The boundary character standing beyond one end of the word. It is not
+       a character of the list: it takes part in the program and then goes
+       away, leaving its mark on whatever it helped make. */
+    bool is_boundary;
     uint8_t originals[6];
     uint8_t original_count;
 };
@@ -22634,11 +22682,9 @@ struct hstex_lig_item {
 static void lig_item_plain(struct hstex_lig_item *item, uint8_t code,
                            bool hyphen)
 {
+    memset(item, 0, sizeof(*item));
     item->character = code;
-    item->is_ligature = false;
     item->is_hyphen = hyphen;
-    item->original_count = 0U;
-    memset(item->originals, 0, sizeof(item->originals));
 }
 
 /* What a character is made of: itself, unless it is already a ligature, in
@@ -22662,43 +22708,18 @@ static void lig_item_append_originals(struct hstex_lig_item *target,
     }
 }
 
-static int emit_lig_item(struct hstex_engine *engine,
-                         const struct hstex_lig_item *item, char *error,
-                         size_t error_capacity)
+/* True where nothing of the word stands after this item but the boundary,
+   which is where the reference finds its lookahead empty and puts the right
+   mark on the ligature it is making. */
+static bool lig_nothing_after(const struct hstex_lig_item *work, size_t count,
+                              size_t index)
 {
-    int status = append_character_node(engine, item->character,
-                                       item->is_ligature, item->originals,
-                                       item->original_count, error,
-                                       error_capacity);
-    /* An explicit hyphen is followed into the paragraph by an empty
-       discretionary, so the line may break after it; see docs/DECISIONS.md,
-       the-discretionary-after-an-explicit-hyphen. */
-    if (status == 0 && item->is_hyphen) {
-        struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
-        status = append_hbox_node(engine, &node, error, error_capacity);
+    for (size_t next = index + 1U; next < count; ++next) {
+        if (!work[next].is_boundary) {
+            return false;
+        }
     }
-    return status;
-}
-
-/* Put the held-back character into the list. Everything that is not another
-   character does this first, so a command between two characters breaks the
-   pair exactly as it does in the reference. */
-static int flush_pending_character(struct hstex_engine *engine, char *error,
-                                   size_t error_capacity)
-{
-    if (!engine->has_pending_character) {
-        return 0;
-    }
-    struct hstex_lig_item item;
-    item.character = engine->pending_character;
-    item.is_ligature = engine->pending_is_ligature;
-    item.is_hyphen = engine->pending_is_hyphen;
-    item.original_count = engine->pending_original_count;
-    memcpy(item.originals, engine->pending_originals,
-           sizeof(item.originals));
-    engine->has_pending_character = false;
-    engine->pending_is_hyphen = false;
-    return emit_lig_item(engine, &item, error, error_capacity);
+    return true;
 }
 
 /* Where a character the program has finished with goes. The two callers put
@@ -22723,10 +22744,119 @@ typedef int (*hstex_lig_emit)(void *context, const struct hstex_lig_item *item,
    whose program contradicts itself. */
 #define HSTEX_LIG_WORK 64U
 
+static int lig_advance(struct hstex_engine *engine,
+                       const struct hstex_font *font,
+                       struct hstex_lig_item *work, size_t *count,
+                       hstex_lig_emit emit, void *context, char *error,
+                       size_t error_capacity);
+static int lig_emit_horizontal(void *context,
+                               const struct hstex_lig_item *item, bool is_kern,
+                               int32_t kern, char *error,
+                               size_t error_capacity);
+
+static int emit_lig_item(struct hstex_engine *engine,
+                         const struct hstex_lig_item *item, char *error,
+                         size_t error_capacity)
+{
+    if (item->is_boundary) {
+        return 0;
+    }
+    uint8_t boundary = 0U;
+    if (item->is_ligature) {
+        /* The left mark goes on the first ligature the word makes; the right
+           one on the ligature after which nothing of the word is left, which
+           is where the reference finds its lig_stack empty. */
+        if (engine->lig_left_hit) {
+            boundary |= 2U;
+            engine->lig_left_hit = false;
+        }
+        if (engine->lig_right_hit && engine->lig_last_of_word) {
+            boundary |= 1U;
+            engine->lig_right_hit = false;
+        }
+    }
+    int status = append_character_node(engine, item->character,
+                                       item->is_ligature, item->originals,
+                                       item->original_count, boundary, error,
+                                       error_capacity);
+    /* An explicit hyphen is followed into the paragraph by an empty
+       discretionary, so the line may break after it; see docs/DECISIONS.md,
+       the-discretionary-after-an-explicit-hyphen. */
+    if (status == 0 && item->is_hyphen) {
+        struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
+        status = append_hbox_node(engine, &node, error, error_capacity);
+    }
+    return status;
+}
+
+/* Put the held-back character into the list. Everything that is not another
+   character does this first, so a command between two characters breaks the
+   pair exactly as it does in the reference. */
+static int flush_pending_character(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    if (!engine->has_pending_character) {
+        return 0;
+    }
+    struct hstex_lig_item work[HSTEX_LIG_WORK];
+    lig_item_plain(&work[0], engine->pending_character,
+                   engine->pending_is_hyphen);
+    work[0].is_ligature = engine->pending_is_ligature;
+    work[0].original_count = engine->pending_original_count;
+    memcpy(work[0].originals, engine->pending_originals,
+           sizeof(work[0].originals));
+    engine->has_pending_character = false;
+    engine->pending_is_hyphen = false;
+    /* The word ends, so the character beyond its right end takes part in the
+       program one last time -- unless \noboundary said not to. See
+       docs/DECISIONS.md, boundary-characters. */
+    const struct hstex_font *font =
+        font_by_identifier(engine, engine->current_font);
+    bool cancelled = engine->cancel_boundary;
+    if (font != NULL && !cancelled && font->boundary_character >= 0 &&
+        font->boundary_character <= 255) {
+        size_t count = 1U;
+        lig_item_plain(&work[count], (uint8_t)font->boundary_character, false);
+        work[count].is_boundary = true;
+        ++count;
+        if (lig_advance(engine, font, work, &count, lig_emit_horizontal,
+                        engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        for (size_t index = 0U; index < count; ++index) {
+            engine->lig_last_of_word = lig_nothing_after(work, count, index);
+            if (emit_lig_item(engine, &work[index], error, error_capacity) !=
+                0) {
+                engine->lig_last_of_word = false;
+                return -1;
+            }
+        }
+        engine->lig_last_of_word = false;
+        engine->cancel_boundary = false;
+        return 0;
+    }
+    engine->cancel_boundary = false;
+    engine->lig_last_of_word = true;
+    int status = emit_lig_item(engine, &work[0], error, error_capacity);
+    engine->lig_last_of_word = false;
+    return status;
+}
+
+
+static int font_lig_kern(const struct hstex_font *font, uint8_t left,
+                         uint8_t right,
+                         struct hstex_lig_kern_result *result, char *error,
+                         size_t error_capacity)
+{
+    return font_lig_kern_from(font, left, right, false, result, error,
+                              error_capacity);
+}
+
 /* Run the font's program over the work list until only one character is
    left to be looked at beside whatever comes next, and leave everything it
    has finished with in `out`. See docs/DECISIONS.md, ligature-operations. */
-static int lig_advance(const struct hstex_font *font,
+static int lig_advance(struct hstex_engine *engine,
+                       const struct hstex_font *font,
                        struct hstex_lig_item *work, size_t *count,
                        hstex_lig_emit emit, void *context, char *error,
                        size_t error_capacity)
@@ -22737,12 +22867,20 @@ static int lig_advance(const struct hstex_font *font,
                              "the font's ligature program does not settle");
         }
         struct hstex_lig_kern_result step;
-        if (font_lig_kern(font, work[0].character, work[1].character, &step,
-                          error, error_capacity) != 0) {
+        if (font_lig_kern_from(font, work[0].character, work[1].character,
+                               work[0].is_boundary, &step, error,
+                               error_capacity) != 0) {
             return -1;
         }
         if (step.kind != HSTEX_LIG_KERN_LIGATURE) {
-            if (emit(context, &work[0], false, 0, error, error_capacity) != 0) {
+            /* The boundary is not a character of the list, so nothing of it
+               is put there. */
+            engine->lig_last_of_word = lig_nothing_after(work, *count, 0U);
+            bool failed = !work[0].is_boundary &&
+                          emit(context, &work[0], false, 0, error,
+                               error_capacity) != 0;
+            engine->lig_last_of_word = false;
+            if (failed) {
                 return -1;
             }
             if (step.kind == HSTEX_LIG_KERN_KERN && step.kern != 0 &&
@@ -22761,12 +22899,25 @@ static int lig_advance(const struct hstex_font *font,
         struct hstex_lig_item made;
         lig_item_plain(&made, step.ligature, false);
         made.is_ligature = true;
+        /* Whichever end the boundary stood at leaves its mark on the word,
+           whether or not the boundary itself is kept; the first ligature the
+           word puts in the list wears it. */
+        if (work[0].is_boundary) {
+            engine->lig_left_hit = true;
+        }
+        if (work[1].is_boundary) {
+            engine->lig_right_hit = true;
+        }
         if (!step.keep_left) {
-            lig_item_append_originals(&made, &work[0]);
+            if (!work[0].is_boundary) {
+                lig_item_append_originals(&made, &work[0]);
+            }
             made.is_hyphen = made.is_hyphen || work[0].is_hyphen;
         }
         if (!step.keep_right) {
-            lig_item_append_originals(&made, &work[1]);
+            if (!work[1].is_boundary) {
+                lig_item_append_originals(&made, &work[1]);
+            }
             made.is_hyphen = made.is_hyphen || work[1].is_hyphen;
         }
         struct hstex_lig_item built[3];
@@ -22790,8 +22941,12 @@ static int lig_advance(const struct hstex_font *font,
            again at the first character it is not finished with. */
         size_t done = step.advance < *count ? step.advance : *count;
         for (size_t index = 0U; index < done; ++index) {
-            if (emit(context, &work[index], false, 0, error, error_capacity) !=
-                0) {
+            engine->lig_last_of_word = lig_nothing_after(work, *count, index);
+            bool failed = !work[index].is_boundary &&
+                          emit(context, &work[index], false, 0, error,
+                               error_capacity) != 0;
+            engine->lig_last_of_word = false;
+            if (failed) {
                 return -1;
             }
         }
@@ -22837,40 +22992,63 @@ static int append_horizontal_character(struct hstex_engine *engine,
     advance_space_factor(engine, code);
     if (font != NULL &&
         (font->characters == NULL || font->characters[code].tag < 0)) {
+        /* The word ends here, and without the character beyond its right
+           end: the reference had already looked ahead and found this one, so
+           the boundary never came into it. That is what keeps `uZ' from
+           ligaturing through a Z that is not there. */
+        engine->cancel_boundary = true;
+        if (flush_pending_character(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        engine->cancel_boundary = false;
         char_warning(engine, font, code);
         return 0;
     }
+    struct hstex_lig_item work[HSTEX_LIG_WORK];
+    size_t count = 0U;
     if (!engine->has_pending_character || font == NULL) {
         if (font == NULL &&
             flush_pending_character(engine, error, error_capacity) != 0) {
             return -1;
         }
-        engine->has_pending_character = true;
-        engine->pending_is_ligature = false;
-        engine->pending_original_count = 0U;
-        engine->pending_character = code;
-        engine->pending_is_hyphen = hyphen;
-        return 0;
+        bool cancelled = engine->cancel_boundary;
+        engine->cancel_boundary = false;
+        engine->lig_left_hit = false;
+        engine->lig_right_hit = false;
+        /* A word begins, so what stands beyond its left end takes part in
+           the program before the first character does. */
+        if (font == NULL || cancelled || font->boundary_label < 0) {
+            engine->has_pending_character = true;
+            engine->pending_is_ligature = false;
+            engine->pending_original_count = 0U;
+            engine->pending_character = code;
+            engine->pending_is_hyphen = hyphen;
+            return 0;
+        }
+        lig_item_plain(&work[count], 0U, false);
+        work[count].is_boundary = true;
+        ++count;
+        lig_item_plain(&work[count++], code, hyphen);
+    } else {
+        engine->cancel_boundary = false;
+        work[count].character = engine->pending_character;
+        work[count].is_ligature = engine->pending_is_ligature;
+        work[count].is_hyphen = engine->pending_is_hyphen;
+        work[count].is_boundary = false;
+        work[count].original_count = engine->pending_original_count;
+        memcpy(work[count].originals, engine->pending_originals,
+               sizeof(work[count].originals));
+        ++count;
+        lig_item_plain(&work[count++], code, hyphen);
+        engine->has_pending_character = false;
+        engine->pending_is_hyphen = false;
     }
 
-    struct hstex_lig_item work[HSTEX_LIG_WORK];
-    size_t count = 0U;
-    work[count].character = engine->pending_character;
-    work[count].is_ligature = engine->pending_is_ligature;
-    work[count].is_hyphen = engine->pending_is_hyphen;
-    work[count].original_count = engine->pending_original_count;
-    memcpy(work[count].originals, engine->pending_originals,
-           sizeof(work[count].originals));
-    ++count;
-    lig_item_plain(&work[count++], code, hyphen);
-    engine->has_pending_character = false;
-    engine->pending_is_hyphen = false;
-
-    if (lig_advance(font, work, &count, lig_emit_horizontal, engine, error,
-                    error_capacity) != 0) {
+    if (lig_advance(engine, font, work, &count, lig_emit_horizontal, engine,
+                    error, error_capacity) != 0) {
         return -1;
     }
-    if (count == 1U) {
+    if (count == 1U && !work[0].is_boundary) {
         engine->has_pending_character = true;
         engine->pending_character = work[0].character;
         engine->pending_is_ligature = work[0].is_ligature;
@@ -24533,8 +24711,9 @@ static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
                              "a word set again does not fit");
         }
         lig_item_plain(&work[work_count++], characters[index], false);
-        if (lig_advance(metrics, work, &work_count, lig_emit_reconstituted,
-                        &place, error, error_capacity) != 0) {
+        if (lig_advance(engine, metrics, work, &work_count,
+                        lig_emit_reconstituted, &place, error,
+                        error_capacity) != 0) {
             return -1;
         }
     }
@@ -33703,8 +33882,31 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_NO_BOUNDARY:
-            /* The next character has no boundary before it. */
+            /* The word before it ends without the character beyond its right
+               end, and the word after it begins without the one beyond its
+               left end. See docs/DECISIONS.md, boundary-characters. */
             engine->cancel_boundary = true;
+            if (flush_pending_character(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            /* Only a character that actually follows has its left boundary
+               cancelled; the reference looks to see. */
+            {
+                hstex_token next = 0U;
+                struct hstex_source_location where;
+                enum hstex_engine_result got = hstex_engine_next_expanded(
+                    engine, &next, &where, error, error_capacity);
+                if (got == HSTEX_ENGINE_ERROR) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                if (got == HSTEX_ENGINE_TOKEN) {
+                    engine->cancel_boundary = character_follows(engine, next);
+                    if (push_one(engine, next, where, error,
+                                 error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                }
+            }
             continue;
         case HSTEX_COMMAND_HALIGN:
         case HSTEX_COMMAND_VALIGN:

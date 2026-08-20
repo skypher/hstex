@@ -1363,6 +1363,11 @@ struct hstex_node {
                docs/DECISIONS.md, ligature-originals. */
             uint8_t originals[6];
             uint8_t original_count;
+            /* Which ends of the ligature the boundary character took part
+               in: 2 for the left, 1 for the right, as the reference's
+               subtype does, and printed as `|' on that side. See
+               docs/DECISIONS.md, boundary-characters. */
+            uint8_t boundary;
         } character;
         struct {
             int32_t stretch;
@@ -1749,6 +1754,14 @@ struct hstex_engine {
     uint8_t pending_originals[6];
     uint8_t pending_original_count;
     bool pending_is_ligature;
+    /* The boundary character has taken part in the word being built, at one
+       end or the other. The mark goes on the first ligature the word puts in
+       the list and no further, which is what the reference's lft_hit and
+       rt_hit do. See docs/DECISIONS.md, boundary-characters. */
+    bool lig_left_hit;
+    bool lig_right_hit;
+    /* True while the last character of a word is being put in the list. */
+    bool lig_last_of_word;
     uint8_t pending_character;
     /* The character held back was read as the font's \hyphenchar, so an
        empty discretionary follows it into the paragraph; see
