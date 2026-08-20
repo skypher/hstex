@@ -1,0 +1,18 @@
+% An alignment preamble column with no # in it.
+%
+% Measured against pdftex: "Missing # inserted in alignment preamble", and
+% the # goes at the END of what was read -- so the whole column becomes the
+% part before the entry and the part after is empty. `\halign{x\cr A\cr}'
+% therefore sets x and then A in one cell.
+%
+% A preamble that begins with & is not this: that marks the point the
+% preamble repeats from, and `\halign{&#\cr A\cr}' is silent.
+%
+% trip line 331 opens `\halign spread-12.truedd{&#\span\iftrue\A\span...'.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\vbox{\halign{x\cr A\cr}}\showbox0
+\setbox1=\vbox{\halign{&\cr A\cr}}\showbox1
+\setbox2=\vbox{\halign{#&y\cr A&B\cr}}\showbox2
+\setbox3=\vbox{\halign{&#\cr A\cr}}\showbox3   % a repeat marker, and silent
+\end

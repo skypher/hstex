@@ -31895,11 +31895,17 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 continue;
             }
             if (meaning->command == HSTEX_COMMAND_CR) {
+                /* A column with no # gets one at the end of what was read,
+                   so the whole of it becomes the part before the entry and
+                   the part after is empty. */
                 if (!seen_marker) {
-                    status = set_error(error, error_capacity,
-                                       "an alignment column has no #, after "
-                                       "an empty column");
-                    break;
+                    static const char *const help[] = {
+                        "There should be exactly one # between &'s, when an",
+                        "\\halign or \\valign is being set up. In this case you had",
+                        "none, so I've put one in; maybe that will work.", NULL};
+                    tex_error(engine, help,
+                              "Missing # inserted in alignment preamble");
+                    seen_marker = true;
                 }
                 status = 0;
                 goto finish_column;
@@ -31927,26 +31933,13 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 continue;
             }
             if (!seen_marker) {
-                char collected[192] = {0};
-                size_t used = 0U;
-                for (size_t index = 0U;
-                     index < before.count && used + 2U < sizeof(collected);
-                     ++index) {
-                    char piece[64];
-                    describe_token(engine, before.data[index], piece,
-                                   sizeof(piece));
-                    int written = snprintf(collected + used,
-                                           sizeof(collected) - used, "%s%s",
-                                           index == 0U ? "" : " ", piece);
-                    if (written <= 0) {
-                        break;
-                    }
-                    used += (size_t)written;
-                }
-                status = set_error(error, error_capacity,
-                                   "an alignment column has no #, after: %s",
-                                   collected);
-                break;
+                    static const char *const help[] = {
+                        "There should be exactly one # between &'s, when an",
+                        "\\halign or \\valign is being set up. In this case you had",
+                        "none, so I've put one in; maybe that will work.", NULL};
+                    tex_error(engine, help,
+                              "Missing # inserted in alignment preamble");
+                seen_marker = true;
             }
             goto finish_column;
         }
