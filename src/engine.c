@@ -30777,8 +30777,11 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
 {
     if (engine->mode != HSTEX_MODE_MATH || !engine->displayed_math ||
         engine->reading_equation_number) {
-        return set_error(error, error_capacity,
-                         "an equation number is only allowed in a display");
+        /* Nowhere but a display has an equation to number, and the
+           reference names the mode and carries on. trip line 254 reaches
+           this after the $$ it had to insert closed the display. */
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
     }
     struct hstex_box equation = {0};
     if (package_displayed_formula(engine, &equation, error, error_capacity) !=
@@ -30788,6 +30791,10 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
     engine->displayed_equation = equation;
     engine->reading_equation_number = true;
     engine->equation_number_on_left = left;
+    /* An equation number is set in text style and is internal: \ifinner is
+       true inside one, and the reference names the mode "math mode" rather
+       than "display math mode" when it refuses a second \eqno there. */
+    engine->inner_mode = true;
     return push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
                           error_capacity);
 }
@@ -34457,6 +34464,85 @@ static const char *group_closer_name(enum hstex_group_kind kind)
     }
 }
 
+/* Whether a command assigns. The reference lets an alignment that filled a
+   display be followed by assignments and \relax and nothing else before the
+   $$ that closes it, so this is the list of what may stand there --
+   measured, command by command, against pdftex: every assignment is
+   admitted, including the prefixes, \parshape, \textfont, \patterns and
+   the interaction modes, while \message, \mark, \penalty, \unskip,
+   \showthe, \lowercase, \ignorespaces, \setlanguage, \afterassignment
+   and \aftergroup are not. See tests/trip/probes,
+   what-may-follow-a-display-alignment. */
+static bool command_assigns(enum hstex_command command)
+{
+    switch (command) {
+    case HSTEX_COMMAND_ADVANCE:
+    case HSTEX_COMMAND_BOX_DIMEN:
+    case HSTEX_COMMAND_CAT_CODE:
+    case HSTEX_COMMAND_CHAR_DEF:
+    case HSTEX_COMMAND_COUNT:
+    case HSTEX_COMMAND_COUNT_DEF:
+    case HSTEX_COMMAND_COUNT_REGISTER:
+    case HSTEX_COMMAND_DEF:
+    case HSTEX_COMMAND_DEL_CODE:
+    case HSTEX_COMMAND_DIMEN:
+    case HSTEX_COMMAND_DIMEN_DEF:
+    case HSTEX_COMMAND_DIMEN_PARAMETER:
+    case HSTEX_COMMAND_DIMEN_REGISTER:
+    case HSTEX_COMMAND_DIVIDE:
+    case HSTEX_COMMAND_EDEF:
+    case HSTEX_COMMAND_FONT:
+    case HSTEX_COMMAND_FONT_CHAR_CODE:
+    case HSTEX_COMMAND_FONT_DIMEN:
+    case HSTEX_COMMAND_FONT_GIVEN:
+    case HSTEX_COMMAND_FUTURE_LET:
+    case HSTEX_COMMAND_GDEF:
+    case HSTEX_COMMAND_GLOBAL:
+    case HSTEX_COMMAND_GLUE_PARAMETER:
+    case HSTEX_COMMAND_HYPHENATION:
+    case HSTEX_COMMAND_HYPHEN_CHAR:
+    case HSTEX_COMMAND_INTEGER_PARAMETER:
+    case HSTEX_COMMAND_INTERACTION_MODE:
+    case HSTEX_COMMAND_LC_CODE:
+    case HSTEX_COMMAND_LET:
+    case HSTEX_COMMAND_LONG:
+    case HSTEX_COMMAND_MATH_CHAR_DEF:
+    case HSTEX_COMMAND_MATH_CODE:
+    case HSTEX_COMMAND_MATH_FONT:
+    case HSTEX_COMMAND_MUGLUE_PARAMETER:
+    case HSTEX_COMMAND_MULTIPLY:
+    case HSTEX_COMMAND_MUSKIP:
+    case HSTEX_COMMAND_MUSKIP_DEF:
+    case HSTEX_COMMAND_MUSKIP_REGISTER:
+    case HSTEX_COMMAND_OUTER:
+    case HSTEX_COMMAND_PAGE_DIMEN:
+    case HSTEX_COMMAND_PAGE_INTEGER:
+    case HSTEX_COMMAND_PAR_SHAPE:
+    case HSTEX_COMMAND_PATTERNS:
+    case HSTEX_COMMAND_PREV_DEPTH:
+    case HSTEX_COMMAND_PREV_GRAF:
+    case HSTEX_COMMAND_PROTECTED:
+    case HSTEX_COMMAND_READ:
+    case HSTEX_COMMAND_READ_LINE:
+    case HSTEX_COMMAND_SET_BOX:
+    case HSTEX_COMMAND_SF_CODE:
+    case HSTEX_COMMAND_SKEW_CHAR:
+    case HSTEX_COMMAND_SKIP:
+    case HSTEX_COMMAND_SKIP_DEF:
+    case HSTEX_COMMAND_SKIP_REGISTER:
+    case HSTEX_COMMAND_SPACE_FACTOR:
+    case HSTEX_COMMAND_TOKEN_PARAMETER:
+    case HSTEX_COMMAND_TOKS:
+    case HSTEX_COMMAND_TOKS_DEF:
+    case HSTEX_COMMAND_TOKS_REGISTER:
+    case HSTEX_COMMAND_UC_CODE:
+    case HSTEX_COMMAND_XDEF:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* The reference closes a group that a command cannot live in: it inserts
    the group's own closing token, says which one, and reads the command
    again. The log shows the closer as <inserted text>.
@@ -34464,6 +34550,68 @@ static const char *group_closer_name(enum hstex_group_kind kind)
    Measured: `$$\begingroup\halign{...}' says "Missing \endgroup inserted"
    and then obeys the \halign; `$\begingroup x$' says the same for the $.
    trip line 250 is the first of these. */
+/* A vertical command met inside a formula. The reference puts a $ in front
+   of it and reads it again, so the formula closes and the command does what
+   it came to do. Measured: \par, \vskip, \hrule, \unvbox and \end all
+   draw "Missing $ inserted"; in a display the inserted $ then draws
+   "Display math should end with $$" as well, which is the reference's own
+   pair of messages. */
+static bool command_wants_a_dollar(const struct hstex_meaning *meaning)
+{
+    switch (meaning->command) {
+    case HSTEX_COMMAND_PAR:
+    case HSTEX_COMMAND_VSKIP:
+    case HSTEX_COMMAND_HRULE:
+    case HSTEX_COMMAND_END:
+        return true;
+    case HSTEX_COMMAND_UNBOX:
+        return meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL ||
+               meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL_COPY;
+    default:
+        return false;
+    }
+}
+
+static int insert_math_shift(struct hstex_engine *engine, hstex_token offending,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I've inserted a begin-math/end-math symbol since I think",
+        "you left one out. Proceed, with fingers crossed.", NULL};
+    hstex_token shift =
+        hstex_token_character((uint8_t)HSTEX_CAT_MATH_SHIFT, (uint8_t)'$');
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, shift, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing $ inserted");
+    return 0;
+}
+
+/* An alignment that filled a display is closed by $$, and a command that
+   may not stand before it closes the display first and is read again. The
+   reference names the pair, not one shift. */
+static int insert_display_close(struct hstex_engine *engine,
+                                hstex_token offending,
+                                struct hstex_source_location location,
+                                char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "Displays can use special alignments (like \\eqalignno)",
+        "only if nothing but the alignment itself is between $$'s.",
+        "So I've deleted the formulas that preceded this alignment.", NULL};
+    hstex_token shift =
+        hstex_token_character((uint8_t)HSTEX_CAT_MATH_SHIFT, (uint8_t)'$');
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, shift, location, error, error_capacity) != 0 ||
+        push_one(engine, shift, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing $$ inserted");
+    return 0;
+}
+
 static int off_save(struct hstex_engine *engine, hstex_token offending,
                     struct hstex_source_location location, char *error,
                     size_t error_capacity)
@@ -35203,6 +35351,41 @@ static enum hstex_engine_result next_output(
         }
 
 handle_token:
+        /* A vertical command inside a formula closes it first. Without this
+           an unclosed display never ends: \end would be met again and
+           again with the formula still open. */
+        if (engine->mode == HSTEX_MODE_MATH &&
+            hstex_token_is_control_sequence(*token)) {
+            const struct hstex_meaning *vertical = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(*token));
+            if (command_wants_a_dollar(vertical)) {
+                if (insert_math_shift(engine, *token, *location, error,
+                                      error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+        }
+        /* An alignment that filled a display admits only $$, an assignment
+           and \relax before the display closes; anything else closes it
+           first and is read again. */
+        if (engine->display_alignment &&
+            !token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
+            bool allowed = false;
+            if (hstex_token_is_control_sequence(*token)) {
+                const struct hstex_meaning *what = hstex_engine_meaning(
+                    engine, hstex_token_control_sequence_id(*token));
+                allowed = what->command == HSTEX_COMMAND_RELAX ||
+                          command_assigns(what->command);
+            }
+            if (!allowed) {
+                if (insert_display_close(engine, *token, *location, error,
+                                         error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+        }
         if (hstex_token_is_character(*token)) {
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,

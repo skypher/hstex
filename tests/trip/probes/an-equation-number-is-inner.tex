@@ -1,0 +1,17 @@
+% Whether an equation number is internal.
+%
+% Measured against pdftex: it is. \ifinner is true inside \eqno's argument
+% and inside \leqno's, and the reference names that mode "math mode" rather
+% than "display math mode" -- which is what it says when a second \eqno
+% appears inside the first one's number.
+%
+% \eqno anywhere but a display is refused by name and the run goes on; trip
+% line 254 reaches that after the $$ it had to insert closed the display.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$$x\eqno \message{[eqno=\ifinner Y\else N\fi]}$$\par
+$$x\leqno \message{[leqno=\ifinner Y\else N\fi]}$$\par
+$$x\message{[display=\ifinner Y\else N\fi]}$$\par
+\eqno x\message{[after a refused eqno]}\par
+$$x\eqno y\eqno z$$\message{[after two]}\par
+\end

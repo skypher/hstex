@@ -1,0 +1,17 @@
+% A vertical command met inside a formula.
+%
+% Measured against pdftex: it puts a $ in front of the command and reads it
+% again -- "Missing $ inserted" -- so the formula closes and the command
+% then does what it came to do. \par, \vskip, \hrule, \unvbox and \end all
+% do this. In a display the inserted $ draws "Display math should end with
+% $$" as well, which is the reference's own pair of messages.
+%
+% Without this an unclosed display never ends: \end is met again and again
+% with the formula still open.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$x\par \message[after inline par]\par
+$$x\par \message[after display par]\par
+$x\vskip2pt \message[after vskip]\par
+$$x   % unclosed at \end
+\end
