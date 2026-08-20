@@ -33076,6 +33076,30 @@ static bool command_starts_conditional(enum hstex_command command)
            command == HSTEX_COMMAND_IF_CS_NAME;
 }
 
+/* Two stored token lists mean the same thing when they hold the same tokens.
+   A token handed out of a token register carries a one-shot mark saying it
+   has already been through expansion, and that mark is no part of what the
+   token means: \\def\\P{#1} against \\the\\toks0 stores a marked character
+   where \\def\\N{a} stores a plain one, and \\ifx must still call them equal.
+   See docs/DECISIONS.md, a-token-out-of-a-register. */
+static bool stored_token_lists_equal(const hstex_token *left,
+                                     const hstex_token *right, size_t count)
+{
+    if (count == 0U) {
+        return true;
+    }
+    if (memcmp(left, right, count * sizeof(*left)) == 0) {
+        return true;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        if (normalize_one_shot_token(left[index]) !=
+            normalize_one_shot_token(right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool meanings_equal(const struct hstex_engine *engine,
                            const struct hstex_meaning *left,
                            const struct hstex_meaning *right)
@@ -33101,14 +33125,12 @@ static bool meanings_equal(const struct hstex_engine *engine,
                left_macro->parameter_count_tokens ==
                    right_macro->parameter_count_tokens &&
                left_macro->replacement_count == right_macro->replacement_count &&
-               (left_macro->parameter_count_tokens == 0U ||
-                memcmp(left_macro->parameter_text, right_macro->parameter_text,
-                       left_macro->parameter_count_tokens *
-                           sizeof(*left_macro->parameter_text)) == 0) &&
-               (left_macro->replacement_count == 0U ||
-                memcmp(left_macro->replacement, right_macro->replacement,
-                       left_macro->replacement_count *
-                           sizeof(*left_macro->replacement)) == 0);
+               stored_token_lists_equal(left_macro->parameter_text,
+                                        right_macro->parameter_text,
+                                        left_macro->parameter_count_tokens) &&
+               stored_token_lists_equal(left_macro->replacement,
+                                        right_macro->replacement,
+                                        left_macro->replacement_count);
     }
     case HSTEX_COMMAND_TOKEN_ALIAS:
         return left->value.token == right->value.token;
