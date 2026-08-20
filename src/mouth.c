@@ -354,11 +354,10 @@ enum hstex_mouth_result hstex_mouth_next(
             mouth->state = HSTEX_MOUTH_NEW_LINE;
             continue;
         case HSTEX_CAT_INVALID:
-            (void)set_error(error, error_capacity,
-                            "invalid character %u at line %u, column %u",
-                            (unsigned int)character.value, character.location.line,
-                            character.location.column);
-            return HSTEX_MOUTH_ERROR;
+            /* Read past and handed up: the engine reports it and goes on. */
+            mouth->state = HSTEX_MOUTH_MIDDLE_LINE;
+            *location = character.location;
+            return HSTEX_MOUTH_INVALID;
         case HSTEX_CAT_BEGIN_GROUP:
         case HSTEX_CAT_END_GROUP:
         case HSTEX_CAT_MATH_SHIFT:

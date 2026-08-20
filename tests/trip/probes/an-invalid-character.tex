@@ -1,0 +1,18 @@
+% A character of category 15.
+%
+% Measured against pdftex: "Text line contains an invalid character", and
+% it is forgotten -- the rest of the line is read and set as though it had
+% not been there. Two in a row draw two messages.
+%
+% The mouth cannot report this itself, since only the engine holds the
+% error machinery, so it reads past the character and hands the fault up.
+%
+% trip line 351 writes `\a^^@^^@a@' -- an undefined control sequence
+% followed by invalid characters.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\catcode`\@=15
+A@B\message{[the line carried on]}\par
+A@@B\message{[two draw two]}\par
+\setbox0=\hbox{A@B}\message{[and AB was set: \the\wd0]}
+\end

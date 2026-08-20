@@ -18,6 +18,10 @@ enum hstex_mouth_result {
     HSTEX_MOUTH_ERROR = -1,
     HSTEX_MOUTH_EOF = 0,
     HSTEX_MOUTH_TOKEN = 1,
+    /* A character of category 15, which the reference reports and forgets.
+       The mouth has already read past it; it hands the fault up because
+       only the engine can report one. */
+    HSTEX_MOUTH_INVALID = 2,
 };
 
 /* Where a token came from. Two words, because one of these is copied for

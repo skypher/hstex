@@ -3410,6 +3410,14 @@ static enum hstex_engine_result raw_next(
         if (result == HSTEX_MOUTH_ERROR) {
             return HSTEX_ENGINE_ERROR;
         }
+        if (result == HSTEX_MOUTH_INVALID) {
+            static const char *const help[] = {
+                "A funny symbol that I can't read has just been input.",
+                "Continue, and I'll forget that it ever happened.", NULL};
+            tex_error(engine, help,
+                      "Text line contains an invalid character");
+            continue;
+        }
         note_files_closed(engine);
         if (engine->sources.file_end_count == ended_before ||
             engine->token_parameters[HSTEX_TOKEN_EVERY_EOF] == 0U) {
@@ -33800,6 +33808,14 @@ static int define_read_line(struct hstex_engine *engine, hstex_cs_id target,
             &mouth, &token, &location, error, error_capacity);
         if (result == HSTEX_MOUTH_EOF) {
             break;
+        }
+        if (result == HSTEX_MOUTH_INVALID) {
+            static const char *const help[] = {
+                "A funny symbol that I can't read has just been input.",
+                "Continue, and I'll forget that it ever happened.", NULL};
+            tex_error(engine, help,
+                      "Text line contains an invalid character");
+            continue;
         }
         if (result == HSTEX_MOUTH_ERROR ||
             vector_push(&replacement, token, error, error_capacity) != 0) {

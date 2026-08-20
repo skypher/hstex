@@ -286,7 +286,10 @@ static int test_funny_space_and_invalid(void)
     struct hstex_source_location location;
     enum hstex_mouth_result result = hstex_mouth_next(
         &third.mouth, &token, &location, third.error, sizeof(third.error));
-    failed = result != HSTEX_MOUTH_ERROR || strstr(third.error, "invalid character") == NULL;
+    /* A character of category 15 is not the mouth's to report: it reads
+       past it and hands the fault up, because only the engine can say
+       "Text line contains an invalid character" and carry on. */
+    failed = result != HSTEX_MOUTH_INVALID;
     fixture_destroy(&third);
     return failed;
 }
