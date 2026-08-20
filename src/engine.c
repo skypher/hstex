@@ -2378,6 +2378,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         {"nonscript", HSTEX_COMMAND_NON_SCRIPT, 0},
         {"shipout", HSTEX_COMMAND_SHIP_OUT, 0},
         {"showbox", HSTEX_COMMAND_SHOW_BOX, 0},
+        {"vadjust", HSTEX_COMMAND_VADJUST, 0},
         {"show", HSTEX_COMMAND_SHOW, 0},
         {"showthe", HSTEX_COMMAND_SHOW_THE, 0},
         {"showlists", HSTEX_COMMAND_SHOW_LISTS, 0},
@@ -13687,6 +13688,18 @@ static void show_node(struct hstex_engine *engine,
         }
         print_byte(engine, ')');
         return;
+    case HSTEX_NODE_ADJUST:
+        print_text(engine, "\\vadjust");
+        if (node->value.list.node_count != 0U &&
+            (size_t)node->value.list.node_start +
+                    node->value.list.node_count <=
+                engine->list_item_count) {
+            show_node_list(engine,
+                           engine->list_items + node->value.list.node_start,
+                           node->value.list.node_count, prefix, depth + 1U,
+                           threshold, breadth, '.');
+        }
+        return;
     case HSTEX_NODE_WHATSIT:
         show_whatsit(engine, node);
         return;
@@ -14755,6 +14768,7 @@ static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_ADJUST:
             break;
         }
     }
@@ -14940,6 +14954,7 @@ static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_ADJUST:
             break;
         }
     }
@@ -16834,6 +16849,7 @@ static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_ADJUST:
             break;
         }
     }
@@ -16986,6 +17002,7 @@ static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_ADJUST:
             break;
         }
     }
@@ -21578,6 +21595,8 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 12;
     case HSTEX_NODE_LIGATURE:
         return 7;
+    case HSTEX_NODE_ADJUST:
+        return 5;
     case HSTEX_NODE_PENALTY:
         return 13;
     case HSTEX_NODE_WHATSIT:
@@ -23302,6 +23321,7 @@ static bool protrusion_passes_over(const struct hstex_node *node)
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
     case HSTEX_NODE_INSERT:
+    case HSTEX_NODE_ADJUST:
         return true;
     case HSTEX_NODE_DISCRETIONARY:
         /* A discretionary with nothing of its own is stepped over; one that
@@ -23436,6 +23456,7 @@ static bool precedes_glue_break(const struct hstex_node *node)
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
     case HSTEX_NODE_INSERT:
+    case HSTEX_NODE_ADJUST:
         return true;
     }
     return true;
@@ -24301,21 +24322,44 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             size_t kept = 0U;
             for (size_t item = 0U; item < builder.count; ++item) {
                 uint32_t held = builder.node_identifiers[item];
-                if (held != 0U && (size_t)held <= engine->node_count &&
-                    (engine->nodes[held - 1U].kind == HSTEX_NODE_MARK ||
-                     engine->nodes[held - 1U].kind == HSTEX_NODE_INSERT)) {
-                    uint32_t *grown = realloc(
-                        migrated, (migrated_count + 1U) * sizeof(*migrated));
-                    if (grown == NULL) {
-                        status = set_error(error, error_capacity,
-                                           "mark migration allocation failed");
-                        break;
-                    }
-                    migrated = grown;
-                    migrated[migrated_count++] = held;
+                const struct hstex_node *at =
+                    held != 0U && (size_t)held <= engine->node_count
+                        ? &engine->nodes[held - 1U]
+                        : NULL;
+                if (at == NULL || (at->kind != HSTEX_NODE_MARK &&
+                                   at->kind != HSTEX_NODE_INSERT &&
+                                   at->kind != HSTEX_NODE_ADJUST)) {
+                    builder.node_identifiers[kept++] = held;
                     continue;
                 }
-                builder.node_identifiers[kept++] = held;
+                /* A mark or an insertion moves itself; what a \\vadjust
+                   moves is the material it holds, and the node it was
+                   written as does not survive the move. */
+                size_t moving = 1U;
+                const uint32_t *contents = &held;
+                if (at->kind == HSTEX_NODE_ADJUST) {
+                    if ((size_t)at->value.list.node_start +
+                            at->value.list.node_count >
+                        engine->list_item_count) {
+                        continue;
+                    }
+                    moving = at->value.list.node_count;
+                    contents = engine->list_items + at->value.list.node_start;
+                }
+                if (moving == 0U) {
+                    continue;
+                }
+                uint32_t *grown = realloc(
+                    migrated, (migrated_count + moving) * sizeof(*migrated));
+                if (grown == NULL) {
+                    status = set_error(error, error_capacity,
+                                       "mark migration allocation failed");
+                    break;
+                }
+                migrated = grown;
+                for (size_t move = 0U; move < moving; ++move) {
+                    migrated[migrated_count++] = contents[move];
+                }
             }
             if (status == 0) {
                 builder.count = kept;
@@ -29032,6 +29076,45 @@ static int execute_insert(struct hstex_engine *engine, char *error,
             .float_cost = float_cost,
         },
     };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+/* \vadjust: vertical material written inside a paragraph, which leaves the
+   line it was written in and stands behind it. In a box that is not a line
+   it stays where it was put. See docs/DECISIONS.md, vadjust. */
+static int execute_vadjust(struct hstex_engine *engine, char *error,
+                           size_t error_capacity)
+{
+    if (engine->mode == HSTEX_MODE_VERTICAL) {
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
+    }
+    if (scan_left_brace(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_vbox_builder builder = {0};
+    int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
+                                        NULL, error, error_capacity);
+    struct hstex_box packed = {0};
+    if (status == 0) {
+        status = finalize_vbox(engine, &builder, false, false, 0, &packed,
+                               error, error_capacity);
+    }
+    free(builder.node_identifiers);
+    if (status != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_ADJUST,
+        .value.list = {
+            .node_start = packed.node_start,
+            .node_count = packed.node_count,
+        },
+    };
+    if (engine->mode == HSTEX_MODE_HORIZONTAL &&
+        flush_pending_character(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     return append_current_list_node(engine, &node, error, error_capacity);
 }
 
@@ -34676,6 +34759,11 @@ handle_token:
         case HSTEX_COMMAND_OVER_UNDER_LINE:
             if (execute_over_under_line(engine, meaning->value.integer == 0,
                                         error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_VADJUST:
+            if (execute_vadjust(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

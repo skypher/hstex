@@ -284,6 +284,7 @@ enum hstex_command {
     HSTEX_COMMAND_MARK,
     HSTEX_COMMAND_MARK_TEXT,
     HSTEX_COMMAND_INSERT,
+    HSTEX_COMMAND_VADJUST,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -1214,6 +1215,9 @@ enum hstex_node_kind {
     HSTEX_NODE_MATH,
     HSTEX_NODE_MARK,
     HSTEX_NODE_INSERT,
+    /* \vadjust: vertical material that leaves the line it was written in
+       and stands behind it. See docs/DECISIONS.md, vadjust. */
+    HSTEX_NODE_ADJUST,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
