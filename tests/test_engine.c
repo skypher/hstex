@@ -172,6 +172,24 @@ static int run_document(const char *source, const char *expected)
         status = 1;
     }
     (void)fclose(sink);
+    /* The engine says which file it is reading, in brackets, and a probe's
+       file has a name made up for it. The opening bracket is written before
+       the stream below is listening, so what reaches it is whatever kept
+       the next thing clear of it -- a space, or the end of the line -- and
+       the closing bracket at the end. Both are taken out. See docs/DECISIONS.md, the-file-notation. */
+    if (captured != NULL && captured_length != 0U &&
+        (captured[0] == ' ' || captured[0] == '\n')) {
+        memmove(captured, captured + 1U, captured_length);
+        --captured_length;
+    }
+    if (captured != NULL && captured_length != 0U &&
+        captured[captured_length - 1U] == ')') {
+        --captured_length;
+        if (captured_length != 0U && captured[captured_length - 1U] == ' ') {
+            --captured_length;
+        }
+        captured[captured_length] = '\0';
+    }
     size_t expected_length = strlen(expected);
     if (status == 0 &&
         (captured_length != expected_length ||

@@ -133,6 +133,14 @@ static bool conditional_test_pending(const struct hstex_engine *engine);
 static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static bool too_many_errors(const struct hstex_engine *engine);
+/* The brackets the reference puts around the file it is reading. */
+static void note_file_open(struct hstex_engine *engine, const char *path);
+static void note_files_closed(struct hstex_engine *engine);
+static void print_line(struct hstex_engine *engine);
+static void print_byte(struct hstex_engine *engine, char byte);
+static void print_bytes(struct hstex_engine *engine, const char *text,
+                        size_t length);
+static FILE *diagnostic_stream(struct hstex_engine *engine);
 static uint8_t normalised_hyphen_min(int32_t value);
 /* The semantic nest \showlists walks. */
 static int nest_push(struct hstex_engine *engine, char *error,
@@ -3218,6 +3226,7 @@ int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
         free(job_name);
         return -1;
     }
+    note_file_open(engine, path);
     if (job_name != NULL) {
         engine->job_name = job_name;
     }
@@ -3324,6 +3333,43 @@ int hstex_engine_set_output_directory(struct hstex_engine *engine,
     return 0;
 }
 
+/* The reference says which file it is reading, in brackets that close when
+   the file ends: `(name' where it opens and `)' where it runs out. The name
+   is the one it was found under, which for a file in the current directory
+   begins `./'. See docs/DECISIONS.md, the-file-notation. */
+static void note_file_open(struct hstex_engine *engine, const char *path)
+{
+    char name[512];
+    if (strchr(path, '/') == NULL) {
+        (void)snprintf(name, sizeof(name), "./%s", path);
+    } else {
+        (void)snprintf(name, sizeof(name), "%s", path);
+    }
+    size_t length = strlen(name);
+    if ((size_t)engine->message_column + length >
+        (size_t)HSTEX_PRINT_LINE - 2U) {
+        print_line(engine);
+    } else if (engine->message_column > 0) {
+        print_byte(engine, ' ');
+    }
+    print_byte(engine, '(');
+    print_bytes(engine, name, length);
+    ++engine->open_parens;
+    (void)fflush(diagnostic_stream(engine));
+}
+
+static void note_files_closed(struct hstex_engine *engine)
+{
+    while (engine->files_closed_reported < engine->sources.file_end_count) {
+        print_byte(engine, ')');
+        ++engine->files_closed_reported;
+        if (engine->open_parens != 0U) {
+            --engine->open_parens;
+        }
+    }
+    (void)fflush(diagnostic_stream(engine));
+}
+
 /* A file that runs out inserts \everyeof, once, before whatever follows it;
    see docs/DECISIONS.md, everyeof. */
 static enum hstex_engine_result raw_next(
@@ -3340,6 +3386,7 @@ static enum hstex_engine_result raw_next(
         if (result == HSTEX_MOUTH_ERROR) {
             return HSTEX_ENGINE_ERROR;
         }
+        note_files_closed(engine);
         if (engine->sources.file_end_count == ended_before ||
             engine->token_parameters[HSTEX_TOKEN_EVERY_EOF] == 0U) {
             return result == HSTEX_MOUTH_EOF ? HSTEX_ENGINE_EOF
@@ -3361,9 +3408,9 @@ static enum hstex_engine_result raw_next(
                             "could not install everyeof tokens");
             return HSTEX_ENGINE_ERROR;
         }
-    hstex_source_name_top(&engine->sources,
-                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
-                          (uint32_t)HSTEX_TOKEN_EVERY_EOF);
+        hstex_source_name_top(&engine->sources,
+                              (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                              (uint32_t)HSTEX_TOKEN_EVERY_EOF);
     }
 }
 
@@ -4038,6 +4085,9 @@ static int execute_input(struct hstex_engine *engine, char *error,
     }
     int status = hstex_source_push_file(&engine->sources, path, error,
                                         error_capacity);
+    if (status == 0) {
+        note_file_open(engine, path);
+    }
     free(path);
     free(filename);
     return status;
@@ -33926,6 +33976,13 @@ int hstex_engine_run(struct hstex_engine *engine,
             return -1;
         }
     }
+    /* Whatever files are still being read have their brackets closed, each
+       behind a space, the way the reference finishes a run. */
+    while (engine->open_parens != 0U) {
+        print_text(engine, " )");
+        --engine->open_parens;
+    }
+    (void)fflush(diagnostic_stream(engine));
     /* The reference stops where the input stops: a paragraph still being
        filled is not ended, and no page is sent off, because neither \end nor
        \par was ever read. What has been written of the page description is

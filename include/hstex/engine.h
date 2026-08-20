@@ -1796,6 +1796,11 @@ struct hstex_engine {
     bool lig_right_hit;
     /* True while the last character of a word is being put in the list. */
     bool lig_last_of_word;
+    /* How many files the reference has written a `)' for, so that one is
+       written for each that ends. See docs/DECISIONS.md, the-file-notation. */
+    size_t files_closed_reported;
+    /* How many of those brackets are still open. */
+    size_t open_parens;
     /* The semantic nest, outermost first. */
     struct hstex_nest_level *nest;
     size_t nest_count;
