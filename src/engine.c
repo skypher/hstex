@@ -25605,6 +25605,7 @@ static int lig_emit_reconstituted(void *context,
 static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
                                    const uint8_t *characters, size_t count,
                                    bool from_left_boundary,
+                                   bool to_right_boundary,
                                    uint32_t *identifiers, size_t capacity,
                                    size_t *written, char *error,
                                    size_t error_capacity)
@@ -25659,10 +25660,33 @@ static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
             return -1;
         }
     }
-    /* Nothing follows the word, so whatever is still held simply goes into
-       the list. */
     int status = 0;
+    /* The word ends, so the character beyond its right end takes part in the
+       program one last time, exactly as it does where the word was first
+       set. See docs/DECISIONS.md, boundary-characters. */
+    if (to_right_boundary && metrics->boundary_character >= 0 &&
+        metrics->boundary_character <= 255) {
+        if (work_count == HSTEX_LIG_WORK) {
+            engine->lig_left_hit = left_hit;
+            engine->lig_right_hit = right_hit;
+            engine->lig_last_of_word = last_of_word;
+            return set_error(error, error_capacity,
+                             "a word set again does not fit");
+        }
+        lig_item_plain(&work[work_count], (uint8_t)metrics->boundary_character,
+                       false);
+        work[work_count].is_boundary = true;
+        ++work_count;
+        if (lig_advance(engine, metrics, work, &work_count,
+                        lig_emit_reconstituted, &place, error,
+                        error_capacity) != 0) {
+            status = -1;
+        }
+    }
+    /* Whatever is still held simply goes into the list. */
     for (size_t item = 0U; status == 0 && item < work_count; ++item) {
+        engine->lig_last_of_word =
+            to_right_boundary && lig_nothing_after(work, work_count, item);
         if (lig_emit_reconstituted(&place, &work[item], false, 0, error,
                                    error_capacity) != 0) {
             status = -1;
@@ -25847,13 +25871,13 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 size_t made_after = 0U;
                 if (reconstitute_characters(engine, word.font, taken,
                                             count_before,
-                                            previous == word_start, behind,
-                                            room, &made_before, error,
+                                            previous == word_start, false,
+                                            behind, room, &made_before, error,
                                             error_capacity) != 0 ||
                     reconstitute_characters(engine, word.font,
                                             word.letters + letter,
-                                            word.count - letter, true, ahead,
-                                            room, &made_after, error,
+                                            word.count - letter, true, true,
+                                            ahead, room, &made_after, error,
                                             error_capacity) != 0) {
                     free(ahead);
                     free(behind);
@@ -25991,8 +26015,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                         size_t pre_count = 0U;
                         uint32_t start = 0U;
                         if (reconstitute_characters(engine, word.font, letters,
-                                                    letter_count, false, pre,
-                                                    8U, &pre_count, error,
+                                                    letter_count, false, false,
+                                                    pre, 8U, &pre_count, error,
                                                     error_capacity) != 0 ||
                             store_list_run(engine, pre, pre_count, &start,
                                            error, error_capacity) != 0) {
@@ -26076,12 +26100,13 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
                 if (inside < original_count &&
                     reconstitute_characters(engine, word.font, originals,
-                                            inside, false, pre, 7U, &pre_count,
-                                            error, error_capacity) == 0 &&
+                                            inside, false, false, pre, 7U,
+                                            &pre_count, error,
+                                            error_capacity) == 0 &&
                     reconstitute_characters(
                         engine, word.font, originals + inside,
-                        (size_t)original_count - inside, false, post, 8U,
-                        &post_count, error, error_capacity) == 0 &&
+                        (size_t)original_count - inside, false, false, post,
+                        8U, &post_count, error, error_capacity) == 0 &&
                     make_hyphen_node(engine, word.font, &hyphen, error,
                                      error_capacity) == 0 &&
                     hyphen != 0U) {
