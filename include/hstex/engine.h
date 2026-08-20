@@ -1026,7 +1026,15 @@ struct hstex_nest_level {
     struct hstex_vbox_builder *vbox;
     int32_t prev_depth;
     int32_t space_factor;
+    /* The language and the two hyphenmins as they stood when the list was
+       entered, which is what the reference reports rather than what they
+       stand at now. */
     int32_t language;
+    /* The language the list is in now, which a \setlanguage whatsit or a
+       changed \language moves on. */
+    int32_t current_language;
+    uint8_t left_hyphen_min;
+    uint8_t right_hyphen_min;
     int32_t prev_graf;
 };
 

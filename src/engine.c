@@ -14135,6 +14135,15 @@ static int nest_push(struct hstex_engine *engine, char *error,
     const struct hstex_file_source *file =
         hstex_source_current_file(&engine->sources);
     level->line = file == NULL ? 0U : file->mouth.line_number;
+    level->language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
+    if (level->language < 0 || level->language > 255) {
+        level->language = 0;
+    }
+    level->current_language = level->language;
+    level->left_hyphen_min = normalised_hyphen_min(
+        engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN]);
+    level->right_hyphen_min = normalised_hyphen_min(
+        engine->integer_parameters[HSTEX_INTEGER_RIGHT_HYPHEN_MIN]);
     return 0;
 }
 
@@ -14159,7 +14168,6 @@ static void nest_note(struct hstex_engine *engine)
     level->prev_depth = engine->prev_depth;
     level->space_factor = engine->space_factor;
     level->prev_graf = engine->prev_graf;
-    level->language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
 }
 
 static const char *nest_mode_name(const struct hstex_nest_level *level)
@@ -14208,13 +14216,9 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
             if (language < 0 || language > 255) {
                 language = 0;
             }
-            print_formatted(
-                engine, " (language%d:hyphenmin%d,%d)", language,
-                (int)normalised_hyphen_min(
-                    engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN]),
-                (int)normalised_hyphen_min(
-                    engine->integer_parameters
-                        [HSTEX_INTEGER_RIGHT_HYPHEN_MIN]));
+            print_formatted(engine, " (language%d:hyphenmin%d,%d)", language,
+                            (int)level->left_hyphen_min,
+                            (int)level->right_hyphen_min);
         }
         if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
             if (level->hbox != NULL) {
@@ -14224,9 +14228,9 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
             }
             print_fresh_line(engine);
             print_formatted(engine, "spacefactor %d", level->space_factor);
-            if (!level->inner && level->language > 0) {
+            if (!level->inner && level->current_language > 0) {
                 print_formatted(engine, ", current language %d",
-                                level->language);
+                                level->current_language);
             }
             continue;
         }
@@ -23370,6 +23374,40 @@ static int lig_emit_horizontal(void *context,
     return emit_lig_item(engine, item, error, error_capacity);
 }
 
+/* A paragraph remembers which language it is setting. Where \\language has
+   moved on since, a whatsit says so before the next character joins the
+   list, exactly as \\setlanguage would. Only an unrestricted horizontal
+   list does this. See docs/DECISIONS.md, setlanguage. */
+static int fix_language(struct hstex_engine *engine, char *error,
+                        size_t error_capacity)
+{
+    if (engine->mode != HSTEX_MODE_HORIZONTAL || engine->inner_mode ||
+        engine->nest_count == 0U) {
+        return 0;
+    }
+    struct hstex_nest_level *level = &engine->nest[engine->nest_count - 1U];
+    int32_t language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
+    if (language < 0 || language > 255) {
+        language = 0;
+    }
+    if (language == level->current_language) {
+        return 0;
+    }
+    level->current_language = language;
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {
+            .kind = (uint8_t)HSTEX_WHATSIT_LANGUAGE,
+            .stream = normalised_hyphen_min(
+                engine->integer_parameters[HSTEX_INTEGER_LEFT_HYPHEN_MIN]),
+            .action = normalised_hyphen_min(
+                engine->integer_parameters[HSTEX_INTEGER_RIGHT_HYPHEN_MIN]),
+            .number = language,
+        },
+    };
+    return append_hbox_node(engine, &node, error, error_capacity);
+}
+
 /* Take one character into the horizontal list, consulting the font's
    ligature and kerning program against the character held back before it.
    See docs/DECISIONS.md, ligature-operations. */
@@ -23388,6 +23426,9 @@ static int append_horizontal_character(struct hstex_engine *engine,
        ligature leaves behind whatever the last of its parts said; see
        docs/DECISIONS.md, the-space-factor-of-a-ligature. */
     advance_space_factor(engine, code);
+    if (fix_language(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     if (font != NULL &&
         (font->characters == NULL || font->characters[code].tag < 0)) {
         /* The word ends here, and without the character beyond its right
@@ -32050,6 +32091,11 @@ static int execute_set_language(struct hstex_engine *engine, char *error,
     }
     if (language <= 0 || language > 255) {
         language = 0;
+    }
+    /* The list is now setting that language, so nothing needs to say so
+       again until \\language moves on. */
+    if (engine->nest_count != 0U) {
+        engine->nest[engine->nest_count - 1U].current_language = language;
     }
     struct hstex_node node = {
         .kind = HSTEX_NODE_WHATSIT,
