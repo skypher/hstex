@@ -32934,33 +32934,50 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                     break;
                 }
                 struct hstex_vbox_builder between = {0};
-                /* The alignment's list already holds the rows before this
-                   one, so a paragraph starting here is not the first thing
-                   in it. */
-                between.continues = row_count != 0U;
-                /* \noalign material sits in the alignment's own vertical
-                   list, so \prevdepth is the depth of the row before it;
-                   see docs/DECISIONS.md, prevdepth-inside-noalign. */
-                int32_t enclosing_depth = engine->prev_depth;
+                struct hstex_hbox_builder between_across = {0};
+                uint32_t *items = NULL;
+                size_t item_count = 0U;
                 int32_t settled = row_depth;
-                status = evaluate_vbox_contents(engine, &between, row_depth,
-                                                &settled, NULL, error,
-                                                error_capacity);
-                engine->prev_depth = enclosing_depth;
+                if (vertical) {
+                    /* A \valign's rows are columns, so what stands between
+                       them is a horizontal list, and the reference is in
+                       restricted horizontal mode there. Measured:
+                       \ifhmode is true inside a \valign's \noalign and
+                       false inside a \halign's. */
+                    status = evaluate_hbox_contents(engine, &between_across,
+                                                    error, error_capacity);
+                    items = between_across.node_identifiers;
+                    item_count = between_across.count;
+                } else {
+                    /* The alignment's list already holds the rows before
+                       this one, so a paragraph starting here is not the
+                       first thing in it. */
+                    between.continues = row_count != 0U;
+                    /* \noalign material sits in the alignment's own vertical
+                       list, so \prevdepth is the depth of the row before it;
+                       see docs/DECISIONS.md, prevdepth-inside-noalign. */
+                    int32_t enclosing_depth = engine->prev_depth;
+                    status = evaluate_vbox_contents(engine, &between,
+                                                    row_depth, &settled, NULL,
+                                                    error, error_capacity);
+                    engine->prev_depth = enclosing_depth;
+                    items = between.node_identifiers;
+                    item_count = between.count;
+                }
                 if (status == 0) {
                     status = reserve_align_rows(&rows, &row_capacity,
                                                 row_count + 1U, error,
                                                 error_capacity);
                 }
                 if (status != 0) {
-                    free(between.node_identifiers);
+                    free(items);
                     break;
                 }
                 struct hstex_align_row *entry = &rows[row_count++];
                 memset(entry, 0, sizeof(*entry));
                 entry->noalign = true;
-                entry->items = between.node_identifiers;
-                entry->item_count = between.count;
+                entry->items = items;
+                entry->item_count = item_count;
                 entry->prev_depth = settled;
                 row_depth = settled;
                 continue;

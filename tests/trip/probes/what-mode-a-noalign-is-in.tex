@@ -1,0 +1,21 @@
+% The mode inside \noalign.
+%
+% Measured against pdftex: a \halign's rows are rows, so what stands
+% between them is a vertical list and \noalign is in internal vertical
+% mode. A \valign's rows are COLUMNS, so what stands between them is a
+% horizontal list and \noalign is in restricted horizontal mode.
+%
+% Either way it is internal: \ifinner is true in both.
+%
+% Being in the wrong one shows: `\noalign{\spacefactor=2000}' inside a
+% \valign is ordinary, and drew "You can't use `\spacefactor' in internal
+% vertical mode" here until the mode was right. trip lines 181 and 186
+% write exactly that.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\halign{#\cr A\cr\noalign{\message{[halign=\ifhmode H\else V\fi]}}\cr}
+\valign{#\cr\hbox{A}\cr\noalign{\message{[valign=\ifhmode H\else V\fi]}}\cr}
+\valign{#\cr\hbox{A}\cr\noalign{\spacefactor=2000\message{[and so this is fine]}}\cr}
+\setbox0=\hbox{\valign{#\cr\hbox{A}\cr\noalign{\kern3pt}\hbox{B}\cr}}\showbox0
+\setbox1=\vbox{\halign{#\cr A\cr\noalign{\kern3pt}B\cr}}\showbox1
+\end
