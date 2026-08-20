@@ -105,6 +105,12 @@ static const struct hstex_node *current_list_last_node(
 static const struct hstex_node *last_item_node(
     const struct hstex_engine *engine);
 static int32_t last_node_type(const struct hstex_node *node);
+static void spec_flush(struct hstex_engine *engine);
+static void spec_touch(const struct hstex_engine *engine, const char *prefix,
+                       int32_t page, const char *content);
+static void spec_chunk_stop(struct hstex_engine *engine);
+static void spec_finalize(struct hstex_engine *engine);
+
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
                               char *error, size_t error_capacity);
@@ -1923,6 +1929,14 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             engine->parallel_stride_ns =
                 by_time ? (uint64_t)asked * 1000000ULL : 0ULL;
         }
+    }
+    const char *verify = getenv("HSTEX_VERIFY");
+    if (verify != NULL) {
+        engine->verifying = 1;
+        engine->spec_carrier = 1;
+        engine->spec_start = -1;
+        (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
+                       verify);
     }
     const char *checkpoint = getenv("HSTEX_CHECKPOINT");
     if (checkpoint != NULL) {
@@ -14709,7 +14723,24 @@ static int pdf_open(struct hstex_engine *engine, char *error,
     if (path == NULL) {
         return set_error(error, error_capacity, "PDF allocation failed");
     }
-    engine->pdf_file = fopen(path, "wb");
+    if (engine->verifying) {
+        /* The verifier writes where the fleet writes, so that the file it
+           validates and the file it fills are one file. The chunks may have
+           begun already, so what is there is kept. */
+        free(path);
+        char fleet_name[512];
+        (void)snprintf(fleet_name, sizeof(fleet_name), "%s-fleet.pdf", job);
+        path = output_path(engine, fleet_name);
+        if (path == NULL) {
+            return set_error(error, error_capacity, "PDF allocation failed");
+        }
+        engine->pdf_file = fopen(path, "r+b");
+        if (engine->pdf_file == NULL) {
+            engine->pdf_file = fopen(path, "w+b");
+        }
+    } else {
+        engine->pdf_file = fopen(path, "wb");
+    }
     free(path);
     if (engine->pdf_file == NULL) {
         return set_error(error, error_capacity, "cannot write the PDF file");
@@ -17016,6 +17047,17 @@ static int pdf_close(struct hstex_engine *engine, char *error,
     if (engine->pdf_file == NULL) {
         return 0;
     }
+    if (engine->spec_finished) {
+        /* The verifier stopped by handing off: everything after its pages
+           is already in the file, trailer and all, written by the chunks
+           it validated. */
+        if (pdf_flush(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        (void)fclose(engine->pdf_file);
+        engine->pdf_file = NULL;
+        return 0;
+    }
     /* A destination that was aimed at but never put anywhere is replaced by
        one that stands at the top of the first page, the last one aimed at
        first. See docs/DECISIONS.md, destinations-in-the-file. */
@@ -19042,7 +19084,23 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
         return set_error(error, error_capacity,
                          "output path allocation failed");
     }
-    FILE *file = fopen(path, "wb");
+    FILE *file = NULL;
+    if (engine->verifying) {
+        size_t path_length = strlen(path);
+        char *fleet = malloc(path_length + 7U);
+        if (fleet != NULL) {
+            memcpy(fleet, path, path_length);
+            memcpy(fleet + path_length, "-fleet", 7U);
+            file = fopen(fleet, "r+b");
+            if (file == NULL) {
+                file = fopen(fleet, "w+b");
+            }
+            free(path);
+            path = fleet;
+        }
+    } else {
+        file = fopen(path, "wb");
+    }
     ++engine->file_generation;
     if (file == NULL) {
         int saved_errno = errno;
@@ -31643,10 +31701,26 @@ int hstex_engine_run(struct hstex_engine *engine,
     }
     int closed = pdf_close(engine, error, error_capacity);
     if (engine->parallel_is_worker) {
+        if (engine->speculating) {
+            /* A carrier that ran all the way says so; a chunk that reached
+               the end without meeting the chunk after it stops the usual
+               way, its stop page being the document's end. */
+            spec_flush(engine);
+            if (engine->spec_carrier) {
+                spec_touch(engine, "end-done", -1, NULL);
+                _exit(0);
+            }
+            spec_chunk_stop(engine);
+            spec_touch(engine, "end-done", -1, NULL);
+            _exit(0);
+        }
         /* The last chunk has no boundary to stop at, so it stops here. */
         finish_a_chunk(engine);
     }
     hstex_engine_release_chunks(engine);
+    if (engine->verifying) {
+        spec_finalize(engine);
+    }
     return closed;
 }
 
@@ -33306,6 +33380,9 @@ static void digest_box_shape(uint64_t *digest, const struct hstex_box *box)
    next object takes. A guessed chunk may mean the right thing and still be
    standing at the wrong place in the file, and what machinery the guessing
    needs depends on which of the two fails. */
+static void page_state_digest_split(const struct hstex_engine *engine,
+                                    uint64_t *semantic, uint64_t *placement);
+
 static void page_state_digest_split_parts(const struct hstex_engine *engine,
                                           uint64_t *semantic,
                                           uint64_t *placement,
@@ -33406,6 +33483,13 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
 
 static void maybe_dump_meanings(const struct hstex_engine *engine);
 
+static void page_state_digest_split(const struct hstex_engine *engine,
+                                    uint64_t *semantic, uint64_t *placement)
+{
+    uint64_t parts[6];
+    page_state_digest_split_parts(engine, semantic, placement, parts);
+}
+
 static void note_page_digest(const struct hstex_engine *engine)
 {
     static FILE *log;
@@ -33469,7 +33553,20 @@ static void redirect_the_write_streams(struct hstex_engine *engine,
             engine->write_stream_paths[index] == NULL) {
             continue;
         }
-        FILE *own = fopen(engine->write_stream_paths[index], "r+b");
+        /* A chunk serving the same run writes into the file itself; a chunk
+           serving a run that has not happened yet writes into a fleet copy,
+           because the file itself is that run's INPUT and must not change
+           under it. */
+        char *where = engine->write_stream_paths[index];
+        char fleet[600];
+        if (engine->speculating) {
+            (void)snprintf(fleet, sizeof(fleet), "%s-fleet", where);
+            where = fleet;
+        }
+        FILE *own = fopen(where, "r+b");
+        if (own == NULL && engine->speculating) {
+            own = fopen(where, "w+b");
+        }
         if (own == NULL) {
             continue;
         }
@@ -33479,6 +33576,10 @@ static void redirect_the_write_streams(struct hstex_engine *engine,
         }
         (void)close(fileno(open_stream));
         engine->write_streams[index] = own;
+        if (engine->speculating) {
+            free(engine->write_stream_paths[index]);
+            engine->write_stream_paths[index] = strdup(where);
+        }
     }
 }
 
@@ -33521,14 +33622,19 @@ static void finish_a_chunk(struct hstex_engine *engine)
             (void)fflush(engine->write_streams[index]);
         }
     }
-    char done = 1;
-    ssize_t said = write(engine->parallel_done_write, &done, 1);
-    (void)said;
+    if (engine->parallel_done_write >= 0) {
+        char done = 1;
+        ssize_t said = write(engine->parallel_done_write, &done, 1);
+        (void)said;
+    }
     _exit(0);
 }
 
 static int apply_state_patch(struct hstex_engine *engine, const char *path);
 static void probe_and_leave(struct hstex_engine *engine);
+static void spec_write_state(const struct hstex_engine *engine,
+                             const char *prefix, int32_t page);
+static void speculation_boundary(struct hstex_engine *engine);
 
 static void park_a_chunk(struct hstex_engine *engine)
 {
@@ -33536,7 +33642,7 @@ static void park_a_chunk(struct hstex_engine *engine)
         return;
     }
     if (engine->parallel_is_worker) {
-        if (engine->parallel_stop > 0 &&
+        if (!engine->speculating && engine->parallel_stop > 0 &&
             engine->shipped_pages >= engine->parallel_stop) {
             finish_a_chunk(engine);
         }
@@ -33634,6 +33740,7 @@ static void park_a_chunk(struct hstex_engine *engine)
                 have += (size_t)got;
             }
             engine->parallel_stop = header[0];
+            engine->parallel_one_shot = getenv("HSTEX_SPECULATE") != NULL;
             size_t patch_length =
                 header[1] > 0 && header[1] < 4096 ? (size_t)header[1] : 0U;
             engine->parallel_patch[0] = '\0';
@@ -33653,6 +33760,9 @@ static void park_a_chunk(struct hstex_engine *engine)
                 }
                 engine->parallel_patch[patch_length] = '\0';
             }
+            if (engine->parallel_one_shot) {
+                break;
+            }
             pid_t again = fork();
             if (again < 0) {
                 break;
@@ -33666,6 +33776,22 @@ static void park_a_chunk(struct hstex_engine *engine)
             _exit(1);
         }
         probe_and_leave(engine);
+        const char *speculate = getenv("HSTEX_SPECULATE");
+        if (speculate != NULL && engine->parallel_patch[0] != '\0') {
+            engine->speculating = 1;
+            engine->spec_start = engine->shipped_pages;
+            (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
+                           speculate);
+            spec_write_state(engine, "entry", engine->spec_start);
+            /* The run that parked this fleet must not wait for verdicts
+               that will come from a run after it, so the chunk reports in
+               now rather than when it is done. */
+            char done = 1;
+            ssize_t said = write(engine->parallel_done_write, &done, 1);
+            (void)said;
+            (void)close(engine->parallel_done_write);
+            engine->parallel_done_write = -1;
+        }
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
         }
@@ -33748,6 +33874,19 @@ static void release_them_once(struct hstex_engine *engine)
     struct timespec before;
     struct timespec after;
     (void)clock_gettime(CLOCK_MONOTONIC, &before);
+    const char *speculate = getenv("HSTEX_SPECULATE");
+    if (speculate != NULL) {
+        char name[600];
+        (void)snprintf(name, sizeof(name), "%s/pages.txt", speculate);
+        FILE *manifest = fopen(name, "w");
+        if (manifest != NULL) {
+            for (int index = 0; index < engine->parallel_workers; ++index) {
+                (void)fprintf(manifest, "%d\n",
+                              engine->parallel_pages[index]);
+            }
+            (void)fclose(manifest);
+        }
+    }
     const char *patch = getenv("HSTEX_PATCH");
     size_t patch_length = patch == NULL ? 0U : strlen(patch);
     if (patch_length >= 4096U) {
@@ -33961,6 +34100,327 @@ static void probe_and_leave(struct hstex_engine *engine)
     _exit(0);
 }
 
+
+/* ---- The relay ----------------------------------------------------------
+   One run at a time carries the truth. Parked chunks each typeset their own
+   range on a guess; the carrier walks the document from the front, and at
+   every parked page compares its state with the chunk's patched beginning.
+   Equal means everything that chunk wrote is right, so the carrier confers
+   validity and stops; the chunk, told it was valid, either rests -- its own
+   end matched the next beginning -- or takes the baton and reruns what the
+   chunk after it got wrong. Verdicts flow strictly forward from the
+   verifier, so there is exactly one carrier at any moment, and a stale
+   region is rewritten only after the chunk that wrote it has said it is
+   done writing. Everything meets in a directory of small files:
+
+     pages.txt          the parked pages, one per line
+     entry-<P>.txt      the patched state a chunk began in
+     marker-<P>.txt     written when the chunk that began at P stops writing
+     valid-<P>.txt      the carrier's verdict: everything from P stands
+     stale-<P>.txt      the carrier's verdict: P was wrong and is rewritten
+     end-done.txt       a carrier ran all the way to the end
+*/
+
+static void spec_path(const struct hstex_engine *engine, char *room,
+                      size_t capacity, const char *prefix, int32_t page)
+{
+    if (page >= 0) {
+        (void)snprintf(room, capacity, "%s/%s-%d.txt", engine->spec_dir,
+                       prefix, page);
+    } else {
+        (void)snprintf(room, capacity, "%s/%s.txt", engine->spec_dir, prefix);
+    }
+}
+
+static bool spec_exists(const struct hstex_engine *engine, const char *prefix,
+                        int32_t page)
+{
+    char name[600];
+    spec_path(engine, name, sizeof(name), prefix, page);
+    return access(name, F_OK) == 0;
+}
+
+static void spec_wait(const struct hstex_engine *engine, const char *prefix,
+                      int32_t page)
+{
+    char name[600];
+    spec_path(engine, name, sizeof(name), prefix, page);
+    struct timespec nap = {0, 2000000L};
+    while (access(name, F_OK) != 0) {
+        (void)nanosleep(&nap, NULL);
+    }
+}
+
+static void spec_touch(const struct hstex_engine *engine, const char *prefix,
+                       int32_t page, const char *content)
+{
+    char name[600];
+    char temporary[600];
+    spec_path(engine, name, sizeof(name), prefix, page);
+    (void)snprintf(temporary, sizeof(temporary), "%s.tmp", name);
+    FILE *out = fopen(temporary, "w");
+    if (out == NULL) {
+        return;
+    }
+    if (content != NULL) {
+        (void)fputs(content, out);
+    }
+    (void)fclose(out);
+    (void)rename(temporary, name);
+}
+
+static void spec_write_state(const struct hstex_engine *engine,
+                             const char *prefix, int32_t page)
+{
+    uint64_t semantic = 0U;
+    uint64_t placement = 0U;
+    page_state_digest_split(engine, &semantic, &placement);
+    char line[64];
+    (void)snprintf(line, sizeof(line), "%016llx %016llx\n",
+                   (unsigned long long)semantic,
+                   (unsigned long long)placement);
+    spec_touch(engine, prefix, page, line);
+}
+
+static bool spec_read_state(const struct hstex_engine *engine,
+                            const char *prefix, int32_t page,
+                            uint64_t *semantic, uint64_t *placement)
+{
+    char name[600];
+    spec_path(engine, name, sizeof(name), prefix, page);
+    FILE *in = fopen(name, "r");
+    if (in == NULL) {
+        return false;
+    }
+    unsigned long long a = 0U;
+    unsigned long long b = 0U;
+    int got = fscanf(in, "%llx %llx", &a, &b);
+    (void)fclose(in);
+    if (got != 2) {
+        return false;
+    }
+    *semantic = a;
+    *placement = b;
+    return true;
+}
+
+static void spec_load_pages(struct hstex_engine *engine)
+{
+    if (engine->spec_pages != NULL) {
+        return;
+    }
+    char name[600];
+    spec_path(engine, name, sizeof(name), "pages", -1);
+    FILE *in = fopen(name, "r");
+    if (in == NULL) {
+        return;
+    }
+    size_t capacity = 16U;
+    engine->spec_pages = malloc(capacity * sizeof(*engine->spec_pages));
+    long page = 0L;
+    while (engine->spec_pages != NULL && fscanf(in, "%ld", &page) == 1) {
+        if (engine->spec_page_count == capacity) {
+            capacity *= 2U;
+            int32_t *grown = realloc(engine->spec_pages,
+                                     capacity * sizeof(*grown));
+            if (grown == NULL) {
+                break;
+            }
+            engine->spec_pages = grown;
+        }
+        engine->spec_pages[engine->spec_page_count++] = (int32_t)page;
+    }
+    (void)fclose(in);
+}
+
+static bool spec_is_parked_page(struct hstex_engine *engine, int32_t page)
+{
+    spec_load_pages(engine);
+    for (size_t index = 0U; index < engine->spec_page_count; ++index) {
+        if (engine->spec_pages[index] == page) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Everything written so far goes to the file, so that a marker or a stop
+   means what it says. */
+/* A worker's digest reads the offsets snapshotted at its fork, because a
+   forked copy's ftell can alias the shared descriptor. Once the worker has
+   opened its fleet copies, the streams are its own and the snapshot is what
+   is stale, so it is brought up to date before a digest is taken. */
+static void spec_refresh_reached(struct hstex_engine *engine)
+{
+    for (size_t index = 0U; index < 16U; ++index) {
+        if (engine->write_streams[index] != NULL) {
+            engine->parallel_reached[index] =
+                ftell(engine->write_streams[index]);
+        }
+    }
+}
+
+static void spec_flush(struct hstex_engine *engine)
+{
+    char ignored[256];
+    (void)pdf_flush(engine, ignored, sizeof(ignored));
+    if (engine->pdf_file != NULL) {
+        (void)fflush(engine->pdf_file);
+    }
+    for (size_t index = 0U; index < 16U; ++index) {
+        if (engine->write_streams[index] != NULL) {
+            (void)fflush(engine->write_streams[index]);
+        }
+    }
+}
+
+/* A speculative chunk has reached the page the chunk after it began at: its
+   own writing is done. It says so, then waits to be told whether it was
+   right about the world -- valid, and it rests or takes the baton; stale,
+   and everything it wrote will be rewritten by whoever said so. */
+static void spec_chunk_stop(struct hstex_engine *engine)
+{
+    spec_refresh_reached(engine);
+    spec_flush(engine);
+    uint64_t semantic = 0U;
+    uint64_t placement = 0U;
+    page_state_digest_split(engine, &semantic, &placement);
+    uint64_t entry_semantic = 0U;
+    uint64_t entry_placement = 0U;
+    bool matched =
+        spec_read_state(engine, "entry", engine->shipped_pages,
+                        &entry_semantic, &entry_placement) &&
+        semantic == entry_semantic && placement == entry_placement;
+    spec_write_state(engine, "marker", engine->spec_start);
+    for (;;) {
+        if (spec_exists(engine, "valid", engine->spec_start)) {
+            if (matched) {
+                spec_touch(engine, "valid", engine->shipped_pages, NULL);
+                _exit(0);
+            }
+            /* The chunk after this one began somewhere this run did not
+               reach, so this run -- the true one, as it now knows -- takes
+               the baton and rewrites it. */
+            spec_touch(engine, "stale", engine->shipped_pages, NULL);
+            spec_wait(engine, "marker", engine->shipped_pages);
+            engine->spec_carrier = 1;
+            engine->parallel_stop = 0;
+            return;
+        }
+        if (spec_exists(engine, "stale", engine->spec_start)) {
+            _exit(0);
+        }
+        struct timespec nap = {0, 2000000L};
+        (void)nanosleep(&nap, NULL);
+    }
+}
+
+/* The carrier at a parked page. Its state is the truth; the entry file is
+   what the chunk that began here guessed. Equal: everything from here on
+   stands, and the carrier's work is over. Not equal: the chunk was wrong,
+   and the carrier waits for it to stop writing and then rewrites its range. */
+static void spec_carrier_boundary(struct hstex_engine *engine)
+{
+    if (engine->shipped_pages == engine->spec_start ||
+        !spec_is_parked_page(engine, engine->shipped_pages)) {
+        return;
+    }
+    if (engine->parallel_is_worker) {
+        spec_refresh_reached(engine);
+    }
+    uint64_t semantic = 0U;
+    uint64_t placement = 0U;
+    page_state_digest_split(engine, &semantic, &placement);
+    uint64_t entry_semantic = 0U;
+    uint64_t entry_placement = 0U;
+    if (spec_read_state(engine, "entry", engine->shipped_pages,
+                        &entry_semantic, &entry_placement) &&
+        semantic == entry_semantic && placement == entry_placement) {
+        spec_flush(engine);
+        spec_touch(engine, "valid", engine->shipped_pages, NULL);
+        if (engine->verifying) {
+            engine->spec_finished = 1;
+            return;
+        }
+        _exit(0);
+    }
+    spec_touch(engine, "stale", engine->shipped_pages, NULL);
+    spec_wait(engine, "marker", engine->shipped_pages);
+}
+
+static void speculation_boundary(struct hstex_engine *engine)
+{
+    if (engine->spec_carrier) {
+        spec_carrier_boundary(engine);
+        return;
+    }
+    if (engine->speculating && engine->parallel_stop > 0 &&
+        engine->shipped_pages >= engine->parallel_stop) {
+        spec_chunk_stop(engine);
+    }
+}
+
+/* The verifier has stopped -- by handing off, or by running to the end. The
+   final files are assembled from the fleet copies once every parked page has
+   a verdict and every writer has said it is done. */
+static void spec_finalize(struct hstex_engine *engine)
+{
+    spec_load_pages(engine);
+    bool tail_is_stale = false;
+    for (size_t index = 0U; index < engine->spec_page_count; ++index) {
+        int32_t page = engine->spec_pages[index];
+        struct timespec nap = {0, 2000000L};
+        while (!spec_exists(engine, "valid", page) &&
+               !spec_exists(engine, "stale", page)) {
+            (void)nanosleep(&nap, NULL);
+        }
+        spec_wait(engine, "marker", page);
+        if (index + 1U == engine->spec_page_count) {
+            tail_is_stale = spec_exists(engine, "stale", page);
+        }
+    }
+    if (tail_is_stale && !spec_exists(engine, "end-done", -1)) {
+        spec_wait(engine, "end-done", -1);
+    }
+    /* The fleet copies become the real files. */
+    for (size_t index = 0U; index < 16U; ++index) {
+        if (engine->write_streams[index] == NULL ||
+            engine->write_stream_paths[index] == NULL) {
+            continue;
+        }
+        (void)fclose(engine->write_streams[index]);
+        engine->write_streams[index] = NULL;
+        char *fleet = engine->write_stream_paths[index];
+        size_t length = strlen(fleet);
+        if (length > 6U && strcmp(fleet + length - 6U, "-fleet") == 0) {
+            char *real = strndup(fleet, length - 6U);
+            if (real != NULL) {
+                (void)rename(fleet, real);
+                free(real);
+            }
+        }
+    }
+    {
+        if (engine->pdf_file != NULL) {
+            (void)fclose(engine->pdf_file);
+            engine->pdf_file = NULL;
+        }
+        const char *job = engine->job_name == NULL ? "texput"
+                                                   : engine->job_name;
+        char fleet_name[512];
+        char real_name[512];
+        (void)snprintf(fleet_name, sizeof(fleet_name), "%s-fleet.pdf", job);
+        (void)snprintf(real_name, sizeof(real_name), "%s.pdf", job);
+        char *from = output_path(engine, fleet_name);
+        char *to = output_path(engine, real_name);
+        if (from != NULL && to != NULL) {
+            (void)rename(from, to);
+        }
+        free(from);
+        free(to);
+    }
+}
+
 static void take_up_elsewhere(struct hstex_engine *engine)
 {
     if (engine->checkpoint_page == 0 ||
@@ -34008,6 +34468,10 @@ enum hstex_engine_result hstex_engine_next_output(
         note_page_digest(engine);
         take_up_elsewhere(engine);
         park_a_chunk(engine);
+        speculation_boundary(engine);
+        if (engine->spec_finished) {
+            return HSTEX_ENGINE_EOF;
+        }
     }
     ++engine->output_depth;
     enum hstex_engine_result result =

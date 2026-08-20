@@ -1922,6 +1922,19 @@ struct hstex_engine {
        copy's ftell can read the shared descriptor's offset, which the run
        above goes on moving, so the positions are taken at the fork. */
     long parallel_reached[16];
+    /* The relay: one run at a time carries the truth. A parked chunk whose
+       patched beginning the carrier's state matches takes over; a chunk it
+       does not match is overrun and rewritten. See docs/DECISIONS.md,
+       the-relay. */
+    int speculating;
+    int spec_carrier;
+    int spec_finished;
+    int verifying;
+    int32_t spec_start;
+    char spec_dir[512];
+    int32_t *spec_pages;
+    size_t spec_page_count;
+    int parallel_one_shot;
     /* The children of one language's trie root, spread by character: every
        walk starts at the root, and the root has the most children, so the
        list scan is paid once and remembered. Rebuilt when the trie grows or

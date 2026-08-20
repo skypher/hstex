@@ -310,10 +310,22 @@ are still byte for byte right.
 That is the taking up and the writing, and it is not a cold run made
 faster: standing the fleet up costs a sequential run of the same document,
 so what is measured is what a run costs once the fleet is there, which is
-the persistent mode the contract reports on its own. The guessing --
-starting a chunk before the state it begins in is known, and checking the
-digest afterwards -- is what is left. See docs/DECISIONS.md,
-a-checkpoint-inside-a-file.
+the persistent mode the contract reports on its own.
+
+The guessing now works too. A fleet parked by one pass can serve the next:
+each woken chunk reads a patch -- the labels the next pass will see
+differently -- and typesets its range on that guess into fleet copies of
+every file, while a verifier walks the document from the front and at each
+parked page compares its state, by content, with the chunk's patched
+beginning. Equal means everything from there stands and the verifier stops;
+unequal means the chunk was wrong, and the truth is relayed forward by one
+carrier at a time rewriting what the guesses got wrong. Under a real
+70-label delta between the corpus's third and fourth passes, ten of
+twenty-three chunks validate and pass 4 comes out in 13.9 seconds against
+about 20 -- byte for byte, all four files. Across the pipeline's expensive
+seam (citations resolving between passes 2 and 3) nothing validates and the
+relay degrades to a plain sequential run, unhurt. See docs/DECISIONS.md,
+the-relay, the-guess-and-what-it-is-worth.
 
 ## Build
 
