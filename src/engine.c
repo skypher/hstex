@@ -13366,6 +13366,15 @@ static int scan_left_brace(struct hstex_engine *engine, char *error,
             if (meaning->command == HSTEX_COMMAND_RELAX) {
                 continue;
             }
+            if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
+                /* It is met while expanding, so it is reported and
+                   forgotten there and the search goes on: measured,
+                   `\\halign\\qqq{...}' draws the undefined control sequence
+                   and nothing about a missing brace. */
+                record_executing_name(engine, token);
+                report_undefined_control_sequence(engine);
+                continue;
+            }
         }
         break;
     }
@@ -33442,21 +33451,12 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
         scan_dimension(engine, &requested_width, error, error_capacity) != 0) {
         return -1;
     }
-    hstex_token opening = 0U;
-    struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space_unrestricted(
-        engine, &opening, &location, error, error_capacity);
-    if (result != HSTEX_ENGINE_TOKEN ||
-        !token_is_effective_begin_group(engine, opening)) {
-        if (result == HSTEX_ENGINE_ERROR) {
-            return -1;
-        }
-        char found[128];
-        describe_token(engine, result == HSTEX_ENGINE_TOKEN ? opening : 0U,
-                       found, sizeof(found));
-        return set_error(error, error_capacity,
-                         "an alignment requires a braced body, found %s",
-                         found);
+    /* The body's brace is sought as any other mandatory one is: \relax is
+       stepped over, a control sequence \let to a `{' will do, and where
+       there is none the reference says "Missing { inserted" and reads the
+       token again as the first of the preamble. */
+    if (scan_left_brace(engine, error, error_capacity) != 0) {
+        return -1;
     }
 
     /* The alignment gathers its rows in a list of its own, which runs across

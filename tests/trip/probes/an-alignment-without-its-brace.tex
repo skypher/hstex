@@ -1,0 +1,30 @@
+% \halign or \valign whose body does not begin with a brace.
+%
+% Measured against pdftex: the brace is sought exactly as any other
+% mandatory one is --
+%
+%   * \relax is stepped over: \halign\relax{...} is an ordinary alignment.
+%   * A control sequence \let to a `{' will do: \let\lb={ \halign\lb...
+%   * Expansion happens while looking, and what goes wrong there is
+%     reported there. \halign\qqq{#\cr X\cr} draws "Undefined control
+%     sequence" and NOTHING about a missing brace, the { being found
+%     straight after.
+%   * Where there really is none, "Missing { inserted" and the token is
+%     read again as the first of the preamble -- which is why \halign X\cr
+%     goes on to draw "Missing # inserted in alignment preamble".
+%
+% This engine stopped on all but the first two. trip line 421 writes
+% \def\unbalanced{\halign\lb}, whose brace is a control sequence.
+%
+% NOT YET: \halign X\cr leaves a \vbox unclosed at the end of the run, and
+% there the reference says "You can't use `\end' in internal vertical
+% mode" where this engine says the input ended inside a vbox. Everything
+% before that, the box included, agrees.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\vbox{\halign\qqq{#\cr X\cr}}\showbox0
+\setbox1=\vbox{\halign\qqq\rrr{#\cr X\cr}}\showbox1
+\setbox2=\vbox{\halign\relax{#\cr X\cr}}\showbox2
+\let\lb={\setbox3=\vbox{\halign\lb#\cr X\cr}}\showbox3
+\setbox4=\vbox{\halign to 30pt{#\cr X\cr}}\showbox4
+\end
