@@ -24094,11 +24094,10 @@ static void trace_short_display(struct hstex_engine *engine,
             break;
         case HSTEX_NODE_LIGATURE: {
             trace_font(engine, trace, node->value.character.font);
+            /* A ligature stands for what it was made of, so one that was
+               made of nothing -- the character an operation put between two
+               it kept -- stands for nothing. */
             uint8_t count = node->value.character.original_count;
-            if (count == 0U) {
-                show_ascii(engine,
-                           (uint8_t)node->value.character.character);
-            }
             for (uint8_t item = 0U; item < count; ++item) {
                 show_ascii(engine, node->value.character.originals[item]);
             }
