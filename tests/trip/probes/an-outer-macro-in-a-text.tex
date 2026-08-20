@@ -10,6 +10,14 @@
 % the fault. \outer was recorded here for \meaning's sake and never
 % checked.
 %
+% A macro's own DEFINITION is another such text: "Forbidden control
+% sequence found while scanning definition of \a". \noexpand protects the
+% macro there, as it does anywhere.
+%
+% NOT YET: in an \edef body the reference reports one BEFORE expanding it,
+% so `\edef\a{X\o Y}' draws the fault even though \o would have expanded
+% away. This engine sees only what survives expansion and stays silent.
+%
 % A register is named by the control sequence that was WRITTEN, not by the
 % primitive behind it: a \toksdef'd \tk reads as "text of \tk".
 %

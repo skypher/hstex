@@ -9442,7 +9442,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     }
 
     uint32_t origin_line = 0U;
-    const char *origin = current_source_line(engine, &origin_line);
+    (void)current_source_line(engine, &origin_line);
     struct hstex_token_vector parameter_text = {0};
     uint8_t parameter_count = 0U;
     bool has_hash_brace = false;
@@ -9597,19 +9597,48 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
             enum hstex_symbol_kind kind;
             const uint8_t *name = NULL;
             size_t length = 0U;
-            if (hstex_symbol_name(&engine->lexical_state.symbols,
-                                  hstex_token_control_sequence_id(target),
-                                  &kind, &name, &length) == 0) {
+            (void)kind;
+            (void)name;
+            (void)length;
+            {
+                char named[128];
+                describe_token(engine, target, named, sizeof(named));
+                /* The reference names no place: the origin it would have
+                   pointed at has closed by now, which is how this message
+                   came to print bytes of freed memory. */
                 return set_error(error, error_capacity,
-                                 "end of input while defining \\%.*s, "
-                                 "started at %s:%u",
-                                 (int)length, (const char *)name, origin,
-                                 (unsigned int)origin_line);
+                                 "File ended while scanning definition of %s",
+                                 named);
             }
-            return set_error(error, error_capacity,
-                             "end of input in macro replacement text");
         }
         current = normalize_frozen_control_sequence(current);
+        /* An \outer macro may not stand in a definition either. The
+           reference names the definition, inserts the } that would have
+           closed it, and reads the macro again. */
+        if (hstex_token_is_control_sequence(current) && !current_unexpanded &&
+            token_is_outer_macro(engine, current)) {
+            static const char *const help[] = {
+                "I suspect you have forgotten a `}', causing me",
+                "to read past where you wanted me to stop.",
+                "I'll try to recover; but if the error is serious,",
+                "you'd better type `E' or `X' now and fix your file.", NULL};
+            char named[128];
+            describe_token(engine, target, named, sizeof(named));
+            hstex_token close = hstex_token_character(
+                (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+            if (push_one(engine, current, location, error, error_capacity) !=
+                    0 ||
+                push_one(engine, close, location, error, error_capacity) != 0) {
+                vector_destroy(&parameter_text);
+                vector_destroy(&replacement);
+                return -1;
+            }
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning "
+                      "definition of %s",
+                      named);
+            continue;
+        }
         if (token_is_category(current, HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
         } else if (token_is_category(current, HSTEX_CAT_END_GROUP)) {
