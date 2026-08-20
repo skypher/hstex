@@ -28032,7 +28032,13 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     struct hstex_box line = {0};
     bool had_line = engine->paragraph_builder != NULL &&
                     engine->paragraph_builder->count != 0U;
-    /* The line before a display is a widow of a different kind. */
+    /* The line before a display is a widow of a different kind. It is still
+       a line of the paragraph, so a box that will not fit is reported
+       against the line the paragraph began on. */
+    if (engine->nest_count != 0U) {
+        engine->paragraph_line =
+            (int32_t)engine->nest[engine->nest_count - 1U].line;
+    }
     engine->breaking_for_display = true;
     int broken = finish_paragraph_line(engine, &line, error, error_capacity);
     engine->breaking_for_display = false;
@@ -30236,8 +30242,16 @@ static int append_display_line(struct hstex_engine *engine,
             struct hstex_glue spare = list_total_glue(
                 engine, engine->list_items + equation.node_start,
                 equation.node_count);
+            /* The reference packs the equation again here rather than
+               setting its glue, so a squeeze that does not fit is
+               reported. See docs/DECISIONS.md, boxes-that-do-not-fit. */
+            int32_t natural = equation.width;
             equation.glue = packing_glue_set(equation.width, room, &spare);
             equation.width = room;
+            engine->badness = packing_badness(natural, room, &spare);
+            report_packing(engine, &equation, natural, &spare, false,
+                           engine->list_items + equation.node_start,
+                           equation.node_count);
         }
     }
     if (e == 0 && equation.width > width) {
@@ -30249,7 +30263,13 @@ static int append_display_line(struct hstex_engine *engine,
             struct hstex_glue spare = list_total_glue(
                 engine, engine->list_items + equation.node_start,
                 equation.node_count);
+            int32_t natural = equation.width;
             equation.glue = packing_glue_set(equation.width, width, &spare);
+            equation.width = width;
+            engine->badness = packing_badness(natural, width, &spare);
+            report_packing(engine, &equation, natural, &spare, false,
+                           engine->list_items + equation.node_start,
+                           equation.node_count);
         }
         equation.width = width;
     }
