@@ -13653,6 +13653,18 @@ static void show_rule_dimen(struct hstex_engine *engine, int32_t value)
     show_scaled(engine, value);
 }
 
+/* The reference writes in ^^ notation only what it cannot write as itself:
+   codes 0-8, 12-31 and 127. Tab, line feed and vertical tab go through as
+   the bytes they are, and so does the whole upper half. See
+   docs/DECISIONS.md, a-character-the-log-writes-as-itself. */
+static bool character_needs_caret(uint8_t code)
+{
+    if (code == 9U || code == 10U || code == 11U) {
+        return false;
+    }
+    return code < 32U || code == 127U;
+}
+
 /* The reference writes an unprintable character in ^^ notation. */
 static void show_ascii(struct hstex_engine *engine, uint8_t code)
 {
@@ -13664,17 +13676,10 @@ static void show_ascii(struct hstex_engine *engine, uint8_t code)
         print_line(engine);
         return;
     }
-    if (code < 32U || code == 127U) {
+    if (character_needs_caret(code)) {
         print_text(engine, "^^");
         print_byte(engine,
                    (char)(code < 64U ? code + 64U : code - 64U));
-        return;
-    }
-    if (code >= 128U) {
-        static const char hexadecimal[] = "0123456789abcdef";
-        print_text(engine, "^^");
-        print_byte(engine, hexadecimal[code >> 4U]);
-        print_byte(engine, hexadecimal[code & 0x0fU]);
         return;
     }
     print_byte(engine, (char)code);
@@ -23305,7 +23310,7 @@ static void char_warning(struct hstex_engine *engine,
     }
     print_fresh_line(engine);
     print_text(engine, "Missing character: There is no ");
-    if (code < 32U || code == 127U) {
+    if (character_needs_caret(code)) {
         print_formatted(engine, "^^%c",
                         (char)(code < 64U ? code + 64U : code - 64U));
     } else {
