@@ -1,0 +1,25 @@
+% What the three lists of a \discretionary may hold, and where one may
+% stand.
+%
+% Measured against pdftex:
+%
+%   Only what a broken line can carry: characters and the ligatures they
+%   make, kerns, boxes and rules. Glue, a penalty, a mark, a whatsit or
+%   another discretionary draws "Improper discretionary list", and the
+%   part is TRUNCATED at that node -- what follows it is gone too. Once
+%   per offending part, so three bad parts draw three messages.
+%
+%   A \discretionary is allowed inside a formula, but its third part must
+%   be empty there: a formula has no line to break, so there is nothing
+%   for a third part to replace. "Illegal math \discretionary", and the
+%   third part is deleted.
+%
+% trip line 277 writes one in a formula with glue in the second part and
+% a character in the third, and so draws both faults.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{A\discretionary{X\hskip2pt Y\kern3pt Z}{}{}B}\showbox0
+\setbox1=\hbox{A\discretionary{X\kern2pt\hbox{}\vrule}{}{}B}\showbox1
+\setbox2=\hbox{$x\discretionary{A}{B}{C}y$}\showbox2
+A\discretionary{X\hss}{Y\hss}{Z\hss}B\par
+\end

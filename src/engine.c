@@ -11328,6 +11328,33 @@ static int scan_discretionary_list(struct hstex_engine *engine,
     struct hstex_hbox_builder builder = {0};
     int status = evaluate_hbox_contents(engine, &builder, error,
                                         error_capacity);
+    /* Only what a broken line can carry belongs here: characters and the
+       ligatures they make, kerns, boxes and rules. Measured against
+       pdftex: glue, a penalty, a mark, a whatsit or another discretionary
+       draws "Improper discretionary list" and the part is truncated at
+       that node -- what follows it is gone too, once per offending part. */
+    if (status == 0) {
+        for (size_t index = 0U; index < builder.count; ++index) {
+            uint32_t identifier = builder.node_identifiers[index];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            uint8_t kind = engine->nodes[identifier - 1U].kind;
+            if (kind == (uint8_t)HSTEX_NODE_CHARACTER ||
+                kind == (uint8_t)HSTEX_NODE_LIGATURE ||
+                kind == (uint8_t)HSTEX_NODE_KERN ||
+                kind == (uint8_t)HSTEX_NODE_LIST ||
+                kind == (uint8_t)HSTEX_NODE_RULE) {
+                continue;
+            }
+            static const char *const help[] = {
+                "Discretionary lists must contain only boxes and kerns.",
+                NULL};
+            tex_error(engine, help, "Improper discretionary list");
+            builder.count = index;
+            break;
+        }
+    }
     if (status == 0 && builder.count > (size_t)UINT16_MAX) {
         status = set_error(error, error_capacity,
                            "a discretionary list may hold at most %u nodes",
@@ -11350,8 +11377,11 @@ static int scan_discretionary_list(struct hstex_engine *engine,
 static int execute_discretionary(struct hstex_engine *engine, char *error,
                                  size_t error_capacity)
 {
-    if (ensure_horizontal_mode(engine, error, error_capacity) != 0 ||
-        flush_pending_character(engine, error, error_capacity) != 0) {
+    if (engine->mode != HSTEX_MODE_MATH &&
+        ensure_horizontal_mode(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
     }
     struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
@@ -11372,6 +11402,16 @@ static int execute_discretionary(struct hstex_engine *engine, char *error,
     if (replaced_count > 255U) {
         return set_error(error, error_capacity,
                          "a discretionary may replace at most 255 nodes");
+    }
+    /* A formula has no line to break, so there is nothing for a third part
+       to replace: the reference deletes it and says so. */
+    if (engine->mode == HSTEX_MODE_MATH && replaced_count != 0U) {
+        static const char *const help[] = {
+            "Sorry: The third part of a discretionary break must be",
+            "empty, in math formulas. I had to delete your third part.",
+            NULL};
+        tex_error(engine, help, "Illegal math \\discretionary");
+        replaced_count = 0U;
     }
     node.value.disc.replace_count = (uint8_t)replaced_count;
     if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
