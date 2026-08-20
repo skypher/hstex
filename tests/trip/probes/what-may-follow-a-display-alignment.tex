@@ -1,5 +1,5 @@
 % What may stand between an alignment that filled a display and the $$ that
-% closes it.  NOT YET IMPLEMENTED -- this probe records the measurement.
+% closes it.
 %
 % Measured against pdftex: only $$, assignments, and \relax. Anything else
 % -- a letter, \hbox, \vskip, \par, \eqno -- gets "Missing $$ inserted",
@@ -11,13 +11,22 @@
 % \setbox is the exception among assignments: it is refused outright with
 % "Improper \setbox" (see a-font-names-itself-before-its-metrics).
 %
-% Implementing this needs a predicate for "is an assignment", which the
-% engine does not have -- its main loop knows the assignment commands only
-% as cases of a switch.
+% Blanks stand between those assignments -- an alignment usually ends a
+% line -- and the reference skips them rather than closing the display on
+% one.
+%
+% Deciding this needs a predicate for "does this command assign", built
+% from the main loop's own cases and then checked command by command
+% against the reference: it admits the prefixes, \parshape, \textfont,
+% \patterns and the interaction modes along with the obvious ones, and
+% refuses \message, \mark, \penalty, \unskip, \showthe, \lowercase,
+% \ignorespaces, \setlanguage, \afterassignment and \aftergroup.
 \tracingonline=1
 \font\tt=cmr10 \tt
 $$\halign{#\cr A\cr}\count0=1 $$\message{[assignment is allowed]}\par
 $$\halign{#\cr A\cr}\relax$$\message{[relax is allowed]}\par
 $$\halign{#\cr A\cr}$$\message{[a bare close is silent]}\par
 $$\halign{#\cr A\cr}\eqno x$$\message{[eqno draws two]}\par
+$$\halign{#\cr A\cr}
+\count0=1 $$\message{[a blank line is skipped]}\par
 \end

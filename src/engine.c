@@ -34597,10 +34597,11 @@ static int insert_display_close(struct hstex_engine *engine,
                                 struct hstex_source_location location,
                                 char *error, size_t error_capacity)
 {
+    /* Two lines, where "Improper \\halign inside $$'s" has three: nothing
+       is deleted here, so the reference does not say it is. */
     static const char *const help[] = {
         "Displays can use special alignments (like \\eqalignno)",
-        "only if nothing but the alignment itself is between $$'s.",
-        "So I've deleted the formulas that preceded this alignment.", NULL};
+        "only if nothing but the alignment itself is between $$'s.", NULL};
     hstex_token shift =
         hstex_token_character((uint8_t)HSTEX_CAT_MATH_SHIFT, (uint8_t)'$');
     if (push_one(engine, offending, location, error, error_capacity) != 0 ||
@@ -35370,7 +35371,11 @@ handle_token:
            and \relax before the display closes; anything else closes it
            first and is read again. */
         if (engine->display_alignment &&
-            !token_is_category(*token, HSTEX_CAT_MATH_SHIFT)) {
+            !token_is_category(*token, HSTEX_CAT_MATH_SHIFT) &&
+            !token_is_space(*token)) {
+            /* Blanks stand between the assignments the reference allows
+               here -- an alignment usually ends a line -- and it skips
+               them rather than closing the display on one. */
             bool allowed = false;
             if (hstex_token_is_control_sequence(*token)) {
                 const struct hstex_meaning *what = hstex_engine_meaning(
