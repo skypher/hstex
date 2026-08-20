@@ -1801,6 +1801,10 @@ struct hstex_engine {
     size_t files_closed_reported;
     /* How many of those brackets are still open. */
     size_t open_parens;
+    /* The page description this run wrote, and how much of it, for the line
+       the reference ends a run with. See docs/DECISIONS.md,
+       what-a-run-says-at-its-end. */
+    char *output_name;
     /* The semantic nest, outermost first. */
     struct hstex_nest_level *nest;
     size_t nest_count;

@@ -182,6 +182,20 @@ static int run_document(const char *source, const char *expected)
         memmove(captured, captured + 1U, captured_length);
         --captured_length;
     }
+    /* And what the run came to, which names the file it wrote. */
+    if (captured != NULL) {
+        static const char *const endings[] = {"\nOutput written on ",
+                                              "\nNo pages of output."};
+        for (size_t which = 0U;
+             which < sizeof(endings) / sizeof(endings[0]); ++which) {
+            char *at = strstr(captured, endings[which]);
+            if (at != NULL) {
+                captured_length = (size_t)(at - captured);
+                captured[captured_length] = '\0';
+                break;
+            }
+        }
+    }
     if (captured != NULL && captured_length != 0U &&
         captured[captured_length - 1U] == ')') {
         --captured_length;

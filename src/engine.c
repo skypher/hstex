@@ -3180,6 +3180,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->glyph_unicode);
     free(engine->output_directory);
+    free(engine->output_name);
     free(engine->job_name);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
@@ -15464,6 +15465,8 @@ static int dvi_open(struct hstex_engine *engine, char *error,
                          "page description allocation failed");
     }
     engine->dvi_file = fopen(path, "wb");
+    free(engine->output_name);
+    engine->output_name = strdup(path);
     free(path);
     if (engine->dvi_file == NULL) {
         return set_error(error, error_capacity,
@@ -15958,7 +15961,8 @@ static int pdf_open(struct hstex_engine *engine, char *error,
     } else {
         engine->pdf_file = fopen(path, "wb");
     }
-    free(path);
+    free(engine->output_name);
+    engine->output_name = path;
     if (engine->pdf_file == NULL) {
         return set_error(error, error_capacity, "cannot write the PDF file");
     }
@@ -34016,6 +34020,22 @@ int hstex_engine_run(struct hstex_engine *engine,
         return -1;
     }
     int closed = pdf_close(engine, error, error_capacity);
+    /* What the reference says a run came to. See docs/DECISIONS.md,
+       what-a-run-says-at-its-end. */
+    if (!engine->parallel_is_worker) {
+        print_fresh_line(engine);
+        if (engine->shipped_pages == 0 || engine->output_name == NULL) {
+            print_text(engine, "No pages of output.");
+        } else {
+            size_t bytes = engine->pdf_written != 0U ? engine->pdf_written
+                                                     : engine->dvi_written;
+            print_formatted(engine, "Output written on %s (%d page%s, %zu bytes).",
+                            engine->output_name, engine->shipped_pages,
+                            engine->shipped_pages == 1 ? "" : "s", bytes);
+        }
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
+    }
     if (engine->parallel_is_worker) {
         if (engine->speculating) {
             /* A carrier that ran all the way says so; a chunk that reached
