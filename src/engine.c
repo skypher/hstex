@@ -107,6 +107,7 @@ static const struct hstex_node *last_item_node(
     const struct hstex_engine *engine);
 static int32_t last_node_type(const struct hstex_node *node);
 static void spec_flush(struct hstex_engine *engine);
+static void digest_bytes(uint64_t *digest, const void *bytes, size_t length);
 static void spec_touch(const struct hstex_engine *engine, const char *prefix,
                        int32_t page, const char *content);
 static void spec_chunk_stop(struct hstex_engine *engine);
@@ -114,6 +115,7 @@ static void spec_finalize(struct hstex_engine *engine);
 static void spec_load_pages(struct hstex_engine *engine);
 static void spec_path(const struct hstex_engine *engine, char *room,
                       size_t capacity, const char *prefix, int32_t page);
+static void spec_snapshot_aux(struct hstex_engine *engine);
 
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
@@ -1942,6 +1944,30 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
         (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
                        verify);
     }
+    /* One switch for the whole loop: point HSTEX_FLEET at a directory, and
+       a run finding a fleet parked there is served from it, while a run
+       finding none runs whole and leaves one for the next. The benchmark's
+       process-per-pass measurements are untouched: nothing happens unless
+       the switch is set. */
+    const char *fleet = getenv("HSTEX_FLEET");
+    if (fleet != NULL && verify == NULL) {
+        char manifest[600];
+        (void)snprintf(manifest, sizeof(manifest), "%s/pages.txt", fleet);
+        (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
+                       fleet);
+        if (access(manifest, F_OK) == 0) {
+            engine->verifying = 1;
+            engine->spec_carrier = 1;
+            engine->spec_start = -1;
+        } else {
+            (void)mkdir(fleet, 0700);
+            engine->parking = 1;
+            if (engine->parallel_chunk == 0) {
+                engine->parallel_chunk = 1;
+                engine->parallel_stride_ns = 400ULL * 1000000ULL;
+            }
+        }
+    }
     const char *checkpoint = getenv("HSTEX_CHECKPOINT");
     if (checkpoint != NULL) {
         bool every = strncmp(checkpoint, "every:", 6U) == 0;
@@ -3165,6 +3191,9 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
     engine->active_vbox_builder = engine->contribution_builder;
     if (hstex_engine_push_file(engine, path, error, error_capacity) != 0) {
         return -1;
+    }
+    if (engine->parking) {
+        spec_snapshot_aux(engine);
     }
     uint32_t every_job = engine->token_parameters[HSTEX_TOKEN_EVERY_JOB];
     if (every_job != 0U) {
@@ -31664,6 +31693,229 @@ void hstex_engine_set_message_stream(struct hstex_engine *engine,
 static void hstex_engine_release_chunks(struct hstex_engine *engine);
 static void finish_a_chunk(struct hstex_engine *engine);
 
+
+/* ---- The aux delta, written by the engine itself -----------------------
+   A parked chunk carries the labels its run read; the run being served
+   reads newer ones. The difference is a file of assignments, and the
+   verifier writes it by comparing the aux the fleet was parked with -- a
+   copy taken before the parking run read it -- against the aux on disk
+   now. Only \newlabel and \bibcite become definitions when an aux is
+   read, so only they are compared; see tools/gen-aux-patch.py, which this
+   ports. */
+
+struct aux_line {
+    uint64_t name_hash;
+    uint64_t body_hash;
+    const char *name;
+    size_t name_length;
+    const char *body;
+    size_t body_length;
+    char prefix;
+};
+
+static char *spec_read_whole(const char *path, size_t *length)
+{
+    FILE *in = fopen(path, "rb");
+    if (in == NULL) {
+        *length = 0U;
+        return NULL;
+    }
+    if (fseek(in, 0L, SEEK_END) != 0) {
+        (void)fclose(in);
+        *length = 0U;
+        return NULL;
+    }
+    long told = ftell(in);
+    rewind(in);
+    if (told < 0L) {
+        (void)fclose(in);
+        *length = 0U;
+        return NULL;
+    }
+    char *bytes = malloc((size_t)told + 1U);
+    if (bytes == NULL || fread(bytes, 1U, (size_t)told, in) != (size_t)told) {
+        free(bytes);
+        (void)fclose(in);
+        *length = 0U;
+        return NULL;
+    }
+    (void)fclose(in);
+    bytes[told] = '\0';
+    *length = (size_t)told;
+    return bytes;
+}
+
+static size_t spec_harvest_aux(const char *text, size_t length,
+                               struct aux_line **out)
+{
+    size_t capacity = 256U;
+    size_t count = 0U;
+    struct aux_line *lines = malloc(capacity * sizeof(*lines));
+    if (lines == NULL) {
+        *out = NULL;
+        return 0U;
+    }
+    const char *at = text;
+    const char *end = text + length;
+    while (at < end) {
+        const char *line_end = memchr(at, '\n', (size_t)(end - at));
+        if (line_end == NULL) {
+            line_end = end;
+        }
+        char prefix = 0;
+        const char *rest = NULL;
+        if ((size_t)(line_end - at) > 10U &&
+            memcmp(at, "\\newlabel{", 10U) == 0) {
+            prefix = 'r';
+            rest = at + 10U;
+        } else if ((size_t)(line_end - at) > 9U &&
+                   memcmp(at, "\\bibcite{", 9U) == 0) {
+            prefix = 'b';
+            rest = at + 9U;
+        }
+        if (prefix != 0) {
+            const char *name_end = memchr(rest, '}', (size_t)(line_end - rest));
+            if (name_end != NULL && name_end + 1 < line_end &&
+                name_end[1] == '{') {
+                const char *body = name_end + 2;
+                const char *body_end = line_end;
+                while (body_end > body && (body_end[-1] == '\r' ||
+                                           body_end[-1] == ' ')) {
+                    --body_end;
+                }
+                if (body_end > body && body_end[-1] == '}') {
+                    --body_end;
+                    if (count == capacity) {
+                        capacity *= 2U;
+                        struct aux_line *grown =
+                            realloc(lines, capacity * sizeof(*lines));
+                        if (grown == NULL) {
+                            break;
+                        }
+                        lines = grown;
+                    }
+                    struct aux_line *entry = &lines[count++];
+                    entry->prefix = prefix;
+                    entry->name = rest;
+                    entry->name_length = (size_t)(name_end - rest);
+                    entry->body = body;
+                    entry->body_length = (size_t)(body_end - body);
+                    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+                    digest_bytes(&hash, &prefix, 1U);
+                    digest_bytes(&hash, rest, entry->name_length);
+                    entry->name_hash = hash;
+                    hash = UINT64_C(0xcbf29ce484222325);
+                    digest_bytes(&hash, body, entry->body_length);
+                    entry->body_hash = hash;
+                }
+            }
+        }
+        at = line_end < end ? line_end + 1 : end;
+    }
+    *out = lines;
+    return count;
+}
+
+static const struct aux_line *spec_find_aux(const struct aux_line *lines,
+                                            size_t count, uint64_t name_hash)
+{
+    for (size_t index = 0U; index < count; ++index) {
+        if (lines[index].name_hash == name_hash) {
+            return &lines[index];
+        }
+    }
+    return NULL;
+}
+
+/* The labels a parking run will read are kept beside the fleet, so that a
+   later verifier can say how the fleet's labels differ from its own. Taken
+   before the document reads anything: what is on disk now is what this run
+   will read. */
+static void spec_snapshot_aux(struct hstex_engine *engine)
+{
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    char aux_name[512];
+    (void)snprintf(aux_name, sizeof(aux_name), "%s.aux", job);
+    char *aux_path = output_path(engine, aux_name);
+    if (aux_path == NULL) {
+        return;
+    }
+    char parked_name[600];
+    spec_path(engine, parked_name, sizeof(parked_name), "aux-parked", -1);
+    size_t length = 0U;
+    char *text = spec_read_whole(aux_path, &length);
+    free(aux_path);
+    FILE *out = fopen(parked_name, "w");
+    if (out != NULL) {
+        if (text != NULL && length != 0U) {
+            (void)fwrite(text, 1U, length, out);
+        }
+        (void)fclose(out);
+    }
+    free(text);
+}
+
+/* Write the patch turning the parked labels into the current ones, and say
+   whether one was needed at all. */
+static bool spec_write_aux_patch(struct hstex_engine *engine,
+                                 const char *patch_path)
+{
+    char parked_name[600];
+    spec_path(engine, parked_name, sizeof(parked_name), "aux-parked", -1);
+    size_t old_length = 0U;
+    char *old_text = spec_read_whole(parked_name, &old_length);
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    char aux_name[512];
+    (void)snprintf(aux_name, sizeof(aux_name), "%s.aux", job);
+    char *aux_path = output_path(engine, aux_name);
+    size_t new_length = 0U;
+    char *new_text =
+        aux_path == NULL ? NULL : spec_read_whole(aux_path, &new_length);
+    free(aux_path);
+    struct aux_line *old_lines = NULL;
+    struct aux_line *new_lines = NULL;
+    size_t old_count = spec_harvest_aux(old_text == NULL ? "" : old_text,
+                                        old_length, &old_lines);
+    size_t new_count = spec_harvest_aux(new_text == NULL ? "" : new_text,
+                                        new_length, &new_lines);
+    FILE *out = fopen(patch_path, "w");
+    size_t emitted = 0U;
+    if (out != NULL) {
+        for (size_t index = 0U; index < new_count; ++index) {
+            const struct aux_line *entry = &new_lines[index];
+            const struct aux_line *before =
+                spec_find_aux(old_lines, old_count, entry->name_hash);
+            if (before != NULL && before->body_hash == entry->body_hash) {
+                continue;
+            }
+            (void)fprintf(out,
+                          "\\global\\expandafter\\def\\csname %c@%.*s"
+                          "\\endcsname{%.*s}%%\n",
+                          entry->prefix, (int)entry->name_length, entry->name,
+                          (int)entry->body_length, entry->body);
+            ++emitted;
+        }
+        for (size_t index = 0U; index < old_count; ++index) {
+            const struct aux_line *entry = &old_lines[index];
+            if (spec_find_aux(new_lines, new_count, entry->name_hash) ==
+                NULL) {
+                (void)fprintf(out,
+                              "\\global\\expandafter\\let\\csname "
+                              "%c@%.*s\\endcsname\\relax %%\n",
+                              entry->prefix, (int)entry->name_length,
+                              entry->name);
+                ++emitted;
+            }
+        }
+        (void)fclose(out);
+    }
+    free(old_lines);
+    free(new_lines);
+    free(old_text);
+    free(new_text);
+    return emitted != 0U;
+}
+
 /* The verifier lets the parked fleet go: down each chunk's named pipe goes
    the patch, and the chunks begin reading the disk as it now stands. A pipe
    with no reader is a chunk that died, and its range is simply never
@@ -31671,7 +31923,30 @@ static void finish_a_chunk(struct hstex_engine *engine);
 static void spec_release_fleet(struct hstex_engine *engine)
 {
     spec_load_pages(engine);
+    /* What the last round said is the last round's business. */
+    static const char *const stale_prefixes[] = {"entry", "marker", "valid",
+                                                 "stale"};
+    for (size_t index = 0U; index < engine->spec_page_count; ++index) {
+        for (size_t which = 0U; which < 4U; ++which) {
+            char name[600];
+            spec_path(engine, name, sizeof(name), stale_prefixes[which],
+                      engine->spec_pages[index]);
+            (void)unlink(name);
+        }
+    }
+    {
+        char name[600];
+        spec_path(engine, name, sizeof(name), "end-done", -1);
+        (void)unlink(name);
+    }
+    char written_patch[600];
     const char *patch = getenv("HSTEX_PATCH");
+    if (patch == NULL) {
+        spec_path(engine, written_patch, sizeof(written_patch), "patch", -1);
+        if (spec_write_aux_patch(engine, written_patch)) {
+            patch = written_patch;
+        }
+    }
     int32_t patch_length =
         patch == NULL ? 0 : (int32_t)strlen(patch);
     if (patch_length >= 4096) {
@@ -33834,6 +34109,11 @@ static void redirect_to_the_fleet_file(struct hstex_engine *engine)
         return;
     }
     FILE *own = fopen(path, "r+b");
+    if (own == NULL) {
+        /* The last round's assembly renamed the fleet file into place, so
+           the first writer of a new round starts it afresh. */
+        own = fopen(path, "w+b");
+    }
     free(path);
     if (own == NULL) {
         return;
@@ -34014,6 +34294,9 @@ static void park_a_chunk(struct hstex_engine *engine)
             }
         }
         const char *speculate = getenv("HSTEX_SPECULATE");
+        if (speculate == NULL && engine->parking) {
+            speculate = engine->spec_dir;
+        }
         if (speculate != NULL) {
             /* A speculative chunk must not run yet: what it will read from
                disk belongs to the run it will serve, which has not begun --
@@ -34023,8 +34306,10 @@ static void park_a_chunk(struct hstex_engine *engine)
                what comes down the pipe is the patch. */
             engine->speculating = 1;
             engine->spec_start = engine->shipped_pages;
-            (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir), "%s",
-                           speculate);
+            if (speculate != engine->spec_dir) {
+                (void)snprintf(engine->spec_dir, sizeof(engine->spec_dir),
+                               "%s", speculate);
+            }
             char done = 1;
             ssize_t said = write(engine->parallel_done_write, &done, 1);
             (void)said;
@@ -34034,41 +34319,70 @@ static void park_a_chunk(struct hstex_engine *engine)
             spec_path(engine, gate_name, sizeof(gate_name), "go",
                       engine->spec_start);
             (void)mkfifo(gate_name, 0600);
-            int lane = open(gate_name, O_RDONLY);
-            if (lane < 0) {
-                _exit(1);
+            if (getenv("HSTEX_FLEET_DEBUG") != NULL) {
+                (void)fprintf(stderr, "FLEETDBG park %d pid=%d\n",
+                              engine->spec_start, (int)getpid());
             }
-            int32_t patch_length = 0;
-            size_t have = 0U;
-            while (have < sizeof(patch_length)) {
-                ssize_t got = read(lane, (char *)&patch_length + have,
-                                   sizeof(patch_length) - have);
-                if (got < 0 && errno == EINTR) {
-                    continue;
+            for (;;) {
+                int lane = open(gate_name, O_RDONLY);
+                if (lane < 0) {
+                    _exit(1);
                 }
-                if (got <= 0) {
-                    _exit(0);
-                }
-                have += (size_t)got;
-            }
-            engine->parallel_patch[0] = '\0';
-            if (patch_length > 0 && (size_t)patch_length <
-                                        sizeof(engine->parallel_patch)) {
-                have = 0U;
-                while (have < (size_t)patch_length) {
-                    ssize_t got = read(lane, engine->parallel_patch + have,
-                                       (size_t)patch_length - have);
+                int32_t patch_length = 0;
+                size_t have = 0U;
+                bool hung_up = false;
+                while (have < sizeof(patch_length)) {
+                    ssize_t got = read(lane, (char *)&patch_length + have,
+                                       sizeof(patch_length) - have);
                     if (got < 0 && errno == EINTR) {
                         continue;
                     }
                     if (got <= 0) {
-                        _exit(0);
+                        hung_up = true;
+                        break;
                     }
                     have += (size_t)got;
                 }
-                engine->parallel_patch[patch_length] = '\0';
+                if (hung_up) {
+                    /* An open with no bytes is not a release: a passer-by
+                       opened and closed the pipe. Park again. */
+                    (void)close(lane);
+                    continue;
+                }
+                engine->parallel_patch[0] = '\0';
+                if (patch_length > 0 && (size_t)patch_length <
+                                            sizeof(engine->parallel_patch)) {
+                    have = 0U;
+                    while (have < (size_t)patch_length) {
+                        ssize_t got =
+                            read(lane, engine->parallel_patch + have,
+                                 (size_t)patch_length - have);
+                        if (got < 0 && errno == EINTR) {
+                            continue;
+                        }
+                        if (got <= 0) {
+                            _exit(0);
+                        }
+                        have += (size_t)got;
+                    }
+                    engine->parallel_patch[patch_length] = '\0';
+                }
+                (void)close(lane);
+                if (getenv("HSTEX_FLEET_DEBUG") != NULL) {
+                    (void)fprintf(stderr,
+                                  "FLEETDBG woken %d pid=%d patch=%d\n",
+                                  engine->spec_start, (int)getpid(),
+                                  (int)patch_length);
+                }
+                /* A copy stays parked, holding the state as parked -- before
+                   any patch -- so the fleet serves run after run. */
+                pid_t successor = fork();
+                if (successor == 0) {
+                    engine->parallel_patch[0] = '\0';
+                    continue;
+                }
+                break;
             }
-            (void)close(lane);
         }
         if (engine->parallel_patch[0] != '\0' &&
             apply_state_patch(engine, engine->parallel_patch) != 0) {
@@ -34077,6 +34391,10 @@ static void park_a_chunk(struct hstex_engine *engine)
         probe_and_leave(engine);
         if (engine->speculating) {
             spec_write_state(engine, "entry", engine->spec_start);
+            if (getenv("HSTEX_FLEET_DEBUG") != NULL) {
+                (void)fprintf(stderr, "FLEETDBG entry %d pid=%d\n",
+                              engine->spec_start, (int)getpid());
+            }
         }
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
@@ -34161,6 +34479,9 @@ static void release_them_once(struct hstex_engine *engine)
     struct timespec after;
     (void)clock_gettime(CLOCK_MONOTONIC, &before);
     const char *speculate = getenv("HSTEX_SPECULATE");
+    if (speculate == NULL && engine->parking) {
+        speculate = engine->spec_dir;
+    }
     if (speculate != NULL) {
         char name[600];
         (void)snprintf(name, sizeof(name), "%s/pages.txt", speculate);

@@ -311,11 +311,13 @@ That is the taking up and the writing, and it is not a cold run made
 faster: standing the fleet up costs a sequential run of the same document,
 so what is measured is what a run costs once the fleet is there, which is
 the persistent mode the contract reports on its own. The fleet now serves
-the edit loop: it sleeps on named pipes until the next run's verifier
-releases it, each chunk reads the disk as it stands -- edits and all -- and
-a rerun after a sentence added near the end of the corpus takes 2.0 seconds
-against 19.5, byte for byte, all four files. See docs/DECISIONS.md,
-the-relay.
+the edit loop, on one switch: `HSTEX_FLEET=<dir>` makes a run with no fleet
+park one as it goes, and a run that finds one get served from it -- the aux
+delta is patched in automatically, chunks read the disk as it stands, edits
+and all, and every released chunk leaves a successor parked so the fleet
+outlives the round. A four-round editing session on the corpus: 19.9
+seconds cold, then 2.3, 2.3 and 2.6 after three successive edits, every
+round byte for byte. See docs/DECISIONS.md, the-relay.
 
 The guessing now works too. A fleet parked by one pass can serve the next:
 each woken chunk reads a patch -- the labels the next pass will see

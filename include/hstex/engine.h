@@ -1935,6 +1935,9 @@ struct hstex_engine {
     int32_t *spec_pages;
     size_t spec_page_count;
     int parallel_one_shot;
+    /* HSTEX_FLEET: this run is to leave a fleet parked in spec_dir when no
+       fleet is there, so the next run may be served from it. */
+    int parking;
     /* The children of one language's trie root, spread by character: every
        walk starts at the root, and the root has the most children, so the
        list scan is paid once and remembered. Rebuilt when the trie grows or

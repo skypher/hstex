@@ -1,38 +1,40 @@
 #!/bin/bash
-# Reproduce the relay: a pass produced from the previous pass's parked fleet.
+# The edit loop in two commands.
 #
-#   tools/relay-demo.sh <format.hfmt> <document.tex> <workdir>
+#   HSTEX_FLEET=<dir> hstex --format <format> <document>
 #
-# The work directory must hold the document's auxiliary inputs as the pass
-# BEFORE the parking pass would leave them (aux/toc/out and any .bbl), plus
-# a copy of the aux the parking pass will write, named aux.next -- which a
-# deterministic engine makes available by running the pass once beforehand.
-# The demo then runs the parking pass, wakes its fleet against the patch,
-# runs the verifier, and reports whether the verifier's outputs are byte for
-# byte a plain run's.
+# A run finding no fleet in <dir> runs whole and leaves one parked; a run
+# finding one is served from it -- it verifies the parked chunks against its
+# own state at every parked page, lets the valid ones stand, rewrites the
+# rest, and leaves the fleet parked for the next run. Chunks read the disk
+# as it stands when THEY are released, so edits between runs are seen; the
+# aux delta between runs is patched into the chunks automatically from the
+# snapshot the parking run took. HSTEX_DIGEST_SOFT should name
+# tools/soft-names.txt (the scratch-macro waiver); without it almost nothing
+# validates and every run degrades -- correctly, slowly -- to sequential.
+#
+# This script demonstrates the loop: it compiles DOCUMENT twice with an
+# edit-hook of your choosing in between, and reports both times.
+#
+#   tools/relay-demo.sh <format.hfmt> <document.tex> <workdir> [edit-command]
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-format="$1"; document="$2"; work="$3"
-job="$(basename "${document%.tex}")"
-out="$work/build/document-output"
-relay="$work/relay"
-mkdir -p "$out" "$relay"
-rm -f "$relay"/* "$out"/*-fleet*
+format="$1"; document="$2"; work="$3"; edit="${4:-true}"
+mkdir -p "$work/build/document-output"
 
-python3 "$root/tools/gen-aux-patch.py" "$out/$job.aux" "$work/aux.next" \
-    > "$work/patch.tex"
+compile() {
+  ( cd "$work" && HSTEX_FLEET="$work/fleet" \
+      HSTEX_DIGEST_SOFT="$root/tools/soft-names.txt" \
+      /usr/bin/time -f "wall=%e" "$root/build/hstex" \
+      --format "$format" "$document" >/dev/null 2>"$work/last.log" )
+  grep -o "wall=.*" "$work/last.log" | tail -1
+}
 
-echo "parking pass (fleet + patch at its end)"
-( cd "$work" && HSTEX_PARALLEL=100 HSTEX_PARALLEL_ROUNDS=1 \
-    HSTEX_PATCH="$work/patch.tex" HSTEX_SPECULATE="$relay" \
-    HSTEX_DIGEST_SOFT="$root/tools/soft-names.txt" \
-    "$root/build/hstex" --format "$format" "$document" >/dev/null 2>parking.log )
-
-echo "verifier"
-( cd "$work" && HSTEX_VERIFY="$relay" \
-    HSTEX_DIGEST_SOFT="$root/tools/soft-names.txt" \
-    /usr/bin/time -f "verifier wall=%e" "$root/build/hstex" \
-    --format "$format" "$document" >/dev/null 2>verifier.log )
-tail -1 "$work/verifier.log"
-echo "valid: $(ls "$relay" | grep -c '^valid')  stale: $(ls "$relay" | grep -c '^stale')"
+echo "first compile (parks the fleet):"
+compile
+echo "applying the edit: $edit"
+eval "$edit"
+echo "second compile (served from the fleet):"
+compile
+echo "fleet still parked: $(pgrep -f "$root/build/hstex" | wc -l) processes"
