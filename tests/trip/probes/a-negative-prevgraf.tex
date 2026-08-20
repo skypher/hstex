@@ -1,0 +1,17 @@
+% \prevgraf set to a negative number.
+%
+% Measured against pdftex: named and ignored, and \prevgraf keeps the
+% value it had.
+%
+%   ! Bad \prevgraf (-1).
+%   I allow only nonnegative values here.
+%
+% So `\prevgraf=3 \prevgraf=-5' leaves it at 3, not at 0 and not at -5.
+% This engine stopped instead. trip line 392 writes \prevgraf=-1 inside a
+% conditional whose branches turn on whether it took effect.
+\tracingonline=1
+\prevgraf=-1 \showthe\prevgraf
+\prevgraf=3 \prevgraf=-5 \showthe\prevgraf
+\prevgraf=0 \showthe\prevgraf
+{\if 11 \prevgraf=-1\if 0123\error\else\relax\fi\else\error\fi}\showthe\prevgraf
+\end

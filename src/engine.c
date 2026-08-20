@@ -37346,11 +37346,14 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             if (lines < 0) {
-                (void)set_error(error, error_capacity,
-                                "prevgraf cannot be negative");
-                return HSTEX_ENGINE_ERROR;
+                /* Named and ignored: the reference leaves \prevgraf as it
+                   was. */
+                static const char *const help[] = {
+                    "I allow only nonnegative values here.", NULL};
+                tex_error(engine, help, "Bad \\prevgraf (%d)", lines);
+            } else {
+                engine->prev_graf = lines;
             }
-            engine->prev_graf = lines;
             /* The prefix this assignment may have carried is spent. */
             engine->pending_global = false;
             engine->pending_macro_flags = 0U;
