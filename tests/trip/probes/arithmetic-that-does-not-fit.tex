@@ -1,0 +1,22 @@
+% \advance, \multiply and \divide past what a register holds.
+%
+% Measured against pdftex, and the two behave differently:
+%
+%   \advance is not checked at all. It wraps in thirty-two bits and says
+%   nothing: 16000pt advanced by 16000pt three times over comes to
+%   -17536.0pt, and \count 2000000000 advanced by itself to -294967296.
+%   Glue advances the same way, component by component.
+%
+%   \multiply and \divide report "Arithmetic overflow" and the register
+%   KEEPS WHAT IT HAD. Dividing by nothing is the same fault in the same
+%   words -- not a division-by-zero of its own.
+%
+% trip line 350 multiplies a dimension until it does not fit.
+\tracingonline=1
+\dimen7=16000pt \advance\dimen7 by 16000pt \message{[wrapped once=\the\dimen7]}
+\advance\dimen7 by 16000pt \message{[and again=\the\dimen7]}
+\count7=2000000000 \advance\count7 by 2000000000 \message{[count=\the\count7]}
+\dimen7=16000pt \multiply\dimen7 2 \message{[kept=\the\dimen7]}
+\count7=5 \divide\count7 0 \message{[kept=\the\count7]}
+\skip7=16000pt \multiply\skip7 2 \message{[kept=\the\skip7]}
+\end

@@ -20662,25 +20662,46 @@ static bool arithmetic_variable_is_glue(enum arithmetic_variable_kind kind)
            kind == ARITHMETIC_VARIABLE_GLUE_PARAMETER;
 }
 
-static int arithmetic_scalar_result(int32_t current, int32_t operand,
+static int arithmetic_scalar_result(struct hstex_engine *engine,
+                                    int32_t current, int32_t operand,
                                     enum hstex_command operation,
                                     int64_t lower, int64_t upper,
                                     int32_t *value, char *error,
                                     size_t error_capacity)
 {
-    int64_t result = 0;
+    (void)error;
+    (void)error_capacity;
+    static const char *const help[] = {
+        "I can't carry out that multiplication or division,",
+        "since the result is out of range.", NULL};
+    /* \advance is not checked at all: the reference lets it wrap in
+       thirty-two bits and says nothing. Measured: 16000pt advanced by
+       16000pt three times over comes to -17536.0pt, and \count 2000000000
+       advanced by itself to -294967296. The wrap is done in unsigned
+       arithmetic because the signed kind would be undefined. */
     if (operation == HSTEX_COMMAND_ADVANCE) {
-        result = (int64_t)current + operand;
-    } else if (operation == HSTEX_COMMAND_MULTIPLY) {
+        uint32_t wrapped = (uint32_t)current + (uint32_t)operand;
+        *value = (int32_t)wrapped;
+        (void)lower;
+        (void)upper;
+        return 0;
+    }
+    int64_t result = 0;
+    if (operation == HSTEX_COMMAND_MULTIPLY) {
         result = (int64_t)current * operand;
+    } else if (operand == 0) {
+        /* Dividing by nothing is the same fault, in the same words. */
+        tex_error(engine, help, "Arithmetic overflow");
+        *value = current;
+        return 0;
     } else {
-        if (operand == 0) {
-            return set_error(error, error_capacity, "division by zero");
-        }
         result = (int64_t)current / operand;
     }
     if (result < lower || result > upper) {
-        return set_error(error, error_capacity, "arithmetic overflow");
+        /* Reported, and the register keeps what it had. */
+        tex_error(engine, help, "Arithmetic overflow");
+        *value = current;
+        return 0;
     }
     *value = (int32_t)result;
     return 0;
@@ -20698,13 +20719,9 @@ static int advance_glue_component(int32_t *left, uint8_t *left_order,
     if (right_order < *left_order) {
         return 0;
     }
-    int64_t combined = (int64_t)*left + right;
-    if (combined < -INT64_C(1073741823) ||
-        combined > INT64_C(1073741823)) {
-        return set_error(error, error_capacity,
-                         "glue arithmetic overflow");
-    }
-    *left = (int32_t)combined;
+    (void)error;
+    (void)error_capacity;
+    *left = (int32_t)((uint32_t)*left + (uint32_t)right);
     return 0;
 }
 
@@ -20712,13 +20729,8 @@ static int advance_glue_value(struct hstex_glue *left,
                               const struct hstex_glue *right, char *error,
                               size_t error_capacity)
 {
-    int64_t width = (int64_t)left->width + right->width;
-    if (width < -INT64_C(1073741823) || width > INT64_C(1073741823)) {
-        return set_error(error, error_capacity,
-                         "glue-width arithmetic overflow");
-    }
     struct hstex_glue result = *left;
-    result.width = (int32_t)width;
+    result.width = (int32_t)((uint32_t)left->width + (uint32_t)right->width);
     if (advance_glue_component(&result.stretch, &result.stretch_order,
                                right->stretch, right->stretch_order, error,
                                error_capacity) != 0 ||
@@ -20731,20 +20743,21 @@ static int advance_glue_value(struct hstex_glue *left,
     return 0;
 }
 
-static int scale_glue_value(struct hstex_glue *value, int32_t operand,
+static int scale_glue_value(struct hstex_engine *engine,
+                            struct hstex_glue *value, int32_t operand,
                             enum hstex_command operation, char *error,
                             size_t error_capacity)
 {
     struct hstex_glue result = *value;
-    if (arithmetic_scalar_result(result.width, operand, operation,
+    if (arithmetic_scalar_result(engine, result.width, operand, operation,
                                  -INT64_C(1073741823),
                                  INT64_C(1073741823), &result.width, error,
                                  error_capacity) != 0 ||
-        arithmetic_scalar_result(result.stretch, operand, operation,
+        arithmetic_scalar_result(engine, result.stretch, operand, operation,
                                  -INT64_C(1073741823),
                                  INT64_C(1073741823), &result.stretch, error,
                                  error_capacity) != 0 ||
-        arithmetic_scalar_result(result.shrink, operand, operation,
+        arithmetic_scalar_result(engine, result.shrink, operand, operation,
                                  -INT64_C(1073741823),
                                  INT64_C(1073741823), &result.shrink, error,
                                  error_capacity) != 0) {
@@ -20796,7 +20809,7 @@ static int execute_arithmetic(struct hstex_engine *engine,
         int64_t upper = arithmetic_variable_is_integer(variable.kind)
                             ? (int64_t)INT32_MAX
                             : INT64_C(1073741823);
-        if (arithmetic_scalar_result(current, operand, operation, lower, upper,
+        if (arithmetic_scalar_result(engine, current, operand, operation, lower, upper,
                                      &result, error, error_capacity) != 0) {
             return -1;
         }
@@ -20850,7 +20863,7 @@ static int execute_arithmetic(struct hstex_engine *engine,
     } else {
         int32_t operand = 0;
         if (scan_integer(engine, &operand, error, error_capacity) != 0 ||
-            scale_glue_value(&value, operand, operation, error,
+            scale_glue_value(engine, &value, operand, operation, error,
                              error_capacity) != 0) {
             return -1;
         }
