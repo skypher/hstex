@@ -33144,12 +33144,175 @@ static void digest_bytes(uint64_t *digest, const void *bytes, size_t length)
     *digest = value;
 }
 
-static uint64_t page_state_digest(const struct hstex_engine *engine)
+/* A control sequence's meaning, by content rather than by the numbers the
+   allocators happened to hand out. Two runs that agree in every meaning may
+   still disagree in every macro index and every interning order, because
+   their histories differ where their pages did; a digest that read those
+   numbers would then never say "same" again. So a macro is hashed by its
+   parameter text, its body and its flags; a token register by its tokens; a
+   box by its measurements; and each is folded in under its NAME, combined so
+   that the order names were met in does not matter. */
+/* Names whose meanings the digest is told to pass over: the scratch a page
+   leaves in \@tempa and its kin, which nothing reads across a page
+   boundary, and which would otherwise say two equal states differ. The
+   list is the waiver's whole content, and the waiver is only as sound as
+   the claim that nothing on it is read before it is written. */
+static uint64_t *soft_names;
+static size_t soft_name_count;
+static int soft_names_loaded;
+
+static uint64_t name_only_hash(enum hstex_symbol_kind kind,
+                               const uint8_t *name, size_t length)
+{
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+    digest_bytes(&hash, &kind, sizeof(kind));
+    if (length != 0U) {
+        digest_bytes(&hash, name, length);
+    }
+    return hash;
+}
+
+static void load_soft_names(void)
+{
+    if (soft_names_loaded) {
+        return;
+    }
+    soft_names_loaded = 1;
+    const char *path = getenv("HSTEX_DIGEST_SOFT");
+    if (path == NULL) {
+        return;
+    }
+    FILE *in = fopen(path, "r");
+    if (in == NULL) {
+        return;
+    }
+    char line[512];
+    size_t capacity = 0U;
+    while (fgets(line, sizeof(line), in) != NULL) {
+        size_t length = strlen(line);
+        while (length != 0U &&
+               (line[length - 1U] == '\n' || line[length - 1U] == '\r')) {
+            line[--length] = '\0';
+        }
+        if (length < 3U || line[1] != ' ') {
+            continue;
+        }
+        enum hstex_symbol_kind kind =
+            (enum hstex_symbol_kind)(line[0] - '0');
+        if (soft_name_count == capacity) {
+            capacity = capacity == 0U ? 128U : capacity * 2U;
+            uint64_t *grown =
+                realloc(soft_names, capacity * sizeof(*soft_names));
+            if (grown == NULL) {
+                break;
+            }
+            soft_names = grown;
+        }
+        soft_names[soft_name_count++] =
+            name_only_hash(kind, (const uint8_t *)line + 2, length - 2U);
+    }
+    (void)fclose(in);
+}
+
+static bool name_is_soft(uint64_t name_hash)
+{
+    for (size_t index = 0U; index < soft_name_count; ++index) {
+        if (soft_names[index] == name_hash) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint64_t canonical_meaning_hash(const struct hstex_engine *engine,
+                                       hstex_cs_id identifier)
+{
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, identifier);
+    if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
+        return 0U;
+    }
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+    enum hstex_symbol_kind kind;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&engine->lexical_state.symbols, identifier, &kind,
+                          &name, &length) != 0) {
+        return 0U;
+    }
+    load_soft_names();
+    uint64_t named = name_only_hash(kind, name, length);
+    if (soft_name_count != 0U && name_is_soft(named)) {
+        return 0U;
+    }
+    digest_bytes(&hash, &kind, sizeof(kind));
+    if (length != 0U) {
+        digest_bytes(&hash, name, length);
+    }
+    digest_bytes(&hash, &meaning->command, sizeof(meaning->command));
+    digest_bytes(&hash, &meaning->level, sizeof(meaning->level));
+    if (meaning->command == HSTEX_COMMAND_MACRO &&
+        meaning->value.macro_identifier != 0U &&
+        (size_t)meaning->value.macro_identifier <= engine->macro_count) {
+        const struct hstex_macro *macro =
+            &engine->macros[meaning->value.macro_identifier - 1U];
+        digest_bytes(&hash, &macro->flags, sizeof(macro->flags));
+        digest_bytes(&hash, &macro->parameter_count,
+                     sizeof(macro->parameter_count));
+        if (macro->parameter_count_tokens != 0U) {
+            digest_bytes(&hash, macro->parameter_text,
+                         macro->parameter_count_tokens *
+                             sizeof(*macro->parameter_text));
+        }
+        if (macro->replacement_count != 0U) {
+            digest_bytes(&hash, macro->replacement,
+                         macro->replacement_count *
+                             sizeof(*macro->replacement));
+        }
+    } else {
+        digest_bytes(&hash, &meaning->value, sizeof(meaning->value));
+    }
+    return hash;
+}
+
+static void digest_token_list(uint64_t *digest,
+                              const struct hstex_engine *engine,
+                              uint32_t identifier)
+{
+    const struct hstex_token_list *list =
+        token_list_by_identifier((struct hstex_engine *)(uintptr_t)engine,
+                                 identifier);
+    size_t count = list == NULL ? 0U : list->count;
+    digest_bytes(digest, &count, sizeof(count));
+    if (list != NULL && count != 0U) {
+        digest_bytes(digest, list->tokens, count * sizeof(*list->tokens));
+    }
+}
+
+static void digest_box_shape(uint64_t *digest, const struct hstex_box *box)
+{
+    digest_bytes(digest, &box->kind, sizeof(box->kind));
+    if (box->kind != HSTEX_BOX_VOID) {
+        digest_bytes(digest, &box->width, sizeof(box->width));
+        digest_bytes(digest, &box->height, sizeof(box->height));
+        digest_bytes(digest, &box->depth, sizeof(box->depth));
+        digest_bytes(digest, &box->node_count, sizeof(box->node_count));
+    }
+}
+
+/* The state in two halves: what the run MEANS at this boundary -- every
+   meaning, register, parameter, and where the reading stands -- and where
+   its OUTPUT has got to -- the byte the file has reached, the number the
+   next object takes. A guessed chunk may mean the right thing and still be
+   standing at the wrong place in the file, and what machinery the guessing
+   needs depends on which of the two fails. */
+static void page_state_digest_split_parts(const struct hstex_engine *engine,
+                                          uint64_t *semantic,
+                                          uint64_t *placement,
+                                          uint64_t parts[6])
 {
     uint64_t digest = UINT64_C(0xcbf29ce484222325);
 #define DIGEST_VALUE(field) digest_bytes(&digest, &(field), sizeof(field))
-#define DIGEST_ARRAY(base, count) \
-    digest_bytes(&digest, (base), (count) * sizeof(*(base)))
     DIGEST_VALUE(engine->shipped_pages);
     DIGEST_VALUE(engine->group_level);
     DIGEST_VALUE(engine->save_count);
@@ -33157,32 +33320,49 @@ static uint64_t page_state_digest(const struct hstex_engine *engine)
     DIGEST_VALUE(engine->mode);
     DIGEST_VALUE(engine->prev_depth);
     DIGEST_VALUE(engine->space_factor);
-    DIGEST_VALUE(engine->macro_count);
-    DIGEST_VALUE(engine->macro_definitions);
     DIGEST_VALUE(engine->font_count);
     DIGEST_VALUE(engine->current_font);
-    DIGEST_VALUE(engine->node_count);
-    DIGEST_VALUE(engine->list_item_count);
     DIGEST_VALUE(engine->page_integers);
     DIGEST_VALUE(engine->page_dimens);
     DIGEST_VALUE(engine->integer_parameters);
     DIGEST_VALUE(engine->dimen_parameters);
     DIGEST_VALUE(engine->glue_parameters);
     DIGEST_VALUE(engine->muglue_parameters);
-    DIGEST_VALUE(engine->token_parameters);
     DIGEST_VALUE(engine->code_tables);
     DIGEST_VALUE(engine->math_fonts);
     DIGEST_VALUE(engine->lexical_state.catcodes);
-    if (engine->meanings != NULL) {
-        DIGEST_ARRAY(engine->meanings, engine->meaning_capacity);
+    parts[0] = digest;
+    /* Every named meaning, by content, order-independent: interning order
+       differs where histories did. */
+    uint64_t names = 0U;
+    for (hstex_cs_id identifier = 1U;
+         (size_t)identifier <= engine->meaning_capacity; ++identifier) {
+        names ^= canonical_meaning_hash(engine, identifier);
     }
+    DIGEST_VALUE(names);
+    parts[1] = names;
     if (engine->counts != NULL) {
-        DIGEST_ARRAY(engine->counts, engine->count_capacity);
-        DIGEST_ARRAY(engine->dimens, engine->count_capacity);
-        DIGEST_ARRAY(engine->glues, engine->count_capacity);
-        DIGEST_ARRAY(engine->muglues, engine->count_capacity);
-        DIGEST_ARRAY(engine->token_registers, engine->count_capacity);
+        digest_bytes(&digest, engine->counts,
+                     engine->count_capacity * sizeof(*engine->counts));
+        digest_bytes(&digest, engine->dimens,
+                     engine->count_capacity * sizeof(*engine->dimens));
+        digest_bytes(&digest, engine->glues,
+                     engine->count_capacity * sizeof(*engine->glues));
+        digest_bytes(&digest, engine->muglues,
+                     engine->count_capacity * sizeof(*engine->muglues));
+        for (size_t index = 0U; index < engine->count_capacity; ++index) {
+            digest_token_list(&digest, engine,
+                              engine->token_registers[index]);
+        }
+        for (size_t index = 0U; index < engine->count_capacity; ++index) {
+            digest_box_shape(&digest, &engine->boxes[index]);
+        }
     }
+    parts[2] = digest;
+    for (size_t index = 0U; index < HSTEX_TOKEN_PARAMETER_COUNT; ++index) {
+        digest_token_list(&digest, engine, engine->token_parameters[index]);
+    }
+    parts[3] = digest;
     /* Where the reading has got to in every file that is open. */
     for (size_t index = 0U; index < engine->sources.count; ++index) {
         const struct hstex_source_frame *frame = &engine->sources.frames[index];
@@ -33197,10 +33377,34 @@ static uint64_t page_state_digest(const struct hstex_engine *engine)
             DIGEST_VALUE(frame->value.token_list.cursor);
         }
     }
+    parts[4] = digest;
+    *semantic = digest;
+    /* Where the output stands: the byte the file has reached, the number
+       the next object will take, what the cross-reference tables hold, and
+       where each file being written has got to. */
+    digest = UINT64_C(0xcbf29ce484222325);
+    DIGEST_VALUE(engine->pdf_written);
+    DIGEST_VALUE(engine->pdf_object_counter);
+    DIGEST_VALUE(engine->pdf_dest_count);
+    DIGEST_VALUE(engine->pdf_annot_count);
+    DIGEST_VALUE(engine->pdf_outline_count);
+    DIGEST_VALUE(engine->pdf_page_count);
+    for (size_t index = 0U; index < 16U; ++index) {
+        long reached = engine->parallel_is_worker
+                           ? engine->parallel_reached[index]
+                           : engine->write_streams[index] == NULL
+                                 ? -1L
+                                 : ftell(engine->write_streams[index]);
+        DIGEST_VALUE(reached);
+    }
 #undef DIGEST_VALUE
-#undef DIGEST_ARRAY
-    return digest;
+    parts[5] = digest;
+    *placement = digest;
 }
+
+
+
+static void maybe_dump_meanings(const struct hstex_engine *engine);
 
 static void note_page_digest(const struct hstex_engine *engine)
 {
@@ -33220,8 +33424,19 @@ static void note_page_digest(const struct hstex_engine *engine)
             return;
         }
     }
-    (void)fprintf(log, "%d %016llx\n", engine->shipped_pages,
-                  (unsigned long long)page_state_digest(engine));
+    uint64_t semantic = 0U;
+    uint64_t placement = 0U;
+    uint64_t parts[6];
+    page_state_digest_split_parts(engine, &semantic, &placement, parts);
+    (void)fprintf(log,
+                  "%d %016llx %016llx %016llx %016llx %016llx %016llx\n",
+                  engine->shipped_pages, (unsigned long long)semantic,
+                  (unsigned long long)placement,
+                  (unsigned long long)parts[0],
+                  (unsigned long long)parts[1],
+                  (unsigned long long)parts[2],
+                  (unsigned long long)parts[3]);
+    maybe_dump_meanings(engine);
     (void)fflush(log);
 }
 
@@ -33312,6 +33527,9 @@ static void finish_a_chunk(struct hstex_engine *engine)
     _exit(0);
 }
 
+static int apply_state_patch(struct hstex_engine *engine, const char *path);
+static void probe_and_leave(struct hstex_engine *engine);
+
 static void park_a_chunk(struct hstex_engine *engine)
 {
     if (engine->parallel_chunk == 0) {
@@ -33389,6 +33607,7 @@ static void park_a_chunk(struct hstex_engine *engine)
             reached[index] = engine->write_streams[index] == NULL
                                  ? -1L
                                  : ftell(engine->write_streams[index]);
+            engine->parallel_reached[index] = reached[index];
         }
         /* Parked. Each time the gate opens, this chunk leaves a copy of
            itself parked on the same gate -- taken before any work is done,
@@ -33400,11 +33619,12 @@ static void park_a_chunk(struct hstex_engine *engine)
                page the chunk after it was parked at, or zero for the last,
                which runs to the end. Only the run above knows, because a
                chunk parked by the clock does not know where the next fell. */
-            int32_t stop = 0;
+            int32_t header[2] = {0, 0};
             size_t have = 0U;
-            while (have < sizeof(stop)) {
-                ssize_t got = read(engine->parallel_gate_read,
-                                   (char *)&stop + have, sizeof(stop) - have);
+            while (have < sizeof(header)) {
+                ssize_t got =
+                    read(engine->parallel_gate_read, (char *)header + have,
+                         sizeof(header) - have);
                 if (got < 0 && errno == EINTR) {
                     continue;
                 }
@@ -33413,7 +33633,26 @@ static void park_a_chunk(struct hstex_engine *engine)
                 }
                 have += (size_t)got;
             }
-            engine->parallel_stop = stop;
+            engine->parallel_stop = header[0];
+            size_t patch_length =
+                header[1] > 0 && header[1] < 4096 ? (size_t)header[1] : 0U;
+            engine->parallel_patch[0] = '\0';
+            if (patch_length != 0U) {
+                have = 0U;
+                while (have < patch_length) {
+                    ssize_t got = read(engine->parallel_gate_read,
+                                       engine->parallel_patch + have,
+                                       patch_length - have);
+                    if (got < 0 && errno == EINTR) {
+                        continue;
+                    }
+                    if (got <= 0) {
+                        _exit(0);
+                    }
+                    have += (size_t)got;
+                }
+                engine->parallel_patch[patch_length] = '\0';
+            }
             pid_t again = fork();
             if (again < 0) {
                 break;
@@ -33422,6 +33661,11 @@ static void park_a_chunk(struct hstex_engine *engine)
                 break;
             }
         }
+        if (engine->parallel_patch[0] != '\0' &&
+            apply_state_patch(engine, engine->parallel_patch) != 0) {
+            _exit(1);
+        }
+        probe_and_leave(engine);
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
         }
@@ -33504,12 +33748,22 @@ static void release_them_once(struct hstex_engine *engine)
     struct timespec before;
     struct timespec after;
     (void)clock_gettime(CLOCK_MONOTONIC, &before);
+    const char *patch = getenv("HSTEX_PATCH");
+    size_t patch_length = patch == NULL ? 0U : strlen(patch);
+    if (patch_length >= 4096U) {
+        patch_length = 0U;
+    }
     for (int index = 0; index < engine->parallel_workers; ++index) {
-        int32_t stop = index + 1 < engine->parallel_workers
-                           ? engine->parallel_pages[index + 1]
-                           : 0;
+        int32_t header[2];
+        header[0] = index + 1 < engine->parallel_workers
+                        ? engine->parallel_pages[index + 1]
+                        : 0;
+        header[1] = (int32_t)patch_length;
         ssize_t wrote =
-            write(engine->parallel_gates[index], &stop, sizeof(stop));
+            write(engine->parallel_gates[index], header, sizeof(header));
+        if (patch_length != 0U) {
+            wrote = write(engine->parallel_gates[index], patch, patch_length);
+        }
         (void)wrote;
     }
     /* Counted back rather than waited for: a chunk's replacement is a child
@@ -33554,6 +33808,157 @@ static void hstex_engine_release_chunks(struct hstex_engine *engine)
     for (long round = 0; round < rounds; ++round) {
         release_them_once(engine);
     }
+}
+
+static int handle_vertical_list_token(struct hstex_engine *engine,
+                                      hstex_token token,
+                                      struct hstex_source_location location,
+                                      char *error, size_t error_capacity);
+/* What a woken chunk is told besides where to stop: a file of assignments
+   that turns the state it inherited into a guess at the state a different
+   run would have reached here -- the labels a later pass reads differently,
+   say. It is read the way an output routine's tokens are read: behind a
+   boundary, so that it ends where it ends and the document is not touched. */
+static int apply_state_patch(struct hstex_engine *engine, const char *path)
+{
+    char error[512] = {0};
+    if (hstex_source_push_boundary(&engine->sources, error, sizeof(error)) !=
+        0) {
+        return -1;
+    }
+    if (hstex_source_push_file(&engine->sources, path, error, sizeof(error)) !=
+        0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        return -1;
+    }
+    int status = 0;
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location where;
+        enum hstex_engine_result result = hstex_engine_next_output(
+            engine, &token, &where, error, sizeof(error));
+        if (result == HSTEX_ENGINE_EOF) {
+            break;
+        }
+        if (result == HSTEX_ENGINE_ERROR) {
+            status = -1;
+            break;
+        }
+        if (handle_vertical_list_token(engine, token, where, error,
+                                       sizeof(error)) != 0) {
+            status = -1;
+            break;
+        }
+    }
+    if (hstex_source_pop_boundary(&engine->sources, error, sizeof(error)) !=
+        0) {
+        status = -1;
+    }
+    return status;
+}
+
+/* Every named meaning and its content hash, and each scalar block's hash,
+   so that two runs' states at the same page can be diffed name by name.
+   This is the tool the soft list is grown with: where two states that
+   should agree do not, the dump names the meaning that differs.
+   HSTEX_MEANING_DUMP is "<path>:<page>". */
+static void maybe_dump_meanings(const struct hstex_engine *engine)
+{
+    const char *asked = getenv("HSTEX_MEANING_DUMP");
+    if (asked == NULL) {
+        return;
+    }
+    const char *colon = strrchr(asked, ':');
+    if (colon == NULL || atoi(colon + 1) != engine->shipped_pages) {
+        return;
+    }
+    char path[512];
+    size_t length = (size_t)(colon - asked);
+    if (length >= sizeof(path)) {
+        return;
+    }
+    memcpy(path, asked, length);
+    path[length] = '\0';
+    FILE *out = fopen(path, "w");
+    if (out == NULL) {
+        return;
+    }
+#define DUMP_SCALAR(field) \
+    do { \
+        uint64_t one = UINT64_C(0xcbf29ce484222325); \
+        digest_bytes(&one, &(field), sizeof(field)); \
+        (void)fprintf(out, "%016llx 9 SCALAR:%s\n", (unsigned long long)one, \
+                      #field); \
+    } while (0)
+    DUMP_SCALAR(engine->group_level);
+    DUMP_SCALAR(engine->save_count);
+    DUMP_SCALAR(engine->conditional_count);
+    DUMP_SCALAR(engine->mode);
+    DUMP_SCALAR(engine->prev_depth);
+    DUMP_SCALAR(engine->space_factor);
+    DUMP_SCALAR(engine->font_count);
+    DUMP_SCALAR(engine->current_font);
+    DUMP_SCALAR(engine->page_integers);
+    DUMP_SCALAR(engine->page_dimens);
+    DUMP_SCALAR(engine->integer_parameters);
+    DUMP_SCALAR(engine->dimen_parameters);
+    DUMP_SCALAR(engine->glue_parameters);
+    DUMP_SCALAR(engine->muglue_parameters);
+    DUMP_SCALAR(engine->code_tables);
+    DUMP_SCALAR(engine->math_fonts);
+    DUMP_SCALAR(engine->lexical_state.catcodes);
+#undef DUMP_SCALAR
+    for (hstex_cs_id identifier = 1U;
+         (size_t)identifier <= engine->meaning_capacity; ++identifier) {
+        uint64_t hash = canonical_meaning_hash(engine, identifier);
+        if (hash == 0U) {
+            continue;
+        }
+        enum hstex_symbol_kind kind;
+        const uint8_t *name = NULL;
+        size_t name_length = 0U;
+        if (hstex_symbol_name(&engine->lexical_state.symbols, identifier,
+                              &kind, &name, &name_length) != 0) {
+            continue;
+        }
+        (void)fprintf(out, "%016llx %d %.*s\n", (unsigned long long)hash,
+                      (int)kind, (int)name_length, (const char *)name);
+    }
+    (void)fclose(out);
+}
+
+/* A probe reports the state a patched chunk would begin in, and leaves: what
+   it is for is comparing that state against the run the guess is about. */
+static void probe_and_leave(struct hstex_engine *engine)
+{
+    const char *directory = getenv("HSTEX_FLEET_PROBE");
+    if (directory == NULL) {
+        return;
+    }
+    char name[512];
+    (void)snprintf(name, sizeof(name), "%s/entry-%d.txt", directory,
+                   engine->shipped_pages);
+    FILE *out = fopen(name, "w");
+    if (out != NULL) {
+        uint64_t semantic = 0U;
+        uint64_t placement = 0U;
+        uint64_t parts[6];
+        page_state_digest_split_parts(engine, &semantic, &placement, parts);
+        (void)fprintf(out,
+                      "%d %016llx %016llx %016llx %016llx %016llx %016llx\n",
+                      engine->shipped_pages, (unsigned long long)semantic,
+                      (unsigned long long)placement,
+                      (unsigned long long)parts[0],
+                      (unsigned long long)parts[1],
+                      (unsigned long long)parts[2],
+                      (unsigned long long)parts[3]);
+        (void)fclose(out);
+    }
+    maybe_dump_meanings(engine);
+    char done = 1;
+    ssize_t said = write(engine->parallel_done_write, &done, 1);
+    (void)said;
+    _exit(0);
 }
 
 static void take_up_elsewhere(struct hstex_engine *engine)

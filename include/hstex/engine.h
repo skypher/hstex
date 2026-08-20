@@ -1915,6 +1915,13 @@ struct hstex_engine {
     int32_t parallel_pages[256];
     uint64_t parallel_stride_ns;
     uint64_t parallel_parked_at;
+    /* The file of assignments a woken chunk reads before it runs: the guess
+       at how the run it now serves differs from the one that parked it. */
+    char parallel_patch[4096];
+    /* Where each write stream stood when this chunk was parked. A forked
+       copy's ftell can read the shared descriptor's offset, which the run
+       above goes on moving, so the positions are taken at the fork. */
+    long parallel_reached[16];
     /* The children of one language's trie root, spread by character: every
        walk starts at the root, and the root has the most children, so the
        list scan is paid once and remembered. Rebuilt when the trie grows or
