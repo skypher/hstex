@@ -33087,18 +33087,24 @@ static int execute_accent(struct hstex_engine *engine, char *error,
     }
     const struct hstex_font *font =
         font_by_identifier(engine, engine->current_font);
-    if (font == NULL || font->characters == NULL ||
-        font->characters[code].tag < 0) {
-        return set_error(error, error_capacity,
-                         "the current font has no character %d for an accent",
-                         code);
+    /* A character the font does not have is dropped, as any other missing
+       character is. The accent still breaks the ligature run and still
+       sets the space factor, so `f\accent200 i' is an f and an i and not
+       the fi ligature. */
+    bool have_accent = font != NULL && font->characters != NULL &&
+                       font->characters[code].tag >= 0;
+    if (font == NULL) {
+        font = font_by_identifier(engine, engine->current_font);
     }
     /* The accent itself is set in the font that was in force where \\accent
        was read, whatever an assignment after it changes the font to. */
     uint32_t accent_font = engine->current_font;
-    struct hstex_char_metric accent = font->characters[code];
-    int32_t x_height = font->dimen_count >= 5U ? font->dimens[4] : 0;
-    int32_t slant = font->dimen_count >= 1U ? font->dimens[0] : 0;
+    struct hstex_char_metric accent =
+        have_accent ? font->characters[code] : (struct hstex_char_metric){0};
+    int32_t x_height =
+        font != NULL && font->dimen_count >= 5U ? font->dimens[4] : 0;
+    int32_t slant =
+        font != NULL && font->dimen_count >= 1U ? font->dimens[0] : 0;
 
     /* Whatever follows, after any assignments, is the accented character.
        The reference carries those assignments out and goes on looking, so the
@@ -33168,11 +33174,31 @@ static int execute_accent(struct hstex_engine *engine, char *error,
     if (base_font == NULL || base_font->characters == NULL) {
         base_font = font;
     }
+    /* A base character the font does not have is dropped too, and then the
+       accent stands alone: `\accent23 \char200' is just the accent. */
     if (accented >= 0 &&
-        (accented > 255 || base_font->characters[accented].tag < 0)) {
-        return set_error(error, error_capacity,
-                         "the current font has no character %d to accent",
-                         accented);
+        (accented > 255 || base_font == NULL ||
+         base_font->characters == NULL ||
+         base_font->characters[accented].tag < 0)) {
+        accented = -1;
+    }
+    if (!have_accent) {
+        /* Nothing to set above, so what is left is the character below --
+           as a character of its own, since the accent broke the run. */
+        engine->space_factor = 1000;
+        if (accented < 0) {
+            return 0;
+        }
+        struct hstex_char_metric alone = base_font->characters[accented];
+        struct hstex_node bare = {
+            .kind = HSTEX_NODE_CHARACTER,
+            .width = alone.width,
+            .height = alone.height,
+            .depth = alone.depth,
+            .value.character = {.font = engine->current_font,
+                                .character = (uint32_t)accented},
+        };
+        return append_hbox_node(engine, &bare, error, error_capacity);
     }
 
     struct hstex_node accent_node = {

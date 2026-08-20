@@ -1,0 +1,25 @@
+% An \accent whose accent or base character the current font lacks.
+%
+% Measured against pdftex: the missing character is dropped, silently, as
+% any other missing character is -- there is no diagnostic.
+%
+%   \accent200 A     the accent is gone; the A is set alone, WITHOUT the
+%                    kerns an accent rides between.
+%   \accent23 \char200   the base is gone; the accent is set alone.
+%   \accent200       nothing at all.
+%   \nullfont\accent23 A   nothing at all: neither is in \nullfont.
+%
+% The accent still breaks the ligature run and still sets the space factor
+% to a thousand even when it is dropped: `f\accent200 i' is an f and an i,
+% not the fi ligature, and a period after a dropped accent gets ordinary
+% interword glue rather than a period's stretch.
+%
+% trip line 322 writes \accent\x\space where \x is not in the font.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{\accent200 A}\showbox0
+\setbox1=\hbox{\accent23 \char200}\showbox1
+\setbox2=\hbox{f\accent200 i}\showbox2
+\setbox3=\hbox{fi}\showbox3                  % the ligature, for contrast
+\setbox4=\hbox{A\accent200 .\ B}\showbox4
+\end
