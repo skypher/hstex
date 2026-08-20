@@ -13919,9 +13919,13 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
                          "box register %d is outside 0..%zu", index,
                          engine->count_capacity - 1U);
     }
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] <= 0) {
-        /* There is no log to write to, so nothing is shown. */
-        return 0;
+    /* The reference writes a diagnostic to the log whatever \tracingonline
+       says, and to the terminal as well only when it is positive. The
+       message stream here stands for the log, so it is always written. See
+       docs/DECISIONS.md, where-a-diagnostic-goes. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] <= 0 &&
+        engine->history < 1) {
+        engine->history = 1;
     }
     struct hstex_box box = engine->boxes[(size_t)index];
     /* The diagnostic starts a line of its own; see docs/DECISIONS.md,
@@ -24792,8 +24796,7 @@ static int break_paragraph(struct hstex_engine *engine,
     int found = 0;
     /* \tracingparagraphs writes the passes out as the reference does; see
        docs/DECISIONS.md, tracing-paragraphs. */
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0 &&
-        engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] > 0) {
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0) {
         state.trace.active = true;
     }
     int32_t emergency =
