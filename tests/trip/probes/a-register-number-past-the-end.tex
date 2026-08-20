@@ -1,0 +1,18 @@
+% A register number outside the range the engine keeps.
+%
+% Measured against pdftex: "Bad register code (N)" and the register zero is
+% used instead -- the run goes on. The help says "between 0 and 255" whatever
+% the actual limit is, because the reference's words do not vary.
+%
+% The limit itself does: \count, \dimen, \skip, \muskip and \toks reach
+% 32767 in the extended engines this one follows, while an insertion class
+% stops at 254 in all of them -- 255 belongs to the page builder.
+\tracingonline=1
+\insert256{}
+\count32768=1
+\count-1=1
+\dimen32768=1pt
+\toks32768={a}
+\count256=7 \message{[v=\the\count256]}   % inside the range, and silent
+\insert254{}                              % the last class there is
+\end

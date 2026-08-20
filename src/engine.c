@@ -13217,7 +13217,11 @@ static int scan_count_family_assignment(struct hstex_engine *engine, char *error
                                         size_t error_capacity)
 {
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+    /* A register number past the end is a fault the reference
+       forgives, using zero. */
+    if (scan_register_num(engine, &index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
     }
     return scan_count_assignment(engine, index, error, error_capacity);
@@ -13266,7 +13270,11 @@ static int scan_dimen_family_assignment(struct hstex_engine *engine,
                                         char *error, size_t error_capacity)
 {
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+    /* A register number past the end is a fault the reference
+       forgives, using zero. */
+    if (scan_register_num(engine, &index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
     }
     return scan_dimen_assignment(engine, index, error, error_capacity);
@@ -13294,7 +13302,11 @@ static int scan_glue_family_assignment(struct hstex_engine *engine, char *error,
                                        size_t error_capacity)
 {
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+    /* A register number past the end is a fault the reference
+       forgives, using zero. */
+    if (scan_register_num(engine, &index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
     }
     return scan_glue_assignment(engine, index, error, error_capacity);
@@ -13323,7 +13335,11 @@ static int scan_muglue_family_assignment(struct hstex_engine *engine,
                                          char *error, size_t error_capacity)
 {
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+    /* A register number past the end is a fault the reference
+       forgives, using zero. */
+    if (scan_register_num(engine, &index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
     }
     return scan_muglue_assignment(engine, index, error, error_capacity);
@@ -20234,7 +20250,11 @@ static int scan_token_family_assignment(struct hstex_engine *engine,
                                         char *error, size_t error_capacity)
 {
     int32_t index = 0;
-    if (scan_integer(engine, &index, error, error_capacity) != 0) {
+    /* A register number past the end is a fault the reference
+       forgives, using zero. */
+    if (scan_register_num(engine, &index,
+                          (int32_t)engine->count_capacity - 1, error,
+                          error_capacity) != 0) {
         return -1;
     }
     return scan_token_register_assignment(engine, index, error,
@@ -30341,13 +30361,11 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
 static int execute_insert(struct hstex_engine *engine, char *error,
                           size_t error_capacity)
 {
+    /* An insertion class stops at 254 whatever the register width, 255
+       being the page builder's own; going past it is forgiven. */
     int32_t number = 0;
-    if (scan_integer(engine, &number, error, error_capacity) != 0) {
+    if (scan_register_num(engine, &number, 254, error, error_capacity) != 0) {
         return -1;
-    }
-    if (number < 0 || number > 254) {
-        return set_error(error, error_capacity,
-                         "insertion class %d is outside 0..254", number);
     }
     hstex_token opening = 0U;
     struct hstex_source_location location;
