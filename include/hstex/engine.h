@@ -1888,6 +1888,10 @@ struct hstex_engine {
        The reference stops one there, since the template's own end is a
        control sequence a macro argument may not swallow. */
     bool argument_at_boundary;
+    /* A macro argument scan the reference abandons rather than stops for:
+       a \par in a non-long argument. The call produces nothing and the
+       \par is read again. */
+    bool argument_abandoned;
     /* What closes each open group, indexed by level - 1. */
     uint8_t *group_kinds;
     size_t group_kind_capacity;

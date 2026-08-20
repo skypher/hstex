@@ -7494,8 +7494,22 @@ static int scan_balanced_group(struct hstex_engine *engine,
         }
         token = normalize_unexpanded_control_sequence(token);
         if (!long_macro && token_is_paragraph(engine, token)) {
-            return set_error(error, error_capacity,
-                             "paragraph ended a non-long macro argument");
+            {
+            static const char *const help[] = {
+                "I suspect you've forgotten a `}', causing me to apply this",
+                "control sequence to too much text. How can we recover?",
+                "My plan is to forget the whole thing and hope for the best.",
+                NULL};
+                char named[128];
+                describe_token(
+                    engine,
+                    hstex_token_control_sequence(engine->expanding_macro_cs),
+                    named, sizeof(named));
+                tex_error(engine, help,
+                          "Paragraph ended before %s was complete", named);
+                engine->argument_abandoned = true;
+            }
+            return -1;
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
@@ -7950,6 +7964,39 @@ static void strip_single_outer_group(struct hstex_token_vector *argument,
     }
 }
 
+/* A } that a macro argument did not open. The reference names the macro,
+   puts a \par in front of the offending brace, and goes on scanning; the
+   \par then ends the call with "Paragraph ended before ... was complete".
+   Measured: `\def\d#1\d{#1#1}\hbox{\d A}' draws both, in that order, and
+   leaves an empty hbox. */
+static int report_extra_brace_in_argument(struct hstex_engine *engine,
+                                          char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I've run across a `}' that doesn't seem to match anything.",
+        "For example, `\\def\\a#1{...}' and `\\a}' would produce",
+        "this error. If you simply proceed now, the `\\par' that",
+        "I've just inserted will cause me to report a runaway",
+        "argument that might be the root of the problem. But if",
+        "your `}' was spurious, just type `2' and it will go away.", NULL};
+    static const uint8_t name[] = "par";
+    hstex_cs_id par = 0U;
+    struct hstex_source_location where = {0};
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &par, error, error_capacity) != 0 ||
+        push_one(engine, hstex_token_control_sequence(par), where, error,
+                 error_capacity) != 0) {
+        return -1;
+    }
+    char named[128];
+    describe_token(engine,
+                   hstex_token_control_sequence(engine->expanding_macro_cs),
+                   named, sizeof(named));
+    tex_error(engine, help, "Argument of %s has an extra }", named);
+    return 0;
+}
+
 static int scan_delimited_argument(struct hstex_engine *engine,
                                    struct hstex_token_vector *argument,
                                    const hstex_token *delimiter,
@@ -8046,12 +8093,41 @@ static int scan_delimited_argument(struct hstex_engine *engine,
             !(depth == 0U &&
               vector_tail_begins_delimiter(argument, base, delimiter,
                                            delimiter_count))) {
-            return set_error(error, error_capacity,
-                             "paragraph ended a non-long macro argument");
+            {
+            static const char *const help[] = {
+                "I suspect you've forgotten a `}', causing me to apply this",
+                "control sequence to too much text. How can we recover?",
+                "My plan is to forget the whole thing and hope for the best.",
+                NULL};
+                char named[128];
+                describe_token(
+                    engine,
+                    hstex_token_control_sequence(engine->expanding_macro_cs),
+                    named, sizeof(named));
+                tex_error(engine, help,
+                          "Paragraph ended before %s was complete", named);
+                engine->argument_abandoned = true;
+            }
+            return -1;
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++depth;
-        } else if (token_is_category(token, HSTEX_CAT_END_GROUP) && depth != 0U) {
+        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            if (depth == 0U) {
+                /* A } that closes nothing the argument opened belongs to
+                   whatever is around the call. The reference hands it back,
+                   puts a \par in front of it, and goes ON scanning -- so
+                   the \par is what ends the call, with a message of its
+                   own. */
+                argument->count = base;
+                if (push_one(engine, token, location, error,
+                             error_capacity) != 0 ||
+                    report_extra_brace_in_argument(engine, error,
+                                                   error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
+            }
             --depth;
         }
     }
@@ -8260,9 +8336,35 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             }
             first = normalize_unexpanded_control_sequence(first);
             if (!long_macro && token_is_paragraph(engine, first)) {
-                (void)set_error(error, error_capacity,
-                                "paragraph ended a non-long macro argument");
+                {
+            static const char *const help[] = {
+                "I suspect you've forgotten a `}', causing me to apply this",
+                "control sequence to too much text. How can we recover?",
+                "My plan is to forget the whole thing and hope for the best.",
+                NULL};
+                    char named[128];
+                    describe_token(
+                        engine,
+                        hstex_token_control_sequence(
+                            engine->expanding_macro_cs),
+                        named, sizeof(named));
+                    tex_error(engine, help,
+                              "Paragraph ended before %s was complete", named);
+                    engine->argument_abandoned = true;
+                }
                 goto cleanup;
+            }
+            if (token_is_category(first, HSTEX_CAT_END_GROUP)) {
+                /* A } where an argument should begin is not the argument;
+                   see scan_delimited_argument. */
+                if (push_one(engine, first, location, error,
+                             error_capacity) != 0 ||
+                    report_extra_brace_in_argument(engine, error,
+                                                   error_capacity) != 0) {
+                    goto cleanup;
+                }
+                --next_parameter;
+                continue;
             }
             if (token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
                 if (scan_balanced_group(engine, arena, long_macro, error,
@@ -8404,6 +8506,12 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
 
 cleanup:
     arena->count = arena_base;
+    if (engine->argument_abandoned) {
+        /* The reference forgets the whole call and reads the \par again;
+           it does not stop. */
+        engine->argument_abandoned = false;
+        status = 0;
+    }
     if (engine->argument_at_boundary) {
         /* The reference names the macro whose argument ran into the end of
            the entry, inserts a \par, and abandons the call -- the cell
@@ -8414,8 +8522,11 @@ cleanup:
             "I'll try to recover; but if the error is serious,",
             "you'd better type `E' or `X' now and fix your file.", NULL};
         char named[128];
-        describe_token(engine, hstex_token_control_sequence(identifier), named,
-                       sizeof(named));
+        /* The control sequence the call was written with, not the macro's
+           own storage identifier. */
+        describe_token(engine,
+                       hstex_token_control_sequence(engine->expanding_macro_cs),
+                       named, sizeof(named));
         engine->argument_at_boundary = false;
         tex_error(engine, help,
                   "Forbidden control sequence found while scanning use of %s",

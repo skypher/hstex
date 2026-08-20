@@ -14108,8 +14108,11 @@ int main(void)
         run_snippet("\\def\\why{expanded}"
                     "\\errmessage{ERRMESSAGE: \\why}after%",
                     "after") != 0 ||
-        expect_failure("\\def\\a#1{X}\\a{one\n\n two}%",
-                       "non-long macro argument") != 0 ||
+        /* A \par in a non-long argument does not stop the run: the
+           reference forgets the whole call, reads the \par again, and goes
+           on -- so the text after it is still set, and the } that had no
+           call left to close draws "Too many }'s". */
+        run_snippet("\\def\\a#1{X}\\a{one\n\n two}after%", "twoafter") != 0 ||
         test_a_definition_read_while_it_is_replaced() != 0 ||
         test_a_body_that_asks_for_no_argument() != 0 ||
         test_arguments_put_in_more_than_once() != 0 ||

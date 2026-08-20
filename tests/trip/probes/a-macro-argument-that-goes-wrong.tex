@@ -1,0 +1,24 @@
+% The two faults a macro argument scan can meet, and how the reference
+% carries on from each.
+%
+% Measured against pdftex:
+%
+%   A } the argument did not open belongs to whatever is around the call.
+%   "Argument of \d has an extra }", the brace handed back, a \par put in
+%   front of it, and the scan GOES ON -- so the \par is what ends the call,
+%   with a message of its own.
+%
+%   A \par in a non-long argument: "Paragraph ended before \d was
+%   complete", the whole call forgotten, the \par read again, and the run
+%   carries on. The text after it is still set.
+%
+% Both messages name the control sequence the call was WRITTEN with, not
+% the macro's own storage identifier.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\def\d#1\d{#1#1}
+\setbox0=\hbox{\d A}\showbox0        % both faults, and an empty box
+\def\u#1{<#1>}
+\setbox1=\hbox{\u}\showbox1          % the same for an undelimited argument
+\setbox2=\hbox{\d {A}B\d}\showbox2   % a balanced one, and silent
+\end
