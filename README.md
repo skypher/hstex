@@ -315,9 +315,13 @@ the edit loop, on one switch: `HSTEX_FLEET=<dir>` makes a run with no fleet
 park one as it goes, and a run that finds one get served from it -- the aux
 delta is patched in automatically, chunks read the disk as it stands, edits
 and all, and every released chunk leaves a successor parked so the fleet
-outlives the round. A four-round editing session on the corpus: 19.9
-seconds cold, then 2.3, 2.3 and 2.6 after three successive edits, every
-round byte for byte. See docs/DECISIONS.md, the-relay.
+outlives the round. A four-round editing session on the corpus: 20.6
+seconds cold, then 2.6, 2.6 and 2.8 after three successive edits, every
+round byte for byte -- with the state digest fully strict, no scratch-name
+waiver anywhere. The waiver earlier experiments leaned on was covering for
+digest defects since fixed, and a check that watches for waived names being
+read before written now polices any experimental use of one. See
+docs/DECISIONS.md, the-relay and the-waiver-checked-and-then-retired.
 
 The guessing now works too. A fleet parked by one pass can serve the next:
 each woken chunk reads a patch -- the labels the next pass will see
