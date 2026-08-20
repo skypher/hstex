@@ -1,0 +1,25 @@
+% An undefined control sequence.
+%
+% Measured against pdftex: it is reported -- "Undefined control sequence",
+% with the name at the end of the context line above rather than in the
+% message -- and then FORGOTTEN. The run carries on and everything after it
+% is still set. That is what lets a document with one misspelling still
+% produce pages.
+%
+% Forgotten means gone, not turned into \relax. In a conditional the
+% operand is whatever follows it: `\ifcat\missing\relax T\else F\fi' reads
+% \relax and T as its two operands and comes out FALSE, and \if reads its
+% two the same way.
+%
+% \ifx does not report at all -- it compares meanings, and being undefined
+% is a meaning.
+%
+% trip line 351 writes \a, which is undefined there.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\undefinedthing\message{[still here]}
+\setbox0=\hbox{\undefinedthing A}\message{[and the A was set: \the\wd0]}
+\message{[ifcat=\ifcat\missing\relax T\else F\fi]}
+\message{[if=\if\missing\relax T\else F\fi]}
+\message{[ifx=\ifx\missing\relax T\else F\fi]}
+\end

@@ -14078,10 +14078,12 @@ int main(void)
                     "\\ifx\\b\\c T\\else F\\fi%",
                     "TT") != 0 ||
         expect_failure("\\endcsname%", "extra endcsname") != 0 ||
-        expect_failure("\\unknown%",
-                       "undefined control sequence: \\unknown") != 0 ||
-        expect_failure("\\ifcat\\missing\\relax T\\else F\\fi%",
-                       "undefined control sequence: \\missing") != 0 ||
+        /* An undefined control sequence is reported and forgotten, as the
+           reference forgets it: what follows is still set. In a
+           conditional it is gone rather than standing in as \relax, so
+           \ifcat's operands are \relax and T, and it comes out false. */
+        run_snippet("\\unknown after%", "after") != 0 ||
+        run_snippet("\\ifcat\\missing\\relax T\\else F\\fi%", "F") != 0 ||
         /* A number that is not there is the reference's "Missing number",
            which is recovered from with zero rather than stopping the run. */
         run_snippet("\\expanded{\\number}%", "0") != 0 ||

@@ -134,6 +134,10 @@ static void tex_error(struct hstex_engine *engine, const char *const *help,
                       const char *format, ...) HSTEX_PRINTF_FORMAT(3, 4);
 static void report_improper_aux(struct hstex_engine *engine,
                                 const char *name);
+static void report_undefined_control_sequence(struct hstex_engine *engine);
+static int next_conditional_operand(struct hstex_engine *engine,
+                                    hstex_token *token, char *error,
+                                    size_t error_capacity);
 static int math_append_character(struct hstex_engine *engine, uint8_t code,
                                  char *error, size_t error_capacity);
 static bool too_many_errors(const struct hstex_engine *engine);
@@ -8431,9 +8435,6 @@ static int push_conditional(struct hstex_engine *engine, size_t *index,
 static int finish_conditional(struct hstex_engine *engine, size_t index,
                               bool condition, char *error,
                               size_t error_capacity);
-static int set_undefined_control_sequence_error(
-    const struct hstex_engine *engine, hstex_token token, char *error,
-    size_t error_capacity);
 static int start_conditional(struct hstex_engine *engine, bool condition,
                              char *error, size_t error_capacity);
 static int skip_conditional(struct hstex_engine *engine, size_t target,
@@ -34632,13 +34633,12 @@ static int scan_if_char(struct hstex_engine *engine, char *error,
     }
     hstex_token left = 0U;
     hstex_token right = 0U;
-    struct hstex_source_location location;
-    if (hstex_engine_next_expanded(engine, &left, &location, error,
-                                   error_capacity) != HSTEX_ENGINE_TOKEN ||
-        hstex_engine_next_expanded(engine, &right, &location, error,
-                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
+    /* \if reads its two operands the same way \ifcat does, undefined
+       control sequences and all. */
+    if (next_conditional_operand(engine, &left, error, error_capacity) != 0 ||
+        next_conditional_operand(engine, &right, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
-        return set_error(error, error_capacity, "end of input in if");
+        return -1;
     }
     return finish_conditional(
         engine, conditional,
@@ -34646,21 +34646,30 @@ static int scan_if_char(struct hstex_engine *engine, char *error,
         error, error_capacity);
 }
 
-static int next_if_cat_operand(struct hstex_engine *engine, hstex_token *token,
+static int next_conditional_operand(struct hstex_engine *engine, hstex_token *token,
                                char *error, size_t error_capacity)
 {
     struct hstex_source_location location;
-    if (hstex_engine_next_expanded(engine, token, &location, error,
-                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity, "end of input in ifcat");
+    /* An undefined control sequence met while expanding is reported and
+       GONE -- "I'll forget about whatever was undefined" -- so the operand
+       is whatever follows it, not a \relax standing in its place.
+       Measured: `\ifcat\missing\relax T\else F\fi' reads \relax and T
+       as its two operands and comes out false. */
+    for (;;) {
+        if (hstex_engine_next_expanded(engine, token, &location, error,
+                                       error_capacity) != HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input in a conditional");
+        }
+        if (engine->returned_unexpanded ||
+            !hstex_token_is_control_sequence(*token) ||
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(*token))
+                    ->command != HSTEX_COMMAND_UNDEFINED) {
+            return 0;
+        }
+        report_undefined_control_sequence(engine);
     }
-    if (!engine->returned_unexpanded && hstex_token_is_control_sequence(*token) &&
-        hstex_engine_meaning(engine, hstex_token_control_sequence_id(*token))
-                ->command == HSTEX_COMMAND_UNDEFINED) {
-        return set_undefined_control_sequence_error(engine, *token, error,
-                                                    error_capacity);
-    }
-    return 0;
 }
 
 static int if_category_code(const struct hstex_engine *engine,
@@ -34689,8 +34698,8 @@ static int scan_if_cat(struct hstex_engine *engine, char *error,
     }
     hstex_token left = 0U;
     hstex_token right = 0U;
-    if (next_if_cat_operand(engine, &left, error, error_capacity) != 0 ||
-        next_if_cat_operand(engine, &right, error, error_capacity) != 0) {
+    if (next_conditional_operand(engine, &left, error, error_capacity) != 0 ||
+        next_conditional_operand(engine, &right, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
     }
@@ -35175,32 +35184,19 @@ static int end_group(struct hstex_engine *engine, char *error,
     return 0;
 }
 
-static int set_undefined_control_sequence_error(
-    const struct hstex_engine *engine, hstex_token token, char *error,
-    size_t error_capacity)
+/* The reference reports an undefined control sequence and forgets it,
+   which is what lets a document with one misspelling still be set. The
+   name is not in the message: it is at the end of the context line above
+   it, which is what the help refers to. */
+static void report_undefined_control_sequence(struct hstex_engine *engine)
 {
-    enum hstex_symbol_kind kind;
-    const uint8_t *name = NULL;
-    size_t length = 0U;
-    if (hstex_symbol_name(&engine->lexical_state.symbols,
-                          hstex_token_control_sequence_id(token), &kind, &name,
-                          &length) != 0) {
-        return set_error(error, error_capacity,
-                         "undefined control sequence with invalid identifier");
-    }
-    int printable_length =
-        length > (size_t)INT_MAX ? INT_MAX : (int)length;
-    if (kind == HSTEX_SYMBOL_ACTIVE) {
-        return set_error(error, error_capacity,
-                         "undefined active character: %.*s", printable_length,
-                         (const char *)name);
-    }
-    uint32_t line = 0U;
-    const char *origin = current_source_line(engine, &line);
-    return set_error(error, error_capacity,
-                     "undefined control sequence: \\%.*s, at %s:%u",
-                     printable_length, (const char *)name, origin,
-                     (unsigned int)line);
+    static const char *const help[] = {
+        "The control sequence at the end of the top line",
+        "of your error message was never \\def'ed. If you have",
+        "misspelled it (e.g., `\\hobx'), type `I' and the correct",
+        "spelling (e.g., `I\\hbox'). Otherwise just continue,",
+        "and I'll forget about whatever was undefined.", NULL};
+    tex_error(engine, help, "Undefined control sequence");
 }
 
 static int execute_ignore_spaces(struct hstex_engine *engine, char *error,
@@ -37312,8 +37308,8 @@ handle_token:
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_UNDEFINED:
-            return (enum hstex_engine_result)set_undefined_control_sequence_error(
-                engine, *token, error, error_capacity);
+            report_undefined_control_sequence(engine);
+            continue;
         case HSTEX_COMMAND_EXPAND_AFTER:
         case HSTEX_COMMAND_NO_EXPAND:
         case HSTEX_COMMAND_CS_NAME:
