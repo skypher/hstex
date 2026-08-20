@@ -1,0 +1,23 @@
+% A definition whose target is not a control sequence.
+%
+% Measured against pdftex: it reads the token again and names a control
+% sequence nobody can reach -- "Missing control sequence inserted", with
+% \inaccessible shown as the inserted text -- so the definition finishes
+% without swallowing what comes next. The token it read again is then used
+% for whatever the definition wanted: `\mathchardef A' goes on to draw
+% "Missing number, treated as zero" from the same A.
+%
+% All five that name a target behave alike: \def, \let, \futurelet, the
+% \...def shorthands, and \font.
+%
+% trip line 298 writes \mathchardef A.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\mathchardef A\message{[after mathchardef]}\par
+\def A{x}\message{[after def]}\par
+\let A=\relax\message{[after let]}\par
+\futurelet A\relax\relax\message{[after futurelet]}\par
+\countdef A=3 \message{[after countdef]}\par
+\font A=cmr10 \message{[after font]}\par
+\def\zz{x}\message{[a proper one is silent]}\par
+\end

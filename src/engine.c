@@ -9083,18 +9083,54 @@ static bool token_ends_definition_run(hstex_token token)
            category == (uint8_t)HSTEX_CAT_PARAMETER;
 }
 
+/* The control sequence a definition names. When what follows is not one,
+   the reference reads it again and names a control sequence nobody can
+   reach, so that the definition finishes without swallowing what comes
+   next. Measured on trip line 298's `\mathchardef A', where the A is then
+   read as the number and draws "Missing number" of its own. */
+static int scan_target_control_sequence(struct hstex_engine *engine,
+                                        hstex_token *target, char *error,
+                                        size_t error_capacity)
+{
+    struct hstex_source_location location;
+    int taken =
+        raw_next_non_space(engine, target, &location, error, error_capacity);
+    if (taken == HSTEX_ENGINE_TOKEN) {
+        *target = normalize_frozen_control_sequence(*target);
+        if (hstex_token_is_control_sequence(*target)) {
+            return 0;
+        }
+    }
+    static const char *const help[] = {
+        "Please don't say `\\def cs{...}', say `\\def\\cs{...}'.",
+        "I've inserted an inaccessible control sequence so that your",
+        "definition will be completed without mixing me up too badly.",
+        "You can recover graciously from this error, if you're",
+        "careful; see exercise 27.2 in The TeXbook.", NULL};
+    static const uint8_t name[] = "inaccessible";
+    hstex_cs_id spare = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &spare, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (taken == HSTEX_ENGINE_TOKEN &&
+        push_one(engine, *target, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing control sequence inserted");
+    *target = hstex_token_control_sequence(spare);
+    return 0;
+}
+
 static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                            bool expanded_replacement, char *error,
                            size_t error_capacity)
 {
     hstex_token target = 0U;
-    struct hstex_source_location target_location;
-    if (raw_next_non_space(engine, &target, &target_location, error,
-                           error_capacity) != HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(
-            target = normalize_frozen_control_sequence(target))) {
-        return set_error(error, error_capacity,
-                         "def requires a control-sequence target");
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0) {
+        return -1;
     }
 
     uint32_t origin_line = 0U;
@@ -9377,7 +9413,6 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         engine, inherent_global || engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
-    (void)target_location;
     return set_meaning(engine, hstex_token_control_sequence_id(target), meaning,
                        global, error, error_capacity);
 }
@@ -9387,11 +9422,9 @@ static int scan_let(struct hstex_engine *engine, char *error,
 {
     hstex_token target = 0U;
     struct hstex_source_location location;
-    if (raw_next_non_space(engine, &target, &location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(target)) {
-        return set_error(error, error_capacity,
-                         "let requires a control-sequence target");
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0) {
+        return -1;
     }
     hstex_token source = 0U;
     if (raw_next_non_space(engine, &source, &location, error, error_capacity) !=
@@ -9429,13 +9462,9 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
                            size_t error_capacity)
 {
     hstex_token target = 0U;
-    struct hstex_source_location target_location;
-    if (raw_next_non_space(engine, &target, &target_location, error,
-                           error_capacity) != HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(
-            target = normalize_frozen_control_sequence(target))) {
-        return set_error(error, error_capacity,
-                         "futurelet requires a control-sequence target");
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0) {
+        return -1;
     }
 
     hstex_token first = 0U;
@@ -9474,7 +9503,6 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
         vector_destroy(&replay);
         return -1;
     }
-    (void)target_location;
     (void)second_location;
     return push_owned_vector(engine, &replay, first_location, error,
                              error_capacity);
@@ -9484,14 +9512,10 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
                                 size_t error_capacity)
 {
     hstex_token target = 0U;
-    struct hstex_source_location location;
-    if (raw_next_non_space(engine, &target, &location, error,
-                           error_capacity) != HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(
-            target = normalize_frozen_control_sequence(target)) ||
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0) {
-        return set_error(error, error_capacity,
-                         "font requires a control-sequence target");
+        return -1;
     }
 
     /* The target names a font from here on, before the file name and the
@@ -12450,12 +12474,9 @@ static int scan_definition_target(struct hstex_engine *engine,
                                   size_t error_capacity)
 {
     hstex_token target = 0U;
-    struct hstex_source_location location;
-    if (raw_next_non_space(engine, &target, &location, error, error_capacity) !=
-            HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(target)) {
-        return set_error(error, error_capacity,
-                         "definition requires a control-sequence target");
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0) {
+        return -1;
     }
     *identifier = hstex_token_control_sequence_id(target);
     return 0;
