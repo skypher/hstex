@@ -26521,6 +26521,16 @@ static bool command_starts_paragraph(const struct hstex_meaning *meaning)
     case HSTEX_COMMAND_CONTROL_SPACE:
     case HSTEX_COMMAND_CHAR:
     case HSTEX_COMMAND_ACCENT:
+    /* A discretionary is a horizontal command, so it opens a paragraph
+       rather than failing; \- does too, being the same command. \/ does
+       not, and the reference says so. */
+    case HSTEX_COMMAND_DISCRETIONARY:
+    case HSTEX_COMMAND_DISCRETIONARY_HYPHEN:
+    /* \valign builds columns out of a horizontal list, so meeting one in
+       vertical mode starts the paragraph that will hold it -- where
+       \halign, which builds rows, belongs to the vertical list itself.
+       trip line 171 opens its second pass this way. */
+    case HSTEX_COMMAND_VALIGN:
         return true;
     case HSTEX_COMMAND_UNBOX:
         return meaning->value.integer ==

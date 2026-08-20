@@ -1,0 +1,14 @@
+% Which horizontal commands open a paragraph when met in vertical mode.
+%
+% Measured against pdftex: a letter, a digit, \char, a \chardef'd character,
+% $, \unhbox, \unhcopy, \vrule, \accent, \discretionary, \-, \hskip, \valign,
+% \  and \noboundary all start one. \/ does not -- the reference says "You
+% can't use `\/' in vertical mode" and stays where it was. \halign does not
+% either: it builds rows, and rows belong to the vertical list.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\discretionary{}{}{}\message{[disc mode=\ifhmode H\else V\fi]}\par
+\-\message{[hyphen mode=\ifhmode H\else V\fi]}\par
+\valign{#\cr\hbox{A}\cr}\message{[valign mode=\ifhmode H\else V\fi]}\par
+\halign{#\cr A\cr}\message{[halign mode=\ifhmode H\else V\fi]}\par
+\end
