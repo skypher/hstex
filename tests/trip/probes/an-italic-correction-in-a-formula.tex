@@ -1,0 +1,18 @@
+% \/ inside a formula, and in vertical mode.
+%
+% Measured against pdftex: inside a formula \/ is a kern of ZERO, whatever
+% stands before it -- `$x\/y$' puts \kern0.0 after the x, where the same \/
+% in a paragraph puts that character's own italic correction.
+%
+% In vertical mode \/ does not open a paragraph. It is one of the few
+% horizontal commands the reference refuses there rather than starting one
+% for, and it says so and carries on.
+%
+% trip line 298 writes one in a formula.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{$x\/y$}\showbox0
+\setbox1=\hbox{x\/y}\showbox1        % the paragraph's own correction
+\setbox2=\hbox{$\/x$}\showbox2       % a zero kern even with nothing before
+\/\message{[after a refused one]}\par
+\end

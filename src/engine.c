@@ -26843,8 +26843,20 @@ static int execute_control_space(struct hstex_engine *engine, char *error,
 static int execute_italic_correction(struct hstex_engine *engine, char *error,
                                      size_t error_capacity)
 {
-    if (ensure_horizontal_mode(engine, error, error_capacity) != 0) {
-        return -1;
+    /* Inside a formula \/ is a kern of zero, whatever stands before it --
+       measured: `$x\/y$' puts \kern0.0 after the x, where the same \/ in
+       a paragraph would put the character's own italic correction. trip
+       line 298 writes one in a formula. */
+    if (engine->mode == HSTEX_MODE_MATH) {
+        struct hstex_node kern = {.kind = HSTEX_NODE_KERN};
+        return append_current_list_node(engine, &kern, error, error_capacity);
+    }
+    /* \/ does not open a paragraph -- it is one of the few horizontal
+       commands the reference refuses in vertical mode rather than starting
+       one for. It says so and carries on. */
+    if (engine->mode != HSTEX_MODE_HORIZONTAL) {
+        report_illegal_case(engine, engine->executing_token);
+        return 0;
     }
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
