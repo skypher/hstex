@@ -4208,11 +4208,23 @@ static int scan_font_identifier(struct hstex_engine *engine,
 {
     hstex_token token = 0U;
     struct hstex_source_location location;
-    if (expanded_next_non_space(engine, &token, &location, error,
-                                error_capacity) != HSTEX_ENGINE_TOKEN ||
+    int taken = expanded_next_non_space(engine, &token, &location, error,
+                                        error_capacity);
+    if (taken != HSTEX_ENGINE_TOKEN ||
         !hstex_token_is_control_sequence(token)) {
-        return set_error(error, error_capacity,
-                         "font identifier requires a defined font");
+        /* The reference reads the offending token again and takes
+           \nullfont, which is the font that measures nothing. */
+        static const char *const help[] = {
+            "I was looking for a control sequence whose",
+            "current meaning has been defined by \\font.", NULL};
+        if (taken == HSTEX_ENGINE_TOKEN &&
+            push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        tex_error(engine, help, "Missing font identifier");
+        return find_or_create_font(engine, "nullfont",
+                                   INT32_C(10) * INT32_C(65536), identifier,
+                                   error, error_capacity);
     }
     const struct hstex_meaning *meaning = hstex_engine_meaning(
         engine, hstex_token_control_sequence_id(token));
@@ -4247,8 +4259,18 @@ static int scan_font_identifier(struct hstex_engine *engine,
     if (meaning->command != HSTEX_COMMAND_FONT_GIVEN ||
         meaning->value.integer <= 0 ||
         font_by_identifier(engine, (uint32_t)meaning->value.integer) == NULL) {
-        return set_error(error, error_capacity,
-                         "font identifier requires a defined font");
+        /* The reference reads the offending token again and takes
+           \nullfont, which is the font that measures nothing. */
+        static const char *const help[] = {
+            "I was looking for a control sequence whose",
+            "current meaning has been defined by \\font.", NULL};
+        if (push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        tex_error(engine, help, "Missing font identifier");
+        return find_or_create_font(engine, "nullfont",
+                                   INT32_C(10) * INT32_C(65536), identifier,
+                                   error, error_capacity);
     }
     *identifier = (uint32_t)meaning->value.integer;
     return 0;

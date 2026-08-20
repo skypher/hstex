@@ -1,0 +1,18 @@
+% Something that is not a font where a font identifier belongs.
+%
+% Measured against pdftex: "Missing font identifier.", the offending token
+% is read again, and \nullfont -- the font that measures nothing -- stands
+% in. Every place that wants one behaves alike: \textfont and its
+% relatives, \fontdimen, \hyphenchar, \skewchar, \fontname.
+%
+% trip line 346 writes \textfont16=\relax, which draws two faults: "Bad
+% number (16)" for the family, then this one for the \relax.
+\tracingonline=1
+\font\f=cmr10 \f
+\textfont0=\relax\message{[after textfont]}
+\textfont16=\relax\message{[after a bad family too]}
+\fontdimen1\relax=2pt \message{[after fontdimen]}
+\hyphenchar\relax=45 \message{[after hyphenchar]}
+\message{[fontname=\fontname\relax]}
+\font\g=cmr10 \textfont0=\g \message{[a real one: \fontname\textfont0]}
+\end
