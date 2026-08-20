@@ -9,9 +9,10 @@
 # rest, and leaves the fleet parked for the next run. Chunks read the disk
 # as it stands when THEY are released, so edits between runs are seen; the
 # aux delta between runs is patched into the chunks automatically from the
-# snapshot the parking run took. HSTEX_DIGEST_SOFT should name
-# tools/soft-names.txt (the scratch-macro waiver); without it almost nothing
-# validates and every run degrades -- correctly, slowly -- to sequential.
+# snapshot the parking run took. The state digest is fully strict and needs
+# no waiver for this; tools/soft-names.txt exists only for label-delta
+# experiments (see docs/DECISIONS.md, the-waiver-checked-and-then-retired),
+# and any use of it is taint-policed.
 #
 # This script demonstrates the loop: it compiles DOCUMENT twice with an
 # edit-hook of your choosing in between, and reports both times.
@@ -25,7 +26,6 @@ mkdir -p "$work/build/document-output"
 
 compile() {
   ( cd "$work" && HSTEX_FLEET="$work/fleet" \
-      HSTEX_DIGEST_SOFT="$root/tools/soft-names.txt" \
       /usr/bin/time -f "wall=%e" "$root/build/hstex" \
       --format "$format" "$document" >/dev/null 2>"$work/last.log" )
   grep -o "wall=.*" "$work/last.log" | tail -1
