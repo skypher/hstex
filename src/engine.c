@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <time.h>
 #include <unistd.h>
 
 enum {
@@ -1778,6 +1779,13 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     }
     /* Where the run is to be handed to another process; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+    const char *chunked = getenv("HSTEX_PARALLEL");
+    if (chunked != NULL) {
+        long pages = strtol(chunked, NULL, 10);
+        if (pages > 0L && pages < 100000L) {
+            engine->parallel_chunk = (int32_t)pages;
+        }
+    }
     const char *checkpoint = getenv("HSTEX_CHECKPOINT");
     if (checkpoint != NULL) {
         bool every = strncmp(checkpoint, "every:", 6U) == 0;
@@ -2787,6 +2795,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         if (engine->write_streams[index] != NULL) {
             (void)fclose(engine->write_streams[index]);
         }
+        free(engine->write_stream_paths[index]);
+        engine->write_stream_paths[index] = NULL;
         if (engine->read_streams[index] != NULL) {
             (void)fclose(engine->read_streams[index]);
         }
@@ -2957,6 +2967,8 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
             (void)fclose(engine->write_streams[index]);
             engine->write_streams[index] = NULL;
         }
+        free(engine->write_stream_paths[index]);
+        engine->write_stream_paths[index] = NULL;
         if (engine->read_streams[index] != NULL) {
             (void)fclose(engine->read_streams[index]);
             engine->read_streams[index] = NULL;
@@ -18876,6 +18888,8 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
         (void)fclose(engine->write_streams[(size_t)stream]);
     }
     engine->write_streams[(size_t)stream] = file;
+    free(engine->write_stream_paths[(size_t)stream]);
+    engine->write_stream_paths[(size_t)stream] = strdup(path);
     /* The reference notes an opened stream in its log; see
        docs/DECISIONS.md, the-print-line. */
     print_fresh_line(engine);
@@ -31417,10 +31431,21 @@ void hstex_engine_set_message_stream(struct hstex_engine *engine,
     engine->message_stream = stream;
 }
 
+static void hstex_engine_release_chunks(struct hstex_engine *engine);
+
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity)
 {
+    if (engine->parallel_chunk != 0) {
+        int gate[2];
+        if (pipe(gate) != 0) {
+            engine->parallel_chunk = 0;
+        } else {
+            engine->parallel_gate_read = gate[0];
+            engine->parallel_gate_write = gate[1];
+        }
+    }
     struct hstex_source_location location = {0};
     for (;;) {
         hstex_token token = 0U;
@@ -31447,7 +31472,9 @@ int hstex_engine_run(struct hstex_engine *engine,
     if (dvi_close(engine, error, error_capacity) != 0) {
         return -1;
     }
-    return pdf_close(engine, error, error_capacity);
+    int closed = pdf_close(engine, error, error_capacity);
+    hstex_engine_release_chunks(engine);
+    return closed;
 }
 
 static enum hstex_engine_result next_output(
@@ -33025,6 +33052,246 @@ static void note_page_digest(const struct hstex_engine *engine)
     (void)fflush(log);
 }
 
+/* A chunk parked where a run may be taken up. Everything the run is stands
+   in the child, which then waits on a gate the whole fleet shares; when the
+   gate opens they all go at once, each running as far as the next boundary
+   and no further. What that costs is what the run would cost if the state
+   every chunk begins in could be guessed rightly. */
+/* Every chunk writes into one file, each at the place its own bytes begin,
+   so nothing has to be joined together afterwards. Each opens the file for
+   itself rather than sharing the run's, because a shared one has a single
+   position that they would all be moving. */
+static const char *fleet_file_name(struct hstex_engine *engine, char *room,
+                                   size_t capacity)
+{
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    (void)snprintf(room, capacity, "%s-fleet.pdf", job);
+    return room;
+}
+
+/* The other files a run writes are taken up the same way: each chunk opens
+   the same file for itself and seeks to where its own bytes begin, which is
+   where the run had reached when the chunk was parked. */
+static void redirect_the_write_streams(struct hstex_engine *engine,
+                                       const long *reached)
+{
+    for (size_t index = 0U; index < 16U; ++index) {
+        FILE *open_stream = engine->write_streams[index];
+        if (open_stream == NULL || reached[index] < 0L ||
+            engine->write_stream_paths[index] == NULL) {
+            continue;
+        }
+        FILE *own = fopen(engine->write_stream_paths[index], "r+b");
+        if (own == NULL) {
+            continue;
+        }
+        if (fseek(own, reached[index], SEEK_SET) != 0) {
+            (void)fclose(own);
+            continue;
+        }
+        (void)close(fileno(open_stream));
+        engine->write_streams[index] = own;
+    }
+}
+
+static void redirect_to_the_fleet_file(struct hstex_engine *engine)
+{
+    char name[512];
+    char *path = output_path(engine,
+                             fleet_file_name(engine, name, sizeof(name)));
+    if (path == NULL) {
+        return;
+    }
+    FILE *own = fopen(path, "r+b");
+    free(path);
+    if (own == NULL) {
+        return;
+    }
+    if (fseek(own, (long)engine->parallel_offset, SEEK_SET) != 0) {
+        (void)fclose(own);
+        return;
+    }
+    /* Dropped rather than closed: closing would flush this copy of what the
+       run above is still holding. */
+    if (engine->pdf_file != NULL) {
+        (void)close(fileno(engine->pdf_file));
+    }
+    engine->pdf_file = own;
+}
+
+static void park_a_chunk(struct hstex_engine *engine)
+{
+    if (engine->parallel_chunk == 0) {
+        return;
+    }
+    if (engine->parallel_is_worker) {
+        if (engine->parallel_stop > 0 &&
+            engine->shipped_pages >= engine->parallel_stop) {
+            char ignored[256];
+            (void)pdf_flush(engine, ignored, sizeof(ignored));
+            if (engine->pdf_file != NULL) {
+                (void)fflush(engine->pdf_file);
+            }
+            _exit(0);
+        }
+        return;
+    }
+    if (engine->shipped_pages == 0 ||
+        engine->shipped_pages % engine->parallel_chunk != 0 ||
+        engine->parallel_workers >= 256) {
+        return;
+    }
+    long reached[16];
+    pid_t child = fork();
+    if (child < 0) {
+        return;
+    }
+    if (child == 0) {
+        engine->parallel_is_worker = 1;
+        engine->parallel_stop = engine->shipped_pages + engine->parallel_chunk;
+        (void)close(engine->parallel_gate_write);
+        /* The run keeps one tool alive to ask where files are, on a pipe of
+           its own. A fleet of chunks would all be asking down the same pipe
+           and reading each other's answers, so a chunk forgets the one it
+           inherited and starts its own when it first needs to ask. The
+           descriptors are dropped rather than closed: closing would flush
+           this copy of the buffer into the tool the run above is still
+           talking to. */
+        if (engine->finder.questions != NULL) {
+            (void)close(fileno(engine->finder.questions));
+        }
+        if (engine->finder.answers != NULL) {
+            (void)close(fileno(engine->finder.answers));
+        }
+        engine->finder.questions = NULL;
+        engine->finder.answers = NULL;
+        engine->finder.child = 0;
+        engine->finder.marker_answer = NULL;
+        engine->finder.broken = false;
+        /* The bytes still in hand belong to the chunk before this one, which
+           will write them itself; this chunk's own begin where the run had
+           reached when it was parked. */
+        engine->parallel_offset = engine->pdf_written;
+        engine->pdf_out_count = 0U;
+        engine->parallel_redirect = engine->pdf_file != NULL;
+        for (size_t index = 0U; index < 16U; ++index) {
+            reached[index] = engine->write_streams[index] == NULL
+                                 ? -1L
+                                 : ftell(engine->write_streams[index]);
+        }
+        char go = 0;
+        ssize_t got;
+        do {
+            got = read(engine->parallel_gate_read, &go, 1);
+        } while (got < 0 && errno == EINTR);
+        (void)got;
+        if (engine->parallel_redirect) {
+            redirect_to_the_fleet_file(engine);
+        }
+        redirect_the_write_streams(engine, reached);
+        return;
+    }
+    if (engine->parallel_workers == 0) {
+        /* Where the first chunk's bytes end, which is where everything the
+           run wrote before any chunk was parked comes to. */
+        engine->parallel_first_offset = engine->pdf_written;
+    }
+    engine->parallel_pids[engine->parallel_workers++] = (int)child;
+}
+
+/* The gate the parked chunks wait on, opened once the run that parked them
+   is done. What it reports is the wall clock of the chunks alone. */
+/* The file the chunks write into is laid out before they are let go: what
+   the run wrote before the first of them was parked, and then a stretch of
+   a byte no page description contains, so that anything no chunk writes
+   shows up as itself rather than as a plausible zero. */
+static void lay_out_the_fleet_file(struct hstex_engine *engine)
+{
+    const char *job = engine->job_name == NULL ? "texput" : engine->job_name;
+    char sequential_name[512];
+    char fleet_name[512];
+    (void)snprintf(sequential_name, sizeof(sequential_name), "%s.pdf", job);
+    (void)snprintf(fleet_name, sizeof(fleet_name), "%s-fleet.pdf", job);
+    char *from = output_path(engine, sequential_name);
+    char *to = output_path(engine, fleet_name);
+    if (from == NULL || to == NULL) {
+        free(from);
+        free(to);
+        return;
+    }
+    FILE *source = fopen(from, "rb");
+    FILE *target = fopen(to, "wb");
+    free(from);
+    free(to);
+    if (source == NULL || target == NULL) {
+        if (source != NULL) {
+            (void)fclose(source);
+        }
+        if (target != NULL) {
+            (void)fclose(target);
+        }
+        return;
+    }
+    static uint8_t room[1U << 16];
+    size_t left = engine->parallel_first_offset;
+    while (left != 0U) {
+        size_t want = left < sizeof(room) ? left : sizeof(room);
+        size_t got = fread(room, 1U, want, source);
+        if (got == 0U || fwrite(room, 1U, got, target) != got) {
+            break;
+        }
+        left -= got;
+    }
+    if (fseek(source, 0L, SEEK_END) == 0) {
+        long total = ftell(source);
+        memset(room, 0xEE, sizeof(room));
+        size_t rest = total > 0L && (size_t)total > engine->parallel_first_offset
+                          ? (size_t)total - engine->parallel_first_offset
+                          : 0U;
+        while (rest != 0U) {
+            size_t want = rest < sizeof(room) ? rest : sizeof(room);
+            if (fwrite(room, 1U, want, target) != want) {
+                break;
+            }
+            rest -= want;
+        }
+    }
+    (void)fclose(source);
+    (void)fclose(target);
+}
+
+static void hstex_engine_release_chunks(struct hstex_engine *engine)
+{
+    if (engine->parallel_is_worker || engine->parallel_workers == 0) {
+        return;
+    }
+    lay_out_the_fleet_file(engine);
+    struct timespec before;
+    struct timespec after;
+    (void)clock_gettime(CLOCK_MONOTONIC, &before);
+    for (int index = 0; index < engine->parallel_workers; ++index) {
+        char go = 1;
+        ssize_t wrote = write(engine->parallel_gate_write, &go, 1);
+        (void)wrote;
+    }
+    (void)close(engine->parallel_gate_write);
+    (void)close(engine->parallel_gate_read);
+    /* Only the chunks are waited for. The run keeps a tool alive to ask
+       where files are, and waiting for any child at all would wait for
+       that too, which never ends. */
+    for (int index = 0; index < engine->parallel_workers; ++index) {
+        int status = 0;
+        while (waitpid((pid_t)engine->parallel_pids[index], &status, 0) < 0 &&
+               errno == EINTR) {
+        }
+    }
+    (void)clock_gettime(CLOCK_MONOTONIC, &after);
+    (void)fprintf(stderr, "PARALLEL chunks=%d pages=%d seconds=%.3f\n",
+                  engine->parallel_workers, engine->parallel_chunk,
+                  (double)(after.tv_sec - before.tv_sec) +
+                      (double)(after.tv_nsec - before.tv_nsec) / 1e9);
+}
+
 static void take_up_elsewhere(struct hstex_engine *engine)
 {
     if (engine->checkpoint_page == 0 ||
@@ -33060,6 +33327,7 @@ enum hstex_engine_result hstex_engine_next_output(
         compact_nodes(engine);
         note_page_digest(engine);
         take_up_elsewhere(engine);
+        park_a_chunk(engine);
     }
     ++engine->output_depth;
     enum hstex_engine_result result =

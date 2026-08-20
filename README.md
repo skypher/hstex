@@ -280,8 +280,27 @@ against 3.9 at file granularity. So the milestone's second threshold is
 reachable, and it takes sixteen workers rather than a faster expansion
 machinery. What it still takes is a guess at the state each chunk begins in
 and a check that the guess held: a checkpoint says where a run may be taken
-up, not what the state there will be before the run has reached it. See
-docs/DECISIONS.md, a-checkpoint-inside-a-file.
+up, not what the state there will be before the run has reached it.
+
+The division has now been done rather than only costed. `HSTEX_PARALLEL=100`
+parks a chunk at every hundredth page, runs the document to the end, and
+then opens a gate they are all waiting on; each takes the run up where it
+was parked, runs as far as the next boundary, and stops. Nothing is joined
+together afterwards, because a chunk inherits the count of bytes the run had
+written when it was parked, which is exactly where the chunk before it
+stops, so each opens the file for itself and seeks there. Twenty-three
+chunks write the corpus's 49,786,244 bytes between them in 1.94 seconds
+against 24.22 on one processor, and what they write is byte for byte the
+PDF the same engine writes alone -- as are the `.aux`, the `.toc` and the
+`.out`. Fifteen chunks give 10.4 times; the flattening after twenty-three
+is the machine.
+
+That is the taking up and the writing, and it is not a cold run made
+faster: the chunks are parked by a sequential run of the same document, so
+what is measured is what the pages cost the second time. The guessing --
+starting a chunk before the state it begins in is known, and checking the
+digest afterwards -- is what is left. See docs/DECISIONS.md,
+a-checkpoint-inside-a-file.
 
 ## Build
 

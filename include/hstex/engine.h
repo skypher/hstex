@@ -1889,6 +1889,26 @@ struct hstex_engine {
        a-checkpoint-inside-a-file. */
     int32_t checkpoint_page;
     int32_t checkpoint_stride;
+    /* Chunks parked at page boundaries and released together; see
+       docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+    int32_t parallel_chunk;
+    int32_t parallel_stop;
+    int parallel_is_worker;
+    int parallel_gate_read;
+    int parallel_gate_write;
+    int parallel_workers;
+    int parallel_pids[256];
+    /* Where in the file this chunk's own bytes begin, and the file it writes
+       them into. A chunk inherits the byte count the run had reached where
+       it was parked, which is exactly where the chunk before it stops. */
+    size_t parallel_offset;
+    size_t parallel_first_offset;
+    int parallel_redirect;
+    /* What each open write stream was opened as, so that a chunk running
+       beside others can take up the same file at the place its own bytes
+       begin. Kept here, at the end, rather than beside the streams: what a
+       run reads on its hot path should not be pushed about by it. */
+    char *write_stream_paths[16];
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,
