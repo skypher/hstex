@@ -1,0 +1,15 @@
+% A ` mark followed by something that is not one character.
+%
+% Measured against pdftex: only a single character, or a control sequence
+% naming one, belongs there. Anything else is reported, read again, and
+% stood in for by the character `0' -- so the constant reads 48, and the
+% offending token is then obeyed.
+%
+% trip line 249 writes `\relax inside \the\delcode.
+\tracingonline=1
+\count0=`\relax \message{[c=\the\count0]}
+\count0=`\csname\endcsname \message{[c=\the\count0]}
+\count0=`\A \message{[c=\the\count0]}
+\count0=`A \message{[c=\the\count0]}
+\catcode`~=13 \count0=`\~ \message{[c=\the\count0]}
+\end

@@ -4619,11 +4619,24 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
     if (token_is_other_character(token, (uint8_t)'`')) {
         hstex_token character_token = 0U;
         struct hstex_source_location character_location;
-        if (raw_next(engine, &character_token, &character_location, error,
-                     error_capacity) != HSTEX_ENGINE_TOKEN ||
+        int taken = raw_next(engine, &character_token, &character_location,
+                             error, error_capacity);
+        if (taken != HSTEX_ENGINE_TOKEN ||
             token_character_constant(engine, character_token, &magnitude) != 0) {
-            return set_error(error, error_capacity,
-                             "invalid alphabetic character constant");
+            /* Only a single character, or a control sequence naming one,
+               belongs after a ` mark. The reference reads the offending
+               token again and stands in the character `0', so the constant
+               reads 48. */
+            static const char *const help[] = {
+                "A one-character control sequence belongs after a ` mark.",
+                "So I'm essentially inserting \\0 here.", NULL};
+            if (taken == HSTEX_ENGINE_TOKEN &&
+                push_one(engine, character_token, character_location, error,
+                         error_capacity) != 0) {
+                return -1;
+            }
+            tex_error(engine, help, "Improper alphabetic constant");
+            magnitude = (int32_t)'0';
         }
         enum hstex_engine_result terminator = hstex_engine_next_expanded(
             engine, &token, &location, error, error_capacity);
