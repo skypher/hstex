@@ -1,0 +1,16 @@
+% What a \\vadjust leaves behind, for the glue after it.
+%
+% The moved box is given a distinctive 9pt depth.  If the material a \\vadjust
+% moves set the reference for the next box, the glue before the following line
+% would be measured from that 9pt; the reference measures it from the depth of
+% the line instead, and prints \\glue(\\baselineskip) 3.11111.
+%
+%   pdftex -interaction=nonstopmode \\input vadjust-prev-depth \\end
+%
+% See docs/DECISIONS.md, what-a-vadjust-leaves-behind.
+%
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\setbox0=\vbox{\hsize=120pt \parindent=0pt
+aaa\vadjust{\hbox{\vrule depth 9pt height 1pt width 3pt}}%
+ bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm\par}
+\showbox0

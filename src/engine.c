@@ -25175,10 +25175,17 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
             },
         };
         status = append_vbox_node(engine, &line_node, error, error_capacity);
+        /* What a \\vadjust moves goes onto the list as it stands. It is not a
+           box the next one is set against: the reference measures the glue
+           before the following line from the depth of the *line*, however
+           deep the moved material is. See docs/DECISIONS.md,
+           what-a-vadjust-leaves-behind. */
+        int32_t depth_before_migration = engine->prev_depth;
         for (size_t item = 0U; status == 0 && item < migrated_count; ++item) {
             status = append_vbox_item(engine, migrated[item], error,
                                       error_capacity);
         }
+        engine->prev_depth = depth_before_migration;
         free(migrated);
         if (status == 0 && line != lines) {
             int32_t penalty = interline;
