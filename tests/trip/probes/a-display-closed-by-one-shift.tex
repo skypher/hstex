@@ -1,0 +1,16 @@
+% A display closed by a single $ rather than $$.
+%
+% Measured against pdftex: it says "Display math should end with $$", reads
+% the offending token again -- the log shows it as <to be read again> -- and
+% goes on as though $$ had been typed both times. The token is therefore
+% obeyed afterwards, not swallowed.
+%
+% trip line 206 closes `$$\eqno^{}' with one $ and follows it with
+% \scriptfont3=..., which the reference then obeys.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$$x$ y\par
+$$x$\relax y\par
+$$x$$ y\par   % properly closed, and silent
+$x$ y\par     % an inline formula, which one $ does close
+\end

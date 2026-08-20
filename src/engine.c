@@ -34879,6 +34879,26 @@ int hstex_engine_run(struct hstex_engine *engine,
     return closed;
 }
 
+/* A display closed by a single $. The reference reports it, reads the
+   offending token again, and goes on as though $$ had been typed both
+   times -- so the token is pushed back rather than swallowed. Measured on
+   trip line 206, `$$\eqno^{}$\scriptfont3=...', where the reference shows
+   \scriptfont as <to be read again> and then obeys it. */
+static int report_single_shift_closing_display(
+    struct hstex_engine *engine, bool have_token, hstex_token token,
+    struct hstex_source_location where, char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "The `$' that I just saw supposedly matches a previous `$$'.",
+        "So I shall assume that you typed `$$' both times.", NULL};
+    if (have_token &&
+        push_one(engine, token, where, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Display math should end with $$");
+    return 0;
+}
+
 static enum hstex_engine_result next_output(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
@@ -34950,19 +34970,16 @@ handle_token:
                 if (engine->display_alignment) {
                     hstex_token second = 0U;
                     struct hstex_source_location where;
-                    if (raw_next(engine, &second, &where, error,
-                                 error_capacity) != HSTEX_ENGINE_TOKEN ||
+                    int taken = raw_next(engine, &second, &where, error,
+                                         error_capacity);
+                    if (taken != HSTEX_ENGINE_TOKEN ||
                         !token_is_effective_category(
                             engine, second, (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
-                        char found[128];
-                        describe_token(engine, second, found, sizeof(found));
-                        uint32_t line = 0U;
-                        const char *origin = current_source_line(engine, &line);
-                        (void)set_error(error, error_capacity,
-                                        "a display must be closed by $$, "
-                                        "found %s at %s:%u",
-                                        found, origin, (unsigned int)line);
-                        return HSTEX_ENGINE_ERROR;
+                        if (report_single_shift_closing_display(
+                                engine, taken == HSTEX_ENGINE_TOKEN, second,
+                                where, error, error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
                     }
                     if (end_display_alignment(engine, error, error_capacity) !=
                         0) {
@@ -34987,23 +35004,17 @@ handle_token:
                     if (engine->displayed_math) {
                         hstex_token second = 0U;
                         struct hstex_source_location where;
-                        if (raw_next(engine, &second, &where, error,
-                                     error_capacity) != HSTEX_ENGINE_TOKEN ||
+                        int taken = raw_next(engine, &second, &where,
+                                             error, error_capacity);
+                        if (taken != HSTEX_ENGINE_TOKEN ||
                             !token_is_effective_category(
                                 engine, second,
                                 (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
-                            char found[128];
-                            describe_token(engine, second, found,
-                                           sizeof(found));
-                            uint32_t line = 0U;
-                            const char *origin =
-                                current_source_line(engine, &line);
-                            (void)set_error(
-                                error, error_capacity,
-                                "a display must be closed by $$, found %s at "
-                                "%s:%u",
-                                found, origin, (unsigned int)line);
-                            return HSTEX_ENGINE_ERROR;
+                            if (report_single_shift_closing_display(
+                                    engine, taken == HSTEX_ENGINE_TOKEN,
+                                    second, where, error, error_capacity) != 0) {
+                                return HSTEX_ENGINE_ERROR;
+                            }
                         }
                         if (end_display_math(engine, error, error_capacity) !=
                             0) {
