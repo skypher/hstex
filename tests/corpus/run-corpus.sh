@@ -50,6 +50,9 @@ src=$work/src
 mkdir -p "$src"
 
 base=https://mirrors.ctan.org
+# A document that prints the date must be given one, or the two runs differ by
+# the time of day and nothing else.
+clock='\time=600 \day=1 \month=1 \year=2026'
 latex_ltx=
 [ "$fetch_only" -eq 1 ] || latex_ltx=$(kpsewhich latex.ltx)
 
@@ -97,8 +100,8 @@ if [ "$fetch_only" -eq 1 ]; then
     exit 0
 fi
 
-printf '%-10s %-9s %-11s %s\n' document pages boxes verdict
-printf '%-10s %-9s %-11s %s\n' ---------- --------- ----------- -------
+printf '%-10s %-9s %-11s %-8s %s\n' document pages boxes output verdict
+printf '%-10s %-9s %-11s %-8s %s\n' ---------- --------- ----------- -------- -------
 disagreed=0
 detail=$work/detail.txt
 : >"$detail"
@@ -113,10 +116,12 @@ while IFS='	' read -r name format path want note; do
     cp "$src/$name.tex" "$dir/ref/"
     cp "$src/$name.tex" "$dir/hstex/"
 
-    # The reference.
+    # The reference. A plain document is set to DVI with the clock pinned, so
+    # that what comes out can be compared byte for byte with HSTeX's.
     ( cd "$dir/ref"
       if [ "$format" = plain ]; then
-          pdftex -interaction=nonstopmode "\\input $name \\end" >stdout.txt 2>&1 || true
+          pdftex -output-format=dvi -interaction=nonstopmode \
+              "$clock \\input $name \\end" >stdout.txt 2>&1 || true
       else
           pdflatex -interaction=nonstopmode "$name.tex" >stdout.txt 2>&1 || true
       fi ) || true
@@ -127,11 +132,27 @@ while IFS='	' read -r name format path want note; do
     hs_status=0
     ( cd "$dir/hstex"
       if [ "$format" = plain ]; then
-          printf '\\input plain \\input %s \\end\n' "$name" >"run-$name.tex"
+          printf '\\input plain %s \\input %s \\end\n' "$clock" "$name" \
+              >"run-$name.tex"
           "$engine" --run-ini "run-$name.tex" >hstex.log 2>&1
       else
           "$engine" --run-latex "$latex_ltx" "$name.tex" >hstex.log 2>&1
       fi ) || hs_status=$?
+
+    # What each engine actually produced. Only a plain document can be
+    # compared this way: a PDF carries its own identifiers and timestamps.
+    output=-
+    if [ "$format" = plain ]; then
+        ref_dvi=$dir/ref/$name.dvi
+        hs_dvi=$dir/hstex/build/ini-output/run-$name.dvi
+        if [ ! -f "$ref_dvi" ] || [ ! -f "$hs_dvi" ]; then
+            output=missing
+        elif cmp -s "$ref_dvi" "$hs_dvi"; then
+            output=same
+        else
+            output=differs
+        fi
+    fi
 
     ref_pages=$(pages_of "$ref_log" 2>/dev/null || true)
     hs_pages=$(pages_of "$hs_log" 2>/dev/null || true)
@@ -154,12 +175,16 @@ while IFS='	' read -r name format path want note; do
         disagreed=$((disagreed + 1))
         { printf '=== %s: box reports ===\n' "$name"
           diff "$dir/ref.boxes" "$dir/hstex.boxes" || true; } >>"$detail"
+    elif [ "$output" = differs ] || [ "$output" = missing ]; then
+        verdict="the output itself differs"
+        disagreed=$((disagreed + 1))
     else
         verdict=agrees
     fi
 
-    printf '%-10s %-9s %-11s %s\n' \
-        "$name" "${ref_pages:--}/${hs_pages:--}" "$ref_boxes/$hs_boxes" "$verdict"
+    printf '%-10s %-9s %-11s %-8s %s\n' \
+        "$name" "${ref_pages:--}/${hs_pages:--}" "$ref_boxes/$hs_boxes" \
+        "$output" "$verdict"
 done <"$work/manifest.clean"
 
 if [ -s "$detail" ]; then

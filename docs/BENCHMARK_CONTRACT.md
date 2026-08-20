@@ -27,8 +27,14 @@ implementation is read; see `CLEANROOM.md`.
 
 ## Correctness gates
 
-Raw PDF bytes are not compared. A candidate passes a document only when all of
-the following agree with the reference:
+For a plain document set to DVI, the output is compared byte for byte, with
+the clock pinned so the two runs cannot differ by the time of day. Both
+documents in the corpus that can be compared that way are identical to the
+reference's.
+
+Raw PDF bytes are not compared -- a PDF carries identifiers and timestamps of
+its own. A candidate passes such a document only when all of the following
+agree with the reference:
 
 - the run completes, with the same faults reported in the same words;
 - the page count;

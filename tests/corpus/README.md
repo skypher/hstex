@@ -41,6 +41,16 @@ compared on:
 - every box that did not fit, with its kind, amount, badness and lines; and
 - every fault reported.
 
+For a plain document, the output itself is compared as well, byte for byte.
+Both engines are given `\time`, `\day`, `\month` and `\year`, because a
+document that prints the date would otherwise differ by the time of day and
+nothing else, and the reference is asked for DVI so that there is no PDF
+identifier or timestamp in the way. `story` and `gentle` both come out
+identical to the reference's -- 680 and 263,424 bytes.
+
+A LaTeX document is not compared this way: its PDF carries identifiers and
+timestamps of its own.
+
 The reference's summary statistics count its own string pool, `mem` array,
 hash and font tables. Those are properties of that program, not of the
 document, and reproducing them would mean copying its data structures, which
