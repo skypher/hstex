@@ -13008,8 +13008,18 @@ static void print_bytes(struct hstex_engine *engine, const char *text,
                         size_t length)
 {
     FILE *out = diagnostic_stream(engine);
+    /* Every character the reference prints that is the \\newlinechar ends
+       the line instead, whatever it was part of -- a message, a box's
+       contents, the line an error shows, or the engine's own `\\hbox('. See
+       docs/DECISIONS.md, the-newline-character. */
+    int32_t newline =
+        engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER];
     for (size_t index = 0U; index < length; ++index) {
         char byte = text[index];
+        if (newline >= 0 && newline <= 255 &&
+            (unsigned char)byte == (unsigned char)newline) {
+            byte = '\n';
+        }
         (void)fputc(byte, out);
         if (byte == '\n') {
             engine->message_column = 0;
@@ -13470,6 +13480,14 @@ static void show_rule_dimen(struct hstex_engine *engine, int32_t value)
 /* The reference writes an unprintable character in ^^ notation. */
 static void show_ascii(struct hstex_engine *engine, uint8_t code)
 {
+    /* The \\newlinechar ends the line rather than being written, and it is
+       the character that is looked at, not the `^^' the engine would
+       otherwise write it as. See docs/DECISIONS.md, the-newline-character. */
+    if ((int32_t)code ==
+        engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER]) {
+        print_line(engine);
+        return;
+    }
     if (code < 32U || code == 127U) {
         print_text(engine, "^^");
         print_byte(engine,
