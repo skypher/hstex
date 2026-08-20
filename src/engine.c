@@ -34989,6 +34989,23 @@ static int scan_if_num(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "end of input while scanning an ifnum relation");
     }
+    /* The relation is looked at before the right-hand side is scanned,
+       because that is the order the reference reports in: a token that is
+       none of the three draws "Missing = inserted" and is read again as
+       the start of the right-hand side. */
+    if (!token_is_other_character(relation, (uint8_t)'<') &&
+        !token_is_other_character(relation, (uint8_t)'=') &&
+        !token_is_other_character(relation, (uint8_t)'>')) {
+        static const char *const help[] = {
+            "I was expecting to see `<', `=', or `>'. Didn't.", NULL};
+        if (push_one(engine, relation, location, error, error_capacity) != 0) {
+            engine->conditional_count = conditional;
+            return -1;
+        }
+        relation = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                         (uint8_t)'=');
+        tex_error(engine, help, "Missing = inserted for %s", "\\ifnum");
+    }
     if (scan_integer(engine, &right, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
@@ -35001,9 +35018,7 @@ static int scan_if_num(struct hstex_engine *engine, char *error,
     } else if (token_is_other_character(relation, (uint8_t)'>')) {
         condition = left > right;
     } else {
-        engine->conditional_count = conditional;
-        return set_error(error, error_capacity,
-                         "ifnum requires <, =, or >");
+        condition = false;
     }
     return finish_conditional(engine, conditional, condition, error,
                               error_capacity);
@@ -35034,6 +35049,23 @@ static int scan_if_dim(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "end of input while scanning an ifdim relation");
     }
+    /* The relation is looked at before the right-hand side is scanned,
+       because that is the order the reference reports in: a token that is
+       none of the three draws "Missing = inserted" and is read again as
+       the start of the right-hand side. */
+    if (!token_is_other_character(relation, (uint8_t)'<') &&
+        !token_is_other_character(relation, (uint8_t)'=') &&
+        !token_is_other_character(relation, (uint8_t)'>')) {
+        static const char *const help[] = {
+            "I was expecting to see `<', `=', or `>'. Didn't.", NULL};
+        if (push_one(engine, relation, location, error, error_capacity) != 0) {
+            engine->conditional_count = conditional;
+            return -1;
+        }
+        relation = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                         (uint8_t)'=');
+        tex_error(engine, help, "Missing = inserted for %s", "\\ifdim");
+    }
     if (scan_dimension(engine, &right, error, error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
@@ -35046,9 +35078,7 @@ static int scan_if_dim(struct hstex_engine *engine, char *error,
     } else if (token_is_other_character(relation, (uint8_t)'>')) {
         condition = left > right;
     } else {
-        engine->conditional_count = conditional;
-        return set_error(error, error_capacity,
-                         "ifdim requires <, =, or >");
+        condition = false;
     }
     return finish_conditional(engine, conditional, condition, error,
                               error_capacity);

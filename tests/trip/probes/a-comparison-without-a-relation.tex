@@ -1,0 +1,30 @@
+% \ifnum and \ifdim whose relation is missing.
+%
+% Measured against pdftex:
+%
+%   ! Missing = inserted for \ifdim.
+%   <to be read again>
+%                      1
+%   I was expecting to see `<', `=', or `>'. Didn't.
+%
+% The token that was not a relation is read again as the start of the
+% right-hand side, and `=' is assumed. So `\ifdim 72pt1in' compares 72pt
+% with 1in and is true.
+%
+% The order matters: the relation is looked at BEFORE the right-hand side
+% is scanned, so `\ifnum 5 x' says "Missing = inserted" first and only
+% then "Missing number, treated as zero" for the x. This engine scanned
+% first and reported in the other order, and then stopped.
+%
+% trip line 390 writes \ifdim72p\iftrue t1i\fi n\fi, whose expansion
+% leaves 72pt1in with no relation between.
+\tracingonline=1
+\message{[\ifdim 72pt1in A\else B\fi]}
+\message{[\ifnum 5 6 A\else B\fi]}
+\message{[\ifnum 5 x A\else B\fi]}
+\message{[\ifnum 5 \relax 6 A\else B\fi]}
+\message{[\ifdim 72pt<1in A\else B\fi]}
+\message{[\ifnum 5=5 A\else B\fi]}
+\message{[\ifdim 2pt>1pt A\else B\fi]}
+\message{[\ifdim72p\iftrue t1i\fi n\fi]}
+\end
