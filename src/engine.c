@@ -33298,6 +33298,136 @@ static bool name_is_soft(uint64_t name_hash)
     return false;
 }
 
+/* A node by its content, never by the numbers the arenas happened to hand
+   out: its kind, its measurements, what a character is of, what a glue
+   stretches by, and its children by recursion. Two runs whose histories
+   differ lay their arenas out differently while meaning the same lists,
+   and this is what lets the digest see through that. */
+static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
+                        uint32_t identifier);
+static void digest_token_list(uint64_t *digest,
+                              const struct hstex_engine *engine,
+                              uint32_t identifier);
+
+static void digest_node_run(uint64_t *digest,
+                            const struct hstex_engine *engine, uint32_t start,
+                            uint32_t count)
+{
+    digest_bytes(digest, &count, sizeof(count));
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        digest_node(digest, engine, engine->list_items[start + index]);
+    }
+}
+
+static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
+                        uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    digest_bytes(digest, &node->kind, sizeof(node->kind));
+    digest_bytes(digest, &node->explicit_kern, sizeof(node->explicit_kern));
+    digest_bytes(digest, &node->width, sizeof(node->width));
+    digest_bytes(digest, &node->height, sizeof(node->height));
+    digest_bytes(digest, &node->depth, sizeof(node->depth));
+    digest_bytes(digest, &node->shift, sizeof(node->shift));
+    switch (node->kind) {
+    case HSTEX_NODE_CHARACTER:
+    case HSTEX_NODE_LIGATURE:
+        digest_bytes(digest, &node->value.character.font,
+                     sizeof(node->value.character.font));
+        digest_bytes(digest, &node->value.character.character,
+                     sizeof(node->value.character.character));
+        digest_bytes(digest, node->value.character.originals,
+                     node->value.character.original_count);
+        break;
+    case HSTEX_NODE_GLUE:
+        digest_bytes(digest, &node->value.glue.stretch,
+                     sizeof(node->value.glue.stretch));
+        digest_bytes(digest, &node->value.glue.shrink,
+                     sizeof(node->value.glue.shrink));
+        digest_bytes(digest, &node->value.glue.stretch_order,
+                     sizeof(node->value.glue.stretch_order));
+        digest_bytes(digest, &node->value.glue.shrink_order,
+                     sizeof(node->value.glue.shrink_order));
+        digest_bytes(digest, &node->value.glue.leader_kind,
+                     sizeof(node->value.glue.leader_kind));
+        digest_bytes(digest, &node->value.glue.parameter,
+                     sizeof(node->value.glue.parameter));
+        if (node->value.glue.leader != 0U) {
+            digest_node(digest, engine, node->value.glue.leader);
+        }
+        break;
+    case HSTEX_NODE_LIST:
+        digest_bytes(digest, &node->value.list.box_kind,
+                     sizeof(node->value.list.box_kind));
+        digest_bytes(digest, &node->value.list.glue,
+                     sizeof(node->value.list.glue));
+        digest_bytes(digest, &node->value.list.display,
+                     sizeof(node->value.list.display));
+        digest_node_run(digest, engine, node->value.list.node_start,
+                        node->value.list.node_count);
+        break;
+    case HSTEX_NODE_DISCRETIONARY:
+        digest_bytes(digest, &node->value.disc.replace_count,
+                     sizeof(node->value.disc.replace_count));
+        digest_node_run(digest, engine, node->value.disc.pre_start,
+                        node->value.disc.pre_count);
+        digest_node_run(digest, engine, node->value.disc.post_start,
+                        node->value.disc.post_count);
+        break;
+    case HSTEX_NODE_MATH:
+        digest_bytes(digest, &node->value.math.after,
+                     sizeof(node->value.math.after));
+        break;
+    case HSTEX_NODE_KERN:
+        digest_bytes(digest, &node->value.kern.margin,
+                     sizeof(node->value.kern.margin));
+        break;
+    case HSTEX_NODE_MARK:
+        digest_bytes(digest, &node->value.mark.class_number,
+                     sizeof(node->value.mark.class_number));
+        digest_token_list(digest, engine, node->value.mark.tokens);
+        break;
+    case HSTEX_NODE_INSERT:
+        digest_bytes(digest, &node->value.insert.number,
+                     sizeof(node->value.insert.number));
+        digest_bytes(digest, &node->value.insert.split_top_skip,
+                     sizeof(node->value.insert.split_top_skip));
+        digest_bytes(digest, &node->value.insert.split_max_depth,
+                     sizeof(node->value.insert.split_max_depth));
+        digest_bytes(digest, &node->value.insert.float_cost,
+                     sizeof(node->value.insert.float_cost));
+        digest_node_run(digest, engine, node->value.insert.node_start,
+                        node->value.insert.node_count);
+        break;
+    case HSTEX_NODE_WHATSIT:
+        digest_bytes(digest, &node->value.whatsit.kind,
+                     sizeof(node->value.whatsit.kind));
+        digest_bytes(digest, &node->value.whatsit.stream,
+                     sizeof(node->value.whatsit.stream));
+        digest_bytes(digest, &node->value.whatsit.action,
+                     sizeof(node->value.whatsit.action));
+        digest_bytes(digest, &node->value.whatsit.detail,
+                     sizeof(node->value.whatsit.detail));
+        digest_bytes(digest, &node->value.whatsit.number,
+                     sizeof(node->value.whatsit.number));
+        digest_token_list(digest, engine, node->value.whatsit.tokens);
+        break;
+    case HSTEX_NODE_PENALTY:
+        digest_bytes(digest, &node->value.penalty,
+                     sizeof(node->value.penalty));
+        break;
+    case HSTEX_NODE_RULE:
+    default:
+        break;
+    }
+}
+
 static uint64_t canonical_meaning_hash(const struct hstex_engine *engine,
                                        hstex_cs_id identifier)
 {
@@ -33440,14 +33570,61 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
         digest_token_list(&digest, engine, engine->token_parameters[index]);
     }
     parts[3] = digest;
+    /* What is half built at this boundary: the paragraph being filled, the
+       contributions the page builder has not taken, the page so far, the
+       marks and the insertions. Two states that agree in every meaning can
+       still differ here, and one that did cost a wrong page. */
+    DIGEST_VALUE(engine->building_paragraph);
+    DIGEST_VALUE(engine->prev_graf);
+    if (engine->paragraph_builder != NULL) {
+        size_t held = engine->paragraph_builder->count;
+        DIGEST_VALUE(held);
+        for (size_t index = 0U; index < held; ++index) {
+            digest_node(&digest, engine,
+                        engine->paragraph_builder->node_identifiers[index]);
+        }
+    }
+    const struct hstex_vbox_builder *vertical[2];
+    vertical[0] = engine->contribution_builder;
+    vertical[1] = engine->page_builder;
+    for (size_t which = 0U; which < 2U; ++which) {
+        if (vertical[which] == NULL) {
+            continue;
+        }
+        size_t held = vertical[which]->count;
+        DIGEST_VALUE(held);
+        for (size_t index = 0U; index < held; ++index) {
+            digest_node(&digest, engine,
+                        vertical[which]->node_identifiers[index]);
+        }
+    }
+    for (size_t index = 0U; index < engine->mark_class_count; ++index) {
+        const struct hstex_mark_class *mark = &engine->mark_classes[index];
+        DIGEST_VALUE(mark->number);
+        digest_token_list(&digest, engine, mark->top);
+        digest_token_list(&digest, engine, mark->first);
+        digest_token_list(&digest, engine, mark->bot);
+    }
+    for (size_t index = 0U; index < engine->page_insert_count; ++index) {
+        const struct hstex_page_insert *insert = &engine->page_inserts[index];
+        DIGEST_VALUE(insert->number);
+        DIGEST_VALUE(insert->held);
+        DIGEST_VALUE(insert->split);
+    }
     /* Where the reading has got to in every file that is open. A token
-       frame read to its end looks like a husk whose popping is mere
-       representation, and treating it as one was tried: the relay then
-       validated a chunk whose pages came out wrong, because whatever that
-       husk's timing correlates with is real and nothing else in this digest
-       sees it. Strictness here is load-bearing; err toward stale. */
+       frame read to its end is a husk the next read will clear; when it is
+       cleared is representation, not meaning -- but skipping husks is only
+       sound now that the half-built lists above are hashed. The first time
+       it was tried without them, a husk was the one thing distinguishing a
+       chunk whose paragraph-in-progress differed, and the relay shipped a
+       wrong page. Anything weakened here must survive tools/relay-demo.sh
+       against a golden run first. */
     for (size_t index = 0U; index < engine->sources.count; ++index) {
         const struct hstex_source_frame *frame = &engine->sources.frames[index];
+        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST &&
+            frame->value.token_list.cursor >= frame->value.token_list.count) {
+            continue;
+        }
         DIGEST_VALUE(frame->kind);
         if (frame->kind == HSTEX_SOURCE_FILE) {
             digest_bytes(&digest, frame->value.file->path,
@@ -34052,6 +34229,65 @@ static void maybe_dump_meanings(const struct hstex_engine *engine)
     DUMP_SCALAR(engine->math_fonts);
     DUMP_SCALAR(engine->lexical_state.catcodes);
 #undef DUMP_SCALAR
+    (void)fprintf(out, "0000000000000000 9 OUTPUT: pdf_written=%zu objects=%d\n",
+                  engine->pdf_written, engine->pdf_object_counter);
+    if (engine->contribution_builder != NULL) {
+        (void)fprintf(out, "0000000000000000 9 CONTRIB: count=%zu\n",
+                      engine->contribution_builder->count);
+        for (size_t index = 0U;
+             index < engine->contribution_builder->count && index < 40U;
+             ++index) {
+            uint32_t identifier =
+                engine->contribution_builder->node_identifiers[index];
+            if (identifier == 0U ||
+                (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            const struct hstex_node *node =
+                &engine->nodes[identifier - 1U];
+            (void)fprintf(out,
+                          "0000000000000000 9 CONTRIB[%zu]: kind=%d w=%d h=%d d=%d\n",
+                          index, (int)node->kind, node->width, node->height,
+                          node->depth);
+        }
+    }
+    if (engine->page_builder != NULL) {
+        (void)fprintf(out, "0000000000000000 9 PAGE: count=%zu\n",
+                      engine->page_builder->count);
+        for (size_t index = 0U; index < engine->page_builder->count &&
+                                index < 40U; ++index) {
+            uint32_t identifier =
+                engine->page_builder->node_identifiers[index];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            const struct hstex_node *node = &engine->nodes[identifier - 1U];
+            (void)fprintf(out,
+                          "0000000000000000 9 PAGEN[%zu]: kind=%d w=%d h=%d d=%d s=%d\n",
+                          index, (int)node->kind, node->width, node->height,
+                          node->depth, node->shift);
+        }
+    }
+    (void)fprintf(out, "0000000000000000 9 PAR: building=%d count=%zu\n",
+                  engine->building_paragraph,
+                  engine->paragraph_builder == NULL
+                      ? (size_t)0
+                      : engine->paragraph_builder->count);
+    if (engine->paragraph_builder != NULL) {
+        for (size_t index = 0U; index < engine->paragraph_builder->count &&
+                                index < 60U; ++index) {
+            uint32_t identifier =
+                engine->paragraph_builder->node_identifiers[index];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            const struct hstex_node *node = &engine->nodes[identifier - 1U];
+            (void)fprintf(out,
+                          "0000000000000000 9 PARN[%zu]: kind=%d w=%d h=%d d=%d\n",
+                          index, (int)node->kind, node->width, node->height,
+                          node->depth);
+        }
+    }
     for (size_t index = 0U; index < engine->sources.count; ++index) {
         const struct hstex_source_frame *frame = &engine->sources.frames[index];
         if (frame->kind == HSTEX_SOURCE_FILE) {
