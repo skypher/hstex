@@ -1,0 +1,40 @@
+% A vertical command met inside an \hbox.
+%
+% Measured against pdftex. Most of them close the box: the reference says
+%
+%   ! Missing } inserted.
+%   <inserted text>
+%                   }
+%   <to be read again>
+%                      \vfill
+%
+% and reads the command again, so it does what it came to do in the mode
+% outside. `\hbox{A\vfill B}' therefore sets a box holding the A alone,
+% then obeys the \vfill in vertical mode, then starts a paragraph for the
+% B -- and the source's own } is left over, drawing "Too many }'s".
+%
+% \vskip and its four fills, \unvbox, \unvcopy and \halign all do this.
+%
+% Two do not:
+%
+%   \hrule  is named and ignored, and the horizontal list carries on:
+%           `! You can't use `\hrule' here except with leaders.'
+%           with `To put a horizontal rule in an hbox or an alignment, /
+%           you should use \leaders or \hrulefill (see The TeXbook).'
+%           `\hbox{A\hrule B}' sets both letters and no rule.
+%   \par    is ignored in silence. There is no paragraph to end inside an
+%           \hbox and no shape to clear, so nothing is said at all.
+%
+% \unhbox is not a vertical command and is unaffected. All of these
+% stopped this engine. trip line 377 opens \hbox{\vfill\vsplit 3 0pt}.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{A\vfill B}\showbox0
+\setbox1=\hbox{A\vskip3pt B}\showbox1
+\setbox9=\vbox{}\setbox2=\hbox{A\unvbox9 B}\showbox2
+\setbox3=\hbox{A\halign{#\cr X\cr}B}\showbox3
+\setbox4=\hbox{A\hrule B}\showbox4
+\setbox5=\hbox{A\par B}\showbox5
+\setbox8=\hbox{Q}\setbox6=\hbox{A\unhbox8 B}\showbox6
+\setbox7=\vbox{A\vskip3pt B}\showbox7      % a paragraph ends instead
+\end

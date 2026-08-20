@@ -36956,6 +36956,14 @@ handle_token:
                     continue;
                 }
             }
+            if (meaning->command == HSTEX_COMMAND_HALIGN &&
+                engine->mode == HSTEX_MODE_HORIZONTAL && engine->inner_mode) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (execute_alignment(engine,
                                   meaning->command == HSTEX_COMMAND_VALIGN,
                                   error, error_capacity) != 0) {
@@ -37146,6 +37154,16 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_UNBOX:
+            if ((meaning->value.integer == (int32_t)HSTEX_UNBOX_VERTICAL ||
+                 meaning->value.integer ==
+                     (int32_t)HSTEX_UNBOX_VERTICAL_COPY) &&
+                engine->mode == HSTEX_MODE_HORIZONTAL && engine->inner_mode) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (execute_unbox(engine, meaning->value.integer, error,
                               error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -37251,6 +37269,20 @@ handle_token:
             continue;
         case HSTEX_COMMAND_VSKIP:
         case HSTEX_COMMAND_HSKIP:
+            /* A vertical command met inside an \hbox. The reference closes
+               the box -- "Missing } inserted" -- and reads the command
+               again, so it does what it came to do in the mode outside.
+               Measured: `\hbox{A\vfill B}' sets a box holding the A alone,
+               then the \vfill, then a paragraph for the B, and the source's
+               own } is left over as "Too many }'s". */
+            if (meaning->command == HSTEX_COMMAND_VSKIP &&
+                engine->mode == HSTEX_MODE_HORIZONTAL && engine->inner_mode) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (execute_glue(engine, meaning->value.integer,
                              meaning->command == HSTEX_COMMAND_VSKIP, error,
                              error_capacity) != 0) {
@@ -37274,6 +37306,18 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_HRULE:
+            /* Unlike the other vertical commands, a rule closes nothing:
+               the reference names it and goes on with the horizontal list
+               it was already building. */
+            if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+                static const char *const rule_help[] = {
+                    "To put a horizontal rule in an hbox or an alignment,",
+                    "you should use \\leaders or \\hrulefill (see The "
+                    "TeXbook).", NULL};
+                tex_error(engine, rule_help,
+                          "You can't use `\\hrule' here except with leaders");
+                continue;
+            }
             if (execute_hrule(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -37805,6 +37849,11 @@ handle_token:
             if (engine->mode == HSTEX_MODE_VERTICAL &&
                 normal_paragraph(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
+            }
+            /* Inside an \hbox there is no paragraph to end and nothing to
+               clear, and the reference says nothing at all about it. */
+            if (engine->mode == HSTEX_MODE_HORIZONTAL && engine->inner_mode) {
+                continue;
             }
             return HSTEX_ENGINE_TOKEN;
         case HSTEX_COMMAND_UNDEFINED:
