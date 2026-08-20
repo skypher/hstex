@@ -1,0 +1,25 @@
+% Where the run a discretionary replaces begins and ends.
+%
+% Eight breaks in cmr10, chosen so that what joins the letter before the break
+% to the letter after it differs: nothing, a kern, or a ligature.
+% \hyphenpenalty=10000 keeps each discretionary whole so \showbox prints its
+% replace count and both its lists.
+%
+%   pdftex -ini -interaction=nonstopmode where-a-rebuilt-run-begins
+%
+% See docs/DECISIONS.md, where-a-rebuilt-run-begins.
+%
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\font\f=cmr10 \f \hyphenchar\f=45 \hsize=400pt \parindent=0pt
+\uchyph=0 \lefthyphenmin=1 \righthyphenmin=1 \spaceskip=4pt
+\hyphenpenalty=10000 \exhyphenpenalty=10000
+\hbadness=10000 \hfuzz=1000pt \pretolerance=-1 \tolerance=10000
+\lccode`\a=`\a \lccode`\b=`\b \lccode`\c=`\c \lccode`\d=`\d \lccode`\e=`\e
+\lccode`\f=`\f \lccode`\i=`\i \lccode`\l=`\l \lccode`\m=`\m \lccode`\n=`\n
+\lccode`\o=`\o \lccode`\r=`\r \lccode`\s=`\s \lccode`\t=`\t \lccode`\v=`\v
+\lccode`\x=`\x
+\patterns{b1c a1t}
+\setbox0=\vbox{\noindent xx abcd\par}\showbox0
+\setbox0=\vbox{\noindent xx avatar\par}\showbox0
+\end
