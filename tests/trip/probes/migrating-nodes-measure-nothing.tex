@@ -1,0 +1,17 @@
+% An insertion, a \\vadjust and a mark all only pass through a line.
+%
+% Each box holds a rule 30pt tall that is going to leave for the vertical
+% list.  All three boxes should come out the height of the letters in them,
+% 6.94444, not 30.
+%
+%   pdftex -interaction=nonstopmode \\input migrating-nodes-measure-nothing \\end
+%
+% See docs/DECISIONS.md, what-only-passes-through-a-line.
+%
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\setbox0=\hbox{a\insert100{\hrule height 30pt}b}
+\showbox0
+\setbox1=\hbox{a\vadjust{\hrule height 30pt}b}
+\showbox1
+\setbox2=\hbox{a\mark{x}b}
+\showbox2

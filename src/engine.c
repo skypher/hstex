@@ -10237,8 +10237,16 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
     const struct hstex_node *node = &engine->nodes[identifier - 1U];
     /* Whatever a whatsit measures is for whoever reads it -- the rectangle a
        link covers, for one -- and not for the list it stands in. See
-       docs/DECISIONS.md, pdf-links. */
-    bool sizeless = node->kind == HSTEX_NODE_WHATSIT;
+       docs/DECISIONS.md, pdf-links.
+
+       An insertion, a mark and what a \\vadjust holds are all only passing
+       through: they leave for the vertical list when the line is broken, and
+       measure nothing where they stand. See docs/DECISIONS.md,
+       what-only-passes-through-a-line. */
+    bool sizeless = node->kind == HSTEX_NODE_WHATSIT ||
+                    node->kind == HSTEX_NODE_INSERT ||
+                    node->kind == HSTEX_NODE_MARK ||
+                    node->kind == HSTEX_NODE_ADJUST;
     /* A horizontal list that has not been packed yet has no width of its
        own -- a paragraph runs to whatever length it runs to, and only the
        lines it is broken into have to fit a dimension. See
