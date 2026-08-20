@@ -1,0 +1,21 @@
+% What may stand between \accent and the character it goes over.
+%
+% The reference carries out assignments and \relax and goes on looking; a box,
+% a kern, an italic correction or a space stops it and leaves the accent
+% standing alone.  Widths of 5.00002pt mean the accent found its character,
+% 10.00003pt that it did not.
+%
+%   pdftex -interaction=nonstopmode \input accent-and-its-character \end
+%
+% See docs/DECISIONS.md, what-may-stand-between-an-accent-and-its-character.
+%
+\tracingonline=1
+\setbox0=\hbox{\accent127 o}\message{[plain=\the\wd0]}
+\setbox0=\hbox{\accent127 \tenrm o}\message{[font=\the\wd0]}
+\setbox0=\hbox{\accent127 \relax o}\message{[relax=\the\wd0]}
+\setbox0=\hbox{\accent127 \spacefactor=1000 o}\message{[assign=\the\wd0]}
+\setbox0=\hbox{\accent127 \hbox{}o}\message{[hbox=\the\wd0]}
+\setbox0=\hbox{\accent127 \/o}\message{[italic=\the\wd0]}
+\setbox0=\hbox{\accent127 \kern0pt o}\message{[kern=\the\wd0]}
+\showboxbreadth=9999 \showboxdepth=9999
+\setbox0=\hbox{\t oo}\showbox0

@@ -32379,17 +32379,48 @@ static int execute_accent(struct hstex_engine *engine, char *error,
                          "the current font has no character %d for an accent",
                          code);
     }
+    /* The accent itself is set in the font that was in force where \\accent
+       was read, whatever an assignment after it changes the font to. */
+    uint32_t accent_font = engine->current_font;
     struct hstex_char_metric accent = font->characters[code];
     int32_t x_height = font->dimen_count >= 5U ? font->dimens[4] : 0;
     int32_t slant = font->dimen_count >= 1U ? font->dimens[0] : 0;
 
-    /* Whatever follows, after any assignments, is the accented character. */
+    /* Whatever follows, after any assignments, is the accented character.
+       The reference carries those assignments out and goes on looking, so the
+       accent comes from the font in force where \\accent was read and the
+       character under it from whatever font is in force by the time it is
+       reached -- which is exactly what plain TeX's \\t does. See
+       docs/DECISIONS.md, what-may-stand-between-an-accent-and-its-character. */
     hstex_token token = 0U;
     struct hstex_source_location location;
-    enum hstex_engine_result result = expanded_next_non_space(
-        engine, &token, &location, error, error_capacity);
-    if (result == HSTEX_ENGINE_ERROR) {
-        return -1;
+    enum hstex_engine_result result;
+    for (;;) {
+        result = expanded_next_non_space(engine, &token, &location, error,
+                                         error_capacity);
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (result != HSTEX_ENGINE_TOKEN ||
+            !hstex_token_is_control_sequence(token)) {
+            break;
+        }
+        const struct hstex_meaning *between = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        if (between->command == HSTEX_COMMAND_RELAX) {
+            continue;
+        }
+        if (between->command == HSTEX_COMMAND_FONT_GIVEN &&
+            between->value.integer > 0 &&
+            font_by_identifier(engine, (uint32_t)between->value.integer) !=
+                NULL) {
+            if (select_font(engine, (uint32_t)between->value.integer, error,
+                            error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        break;
     }
     int32_t accented = -1;
     if (result == HSTEX_ENGINE_TOKEN) {
@@ -32416,8 +32447,15 @@ static int execute_accent(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    /* The character under the accent belongs to the font in force now, which
+       an assignment in between may have changed. */
+    const struct hstex_font *base_font =
+        font_by_identifier(engine, engine->current_font);
+    if (base_font == NULL || base_font->characters == NULL) {
+        base_font = font;
+    }
     if (accented >= 0 &&
-        (accented > 255 || font->characters[accented].tag < 0)) {
+        (accented > 255 || base_font->characters[accented].tag < 0)) {
         return set_error(error, error_capacity,
                          "the current font has no character %d to accent",
                          accented);
@@ -32429,7 +32467,7 @@ static int execute_accent(struct hstex_engine *engine, char *error,
         .height = accent.height,
         .depth = accent.depth,
         .value.character = {
-            .font = engine->current_font,
+            .font = accent_font,
             .character = (uint32_t)code,
         },
     };
@@ -32439,14 +32477,21 @@ static int execute_accent(struct hstex_engine *engine, char *error,
         return append_hbox_node(engine, &accent_node, error, error_capacity);
     }
 
-    struct hstex_char_metric under = font->characters[accented];
+    struct hstex_char_metric under = base_font->characters[accented];
     int32_t lift = x_height - under.height;
     /* The reference works this out in one figure and rounds it once, so the
        halving and the slant cannot each lose their own scaled point; see
        docs/DECISIONS.md, accent-kerns. */
+    /* The height term is scaled by the slant of the font the character under
+       the accent is in, the x-height term by the accent's own. The two are
+       the same font unless an assignment stood between them, which is why
+       one slant did for both until \\t came along. */
+    int32_t under_slant =
+        base_font->dimen_count >= 1U ? base_font->dimens[0] : 0;
     int64_t numerator =
         INT64_C(65536) * ((int64_t)under.width - accent.width) +
-        2 * ((int64_t)under.height - x_height) * (int64_t)slant;
+        2 * ((int64_t)under.height * (int64_t)under_slant -
+             (int64_t)x_height * (int64_t)slant);
     int64_t delta = numerator >= 0
                         ? (numerator + INT64_C(65536)) / INT64_C(131072)
                         : -((-numerator + INT64_C(65536)) / INT64_C(131072));
