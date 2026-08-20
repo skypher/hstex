@@ -6175,8 +6175,17 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
         return -1;
     }
     if (!matched) {
-        return set_error(error, error_capacity,
-                         "illegal unit of measure in math glue");
+        /* The reference says so and takes the factor as mu, reading
+           nothing -- so what was not a unit is left to be set. Measured on
+           trip line 257's `\mskip1A'. */
+        static const char *const help[] = {
+            "The unit of measurement in math glue must be mu.",
+            "To recover gracefully from this error, it's best to",
+            "delete the erroneous units; e.g., type `2' to delete",
+            "two letters. (See Chapter 27 of The TeXbook.)", NULL};
+        tex_error(engine, help, "Illegal unit of measure (mu inserted)");
+        return scaled_physical_unit(engine, &factor, UINT64_C(1), UINT64_C(1),
+                                    value, error, error_capacity);
     }
     if (skip_optional_space(engine, error, error_capacity) != 0) {
         return -1;

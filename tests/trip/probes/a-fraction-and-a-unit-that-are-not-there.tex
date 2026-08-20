@@ -10,7 +10,8 @@
 %
 %   A factor with no unit after it draws "Illegal unit of measure (pt
 %   inserted)" and is taken as points, reading nothing -- so the ? that
-%   was not a unit is left to be set.
+%   was not a unit is left to be set. Math glue says "(mu inserted)"
+%   instead, and takes the factor as mu.
 \tracingonline=1
 \font\tt=cmr10 \tt
 $A\over B\over C$\message{[after two fractions]}\par
@@ -19,4 +20,5 @@ $\left.A\over A\abovewithdelims.?\right.$\message{[after trip's line]}\par
 \dimen0=2.5 \message{[fraction=\the\dimen0]}
 \dimen0=-3 \message{[negative=\the\dimen0]}
 \skip0=5 \message{[glue=\the\skip0]}
+$x\mskip1A y$\message{[after a mu that was not one]}\par
 \end
