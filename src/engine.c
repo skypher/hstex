@@ -32926,6 +32926,105 @@ handle_token:
    of, so it leaves by `_exit`, which does not flush them: whatever was
    pending is written once, by the child, at the offset the two of them
    share. See docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+/* What the run is, in eight bytes. A chunk started from a guess at its own
+   beginning is only sound if the guess turns out to be the state the chunk
+   before it actually reached, and the two stand in different processes, so
+   what is compared is a digest of them rather than the states themselves.
+   It is also what says a run taken up elsewhere is the same run: the four
+   files agreeing at the end says the output matched, and this says the
+   engine did. See docs/DECISIONS.md, a-checkpoint-inside-a-file. */
+static void digest_bytes(uint64_t *digest, const void *bytes, size_t length)
+{
+    const uint8_t *at = bytes;
+    uint64_t value = *digest;
+    for (size_t index = 0U; index < length; ++index) {
+        value ^= at[index];
+        value *= UINT64_C(0x100000001b3);
+    }
+    *digest = value;
+}
+
+static uint64_t page_state_digest(const struct hstex_engine *engine)
+{
+    uint64_t digest = UINT64_C(0xcbf29ce484222325);
+#define DIGEST_VALUE(field) digest_bytes(&digest, &(field), sizeof(field))
+#define DIGEST_ARRAY(base, count) \
+    digest_bytes(&digest, (base), (count) * sizeof(*(base)))
+    DIGEST_VALUE(engine->shipped_pages);
+    DIGEST_VALUE(engine->group_level);
+    DIGEST_VALUE(engine->save_count);
+    DIGEST_VALUE(engine->conditional_count);
+    DIGEST_VALUE(engine->mode);
+    DIGEST_VALUE(engine->prev_depth);
+    DIGEST_VALUE(engine->space_factor);
+    DIGEST_VALUE(engine->macro_count);
+    DIGEST_VALUE(engine->macro_definitions);
+    DIGEST_VALUE(engine->font_count);
+    DIGEST_VALUE(engine->current_font);
+    DIGEST_VALUE(engine->node_count);
+    DIGEST_VALUE(engine->list_item_count);
+    DIGEST_VALUE(engine->page_integers);
+    DIGEST_VALUE(engine->page_dimens);
+    DIGEST_VALUE(engine->integer_parameters);
+    DIGEST_VALUE(engine->dimen_parameters);
+    DIGEST_VALUE(engine->glue_parameters);
+    DIGEST_VALUE(engine->muglue_parameters);
+    DIGEST_VALUE(engine->token_parameters);
+    DIGEST_VALUE(engine->code_tables);
+    DIGEST_VALUE(engine->math_fonts);
+    DIGEST_VALUE(engine->lexical_state.catcodes);
+    if (engine->meanings != NULL) {
+        DIGEST_ARRAY(engine->meanings, engine->meaning_capacity);
+    }
+    if (engine->counts != NULL) {
+        DIGEST_ARRAY(engine->counts, engine->count_capacity);
+        DIGEST_ARRAY(engine->dimens, engine->count_capacity);
+        DIGEST_ARRAY(engine->glues, engine->count_capacity);
+        DIGEST_ARRAY(engine->muglues, engine->count_capacity);
+        DIGEST_ARRAY(engine->token_registers, engine->count_capacity);
+    }
+    /* Where the reading has got to in every file that is open. */
+    for (size_t index = 0U; index < engine->sources.count; ++index) {
+        const struct hstex_source_frame *frame = &engine->sources.frames[index];
+        DIGEST_VALUE(frame->kind);
+        if (frame->kind == HSTEX_SOURCE_FILE) {
+            digest_bytes(&digest, frame->value.file->path,
+                         strlen(frame->value.file->path));
+            DIGEST_VALUE(frame->value.file->mouth.line_number);
+            DIGEST_VALUE(frame->value.file->mouth.line_cursor);
+        } else if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+            DIGEST_VALUE(frame->value.token_list.count);
+            DIGEST_VALUE(frame->value.token_list.cursor);
+        }
+    }
+#undef DIGEST_VALUE
+#undef DIGEST_ARRAY
+    return digest;
+}
+
+static void note_page_digest(const struct hstex_engine *engine)
+{
+    static FILE *log;
+    static int asked;
+    if (asked == 0) {
+        asked = getenv("HSTEX_PAGE_DIGEST") != NULL ? 1 : -1;
+    }
+    if (asked < 0) {
+        return;
+    }
+    if (log == NULL) {
+        const char *path = getenv("HSTEX_PAGE_DIGEST");
+        log = fopen(path[0] == '\0' ? "page-digest.txt" : path, "w");
+        if (log == NULL) {
+            asked = -1;
+            return;
+        }
+    }
+    (void)fprintf(log, "%d %016llx\n", engine->shipped_pages,
+                  (unsigned long long)page_state_digest(engine));
+    (void)fflush(log);
+}
+
 static void take_up_elsewhere(struct hstex_engine *engine)
 {
     if (engine->checkpoint_page == 0 ||
@@ -32959,6 +33058,7 @@ enum hstex_engine_result hstex_engine_next_output(
         engine->shipped_pages != engine->compacted_pages) {
         engine->compacted_pages = engine->shipped_pages;
         compact_nodes(engine);
+        note_page_digest(engine);
         take_up_elsewhere(engine);
     }
     ++engine->output_depth;
