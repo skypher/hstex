@@ -1,0 +1,17 @@
+% Whether a list nested inside a formula is internal.
+%
+% Measured against pdftex: it is, even when the formula around it is a
+% display. \ifinner is true inside `$${...}$$' and inside a script, and the
+% reference names that mode "math mode" rather than "display math mode" --
+% which is why \halign is refused there outright instead of closing the
+% group. The formula's own list is not nested and keeps what the opening
+% shift decided, and \begingroup opens no math list at all.
+\tracingonline=1
+\font\tt=cmr10 \tt
+$$\message{[plain=\ifinner Y\else N\fi]}$$\par
+$${\message{[brace=\ifinner Y\else N\fi]}}$$\par
+$$x^{\message{[script=\ifinner Y\else N\fi]}}$$\par
+$$\begingroup\message{[begingroup=\ifinner Y\else N\fi]}\endgroup$$\par
+$${x}\message{[after=\ifinner Y\else N\fi]}$$\par
+$\message{[inline=\ifinner Y\else N\fi]}$\par
+\end

@@ -727,6 +727,15 @@ struct hstex_meaning {
     } value;
 };
 
+/* What closes a group, which is what the reference inserts when a command
+   arrives that the current group cannot hold. Only two kinds close with
+   anything but a brace, so the kind is really the closing token. */
+enum hstex_group_kind {
+    HSTEX_GROUP_BRACE = 0,   /* { ... } , and every box and alignment */
+    HSTEX_GROUP_SEMI_SIMPLE, /* \begingroup ... \endgroup */
+    HSTEX_GROUP_MATH_SHIFT   /* $ ... $ */
+};
+
 enum hstex_save_kind {
     HSTEX_SAVE_MEANING = 0,
     HSTEX_SAVE_CAT_CODE,
@@ -1201,6 +1210,10 @@ struct hstex_math_builder {
     struct hstex_noad *noads;
     size_t count;
     size_t capacity;
+    /* Whether the mode was internal before this list opened. A list nested
+       inside a formula -- a { group, a script, a radicand -- is internal
+       even when the formula around it is a display. */
+    bool saved_inner_mode;
     /* The class \mathord and its relatives forced on the next atom, or -1. */
     int32_t forced_class;
     uint8_t style;
@@ -1859,6 +1872,9 @@ struct hstex_engine {
     struct hstex_source_location after_assignment_location;
     bool has_after_assignment;
     uint32_t group_level;
+    /* What closes each open group, indexed by level - 1. */
+    uint8_t *group_kinds;
+    size_t group_kind_capacity;
     uint8_t pending_macro_flags;
     bool pending_global;
     bool returned_unexpanded;

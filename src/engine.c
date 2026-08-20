@@ -9660,7 +9660,8 @@ static int scan_font_integer_assignment(struct hstex_engine *engine,
     return 0;
 }
 
-static int begin_group(struct hstex_engine *engine, char *error,
+static int begin_group(struct hstex_engine *engine,
+                       enum hstex_group_kind kind, char *error,
                        size_t error_capacity);
 static int end_group(struct hstex_engine *engine, char *error,
                      size_t error_capacity);
@@ -10942,7 +10943,7 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
        of its own if it starts one. */
     bool previous_building_paragraph = engine->building_paragraph;
     struct hstex_hbox_builder *previous_paragraph = engine->paragraph_builder;
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
     engine->output_group_floor = engine->group_level;
@@ -11465,7 +11466,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
        of its own if it starts one. */
     bool previous_building_paragraph = engine->building_paragraph;
     struct hstex_hbox_builder *previous_paragraph = engine->paragraph_builder;
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
     engine->output_group_floor = engine->group_level;
@@ -19694,7 +19695,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         /* An empty \output means \shipout\box255. */
         return ship_out_box(engine, 255U, error, error_capacity);
     }
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
     engine->output_active = true;
@@ -26813,6 +26814,15 @@ static int push_math_list(struct hstex_engine *engine, uint8_t style,
     builder->forced_class = -1;
     builder->style = style;
     builder->current_style = style;
+    builder->saved_inner_mode = engine->inner_mode;
+    /* A list nested inside a formula is internal, even when the formula is
+       a display: \ifinner is true in `$${...}$$' and in a script, and the
+       reference names the mode "math mode" there rather than "display math
+       mode". The formula's own list is not nested and keeps what the
+       opening shift decided. */
+    if (engine->math_depth > engine->math_floor + 1U) {
+        engine->inner_mode = true;
+    }
     return 0;
 }
 
@@ -26823,6 +26833,9 @@ static void pop_math_list(struct hstex_engine *engine)
     }
     struct hstex_math_builder *builder =
         &engine->math_stack[--engine->math_depth];
+    if (engine->math_depth >= engine->math_floor + 1U) {
+        engine->inner_mode = builder->saved_inner_mode;
+    }
     free(builder->noads);
     memset(builder, 0, sizeof(*builder));
 }
@@ -28615,7 +28628,7 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     /* The display stands where the line after the paragraph so far would,
        plus one: the reference counts the display as taking two. */
     int32_t where = had_line ? engine->paragraph_lines + 2 : 2;
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_MATH_SHIFT, error, error_capacity) != 0) {
         return -1;
     }
     /* The three parameters belong to the display: they are set inside its
@@ -31171,7 +31184,7 @@ static int begin_math(struct hstex_engine *engine, char *error,
     if (flush_pending_character(engine, error, error_capacity) != 0) {
         return -1;
     }
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_MATH_SHIFT, error, error_capacity) != 0) {
         return -1;
     }
     if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
@@ -31903,7 +31916,7 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     int32_t previous_depth = engine->prev_depth;
     int32_t previous_graf = engine->prev_graf;
 
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
     engine->output_group_floor = engine->group_level;
@@ -32509,8 +32522,13 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                              "\\halign requires vertical mode");
         }
         if (list->count != 0U) {
-            return set_error(error, error_capacity,
-                             "an alignment must be the whole of a display");
+            static const char *const help[] = {
+                "Displays can use special alignments (like \\eqalignno)",
+                "only if nothing but the alignment itself is between $$'s.",
+                "So I've deleted the formulas that preceded this alignment.",
+                NULL};
+            tex_error(engine, help, "Improper \\halign inside $$'s");
+            current_math_list(engine)->count = 0U;
         }
         display = true;
     } else if (engine->mode != HSTEX_MODE_VERTICAL) {
@@ -32581,7 +32599,7 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
         }
         engine->active_vbox_builder = engine->display_rows;
     }
-    if (begin_group(engine, error, error_capacity) != 0) {
+    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
     struct hstex_align_column *columns = NULL;
@@ -34378,12 +34396,98 @@ static int scan_if_cat(struct hstex_engine *engine, char *error,
         error_capacity);
 }
 
-static int begin_group(struct hstex_engine *engine, char *error,
-                       size_t error_capacity)
+/* What closes the group now open, or a brace when none is. */
+static enum hstex_group_kind current_group_kind(
+    const struct hstex_engine *engine)
+{
+    if (engine->group_level == 0U ||
+        (size_t)engine->group_level > engine->group_kind_capacity) {
+        return HSTEX_GROUP_BRACE;
+    }
+    return (enum hstex_group_kind)
+        engine->group_kinds[engine->group_level - 1U];
+}
+
+static const char *group_closer_name(enum hstex_group_kind kind)
+{
+    switch (kind) {
+    case HSTEX_GROUP_SEMI_SIMPLE:
+        return "\\endgroup";
+    case HSTEX_GROUP_MATH_SHIFT:
+        return "$";
+    default:
+        return "}";
+    }
+}
+
+/* The reference closes a group that a command cannot live in: it inserts
+   the group's own closing token, says which one, and reads the command
+   again. The log shows the closer as <inserted text>.
+
+   Measured: `$$\begingroup\halign{...}' says "Missing \endgroup inserted"
+   and then obeys the \halign; `$\begingroup x$' says the same for the $.
+   trip line 250 is the first of these. */
+static int off_save(struct hstex_engine *engine, hstex_token offending,
+                    struct hstex_source_location location, char *error,
+                    size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I've inserted something that you may have forgotten.",
+        "(See the <inserted text> above.)",
+        "With luck, this will get me unwedged. But if you",
+        "really didn't forget anything, try typing `2' now; then",
+        "my insertion and my current dilemma will both disappear.", NULL};
+    enum hstex_group_kind kind = current_group_kind(engine);
+    hstex_token closer;
+    if (kind == HSTEX_GROUP_SEMI_SIMPLE) {
+        static const uint8_t name[] = "endgroup";
+        hstex_cs_id identifier = 0U;
+        if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                HSTEX_SYMBOL_REGULAR, name,
+                                sizeof(name) - 1U, &identifier, error,
+                                error_capacity) != 0) {
+            return -1;
+        }
+        closer = hstex_token_control_sequence(identifier);
+    } else if (kind == HSTEX_GROUP_MATH_SHIFT) {
+        closer = hstex_token_character((uint8_t)HSTEX_CAT_MATH_SHIFT,
+                                       (uint8_t)'$');
+    } else {
+        closer = hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
+                                       (uint8_t)'}');
+    }
+    /* The command is read again after the closer, so it goes back first. */
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, closer, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing %s inserted", group_closer_name(kind));
+    return 0;
+}
+
+static int begin_group(struct hstex_engine *engine, enum hstex_group_kind kind,
+                       char *error, size_t error_capacity)
 {
     if (engine->group_level == UINT32_MAX) {
         return set_error(error, error_capacity, "group nesting overflow");
     }
+    if ((size_t)engine->group_level + 1U > engine->group_kind_capacity) {
+        size_t capacity = engine->group_kind_capacity == 0U
+                              ? 32U
+                              : engine->group_kind_capacity * 2U;
+        while (capacity < (size_t)engine->group_level + 1U) {
+            capacity *= 2U;
+        }
+        uint8_t *grown =
+            realloc(engine->group_kinds, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "group-kind allocation failed");
+        }
+        engine->group_kinds = grown;
+        engine->group_kind_capacity = capacity;
+    }
+    engine->group_kinds[engine->group_level] = (uint8_t)kind;
     ++engine->group_level;
     return 0;
 }
@@ -35112,6 +35216,16 @@ handle_token:
                     continue;
                 }
                 if (engine->mode == HSTEX_MODE_MATH) {
+                    /* A formula can only be closed from its own group, so a
+                       group opened inside it is closed first and the $ read
+                       again. */
+                    if (current_group_kind(engine) != HSTEX_GROUP_MATH_SHIFT) {
+                        if (off_save(engine, *token, *location, error,
+                                     error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
+                        continue;
+                    }
                     /* A display closes on the second of two shifts. */
                     if (engine->displayed_math) {
                         hstex_token second = 0U;
@@ -35184,12 +35298,25 @@ handle_token:
                     begin_math_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
-                if (begin_group(engine, error, error_capacity) != 0) {
+                if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_END_GROUP)) {
+                /* A brace where \endgroup belongs is deleted, in the same
+                   words the reference uses for one inside a formula. */
+                if (current_group_kind(engine) == HSTEX_GROUP_SEMI_SIMPLE) {
+                    static const char *const spurious[] = {
+                        "I've deleted a group-closing symbol because it seems to be",
+                        "spurious, as in `$x}$'. But perhaps the } is legitimate and",
+                        "you forgot something else, as in `\\hbox{$x}'. In such cases",
+                        "the way to recover is to insert both the forgotten and the",
+                        "deleted material, e.g., by typing `I$}'.", NULL};
+                    tex_error(engine, spurious,
+                              "Extra }, or forgotten \\endgroup");
+                    continue;
+                }
                 if (engine->mode == HSTEX_MODE_MATH) {
                     int closed =
                         finish_math_group(engine, error, error_capacity);
@@ -35421,11 +35548,27 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_BEGIN_GROUP:
-            if (begin_group(engine, error, error_capacity) != 0) {
+            if (begin_group(engine, HSTEX_GROUP_SEMI_SIMPLE, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
         case HSTEX_COMMAND_END_GROUP:
+            if (engine->group_level == 0U) {
+                static const char *const spare[] = {
+                    "Things are pretty mixed up, but I think the worst is over.",
+                    NULL};
+                tex_error(engine, spare, "Extra \\endgroup");
+                continue;
+            }
+            /* A group of another kind is closed the way it opened, and the
+               \endgroup is then read again. */
+            if (current_group_kind(engine) != HSTEX_GROUP_SEMI_SIMPLE) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (end_group(engine, error, error_capacity) < 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -35602,6 +35745,28 @@ handle_token:
             continue;
         case HSTEX_COMMAND_HALIGN:
         case HSTEX_COMMAND_VALIGN:
+            if (engine->mode == HSTEX_MODE_MATH) {
+                /* Only a display may hold an alignment, and only from its
+                   own list. A { in math makes the mode internal, and there
+                   -- as in any inline formula -- the reference refuses the
+                   alignment outright rather than closing anything. */
+                if (!engine->displayed_math || engine->reading_equation_number ||
+                    engine->math_depth != engine->math_floor + 1U) {
+                    report_illegal_case(engine, *token);
+                    continue;
+                }
+                /* An alignment stands for a whole display, so it can only
+                   begin from the display's own group; a \begingroup opened
+                   inside the display is closed first and the alignment read
+                   again. */
+                if (current_group_kind(engine) != HSTEX_GROUP_MATH_SHIFT) {
+                    if (off_save(engine, *token, *location, error,
+                                 error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
+            }
             if (execute_alignment(engine,
                                   meaning->command == HSTEX_COMMAND_VALIGN,
                                   error, error_capacity) != 0) {

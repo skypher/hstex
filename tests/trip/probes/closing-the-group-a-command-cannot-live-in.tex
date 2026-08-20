@@ -1,0 +1,27 @@
+% What the reference does when a command arrives that the current group
+% cannot hold -- TeX calls this off_save.
+%
+% Measured against pdftex:
+%
+%   It inserts the group's OWN closing token, says "Missing X inserted",
+%   and reads the command again. The log shows the closer as <inserted
+%   text>. Only two kinds of group close with anything but a brace:
+%   \begingroup with \endgroup, and $ with $.
+%
+%   The one exception is a } arriving where another closer belongs: that is
+%   DELETED instead, with "Extra }, or forgotten \endgroup" -- the same
+%   words used for a } inside a formula.
+%
+%   A bare \endgroup with nothing open says "Extra \endgroup." and is gone.
+%
+% trip line 250 opens \begingroup inside a display and then writes \halign.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\begingroup x}\message{[a]}\par
+{x\endgroup}\message{[b]}\par
+\setbox0=\hbox{x\endgroup}\message{[c]}\par
+$\begingroup x$\message{[d]}\par
+$$\begingroup\halign{#\cr A\cr}$$\message{[e]}\par
+\endgroup\message{[f]}\par
+\begingroup x\endgroup\message{[g]}\par   % properly matched, and silent
+\end
