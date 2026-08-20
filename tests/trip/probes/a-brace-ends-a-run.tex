@@ -1,0 +1,22 @@
+% A brace ends the run of characters a ligature or a kern is made across.
+%
+% Opening one counts as much as closing one.  The reference sets f{f} as two
+% letters and A{V} with no kern between them; ff{i} is the ff ligature and
+% then an i, not the ffi ligature.
+%
+%   pdftex -interaction=nonstopmode \input a-brace-ends-a-run \end
+%
+% See docs/DECISIONS.md, a-brace-ends-a-run-of-characters.
+%
+\showboxbreadth=9999 \showboxdepth=9999 \tracingonline=1
+\setbox0=\hbox{AV}\showbox0
+\setbox1=\hbox{A{V}}\showbox1
+\setbox2=\hbox{{A}V}\showbox2
+\setbox3=\hbox{A{}V}\showbox3
+\setbox4=\hbox{f{f}}\showbox4
+\setbox5=\hbox{f{}f}\showbox5
+\setbox6=\hbox{ff{i}}\showbox6
+\setbox7=\hbox{f{fi}}\showbox7
+\setbox8=\hbox{fi}\showbox8
+\setbox9=\hbox{f\begingroup f\endgroup}\showbox9
+\setbox10=\hbox{f\bgroup f\egroup}\showbox10

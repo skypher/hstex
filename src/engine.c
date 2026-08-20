@@ -34707,6 +34707,15 @@ handle_token:
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_BEGIN_GROUP)) {
+                /* A brace ends the run of characters a ligature or a kern is
+                   made across, opening one as much as closing one: the
+                   reference sets `f{f}' as two letters and `A{V}' with no
+                   kern between them. See docs/DECISIONS.md,
+                   a-brace-ends-a-run-of-characters. */
+                if (flush_pending_character(engine, error, error_capacity) !=
+                    0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
                 if (engine->mode == HSTEX_MODE_MATH &&
                     begin_math_group(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
