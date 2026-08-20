@@ -12172,6 +12172,18 @@ static int insert_hyphen_pattern(struct hstex_engine *engine,
         &engine->hyphen_nodes[node_identifier - 1U];
     if (terminal->value_count == 0U) {
         ++engine->hyphen_pattern_count;
+    } else {
+        /* The same letters again. The reference complains only where what
+           it already holds says something -- a pattern whose levels are all
+           zero records nothing to be overwritten. See docs/DECISIONS.md,
+           hyphenation-diagnostics. */
+        static const char *const help[] = {"(See Appendix H.)", NULL};
+        for (size_t index = 0U; index < terminal->value_count; ++index) {
+            if (engine->hyphen_values[terminal->value_offset + index] != 0U) {
+                tex_error(engine, help, "Duplicate pattern");
+                break;
+            }
+        }
     }
     terminal->value_offset = (uint32_t)engine->hyphen_value_count;
     terminal->value_count = (uint16_t)value_count;
@@ -12225,22 +12237,25 @@ static int insert_hyphen_exception(struct hstex_engine *engine,
     return 0;
 }
 
-static int normalized_hyphen_character(const struct hstex_engine *engine,
-                                       uint8_t character, bool pattern,
-                                       uint8_t *normalized, char *error,
-                                       size_t error_capacity)
+/* The letter a character stands for in a pattern or an exception: its
+   \lccode, or the edge-of-word character where a pattern writes a point.
+   False where the character has no \lccode at all, which is what the two
+   complaints are about. */
+static bool normalized_hyphen_character(const struct hstex_engine *engine,
+                                        uint8_t character, bool pattern,
+                                        uint8_t *normalized)
 {
     if (pattern && character == (uint8_t)'.') {
         *normalized = character;
-        return 0;
+        return true;
     }
     int32_t lowercase = engine->code_tables[1][character];
     if (lowercase <= 0 || lowercase > 255) {
-        return set_error(error, error_capacity,
-                         "hyphenation text contains a character with zero lccode");
+        *normalized = pattern ? (uint8_t)'.' : character;
+        return false;
     }
     *normalized = (uint8_t)lowercase;
-    return 0;
+    return true;
 }
 
 static int finish_hyphen_item(struct hstex_engine *engine, bool patterns,
@@ -12307,6 +12322,15 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
                             char *error, size_t error_capacity)
 {
     struct hstex_source_location location = {0};
+    /* Patterns given after a paragraph has been hyphenated are too late. The
+       reference says so before it reads the list, and then reads it and
+       drops it. See docs/DECISIONS.md, hyphenation-diagnostics. */
+    bool too_late = patterns && engine->hyphen_trie_settled;
+    if (too_late) {
+        static const char *const help[] = {
+            "All patterns must be given before typesetting begins.", NULL};
+        tex_error(engine, help, "Too late for \\patterns");
+    }
     if (scan_left_brace(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -12318,6 +12342,7 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
         language_value = 0;
     }
     uint32_t language = (uint32_t)language_value;
+    bool digit_sensed = false;
     uint8_t letters[HSTEX_MAX_HYPHEN_PATTERN_LENGTH];
     uint8_t values_or_breaks[HSTEX_MAX_HYPHEN_PATTERN_LENGTH + 1U] = {0};
     size_t letter_count = 0U;
@@ -12333,7 +12358,8 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
                              "end of input in hyphenation data");
         }
         if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
-            if (finish_hyphen_item(engine, patterns, language, letters,
+            if (!too_late &&
+                finish_hyphen_item(engine, patterns, language, letters,
                                    values_or_breaks, &letter_count, error,
                                    error_capacity) != 0) {
                 return -1;
@@ -12342,9 +12368,8 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
             engine->pending_macro_flags = 0U;
             return 0;
         }
-        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
-            return set_error(error, error_capacity,
-                             "nested group in hyphenation data");
+        if (too_late) {
+            continue;
         }
         if (token_is_effective_space(engine, token)) {
             if (finish_hyphen_item(engine, patterns, language, letters,
@@ -12352,57 +12377,91 @@ static int scan_hyphen_data(struct hstex_engine *engine, bool patterns,
                                    error_capacity) != 0) {
                 return -1;
             }
+            digit_sensed = false;
             continue;
         }
-        if (!hstex_token_is_character(token)) {
+        if (!hstex_token_is_character(token) ||
+            token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             /* A control sequence that stands for a character counts as that
-               character here: \char and anything \chardef'd or \let to
-               one. Anything else is not a letter, which the reference
-               reports and then ignores. */
-            static const char *const help[] = {
-                "Letters in \\hyphenation words must have \\lccode>0.",
-                "Proceed; I'll ignore the character I just read.", NULL};
-            const struct hstex_meaning *meaning = hstex_engine_meaning(
-                engine, hstex_token_control_sequence_id(token));
-            if (meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+               character here: \char and anything \chardef'd or \let to one.
+               Anything else has no place in the list at all, which the
+               reference says and then goes on with. See docs/DECISIONS.md,
+               hyphenation-diagnostics. */
+            static const char *const improper[] = {
+                "Hyphenation exceptions must contain only letters",
+                "and hyphens. But continue; I'll forgive and forget.", NULL};
+            static const char *const appendix[] = {"(See Appendix H.)", NULL};
+            const struct hstex_meaning *meaning =
+                hstex_token_is_control_sequence(token)
+                    ? hstex_engine_meaning(
+                          engine, hstex_token_control_sequence_id(token))
+                    : NULL;
+            if (meaning != NULL &&
+                meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
                 hstex_token_is_character(meaning->value.token)) {
+                /* A control sequence \let to a character is that character,
+                   in either list. */
                 token = meaning->value.token;
-            } else if (meaning->command == HSTEX_COMMAND_CHAR_GIVEN) {
+            } else if (!patterns && meaning != NULL &&
+                       meaning->command == HSTEX_COMMAND_CHAR_GIVEN) {
+                /* An exception also takes a \chardef'd one, and \char; a
+                   pattern takes neither. */
                 token = hstex_token_character(
                     (uint8_t)HSTEX_CAT_OTHER,
                     (uint8_t)meaning->value.integer);
-            } else if (meaning->command == HSTEX_COMMAND_CHAR) {
+            } else if (!patterns && meaning != NULL &&
+                       meaning->command == HSTEX_COMMAND_CHAR) {
                 int32_t code = 0;
                 if (scan_char_num(engine, &code, error, error_capacity) != 0) {
                     return -1;
                 }
                 token = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
                                               (uint8_t)code);
+            } else if (patterns) {
+                tex_error(engine, appendix, "Bad \\patterns");
+                continue;
             } else {
-                tex_error(engine, help, "Not a letter");
+                tex_error(engine, improper,
+                          "Improper \\hyphenation will be flushed");
                 continue;
             }
         }
         uint8_t character = hstex_token_character_code(token);
-        if (patterns && character >= (uint8_t)'0' &&
+        /* A digit gives the level between the letters around it, but only
+           where a digit did not just do so: the second of two in a row is
+           read as a letter, and is then almost always a nonletter. */
+        if (patterns && !digit_sensed && character >= (uint8_t)'0' &&
             character <= (uint8_t)'9') {
             values_or_breaks[letter_count] =
                 (uint8_t)(character - (uint8_t)'0');
+            digit_sensed = true;
             continue;
         }
         if (!patterns && character == (uint8_t)'-') {
             values_or_breaks[letter_count] = 1U;
             continue;
         }
+        digit_sensed = false;
+        uint8_t normalized = 0U;
+        if (!normalized_hyphen_character(engine, character, patterns,
+                                         &normalized)) {
+            static const char *const appendix[] = {"(See Appendix H.)", NULL};
+            static const char *const letters_only[] = {
+                "Letters in \\hyphenation words must have \\lccode>0.",
+                "Proceed; I'll ignore the character I just read.", NULL};
+            if (!patterns) {
+                /* An exception drops the character it cannot read. */
+                tex_error(engine, letters_only, "Not a letter");
+                continue;
+            }
+            /* A pattern keeps it, as the edge-of-word character. */
+            tex_error(engine, appendix, "Nonletter");
+        }
         if (letter_count == (size_t)HSTEX_MAX_HYPHEN_PATTERN_LENGTH) {
-            return set_error(error, error_capacity,
-                             "hyphenation item is too long");
+            continue;
         }
-        if (normalized_hyphen_character(engine, character, patterns,
-                                        &letters[letter_count], error,
-                                        error_capacity) != 0) {
-            return -1;
-        }
+        letters[letter_count] = normalized;
+        values_or_breaks[letter_count + 1U] = 0U;
         ++letter_count;
     }
 }
@@ -13933,7 +13992,11 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     print_fresh_line(engine);
     print_formatted(engine, "> \\box%d=", index);
     if (box.kind == HSTEX_BOX_VOID) {
-        print_text(engine, "void\n\n! OK.\n");
+        print_text(engine, "void");
+        print_line(engine);
+        print_line(engine);
+        print_text(engine, "! OK");
+        tex_show_end(engine);
         (void)fflush(diagnostic_stream(engine));
         return 0;
     }
@@ -13965,7 +14028,13 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     print_byte(engine, '\n');
     show_node(engine, &node, prefix, 0U, (size_t)threshold,
               (size_t)breadth);
-    print_text(engine, "\n\n! OK.\n");
+    /* The reference ends the list with a newline whatever column it stands
+       at, and then leaves a blank line, so a last line that exactly filled
+       the width is followed by two rather than one. */
+    print_line(engine);
+    print_line(engine);
+    print_text(engine, "! OK");
+    tex_show_end(engine);
     (void)fflush(diagnostic_stream(engine));
     return 0;
 }
@@ -24490,6 +24559,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
 {
     *out_items = NULL;
     *out_count = 0U;
+    /* The reference builds its trie here, the first time a paragraph asks
+       to be hyphenated, and will not take a pattern afterwards. */
+    engine->hyphen_trie_settled = true;
     int32_t language = engine->integer_parameters[HSTEX_INTEGER_LANGUAGE];
     if (language < 0 || (size_t)language >= engine->count_capacity) {
         language = 0;

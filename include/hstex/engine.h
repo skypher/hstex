@@ -1757,6 +1757,10 @@ struct hstex_engine {
     /* \noboundary was read, so the character that follows has no boundary
        character before it. See docs/DECISIONS.md, boundary-characters. */
     bool cancel_boundary;
+    /* The patterns are settled once a paragraph has been hyphenated: the
+       reference builds its trie there and will not take another pattern
+       afterwards. See docs/DECISIONS.md, hyphenation-diagnostics. */
+    bool hyphen_trie_settled;
     enum hstex_interaction_mode interaction_mode;
     /* A recoverable error is reported and then recovered from, the way the
        reference does it, so a document full of them still runs to its end.
