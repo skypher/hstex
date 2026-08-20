@@ -12487,7 +12487,12 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
         return -1;
     }
     if (!matched) {
-        return set_error(error, error_capacity, "vsplit requires a height");
+        /* The reference says so and looks for the dimension anyway; the
+           token that was not `to' has already been put back. */
+        static const char *const help[] = {
+            "I'm working on `\\vsplit<box number> to <dimen>';",
+            "will look for the <dimen> next.", NULL};
+        tex_error(engine, help, "Missing `to' inserted");
     }
     if (scan_dimension(engine, &height, error, error_capacity) != 0) {
         return -1;
@@ -12499,9 +12504,13 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
         return 0;
     }
     if (source.kind != HSTEX_BOX_VLIST) {
-        return set_error(error, error_capacity,
-                         "box %d is a horizontal list and cannot be split",
-                         index);
+        /* An \hbox cannot be split. The reference names it and leaves the
+           box alone, so what \vsplit yields is void. */
+        static const char *const help[] = {
+            "The box you are trying to split is an \\hbox.",
+            "I can't split such a box, so I'll leave it alone.", NULL};
+        tex_error(engine, help, "\\vsplit needs a \\vbox");
+        return 0;
     }
     if ((size_t)source.node_start + source.node_count >
         engine->list_item_count) {

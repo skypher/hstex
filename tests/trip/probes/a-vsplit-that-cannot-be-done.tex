@@ -1,0 +1,32 @@
+% \vsplit without its `to', and \vsplit of a box that is not a \vbox.
+%
+% Measured against pdftex, both recoverable:
+%
+%   \vsplit 9 0pt        ! Missing `to' inserted.
+%                        <to be read again>
+%                                           0
+%                        I'm working on `\vsplit<box number> to <dimen>';
+%                        will look for the <dimen> next.
+%
+%     -- the token that was not `to' is put back and the dimension is
+%     scanned from it, so this splits to 0pt exactly as if `to' had been
+%     written.
+%
+%   \vsplit <an hbox> to 0pt   ! \vsplit needs a \vbox.
+%                        The box you are trying to split is an \hbox.
+%                        I can't split such a box, so I'll leave it alone.
+%
+%     -- and it does leave it alone: the register still holds its \hbox,
+%     unchanged, and what \vsplit yields is void.
+%
+% Splitting a void register is not a fault at all and yields void, which
+% already worked. trip line 377 writes \vsplit 3 0pt where box 3 is an
+% \hbox, so it draws both.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox9=\vbox{\hbox{Q}\hbox{R}}\setbox0=\vsplit 9 0pt \showbox0\showbox9
+\setbox9=\hbox{Q}\setbox1=\vsplit 9 to 0pt \showbox1\showbox9
+\setbox9=\hbox{Q}\setbox2=\vsplit 9 0pt \showbox2\showbox9
+\setbox3=\vsplit 9 to 0pt \showbox3
+\setbox9=\vbox{\hbox{Q}\hbox{R}}\setbox4=\vsplit 9 to 5pt \showbox4\showbox9
+\end
