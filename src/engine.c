@@ -14270,7 +14270,10 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
                             level->prev_graf == 1 ? "" : "s");
         }
     }
-    print_fresh_line(engine);
+    /* The lists end with a newline whatever column they stand at, and then a
+       blank line, the way a box's contents do. */
+    print_line(engine);
+    print_line(engine);
     print_text(engine, "! OK");
     tex_show_end(engine);
     (void)fflush(diagnostic_stream(engine));
@@ -34223,6 +34226,9 @@ handle_token:
         if (engine->has_pending_character &&
             meaning->command != HSTEX_COMMAND_CHAR_GIVEN &&
             meaning->command != HSTEX_COMMAND_CHAR &&
+            /* \\noboundary ends the word itself, and without the character
+               beyond its right end, so it must not be ended here first. */
+            meaning->command != HSTEX_COMMAND_NO_BOUNDARY &&
             flush_pending_character(engine, error, error_capacity) != 0) {
             return HSTEX_ENGINE_ERROR;
         }
