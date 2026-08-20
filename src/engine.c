@@ -4311,8 +4311,13 @@ static int scan_font_identifier(struct hstex_engine *engine,
     return 0;
 }
 
+/* Returns 1 when the parameter is one the font has not got and the fault
+   has been reported: there is nothing to read or to store, and the caller
+   carries on. A font may only grow more parameters while it is the most
+   recently loaded one -- measured, loading any other font closes it, though
+   anything else in between is harmless. */
 static int scan_font_dimen_reference(struct hstex_engine *engine,
-                                     bool allow_extension,
+                                     bool assigning,
                                      struct hstex_font **font,
                                      size_t *dimen_index, char *error,
                                      size_t error_capacity)
@@ -4320,19 +4325,31 @@ static int scan_font_dimen_reference(struct hstex_engine *engine,
     int32_t parameter = 0;
     uint32_t identifier = 0U;
     if (scan_integer(engine, &parameter, error, error_capacity) != 0 ||
-        parameter <= 0 ||
         scan_font_identifier(engine, &identifier, error, error_capacity) != 0) {
         return set_error(error, error_capacity,
                          "invalid fontdimen reference");
     }
     struct hstex_font *selected = font_by_identifier(engine, identifier);
-    size_t index = (size_t)parameter - 1U;
-    if (selected == NULL ||
-        (!allow_extension && index >= selected->dimen_count)) {
+    if (selected == NULL) {
         return set_error(error, error_capacity,
-                         "fontdimen index is not defined");
+                         "fontdimen names no font");
     }
-    if (allow_extension &&
+    bool may_extend = assigning && engine->font_count != 0U &&
+                      selected == &engine->fonts[engine->font_count - 1U];
+    size_t index = parameter > 0 ? (size_t)parameter - 1U : 0U;
+    if (parameter <= 0 || (index >= selected->dimen_count && !may_extend)) {
+        static const char *const help[] = {
+            "To increase the number of font parameters, you must",
+            "use \\fontdimen immediately after the \\font is loaded.", NULL};
+        char named[128];
+        describe_token(engine,
+                       hstex_token_control_sequence(selected->identifier_cs),
+                       named, sizeof(named));
+        tex_error(engine, help, "Font %s has only %zu fontdimen parameters",
+                  named, selected->dimen_count);
+        return 1;
+    }
+    if (may_extend &&
         reserve_font_dimens(selected, index + 1U, error, error_capacity) != 0) {
         return -1;
     }
@@ -5276,11 +5293,13 @@ static int dimen_from_meaning(struct hstex_engine *engine,
     if (meaning->command == HSTEX_COMMAND_FONT_DIMEN) {
         struct hstex_font *font = NULL;
         size_t index = 0U;
-        if (scan_font_dimen_reference(engine, false, &font, &index, error,
-                                      error_capacity) != 0) {
+        int found = scan_font_dimen_reference(engine, false, &font, &index,
+                                              error, error_capacity);
+        if (found < 0) {
             return -1;
         }
-        *value = font->dimens[index];
+        /* A parameter the font has not got reads as zero. */
+        *value = found == 0 ? font->dimens[index] : 0;
         return 1;
     }
     struct hstex_glue glue;
@@ -10126,16 +10145,21 @@ static int scan_font_dimen_assignment(struct hstex_engine *engine,
     struct hstex_font *font = NULL;
     size_t index = 0U;
     int32_t value = 0;
-    if (scan_font_dimen_reference(engine, true, &font, &index, error,
-                                  error_capacity) != 0 ||
+    int found = scan_font_dimen_reference(engine, true, &font, &index, error,
+                                          error_capacity);
+    if (found < 0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_dimension(engine, &value, error, error_capacity) != 0) {
         return set_error(error, error_capacity,
                          "invalid fontdimen assignment");
     }
-    font->dimens[index] = value;
-    if (font->dimen_count <= index) {
-        font->dimen_count = index + 1U;
+    /* The value is still read where there is nowhere to put it, so that
+       what follows is not read as though it were part of one. */
+    if (found == 0) {
+        font->dimens[index] = value;
+        if (font->dimen_count <= index) {
+            font->dimen_count = index + 1U;
+        }
     }
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;

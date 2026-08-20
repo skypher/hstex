@@ -1,0 +1,38 @@
+% \fontdimen naming a parameter beyond the font's own count.
+%
+% Measured against pdftex: reported and carried on --
+%
+%   ! Font \f has only 7 fontdimen parameters.
+%   To increase the number of font parameters, you must
+%   use \fontdimen immediately after the \font is loaded.
+%
+% Reading one gives 0.0pt. Assigning one still READS the value, so what
+% follows is not taken as though it were part of a dimension; it is only
+% not stored. A parameter number of zero or less draws the same message.
+%
+% A font may grow more parameters, but only while it is the most recently
+% LOADED one. What closes that window is loading another font, not doing
+% anything else:
+%
+%   \font\f=cmvtt10 \fontdimen8\f=5pt            works
+%   \font\f=cmvtt10 \setbox9=\hbox{}\fontdimen8\f=5pt   works too
+%   \font\f=cmvtt10 \font\g=cmff10 \fontdimen8\f=5pt    does not
+%
+% The help's "immediately after" is therefore about fonts and not about
+% time. Naming a font that is already loaded does not reopen the window,
+% which is why `\font\f=cmr10 \fontdimen8\f=5pt' fails under plain: cmr10
+% was loaded long before, and \f only renames it.
+%
+% Growing by more than one at a time is allowed: \fontdimen9 on a font
+% with seven parameters gives it nine.
+%
+% This engine stopped on the first of these and let every extension
+% through. trip line 404 writes \fontdimen 1000=20\varunit with no font
+% between, so the nullfont stands in and has not got a thousandth.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\f=cmr10 \showthe\fontdimen100\f
+\showthe\fontdimen0\f
+\setbox0=\hbox{A\fontdimen100\f=5pt B}\showbox0
+\font\g=cmvtt10 \fontdimen8\g=5pt \showthe\fontdimen8\g
+\font\h=cmff10 \fontdimen9\g=5pt \showthe\fontdimen9\g
+\end
