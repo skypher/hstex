@@ -116,6 +116,10 @@ static void spec_load_pages(struct hstex_engine *engine);
 static void spec_path(const struct hstex_engine *engine, char *room,
                       size_t capacity, const char *prefix, int32_t page);
 static void spec_snapshot_aux(struct hstex_engine *engine);
+static void load_soft_names(struct hstex_engine *engine);
+static void taint_read_before_write(struct hstex_engine *engine,
+                                    hstex_cs_id identifier);
+static void taint_arm(struct hstex_engine *engine);
 
 static int expand_scan_tokens(struct hstex_engine *engine,
                               struct hstex_source_location location,
@@ -1225,6 +1229,12 @@ const struct hstex_meaning *hstex_engine_meaning(
         (size_t)identifier > engine->meaning_capacity) {
         return &undefined_meaning;
     }
+    if (engine->taint_pending != 0U &&
+        (size_t)identifier <= engine->taint_map_capacity &&
+        engine->taint_map[identifier - 1U] != 0U) {
+        taint_read_before_write((struct hstex_engine *)(uintptr_t)engine,
+                                identifier);
+    }
     return &engine->meanings[identifier - 1U];
 }
 
@@ -1302,6 +1312,12 @@ static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
                          "invalid control-sequence assignment");
     }
     struct hstex_meaning *destination = &engine->meanings[identifier - 1U];
+    if (engine->taint_pending != 0U &&
+        (size_t)identifier <= engine->taint_map_capacity &&
+        engine->taint_map[identifier - 1U] != 0U) {
+        engine->taint_map[identifier - 1U] = 0U;
+        --engine->taint_pending;
+    }
     /* Held before anything is let go, in case this is the same definition
        coming back to the same control sequence. */
     retain_macro(engine, &meaning);
@@ -1914,6 +1930,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
        still name a node is complete; see docs/DECISIONS.md,
        what-a-page-leaves-behind. */
     engine->hyphen_dispatch_language = -1;
+    load_soft_names(engine);
     const char *dead_nodes = getenv("HSTEX_DEAD_NODES");
     if (dead_nodes != NULL && strcmp(dead_nodes, "trace") == 0) {
         engine->dead_node_check = HSTEX_DEAD_NODES_TRACED;
@@ -2998,6 +3015,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->fonts[index].kerns);
         free(engine->fonts[index].extensibles);
     }
+    free(engine->soft_names);
+    free(engine->spec_pages);
+    free(engine->taint_map);
     free(engine->meanings);
     free(engine->macros);
     free(engine->saves);
@@ -31925,9 +31945,9 @@ static void spec_release_fleet(struct hstex_engine *engine)
     spec_load_pages(engine);
     /* What the last round said is the last round's business. */
     static const char *const stale_prefixes[] = {"entry", "marker", "valid",
-                                                 "stale"};
+                                                 "stale", "tainted"};
     for (size_t index = 0U; index < engine->spec_page_count; ++index) {
-        for (size_t which = 0U; which < 4U; ++which) {
+        for (size_t which = 0U; which < 5U; ++which) {
             char name[600];
             spec_path(engine, name, sizeof(name), stale_prefixes[which],
                       engine->spec_pages[index]);
@@ -33543,10 +33563,6 @@ static void digest_bytes(uint64_t *digest, const void *bytes, size_t length)
    boundary, and which would otherwise say two equal states differ. The
    list is the waiver's whole content, and the waiver is only as sound as
    the claim that nothing on it is read before it is written. */
-static uint64_t *soft_names;
-static size_t soft_name_count;
-static int soft_names_loaded;
-
 static uint64_t name_only_hash(enum hstex_symbol_kind kind,
                                const uint8_t *name, size_t length)
 {
@@ -33558,12 +33574,8 @@ static uint64_t name_only_hash(enum hstex_symbol_kind kind,
     return hash;
 }
 
-static void load_soft_names(void)
+static void load_soft_names(struct hstex_engine *engine)
 {
-    if (soft_names_loaded) {
-        return;
-    }
-    soft_names_loaded = 1;
     const char *path = getenv("HSTEX_DIGEST_SOFT");
     if (path == NULL) {
         return;
@@ -33572,6 +33584,10 @@ static void load_soft_names(void)
     if (in == NULL) {
         return;
     }
+    free(engine->soft_names);
+    engine->soft_names = NULL;
+    engine->soft_name_count = 0U;
+    engine->soft_names_from_environment = 1;
     char line[512];
     size_t capacity = 0U;
     while (fgets(line, sizeof(line), in) != NULL) {
@@ -33585,25 +33601,26 @@ static void load_soft_names(void)
         }
         enum hstex_symbol_kind kind =
             (enum hstex_symbol_kind)(line[0] - '0');
-        if (soft_name_count == capacity) {
+        if (engine->soft_name_count == capacity) {
             capacity = capacity == 0U ? 128U : capacity * 2U;
-            uint64_t *grown =
-                realloc(soft_names, capacity * sizeof(*soft_names));
+            uint64_t *grown = realloc(engine->soft_names,
+                                      capacity * sizeof(*grown));
             if (grown == NULL) {
                 break;
             }
-            soft_names = grown;
+            engine->soft_names = grown;
         }
-        soft_names[soft_name_count++] =
+        engine->soft_names[engine->soft_name_count++] =
             name_only_hash(kind, (const uint8_t *)line + 2, length - 2U);
     }
     (void)fclose(in);
 }
 
-static bool name_is_soft(uint64_t name_hash)
+static bool name_is_soft(const struct hstex_engine *engine,
+                         uint64_t name_hash)
 {
-    for (size_t index = 0U; index < soft_name_count; ++index) {
-        if (soft_names[index] == name_hash) {
+    for (size_t index = 0U; index < engine->soft_name_count; ++index) {
+        if (engine->soft_names[index] == name_hash) {
             return true;
         }
     }
@@ -33764,9 +33781,8 @@ static uint64_t canonical_meaning_hash(const struct hstex_engine *engine,
                           &name, &length) != 0) {
         return 0U;
     }
-    load_soft_names();
     uint64_t named = name_only_hash(kind, name, length);
-    if (soft_name_count != 0U && name_is_soft(named)) {
+    if (engine->soft_name_count != 0U && name_is_soft(engine, named)) {
         return 0U;
     }
     digest_bytes(&hash, &kind, sizeof(kind));
@@ -33838,6 +33854,11 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
                                           uint64_t *placement,
                                           uint64_t parts[6])
 {
+    /* The digest reads every meaning to hash it, and reading is exactly
+       what the taint check watches, so the check is stood down while the
+       digest looks. What the digest reads it does not act on. */
+    size_t watched = engine->taint_pending;
+    ((struct hstex_engine *)(uintptr_t)engine)->taint_pending = 0U;
     uint64_t digest = UINT64_C(0xcbf29ce484222325);
 #define DIGEST_VALUE(field) digest_bytes(&digest, &(field), sizeof(field))
     DIGEST_VALUE(engine->shipped_pages);
@@ -33992,6 +34013,7 @@ static void page_state_digest_split_parts(const struct hstex_engine *engine,
 #undef DIGEST_VALUE
     parts[5] = digest;
     *placement = digest;
+    ((struct hstex_engine *)(uintptr_t)engine)->taint_pending = watched;
 }
 
 
@@ -34395,6 +34417,7 @@ static void park_a_chunk(struct hstex_engine *engine)
                 (void)fprintf(stderr, "FLEETDBG entry %d pid=%d\n",
                               engine->spec_start, (int)getpid());
             }
+            taint_arm(engine);
         }
         if (engine->parallel_redirect) {
             redirect_to_the_fleet_file(engine);
@@ -34749,6 +34772,67 @@ static void maybe_dump_meanings(const struct hstex_engine *engine)
     (void)fclose(out);
 }
 
+/* A waived name was read while it still held what the boundary left in it:
+   the wager behind the waiver -- written before read -- failed for this
+   chunk, so its pages may depend on scratch from across the boundary and it
+   disqualifies itself. The carrier will rewrite its range. */
+static void taint_read_before_write(struct hstex_engine *engine,
+                                    hstex_cs_id identifier)
+{
+    engine->taint_pending = 0U;
+    if (!engine->taint_violated) {
+        engine->taint_violated = 1;
+        enum hstex_symbol_kind kind;
+        const uint8_t *name = NULL;
+        size_t length = 0U;
+        char content[128];
+        content[0] = '\0';
+        if (hstex_symbol_name(&engine->lexical_state.symbols, identifier,
+                              &kind, &name, &length) == 0 &&
+            length < sizeof(content) - 2U) {
+            (void)snprintf(content, sizeof(content), "%.*s\n", (int)length,
+                           (const char *)name);
+        }
+        spec_touch(engine, "tainted", engine->spec_start,
+                   content[0] == '\0' ? NULL : content);
+    }
+}
+
+/* Arm the check: every control sequence whose name is on the waiver gets a
+   byte saying "not yet written". The walk over the symbol table happens
+   once, at the chunk's wake. */
+static void taint_arm(struct hstex_engine *engine)
+{
+    if (engine->soft_name_count == 0U) {
+        return;
+    }
+    free(engine->taint_map);
+    engine->taint_map_capacity = engine->meaning_capacity;
+    engine->taint_map = calloc(engine->taint_map_capacity, 1U);
+    if (engine->taint_map == NULL) {
+        engine->taint_map_capacity = 0U;
+        return;
+    }
+    engine->taint_pending = 0U;
+    engine->taint_violated = 0;
+    size_t names = engine->lexical_state.symbols.entry_count;
+    for (hstex_cs_id identifier = 1U; (size_t)identifier <= names;
+         ++identifier) {
+        enum hstex_symbol_kind kind;
+        const uint8_t *name = NULL;
+        size_t length = 0U;
+        if (hstex_symbol_name(&engine->lexical_state.symbols, identifier,
+                              &kind, &name, &length) != 0) {
+            continue;
+        }
+        if ((size_t)identifier <= engine->taint_map_capacity &&
+            name_is_soft(engine, name_only_hash(kind, name, length))) {
+            engine->taint_map[identifier - 1U] = 1U;
+            ++engine->taint_pending;
+        }
+    }
+}
+
 /* A probe reports the state a patched chunk would begin in, and leaves: what
    it is for is comparing that state against the run the guess is about. */
 static void probe_and_leave(struct hstex_engine *engine)
@@ -35020,7 +35104,8 @@ static void spec_carrier_boundary(struct hstex_engine *engine)
     page_state_digest_split(engine, &semantic, &placement);
     uint64_t entry_semantic = 0U;
     uint64_t entry_placement = 0U;
-    if (spec_read_state(engine, "entry", engine->shipped_pages,
+    if (!spec_exists(engine, "tainted", engine->shipped_pages) &&
+        spec_read_state(engine, "entry", engine->shipped_pages,
                         &entry_semantic, &entry_placement) &&
         semantic == entry_semantic && placement == entry_placement) {
         spec_flush(engine);
@@ -35066,7 +35151,12 @@ static void spec_finalize(struct hstex_engine *engine)
             tail_is_stale = spec_exists(engine, "stale", page);
         }
     }
-    if (tail_is_stale && !spec_exists(engine, "end-done", -1)) {
+    /* A stale tail was rewritten by whoever carried the truth last. When
+       the verifier itself carried to the end -- it never handed off -- the
+       rewriting is its own, already flushed, and there is nobody to wait
+       for. */
+    if (tail_is_stale && engine->spec_finished &&
+        !spec_exists(engine, "end-done", -1)) {
         spec_wait(engine, "end-done", -1);
     }
     /* The fleet copies become the real files. */

@@ -1938,6 +1938,23 @@ struct hstex_engine {
     /* HSTEX_FLEET: this run is to leave a fleet parked in spec_dir when no
        fleet is there, so the next run may be served from it. */
     int parking;
+    /* Names whose meanings the state digest passes over: the scratch the
+       format's macro package leaves in \@tempa and its kin. Name hashes,
+       carried by the format -- the list describes the macro package, and
+       the format is the macro package -- with HSTEX_DIGEST_SOFT overriding
+       for experiments. See docs/DECISIONS.md, the-guess-and-what-it-is-worth. */
+    uint64_t *soft_names;
+    size_t soft_name_count;
+    int soft_names_from_environment;
+    /* The waiver, checked rather than assumed: while a speculative chunk
+       runs, a byte per control sequence says "waived and not yet written".
+       Reading such a name before writing it means the chunk's pages depend
+       on scratch from across the boundary, and the chunk disqualifies
+       itself. Zero pending means the check costs one predictable branch. */
+    uint8_t *taint_map;
+    size_t taint_map_capacity;
+    size_t taint_pending;
+    int taint_violated;
     /* The children of one language's trie root, spread by character: every
        walk starts at the root, and the root has the most children, so the
        list scan is paid once and remembered. Rebuilt when the trie grows or

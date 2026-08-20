@@ -50,8 +50,6 @@
 0 ifHy@activeanchor
 0 ifmaybe@ic
 0 makelabel
-0 par
-0 protect
 0 reserved@a
 0 reserved@b
 0 reserved@c

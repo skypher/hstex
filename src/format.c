@@ -360,6 +360,23 @@ static void transfer_format(struct format_stream *stream,
     TRANSFER_VALUE(stream, engine->interaction_mode);
     TRANSFER_VALUE(stream, engine->group_level);
     TRANSFER_VALUE(stream, engine->dump_requested);
+
+    /* The names the state digest passes over -- the macro package's own
+       scratch -- travel with the format, because they describe the package
+       the format is. A list given by the environment is the experimenter's
+       and outranks the format's. */
+    if (!stream->writing && engine->soft_names_from_environment) {
+        size_t discarded_count = 0U;
+        void *discarded = NULL;
+        transfer_array(stream, &discarded, &discarded_count, NULL,
+                       sizeof(uint64_t), false);
+        free(discarded);
+    } else {
+        void *names = engine->soft_names;
+        transfer_array(stream, &names, &engine->soft_name_count, NULL,
+                       sizeof(uint64_t), false);
+        engine->soft_names = names;
+    }
 }
 
 /* A format is written only from a run that has built nothing of its own, so
