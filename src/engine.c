@@ -35672,6 +35672,15 @@ static int off_save(struct hstex_engine *engine, hstex_token offending,
         "With luck, this will get me unwedged. But if you",
         "really didn't forget anything, try typing `2' now; then",
         "my insertion and my current dilemma will both disappear.", NULL};
+    if (engine->group_level == 0U) {
+        /* There is nothing to close. Inserting a closer here would draw
+           "Too many }'s" and leave the command to be read again in the same
+           mode, which is a loop rather than a recovery, so the command is
+           named and dropped instead. A well-formed document does not reach
+           this; trip does, by way of the brace trickery on line 420. */
+        report_illegal_case(engine, offending);
+        return 0;
+    }
     enum hstex_group_kind kind = current_group_kind(engine);
     hstex_token closer;
     if (kind == HSTEX_GROUP_SEMI_SIMPLE) {
