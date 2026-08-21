@@ -16864,6 +16864,9 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
                             (int)level->left_hyphen_min,
                             (int)level->right_hyphen_min);
         }
+        if (level->output_routine) {
+            print_text(engine, " (\\output routine)");
+        }
         if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
             if (level->hbox != NULL) {
                 show_builder_list(engine, level->hbox->node_identifiers,
@@ -22639,8 +22642,6 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
        command and {vertical mode: \message} at the next command after it. */
     enum hstex_mode previous_output_mode = engine->mode;
     bool previous_output_inner = engine->inner_mode;
-    engine->mode = HSTEX_MODE_VERTICAL;
-    engine->inner_mode = true;
     /* And it knows nothing of a paragraph that may be standing outside it:
        the routine can be fired while one is being filled -- a display right
        before the page breaks leaves one -- and a paragraph the ROUTINE
@@ -22660,9 +22661,15 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     struct hstex_hbox_builder *previous_output_hbox =
         engine->active_hbox_builder;
     int32_t previous_output_depth = engine->prev_depth;
+    /* The level is pushed BEFORE the mode changes, so that the level under
+       it keeps the mode the page builder was in: \showlists run inside the
+       routine calls the outer list `vertical mode' and not an internal one. */
     if (nest_push(engine, error, error_capacity) != 0) {
         return -1;
     }
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = true;
+    engine->nest[engine->nest_count - 1U].output_routine = true;
     engine->active_vbox_builder = &made;
     engine->active_hbox_builder = NULL;
     engine->prev_depth = HSTEX_IGNORE_DEPTH;

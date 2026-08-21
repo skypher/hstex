@@ -1038,6 +1038,8 @@ struct hstex_nest_level {
        ever stands in, so their levels say what they are once and are not
        told again. */
     bool fixed;
+    /* The list an \output routine builds, which \showlists says so of. */
+    bool output_routine;
     uint32_t line;
     struct hstex_hbox_builder *hbox;
     struct hstex_vbox_builder *vbox;

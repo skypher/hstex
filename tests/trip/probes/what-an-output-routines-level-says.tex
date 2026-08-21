@@ -1,0 +1,32 @@
+% WHAT AN OUTPUT ROUTINE'S LEVEL SAYS OF ITSELF.
+%
+% \showlists run inside an \output routine writes two levels: the routine's
+% own list, and the outer vertical list under it.
+%
+%   ### internal vertical mode entered at line 60 (\output routine)
+%   prevdepth ignored
+%   ### vertical mode entered at line 0
+%   ### recent contributions:
+%   \penalty 10000
+%   prevdepth 0.0
+%
+% Two things to see. The routine's level SAYS SO -- ` (\output routine)'
+% behind the line it began at, which no other level carries. And the level
+% under it is `vertical mode', not an internal one: the routine's list is
+% internal, the page builder's is not, and entering the routine does not
+% change what the list under it is.
+%
+% HSTeX wrote neither: the routine's level looked like any other internal
+% vertical one, and the outer level had been told the routine's own mode
+% before its own was written down.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=8 \showboxdepth=8
+\vsize=100pt \hsize=100pt \topskip=10pt
+\output={\showlists\global\setbox9=\box255}
+\message{[A the routine sees its own list and the one under it]}
+\hbox{}\penalty-10000
+\message{[B and outside it, one level only]}\showlists
+\message{[C inside a vbox, which is internal but is no routine]}
+\setbox0=\vbox{\hbox{}\showlists}
+\message{[done]}
+\end
