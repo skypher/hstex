@@ -1,0 +1,41 @@
+% A \chardef AND ITS KIN MAKE THEIR TARGET \relax BEFORE SCANNING.
+%
+% The name being defined stands as \relax for the whole of the value scan,
+% whatever it meant before and whether or not it meant anything. Two
+% things turn on it:
+%
+%   the value may ask what the name means, and gets \relax;
+%   a number that looks ahead past its last digit and meets the name
+%   stops there, rather than expanding it -- which for a name that means
+%   nothing yet would report "Undefined control sequence" and swallow it.
+%
+% trip line 160 writes
+%
+%   \dimendef\varunit=222\varunit=+1,001\ifdim.5\mag>0cc0\fi1pt
+%
+% where the 222 looks ahead onto \varunit itself. The standing-in \relax
+% ends the number, is put back, and is then read again with the meaning
+% the \dimendef has by that time given it.
+%
+% \global reaches the standing-in \relax as it reaches the real meaning.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A a name that meant nothing]}
+\chardef\ca=\ifx\ca\relax 5\else 6\fi
+\showthe\ca
+\message{[B a name that meant something]}
+\def\cb{X}
+\chardef\cb=\ifx\cb\relax 7\else 8\fi
+\showthe\cb
+\message{[C a number that looks ahead onto its own target]}
+\dimendef\varunit=222\varunit=3pt
+\showthe\dimen222 \showthe\varunit
+\message{[D the same for countdef and mathchardef]}
+\countdef\cn=44\cn=9 \showthe\count44
+\mathchardef\cm=\ifx\cm\relax "161\else "162\fi
+\showthe\cm
+\message{[E globally]}
+{\global\chardef\cc=\ifx\cc\relax 1\else 2\fi }
+\showthe\cc
+\message{[done]}
+\end

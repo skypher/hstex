@@ -13550,12 +13550,34 @@ static int execute_fi(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* A \chardef and its kin make their target \relax before they scan the
+   value they will give it, so a number scanned there that looks ahead past
+   its last digit meets \relax and stops, rather than an undefined control
+   sequence which the expander would report and swallow. trip line 160
+   writes `\dimendef\varunit=222\varunit'. \global reaches the standing-in
+   \relax as it reaches the real meaning. */
+static int predefine_target(struct hstex_engine *engine,
+                            hstex_cs_id identifier, bool global, char *error,
+                            size_t error_capacity)
+{
+    struct hstex_meaning standing = {
+        .command = HSTEX_COMMAND_RELAX,
+        .level = 0U,
+        .value = {.integer = 0},
+    };
+    return set_meaning(engine, identifier, standing, global, error,
+                       error_capacity);
+}
+
 static int scan_char_definition(struct hstex_engine *engine, char *error,
                                 size_t error_capacity)
 {
     hstex_cs_id identifier = 0U;
     int32_t value = 0;
+    bool global = assignment_is_global(engine, engine->pending_global);
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        predefine_target(engine, identifier, global, error, error_capacity) !=
+            0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_char_num(engine, &value, error, error_capacity) != 0) {
         return set_error(error, error_capacity, "invalid chardef");
@@ -13565,7 +13587,6 @@ static int scan_char_definition(struct hstex_engine *engine, char *error,
         .level = 0U,
         .value = {.integer = value},
     };
-    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, identifier, meaning, global, error,
@@ -13577,7 +13598,10 @@ static int scan_math_char_definition(struct hstex_engine *engine, char *error,
 {
     hstex_cs_id identifier = 0U;
     int32_t value = 0;
+    bool global = assignment_is_global(engine, engine->pending_global);
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        predefine_target(engine, identifier, global, error, error_capacity) !=
+            0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_fifteen_bit_int(engine, &value, error, error_capacity) != 0) {
         return set_error(error, error_capacity, "invalid mathchardef");
@@ -13587,7 +13611,6 @@ static int scan_math_char_definition(struct hstex_engine *engine, char *error,
         .level = 0U,
         .value = {.integer = value},
     };
-    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, identifier, meaning, global, error,
@@ -13600,7 +13623,10 @@ static int scan_register_definition(struct hstex_engine *engine,
 {
     hstex_cs_id identifier = 0U;
     int32_t index = 0;
+    bool global = assignment_is_global(engine, engine->pending_global);
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        predefine_target(engine, identifier, global, error, error_capacity) !=
+            0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_register_num(engine, &index, 32767, error, error_capacity) != 0) {
         return set_error(error, error_capacity, "invalid register definition");
@@ -13610,7 +13636,6 @@ static int scan_register_definition(struct hstex_engine *engine,
         .level = 0U,
         .value = {.integer = index},
     };
-    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, identifier, meaning, global, error,
@@ -13622,7 +13647,10 @@ static int scan_count_definition(struct hstex_engine *engine, char *error,
 {
     hstex_cs_id identifier = 0U;
     int32_t index = 0;
+    bool global = assignment_is_global(engine, engine->pending_global);
     if (scan_definition_target(engine, &identifier, error, error_capacity) != 0 ||
+        predefine_target(engine, identifier, global, error, error_capacity) !=
+            0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
         scan_register_num(engine, &index, (int32_t)engine->count_capacity - 1,
                           error, error_capacity) != 0) {
@@ -13633,7 +13661,6 @@ static int scan_count_definition(struct hstex_engine *engine, char *error,
         .level = 0U,
         .value = {.integer = index},
     };
-    bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return set_meaning(engine, identifier, meaning, global, error,
