@@ -1,0 +1,49 @@
+% A PREAMBLE IS READ IN THE ALIGNMENT'S OWN MODE, AND ITS TEMPLATES ARE
+% NOT.
+%
+% The preamble of an \halign is read in internal vertical mode and of a
+% \valign in restricted horizontal mode -- the alignment's own list. But
+% almost nothing in a preamble is expanded as it is read: the templates
+% are kept as they were written and run later, inside each entry, in the
+% entry's own mode. \span is the exception, and forces the token after it
+% to be expanded where it stands:
+%
+%   \halign{&#\span\iftrue...}   {internal vertical mode: \iftrue}
+%   \halign{\iftrue#\fi...}      {restricted horizontal mode: \iftrue}
+%
+% both for the same \iftrue written in the same preamble.
+%
+% AND `end of alignment template' comes BEHIND the v part, not in front
+% of it. The reference reads a frozen \endtemplate once the v part is
+% exhausted and traces it there, so
+%
+%   \halign{#\span\A Y&#\cr A&B\cr}     with \def\A{X}
+%
+% draws {the letter A}, {the letter X}, {the letter Y} and only then
+% {end of alignment template}. HSTeX drew it as the entry's own text
+% ended, in front of the whole v part.
+%
+% trip line 331 writes `\halign spread-12.truedd{&#\span\iftrue\A\span
+% \else\span\fi\span&'.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \parindent=0pt \tabskip=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=1000pt \vfuzz=1000pt
+\def\A{X}
+\message{[A span forces expansion in a halign preamble]}
+\tracingcommands=2
+\halign{&#\span\iftrue\A\span\else\span\fi\span\cr A\cr}
+\tracingcommands=0
+\message{[B and in a valign preamble]}
+\tracingcommands=2
+\noindent P\valign{&#\span\iftrue\A\span\else\span\fi\span\cr A\cr}Q\par
+\tracingcommands=0
+\message{[C the v part runs before the template ends]}
+\tracingcommands=2
+\halign{#\span\A Y&#\cr A&B\cr}
+\tracingcommands=0
+\message{[D a plain expandable in a preamble runs with the entry]}
+\tracingcommands=2
+\halign{\iftrue#\fi Y&#\cr A&B\cr}
+\tracingcommands=0
+\message{[done]}
+\end

@@ -34932,11 +34932,6 @@ static int end_alignment_entry(struct hstex_engine *engine,
     }
     entry->ending = (uint8_t)ending;
     entry->after_pushed = true;
-    /* The reference reads a frozen \endtemplate here and traces it as a
-       command of its own. */
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 0) {
-        trace_words(engine, "end of alignment template");
-    }
     struct hstex_source_location origin = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
         0) {
@@ -35133,7 +35128,15 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                                    "input ended inside an alignment entry");
                 break;
             }
-            /* The v part is exhausted: the entry, or this span of it, ends. */
+            /* The v part is exhausted: the entry, or this span of it, ends.
+               The reference reads a frozen \endtemplate HERE, behind the v
+               part rather than in front of it, and traces it as a command of
+               its own -- so `#\span\A Y' draws {the letter X}, {the letter
+               Y} and only then {end of alignment template}. */
+            if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] >
+                0) {
+                trace_words(engine, "end of alignment template");
+            }
             if (hstex_source_pop_boundary(&engine->sources, error,
                                           error_capacity) != 0) {
                 status = -1;
@@ -35770,6 +35773,17 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
        alignment joins stood at. See docs/DECISIONS.md,
        prevdepth-inside-noalign. */
     int32_t row_depth = engine->prev_depth;
+    /* The preamble is read in the alignment's own mode too. Nothing in it
+       is expanded unless \span asks for it, and what \span expands is
+       traced there: trip line 331 writes `\span\iftrue' in a \halign
+       preamble and the reference names internal vertical mode for it. The
+       templates themselves are kept unexpanded and run later, in the
+       entry's mode, which is why an \iftrue written plainly in a preamble
+       is traced in restricted horizontal mode instead. */
+    int32_t mode_before_rows = engine->mode;
+    bool inner_before_rows = engine->inner_mode;
+    engine->mode = vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL;
+    engine->inner_mode = true;
     int status = scan_align_preamble(engine, &columns, &column_count,
                                      &loop_start, error, error_capacity);
     column_capacity = column_count;
@@ -35779,13 +35793,12 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     if (status == 0) {
         status = insert_every_cr(engine, error, error_capacity);
     }
+    /* What stood before the alignment stands again once the rows are done;
+       the peek below puts the alignment's own mode back before each row. */
+    engine->mode = mode_before_rows;
+    engine->inner_mode = inner_before_rows;
     bool previous_building = engine->building_alignment;
     engine->building_alignment = true;
-    /* The rows are read in the alignment's own mode, which the peek below
-       puts back before each of them; what stood before the rows stands
-       again once they are done. */
-    int32_t mode_before_rows = engine->mode;
-    bool inner_before_rows = engine->inner_mode;
 
     while (status == 0) {
         hstex_token token = 0U;
