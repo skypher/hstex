@@ -7886,6 +7886,9 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 push_one(engine, close, location, error, error_capacity) != 0) {
                 return -1;
             }
+            /* The } is inserted, and the context says so. */
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
             char what[160];
             if (scanning != NULL) {
                 (void)snprintf(what, sizeof(what), "%s", scanning);
@@ -9496,7 +9499,8 @@ static enum hstex_engine_result next_expanded_inner(
             /* An \outer macro is refused where an \edef body is being
                read, before it is expanded -- so `\edef\a{X\o Y}' draws
                the fault even though \o would have expanded away. */
-            if (engine->expanded_definition_name != NULL &&
+            if ((engine->expanded_definition_name != NULL ||
+                 engine->expanded_text_name != NULL) &&
                 (macro->flags & (uint8_t)HSTEX_MACRO_OUTER) != 0U) {
                 static const char *const help[] = {
                     "I suspect you have forgotten a `}', causing me",
@@ -9512,10 +9516,21 @@ static enum hstex_engine_result next_expanded_inner(
                              error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
-                tex_error(engine, help,
-                          "Forbidden control sequence found while scanning "
-                          "definition of %s",
-                          engine->expanded_definition_name);
+                /* The } is inserted, and the context says so. */
+                hstex_source_name_top(&engine->sources,
+                                      (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED,
+                                      0U);
+                if (engine->expanded_text_name != NULL) {
+                    tex_error(engine, help,
+                              "Forbidden control sequence found while "
+                              "scanning %s",
+                              engine->expanded_text_name);
+                } else {
+                    tex_error(engine, help,
+                              "Forbidden control sequence found while "
+                              "scanning definition of %s",
+                              engine->expanded_definition_name);
+                }
                 continue;
             }
             engine->expanding_macro_cs =
@@ -23594,6 +23609,32 @@ static int expand_meaning(struct hstex_engine *engine,
 /* Reads whatever the sources have to give down to the boundary the caller
    pushed, expanding as it goes, and lays it out as the bytes a stream would
    receive. The boundary is popped here. */
+/* One token of an expanded text, as the bytes a stream would receive. */
+static int append_token_bytes(struct hstex_engine *engine, hstex_token token,
+                              uint8_t **result, size_t *count,
+                              size_t *capacity, char *error,
+                              size_t error_capacity)
+{
+    if (hstex_token_is_character(token)) {
+        uint8_t character = hstex_token_character_code(token);
+        /* A parameter-category character is written doubled. */
+        if (token_is_category(token, HSTEX_CAT_PARAMETER) &&
+            append_byte(result, count, capacity, character, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        return append_byte(result, count, capacity, character, error,
+                           error_capacity);
+    }
+    if (hstex_token_is_control_sequence(token)) {
+        return serialize_control_sequence(engine, token, result, count,
+                                          capacity, true, error,
+                                          error_capacity);
+    }
+    return set_error(error, error_capacity,
+                     "internal token in expanded write text");
+}
+
 static int expand_to_bytes(struct hstex_engine *engine, uint8_t **bytes,
                            size_t *byte_count, char *error,
                            size_t error_capacity)
@@ -23625,33 +23666,88 @@ static int expand_to_bytes(struct hstex_engine *engine, uint8_t **bytes,
             free(result);
             return -1;
         }
-        if (hstex_token_is_character(token)) {
-            uint8_t character = hstex_token_character_code(token);
-            /* A parameter-category character is written doubled. */
-            if ((token_is_category(token, HSTEX_CAT_PARAMETER) &&
-                 append_byte(&result, &count, &capacity, character, error,
-                             error_capacity) != 0) ||
-                append_byte(&result, &count, &capacity, character, error,
-                            error_capacity) != 0) {
-                free(result);
-                return -1;
-            }
-        } else if (hstex_token_is_control_sequence(token)) {
-            if (serialize_control_sequence(engine, token, &result, &count,
-                                           &capacity, true, error,
-                                           error_capacity) != 0) {
-                free(result);
-                return -1;
-            }
-        } else {
+        if (append_token_bytes(engine, token, &result, &count, &capacity,
+                               error, error_capacity) != 0) {
             free(result);
-            return set_error(error, error_capacity,
-                             "internal token in expanded write text");
+            return -1;
         }
     }
     *bytes = result;
     *byte_count = count;
     return 0;
+}
+
+/* The same bytes, from a text already in hand. */
+static int tokens_to_bytes(struct hstex_engine *engine,
+                           const struct hstex_token_vector *text,
+                           uint8_t **bytes, size_t *byte_count, char *error,
+                           size_t error_capacity)
+{
+    uint8_t *result = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    for (size_t index = 0U; index < text->count; ++index) {
+        if (append_token_bytes(engine, text->data[index], &result, &count,
+                               &capacity, error, error_capacity) != 0) {
+            free(result);
+            return -1;
+        }
+    }
+    *bytes = result;
+    *byte_count = count;
+    return 0;
+}
+
+/* An expanded text read STRAIGHT FROM THE INPUT, the way the reference
+   reads the text of \message, \special and \mark: expand as you go, count
+   braces on what cannot be expanded, and stop at the brace matching the one
+   already read. Nothing is pushed, so a fault raised inside the text names
+   the line the text stands on rather than a list of its own -- trip line
+   293's `\mark{\the\spacefactor}' draws "Improper \spacefactor" against
+   l.293. An \outer macro is forbidden here as it is in a definition, and
+   the expander reports it before expanding, which is why the name is lent
+   to the engine for the length of the read. */
+static int scan_expanded_text_from_input(struct hstex_engine *engine,
+                                         struct hstex_token_vector *text,
+                                         const char *scanning, char *error,
+                                         size_t error_capacity)
+{
+    size_t depth = 1U;
+    const char *previous_text_name = engine->expanded_text_name;
+    engine->expanded_text_name = scanning;
+    for (;;) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        bool previous_inhibition = engine->inhibit_protected_expansion;
+        bool previous_gathering = engine->gathering_expanded_text;
+        engine->inhibit_protected_expansion = true;
+        engine->gathering_expanded_text = true;
+        enum hstex_engine_result result = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        engine->inhibit_protected_expansion = previous_inhibition;
+        engine->gathering_expanded_text = previous_gathering;
+        if (result != HSTEX_ENGINE_TOKEN) {
+            engine->expanded_text_name = previous_text_name;
+            if (result == HSTEX_ENGINE_EOF) {
+                return set_error(error, error_capacity,
+                                 "File ended while scanning %s", scanning);
+            }
+            return -1;
+        }
+        if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            --depth;
+            if (depth == 0U) {
+                engine->expanded_text_name = previous_text_name;
+                return 0;
+            }
+        } else if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            ++depth;
+        }
+        if (vector_push(text, token, error, error_capacity) != 0) {
+            engine->expanded_text_name = previous_text_name;
+            return -1;
+        }
+    }
 }
 
 /* Whether the text is expanded as it is read or only after it has been
@@ -23682,6 +23778,20 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
     (void)snprintf(engine->scanning_text_name,
                    sizeof(engine->scanning_text_name), "text of %s", named);
     struct hstex_token_vector text = {0};
+    if (expanding) {
+        /* Expanded where it stands, so nothing is pushed and a fault inside
+           the text names the line it is on. */
+        if (scan_expanded_text_from_input(engine, &text,
+                                          engine->scanning_text_name, error,
+                                          error_capacity) != 0) {
+            vector_destroy(&text);
+            return -1;
+        }
+        int status = tokens_to_bytes(engine, &text, bytes, byte_count, error,
+                                     error_capacity);
+        vector_destroy(&text);
+        return status;
+    }
     if (scan_balanced_group(engine, &text, true, engine->scanning_text_name,
                             expanding, error, error_capacity) != 0) {
         vector_destroy(&text);
@@ -23699,35 +23809,6 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
     return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
 
-/* The same expansion, gathering tokens rather than bytes: what \mark keeps,
-   so that \topmark and its relatives can put it back into the input. See
-   docs/DECISIONS.md, marks. */
-static int expand_to_tokens(struct hstex_engine *engine,
-                            struct hstex_token_vector *out, char *error,
-                            size_t error_capacity)
-{
-    for (;;) {
-        hstex_token token = 0U;
-        struct hstex_source_location location;
-        bool previous_inhibition = engine->inhibit_protected_expansion;
-        bool previous_gathering = engine->gathering_expanded_text;
-        engine->inhibit_protected_expansion = true;
-        engine->gathering_expanded_text = true;
-        enum hstex_engine_result result = hstex_engine_next_expanded(
-            engine, &token, &location, error, error_capacity);
-        engine->inhibit_protected_expansion = previous_inhibition;
-        engine->gathering_expanded_text = previous_gathering;
-        if (result == HSTEX_ENGINE_EOF) {
-            return hstex_source_pop_boundary(&engine->sources, error,
-                                             error_capacity);
-        }
-        if (result != HSTEX_ENGINE_TOKEN ||
-            vector_push(out, token, error, error_capacity) != 0) {
-            (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-            return -1;
-        }
-    }
-}
 
 /* The text of a \write is kept as it was written, so it can be expanded when
    the page reaches the shipper. See docs/DECISIONS.md, whatsits. */
@@ -33263,23 +33344,11 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
         return set_error(error, error_capacity,
                          "\\mark requires a braced token list");
     }
-    struct hstex_token_vector raw = {0};
-    if (scan_balanced_group(engine, &raw, true, "text of \\mark", true, error, error_capacity) != 0) {
-        vector_destroy(&raw);
-        return -1;
-    }
-    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
-        0) {
-        vector_destroy(&raw);
-        return -1;
-    }
-    if (push_owned_vector(engine, &raw, location, error, error_capacity) != 0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-        vector_destroy(&raw);
-        return -1;
-    }
+    /* Expanded where it stands, so a fault inside the text names the line
+       the \mark is on. */
     struct hstex_token_vector text = {0};
-    if (expand_to_tokens(engine, &text, error, error_capacity) != 0) {
+    if (scan_expanded_text_from_input(engine, &text, "text of \\mark", error,
+                                      error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
     }

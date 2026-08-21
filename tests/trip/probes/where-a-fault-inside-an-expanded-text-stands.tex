@@ -1,0 +1,39 @@
+% A TEXT EXPANDED AS IT IS READ IS READ FROM THE FILE, NOT FROM A LIST.
+%
+% \message, \special and \mark expand their text as they read it, one
+% pass, straight from wherever the text stands. So a fault raised while
+% the text is being expanded names THAT place:
+%
+%   l.N \mark{\the\spacefactor
+%                             }
+%
+% HSTeX gathered the text whole, pushed it as a list of its own and
+% expanded it from there, so every such fault drew an extra frame above
+% the line:
+%
+%   <inserted text> \the \spacefactor
+%   l.N \mark{\the\spacefactor}
+%
+% \write is not like this and is left alone: its text is kept as it was
+% written and expanded when the page reaches the shipper, so a fault in
+% it does belong to a list. That is also what makes \message{\meaning\lz}
+% quiet where \immediate\write16{\meaning\lz} reports the \outer \lz --
+% a conversion's operand is only reached, and so only exempted, in the
+% one-pass kind.
+%
+% trip line 293 writes \mark{\the\spacefactor} in vertical mode.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A a fault inside a mark text]}
+\mark{\the\spacefactor}
+\message{[B a fault inside a message text]}
+\message{\the\spacefactor}
+\message{[C a fault inside a special text]}
+\special{\the\spacefactor}
+\message{[D two of them, and a brace pair inside]}
+\mark{{\the\spacefactor}\the\spacefactor}
+\message{[E a conversion's operand is not the text's]}
+\outer\def\lz{Z}
+\message{[<\meaning\lz>]}
+\message{[done]}
+\end

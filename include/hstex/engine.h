@@ -1924,6 +1924,10 @@ struct hstex_engine {
        refuses an \outer macro there BEFORE expanding it, so the expander
        has to know. Holds the name to put in the message. */
     const char *expanded_definition_name;
+    /* The same, for a text gathered with expansion straight from the input
+       -- "text of \message". An \outer macro is forbidden in one just as
+       it is in a definition, and the fault names it. */
+    const char *expanded_text_name;
     bool dump_requested;
     bool end_requested;
     /* Set once a hundred faults have piled up inside one paragraph: the
