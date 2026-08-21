@@ -21017,6 +21017,15 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
+    /* The routine runs in internal vertical mode, not the vertical mode the
+       page builder was in. Measured through \tracingcommands, which names
+       the mode where it changes: an \output of `{\count9=1 \shipout\box255
+       \count9=2 }' draws {internal vertical mode: \count} at its first
+       command and {vertical mode: \message} at the next command after it. */
+    enum hstex_mode previous_output_mode = engine->mode;
+    bool previous_output_inner = engine->inner_mode;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = true;
     engine->output_active = true;
     struct hstex_source_location location = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
@@ -21056,6 +21065,14 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         status = -1;
     }
     engine->output_active = false;
+    /* The routine is closed by a right brace, which the reference obeys and
+       traces like any other -- one {end-group character }} at the end of
+       every output routine, in the mode the routine ran in. */
+    trace_command(engine,
+                  hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
+                                        (uint8_t)'}'));
+    engine->mode = previous_output_mode;
+    engine->inner_mode = previous_output_inner;
     if (end_group(engine, error, error_capacity) < 0) {
         status = -1;
     }

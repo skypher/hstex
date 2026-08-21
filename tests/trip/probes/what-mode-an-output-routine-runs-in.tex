@@ -1,0 +1,33 @@
+% AN OUTPUT ROUTINE RUNS IN INTERNAL VERTICAL MODE, AND ENDS WITH A BRACE.
+%
+% \tracingcommands names the mode where it changes, so an \output of
+%
+%   {\count9=1 \shipout\box255 \count9=2 }
+%
+% draws
+%
+%   {vertical mode: \penalty}          <- what set the page builder going
+%   {internal vertical mode: \count}   <- the routine's first command
+%   {\shipout}
+%   {\count}
+%   {end-group character }}            <- the routine's closing brace
+%   {vertical mode: \message}          <- back where the page builder was
+%
+% Two things there. The mode is INTERNAL vertical, not the vertical mode
+% the page builder was in -- the routine builds a list of its own. And
+% the routine is closed by a RIGHT BRACE that the reference obeys and
+% traces like any other, one per output routine.
+%
+% hstex ran the routine in the mode that stood and closed its group
+% without a token, so it drew neither line; and because the mode had not
+% changed, the next command after the routine did not name its mode
+% either. That third line is the one that showed up in trip -- fifty-odd
+% missing mode prefixes downstream of a routine that had run.
+\tracingonline=1
+\output={\count9=1 \shipout\box255 \count9=2 }
+\vsize=10pt \maxdeadcycles=3
+\tracingcommands=2
+X\par\penalty-10000
+\message{[done]}
+\tracingcommands=0
+\end
