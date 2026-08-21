@@ -1,0 +1,40 @@
+% A PARAMETER IS WRITTEN OUT WITH THE CHARACTER ITS PARAMETER TEXT USED.
+%
+% More than one character can have category six at once, and a macro
+% defined with the second one shows its parameters with THAT character:
+%
+%   \catcode`\!=6  \def\e!1\e{!1!1}      \show\e  gives  !1\e ->!1!1
+%
+% The rule is one character kept while a token list is written out. It
+% starts as `#' for each list and is set by every parameter of the
+% MACRO'S PARAMETER TEXT as that goes past; the parameters of the body
+% are written with whatever it was left at. So a macro whose parameter
+% text uses both characters shows its whole body with the LAST of them:
+%
+%   \def\f#1!2{[#1][!2]}   \show\f  gives  #1!2->[!1][!2]
+%
+% and the `#1<-' that \tracingmacros puts in front of an argument uses
+% the character the macro's own parameter text left behind, because the
+% two are written one after the other.
+%
+% HSTeX stored only the parameter's NUMBER, so every parameter came out
+% as `#' whatever it was written with.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\catcode`\!=6
+\def\d#1\d{#1#1}
+\def\e!1\e{!1!1}
+\def\f#1!2{[#1][!2]}
+\message{[A a macro written with hash]}
+\show\d
+\message{[B a macro written with the other parameter character]}
+\show\e
+\message{[C both in one]}
+\show\f
+\message{[D and how they trace]}
+\tracingmacros=2
+\message{\d X\d}
+\message{\e Y\e}
+\tracingmacros=0
+\message{[done]}
+\end

@@ -165,6 +165,14 @@ static void print_bytes(struct hstex_engine *engine, const char *text,
                         size_t length);
 static void print_escaped_control_sequence(struct hstex_engine *engine,
                                            hstex_cs_id identifier);
+/* The character a parameter is written out with. The reference keeps one
+   such character while it writes a token list and sets it from each
+   parameter of a MACRO'S PARAMETER TEXT as that goes by; the parameters of
+   the body, and the `#1<-' in front of an argument, are written with
+   whatever it was left at. So `\def\f#1!2{[#1][!2]}' shows its body as
+   `[!1][!2]' -- both with the LAST character its parameter text used, not
+   with the one each was written with. */
+static uint8_t shown_parameter_character = (uint8_t)'#';
 static void print_escaped_name(struct hstex_engine *engine, const char *name);
 static const char *token_parameter_name(uint32_t parameter);
 static void trace_token_parameter(struct hstex_engine *engine, size_t which);
@@ -8829,7 +8837,7 @@ static void trace_macro_argument(struct hstex_engine *engine, unsigned number,
         }
     }
     print_fresh_line(engine);
-    print_formatted(engine, "#%u<-", number);
+    print_formatted(engine, "%c%u<-", (char)shown_parameter_character, number);
     print_bytes(engine, (const char *)bytes, bytes_count);
     print_line(engine);
     free(bytes);
@@ -10155,7 +10163,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                           "Parameters must be numbered consecutively");
             }
             ++parameter_count;
-            current = hstex_token_parameter(parameter_count);
+            current = hstex_token_parameter_written(
+                parameter_count, hstex_token_character_code(current));
         }
         if (vector_push(&parameter_text, current, error, error_capacity) != 0) {
             vector_destroy(&parameter_text);
@@ -10323,8 +10332,10 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                        hstex_token_character_code(following) >= (uint8_t)'1' &&
                        hstex_token_character_code(following) <=
                            (uint8_t)('0' + parameter_count)) {
-                current = hstex_token_parameter((uint8_t)(
-                    hstex_token_character_code(following) - (uint8_t)'0'));
+                current = hstex_token_parameter_written(
+                    (uint8_t)(hstex_token_character_code(following) -
+                              (uint8_t)'0'),
+                    hstex_token_character_code(current));
             } else {
                 /* A number the macro has no parameter for: the reference
                    takes it as the ## that was meant, reads what followed
@@ -23320,8 +23331,8 @@ static int append_token_description(struct hstex_engine *engine,
                            error_capacity);
     }
     if (hstex_token_is_parameter(token)) {
-        if (append_byte(bytes, count, capacity, (uint8_t)'#', error,
-                        error_capacity) != 0) {
+        if (append_byte(bytes, count, capacity, shown_parameter_character,
+                        error, error_capacity) != 0) {
             return -1;
         }
         return append_byte(bytes, count, capacity,
@@ -23541,6 +23552,9 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
+    /* Each list starts with the usual character and picks up whatever its
+       own parameter text uses. */
+    shown_parameter_character = (uint8_t)'#';
     if (truncated != NULL) {
         *truncated = false;
     }
@@ -23645,6 +23659,12 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                 if (limit != 0U && count - shown_from >= limit) {
                     cut = true;
                     break;
+                }
+                /* A parameter of the parameter text sets the character the
+                   rest of the list is written with. */
+                if (hstex_token_is_parameter(macro->parameter_text[index])) {
+                    shown_parameter_character = hstex_token_parameter_character(
+                        macro->parameter_text[index]);
                 }
                 if (append_token_description(
                         engine, macro->parameter_text[index], &bytes, &count,

@@ -64,9 +64,21 @@ static inline hstex_cs_id hstex_token_control_sequence_id(hstex_token token)
     return token & HSTEX_TOKEN_CS_ID_MASK;
 }
 
+/* A parameter carries the character it was WRITTEN with as well as its
+   number, because that is how the reference writes it out again: a macro
+   defined with a second parameter character shows `!1' where one defined
+   with the usual character shows `#1'. A zero there means the usual one,
+   so a parameter token dumped by an older build still reads as `#'. */
+static inline hstex_token hstex_token_parameter_written(uint8_t number,
+                                                        uint8_t character)
+{
+    return (UINT32_C(1) << HSTEX_TOKEN_KIND_SHIFT) |
+           ((uint32_t)character << 8U) | (uint32_t)number;
+}
+
 static inline hstex_token hstex_token_parameter(uint8_t number)
 {
-    return (UINT32_C(1) << HSTEX_TOKEN_KIND_SHIFT) | (uint32_t)number;
+    return hstex_token_parameter_written(number, (uint8_t)'#');
 }
 
 static inline hstex_token
@@ -92,6 +104,12 @@ hstex_token_normalize_unexpanded_non_control(hstex_token token)
 static inline uint8_t hstex_token_parameter_number(hstex_token token)
 {
     return (uint8_t)(token & UINT32_C(0xff));
+}
+
+static inline uint8_t hstex_token_parameter_character(hstex_token token)
+{
+    uint8_t written = (uint8_t)((token >> 8U) & UINT32_C(0xff));
+    return written == 0U ? (uint8_t)'#' : written;
 }
 
 static inline bool hstex_token_is_character(hstex_token token)
