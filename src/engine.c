@@ -12482,12 +12482,16 @@ struct hstex_insert_settings {
     int32_t float_cost;
 };
 
+/* `every_vbox' says whether this vertical list is a \vbox the document
+   asked for: an \insert, a \vadjust and a \noalign all build one the same
+   way, and none of them reads \everyvbox. */
 static int evaluate_vbox_contents(struct hstex_engine *engine,
                                   struct hstex_vbox_builder *builder,
                                   int32_t starting_depth,
                                   int32_t *ending_depth,
                                   struct hstex_insert_settings *settings,
-                                  char *error, size_t error_capacity)
+                                  bool every_vbox, char *error,
+                                  size_t error_capacity)
 {
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
@@ -12541,7 +12545,7 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->prev_depth = starting_depth;
 
     int status = normal_paragraph(engine, error, error_capacity);
-    if (status == 0) {
+    if (status == 0 && every_vbox) {
         status = insert_every_box(engine, (size_t)HSTEX_TOKEN_EVERY_VBOX,
                                   error, error_capacity);
     }
@@ -12700,8 +12704,8 @@ static int scan_vbox(struct hstex_engine *engine, bool top,
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &builder,
-                                        HSTEX_IGNORE_DEPTH, NULL, NULL, error,
-                                        error_capacity);
+                                        HSTEX_IGNORE_DEPTH, NULL, NULL, true,
+                                        error, error_capacity);
     if (status == 0) {
         status = finalize_vbox(engine, &builder, matched_to, matched_spread,
                               requested_height, box, error, error_capacity);
@@ -33292,7 +33296,7 @@ static int execute_insert(struct hstex_engine *engine, char *error,
     struct hstex_vbox_builder builder = {0};
     struct hstex_insert_settings settings = {0};
     int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
-                                        NULL, &settings, error,
+                                        NULL, &settings, false, error,
                                         error_capacity);
     struct hstex_box packed = {0};
     if (status == 0) {
@@ -33351,7 +33355,8 @@ static int execute_vadjust(struct hstex_engine *engine, char *error,
     }
     struct hstex_vbox_builder builder = {0};
     int status = evaluate_vbox_contents(engine, &builder, HSTEX_IGNORE_DEPTH,
-                                        NULL, NULL, error, error_capacity);
+                                        NULL, NULL, false, error,
+                                        error_capacity);
     struct hstex_box packed = {0};
     if (status == 0) {
         status = finalize_vbox(engine, &builder, false, false, 0, &packed,
@@ -35939,7 +35944,8 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
                     int32_t enclosing_depth = engine->prev_depth;
                     status = evaluate_vbox_contents(engine, &between,
                                                     row_depth, &settled, NULL,
-                                                    error, error_capacity);
+                                                    false, error,
+                                                    error_capacity);
                     engine->prev_depth = enclosing_depth;
                     items = between.node_identifiers;
                     item_count = between.count;

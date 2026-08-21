@@ -1,0 +1,32 @@
+% ONLY A \vbox THE DOCUMENT ASKED FOR READS \everyvbox.
+%
+% \insert, \vadjust and \noalign all build a vertical list the same way a
+% \vbox does, and none of them reads \everyvbox. HSTeX built all four
+% through one routine and read the list for every one of them, so
+% `\everyvbox{\relax}' put a \relax inside every \noalign in the
+% document.
+%
+% \everyhbox is the same: only a \hbox the document asked for reads it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \vsize=200pt \parindent=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=100pt \vfuzz=100pt
+\output={\shipout\box255 }
+\everyvbox{\relax}
+\message{[A a vbox reads it]}
+\tracingcommands=2
+\setbox0=\vbox{\hsize=50pt }
+\tracingcommands=0
+\message{[B a noalign does not]}
+\tracingcommands=2
+\halign{#\cr A\cr\noalign{\kern1pt}}
+\tracingcommands=0
+\message{[C a vadjust does not]}
+\tracingcommands=2
+\noindent x\vadjust{\kern1pt}y\par
+\tracingcommands=0
+\message{[D an insert does not]}
+\tracingcommands=2
+\insert100{\kern1pt}
+\tracingcommands=0
+\message{[done]}
+\end
