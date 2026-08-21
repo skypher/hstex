@@ -49,7 +49,41 @@
 %   @@4: line 1.0 t=100010000 -> @@0
 %
 % Doing this properly means inserting an active node at the walk's
-% position rather than at the end. That is the next piece.
+% position rather than at the end.
+%
+% WRITTEN A SECOND TIME AND BACKED OUT AGAIN. The insertion is easy --
+% rebuild the list into a second buffer and swap -- but the CLASS RULE is
+% not what it looks like, and getting it wrong breaks cases that were
+% right. Eight measurements, all `does one breakpoint make one record or
+% two when the candidates are line 1 and line 2':
+%
+%   \hangafter=0                    ONE
+%   \hangafter=1                    ONE
+%   \hangafter=2                    TWO
+%   \hangafter=3                    TWO
+%   \hangafter=-3                   TWO
+%   \parshape=1                     ONE
+%   \parshape=3                     TWO
+%   \looseness=1, nothing else      TWO
+%
+% Write E for the last line whose width is its own -- \parshape's pair
+% count, or |\hangafter|, or nought -- except that any \looseness at all
+% makes E unbounded. Then the only rule that fits all eight is
+%
+%   class(line) = min(line, E)
+%
+% and NOT `line up to E, one shared class after it', which is what the
+% widths would suggest and what was tried. The difference shows exactly
+% at E <= 1, where min() puts lines 1 and 2 together and the widths do
+% not. Check it once more before building on it: find a breakpoint whose
+% candidates are lines 2 and 3 under \hangafter=2, where min() says one
+% class and the widths say two.
+%
+% Also worth knowing: when two classes DO get records, the reference
+% writes them interleaved -- `@ via @@0', the class's `@@n:', `@ via
+% @@1', its `@@n:' -- and when they do not, both `@ via' lines come
+% first and one `@@n:' follows. That is a quick way to read which
+% happened.
 \tracingonline=1 \hsize=100pt \parindent=0pt \tracingparagraphs=1
 \pretolerance=-1 \tolerance=10000 \hbadness=10000
 \message{[A hangindent, so lines differ in width]}
