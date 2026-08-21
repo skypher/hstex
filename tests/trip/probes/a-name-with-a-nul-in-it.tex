@@ -1,0 +1,17 @@
+% A control sequence whose name holds a NUL is named in a fault like any
+% other: the reference writes `^^@' for it. trip makes \a^^@^^@a and uses
+% it wrongly twice.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\^=7
+\tracingonline=1 \errorcontextlines=5
+\outer\def\z{Z}
+\message{[A a name with a NUL in it, used wrongly]}
+\def\a^^@^^@a#1{[#1]}
+\a^^@^^@a\z
+\message{[B the same name in a parameter text that does not match]}
+\def\b^^@x1#1{[#1]}
+\b^^@xy
+\message{[C a NUL as a character]}
+\def\c1{[1]}
+\c^^@
+\message{[done]}
+\end

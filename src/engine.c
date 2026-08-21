@@ -8766,8 +8766,16 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
                 break;
             }
         }
-        (void)snprintf(buffer, capacity, "%s %c", name,
-                       (char)hstex_token_character_code(token));
+        uint8_t code = hstex_token_character_code(token);
+        /* A NUL cannot stand in a C string, and a name is handed on as one.
+           The printer writes what cannot be written as itself with a `^^'
+           of its own, so only this one has to be spelled out here -- and
+           `^^@' is exactly what the printer would have written. */
+        if (code == 0U) {
+            (void)snprintf(buffer, capacity, "%s ^^@", name);
+        } else {
+            (void)snprintf(buffer, capacity, "%s %c", name, (char)code);
+        }
         return;
     }
     if (hstex_token_is_control_sequence(token)) {
@@ -8777,8 +8785,30 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
         if (hstex_symbol_name(&engine->lexical_state.symbols,
                               hstex_token_control_sequence_id(token), &kind,
                               &name, &length) == 0) {
-            (void)snprintf(buffer, capacity, "\\%.*s", (int)length,
-                           (const char *)name);
+            size_t written = 0U;
+            if (capacity != 0U) {
+                buffer[written++] = '\\';
+            }
+            for (size_t index = 0U; index < length; ++index) {
+                /* See the character above: a NUL in a name is spelled out,
+                   everything else the printer looks after. */
+                if (name[index] == 0U) {
+                    if (written + 3U >= capacity) {
+                        break;
+                    }
+                    buffer[written++] = '^';
+                    buffer[written++] = '^';
+                    buffer[written++] = '@';
+                    continue;
+                }
+                if (written + 1U >= capacity) {
+                    break;
+                }
+                buffer[written++] = (char)name[index];
+            }
+            if (capacity != 0U) {
+                buffer[written < capacity ? written : capacity - 1U] = '\0';
+            }
             return;
         }
     }
