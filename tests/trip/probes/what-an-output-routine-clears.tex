@@ -1,0 +1,35 @@
+% AN OUTPUT ROUTINE CLEARS THE PARAGRAPH SHAPE INSIDE ITS OWN GROUP.
+%
+% A paragraph may begin inside \output, so the reference clears the four
+% things that shape one -- \looseness, \hangindent, \hangafter and
+% \parshape -- when it fires the routine up. It does that AFTER opening
+% the routine's group, so the clearing is local: what the document set
+% comes back when the routine ends, and \tracingrestores draws all four:
+%
+%   {restoring \parshape=3}
+%   {restoring \hangafter=-2}
+%   {restoring \hangindent=5.0pt}
+%   {restoring \looseness=1}
+%
+% in that order, being the reverse of the order they were cleared in.
+% Only the ones that were not already clear are saved, on the usual rule
+% that an assignment which changes nothing saves nothing: with all four
+% already at their defaults the routine's group restores none of them.
+%
+% The routine sees them cleared, not as the document left them.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingrestores=1
+\hsize=100pt \vsize=20pt \parindent=0pt \maxdepth=2pt
+\output={\message{[in: looseness=\the\looseness,hangindent=\the\hangindent,%
+  hangafter=\the\hangafter,parshape=\the\parshape]}\shipout\box255 }
+\looseness=1 \hangindent=5pt \hangafter=-2 \parshape=3 0pt 10pt 0pt 20pt 0pt 30pt
+\message{[A a page with the four set]}
+\vbox{}\vskip30pt \penalty-10000
+\message{[B the four again, and clear]}
+\message{[looseness=\the\looseness,hangindent=\the\hangindent,%
+  hangafter=\the\hangafter,parshape=\the\parshape]}
+\looseness=0 \hangindent=0pt \hangafter=1 \parshape=0
+\message{[C a page with none of them set]}
+\vbox{}\vskip30pt \penalty-10000
+\message{[done]}
+\end

@@ -16172,8 +16172,15 @@ static void trace_restore(struct hstex_engine *engine,
         break;
     }
     case HSTEX_SAVE_PAR_SHAPE:
+        /* A shape is worth as many as it has lines, which is what \the
+           gives for it and what a restore names -- not the handle holding
+           it. */
         print_escaped_name(engine, "parshape");
-        print_formatted(engine, "=%d", (int)save->previous.integer);
+        print_formatted(engine, "=%d",
+                        save->previous.integer <= 0
+                            ? 0
+                            : (int)engine->parshapes[
+                                  (size_t)save->previous.integer - 1U]);
         break;
     case HSTEX_SAVE_FONT: {
         /* The font in use is not a named parameter; the reference calls it
@@ -21460,6 +21467,13 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     }
     uint32_t level_before_output = engine->group_level;
     if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* A paragraph may begin inside the routine, so the shape one would take
+       is cleared here -- INSIDE the routine's group, so that what the
+       document set is saved and comes back when the routine ends.
+       \tracingrestores shows the four coming back. */
+    if (normal_paragraph(engine, error, error_capacity) != 0) {
         return -1;
     }
     /* The routine runs in internal vertical mode, not the vertical mode the
