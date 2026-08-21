@@ -33861,9 +33861,21 @@ static int end_display_math(struct hstex_engine *engine,
         return -1;
     }
 
+    /* What a \vadjust, an \insert or a \mark left at the top level of the
+       equation moves out of it, the way it moves out of an \hbox put on a
+       vertical list: it lands right behind the display's line and in front
+       of \postdisplaypenalty. See
+       tests/trip/probes/what-migrates-out-of-a-display.tex. */
+    uint32_t *migrated = NULL;
+    size_t migrated_count = 0U;
+    if (migrate_out_of_hbox(engine, &equation, &migrated, &migrated_count,
+                            error, error_capacity) != 0) {
+        return -1;
+    }
     if (append_display_line(engine, equation, numbered ? &number : NULL, left,
                             width, indent, &shift, dropped, error,
                             error_capacity) != 0) {
+        free(migrated);
         return -1;
     }
     if (dropped && !left) {
@@ -33887,6 +33899,7 @@ static int end_display_math(struct hstex_engine *engine,
         };
         if (append_vbox_node(engine, &infinite, error, error_capacity) != 0 ||
             append_vbox_node(engine, &node, error, error_capacity) != 0) {
+            free(migrated);
             return -1;
         }
         below.width = 0;
@@ -33895,6 +33908,19 @@ static int end_display_math(struct hstex_engine *engine,
         below.stretch_order = 0U;
         below.shrink_order = 0U;
     }
+    /* As with a box, what moves out goes on as it stands and is not
+       something the next line is set against -- and it goes behind the
+       WHOLE display, a number set on a line of its own included. */
+    int32_t depth_before_migration = engine->prev_depth;
+    for (size_t item = 0U; item < migrated_count; ++item) {
+        if (append_vbox_item(engine, migrated[item], error,
+                             error_capacity) != 0) {
+            free(migrated);
+            return -1;
+        }
+    }
+    engine->prev_depth = depth_before_migration;
+    free(migrated);
     penalty.value.penalty =
         engine->integer_parameters[HSTEX_INTEGER_POST_DISPLAY_PENALTY];
     if (append_vbox_node(engine, &penalty, error, error_capacity) != 0) {

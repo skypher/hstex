@@ -1,0 +1,49 @@
+% WHAT A DISPLAY'S EQUATION HOLDS FOR THE VERTICAL LIST MOVES OUT OF IT.
+%
+% A \vadjust, an \insert or a \mark written inside $$...$$ does not stay
+% in the box the equation is set as: it moves out onto the vertical list,
+% landing right behind the display's line and in front of the
+% \postdisplaypenalty. It is the same rule an \hbox obeys when it is put
+% on a vertical list, and HSTeX had it for the \hbox and not for the
+% display.
+%
+% \showbox of the enclosing \vbox says so directly:
+%
+%   .\hbox(4.30554+0.0)x5.71527, shifted 47.14236    the display's line
+%   .\penalty 7                                      what the \vadjust held
+%   .\penalty 0                                      \postdisplaypenalty
+%
+% It goes behind the WHOLE display: a number too wide to stand beside the
+% equation is set on a line of its own below it, and what moves out comes
+% after that line, not between the two.
+%
+% and so does \tracingpages, which weighs the penalty as a place the page
+% could break. That is what this probe reads, because it can be compared
+% without showing the box.
+%
+% trip line 262 writes \vadjust{\penalty7} inside the display that runs
+% from line 261 to line 285.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \tracingpages=1
+\hsize=100pt \vsize=200pt \maxdepth=2pt \topskip=10pt \parindent=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=100pt \vfuzz=100pt
+\output={\shipout\box255 }
+\message{[A a vadjust inside a display]}
+\noindent aaa$$\vadjust{\penalty7}x$$bbb\par
+\message{[B a vadjust inside an inline formula, which already worked]}
+\noindent ccc$\vadjust{\penalty9}y$ddd\par
+\message{[C a vadjust holding glue, inside a display]}
+\noindent eee$$\vadjust{\vskip3pt}z$$fff\par
+\message{[D a number that does not fit, so it goes on a line of its own]}
+\noindent iii$$\vadjust{\penalty11}\hbox to 90pt{}\eqno\hbox to 90pt{}$$jjj\par
+\message{[E a mark inside a display]}
+\noindent ggg$$\mark{M}w$$hhh\par
+\message{[<\botmark>]}
+\message{[done]}
+\end
