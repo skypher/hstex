@@ -1,0 +1,50 @@
+% AN INSERTION'S CORRECTION GLUE GOES ON THE PAGE, NOT ONLY AGAINST THE GOAL.
+%
+% When the FIRST insertion of a class arrives on a page, \skip<n> is the
+% correction glue for that class, and three things happen to it at once:
+%
+%   the goal loses its WIDTH        (along with room for the insertion)
+%   the page gains its STRETCH      at that stretch's own order
+%   the page gains its SHRINK
+%
+% Measured with \skip100=5pt plus 3filll minus 9pt and \dimen100=50pt
+% \count100=1000, an insertion four points tall:
+%
+%   % t=0.0 g=100.0 b=10000 p=1 c=100000#     before it
+%   % t=0.0 plus 3.0filll minus 9.0 g=91.0 b=0 p=2 c=2#   after it
+%
+% 100 - 5 (the width) - 4 (the insertion) = 91, and the stretch and the
+% shrink are now the PAGE's. hstex had the goal right and the page
+% totals bare, so every break after an insertion was judged as though
+% the page could not stretch at all: b=10000 where the reference has
+% b=0. That is a page-breaking difference, not a reporting one.
+%
+% ONLY THE FIRST OF A CLASS. A second insertion of the same class takes
+% room from the goal and adds no more correction glue.
+%
+% AN INFINITE SHRINK COUNTS AS ITS AMOUNT. \skip101=1pt minus 2fil draws
+%
+%   ! Infinite glue shrinkage inserted from \skip101.
+%
+% and the page gains 2.0 of finite shrink -- the register itself is left
+% alone.
+\tracingonline=1 \tracingpages=1
+\output={\shipout\box255 }
+\vsize=100pt \maxdepth=2pt \topskip=0pt
+\dimen100=50pt \count100=1000 \skip100=5pt plus 3filll minus 9pt
+\dimen101=50pt \count101=500 \skip101=1pt minus 2fil
+\message{[A first insert of a class]}
+\hbox{}\penalty1
+\insert100{\hbox{}\vskip4pt}
+\penalty2
+\message{[B second of the same class]}
+\insert100{\hbox{}\vskip4pt}
+\penalty3
+\message{[C a class whose skip shrinks infinitely]}
+\insert101{\hbox{}\vskip4pt}
+\penalty4
+\penalty-10000
+\message{[D what \skip101 still reads]}\showthe\skip101
+\message{[done]}
+\tracingpages=0
+\end

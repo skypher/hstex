@@ -21265,6 +21265,23 @@ static int build_page(struct hstex_engine *engine, char *error,
                     engine->page_dimens[HSTEX_PAGE_GOAL] -=
                         (int32_t)(insertion_size(record->held, factor) +
                                   engine->glues[number].width);
+                    /* Its stretch and shrink go on the PAGE, which is what
+                       the badness of a break is judged by. Measured:
+                       \skip100=5pt plus 3filll minus 9pt makes the page read
+                       `t=0.0 plus 3.0filll minus 9.0 g=91.0' the moment the
+                       first insertion of the class arrives, and the second
+                       insertion of the same class adds nothing more. An
+                       infinite shrink counts as its amount, the message
+                       above having just made it finite. */
+                    const struct hstex_glue *correction =
+                        &engine->glues[number];
+                    if (correction->stretch_order <= 3U) {
+                        engine->page_dimens[HSTEX_PAGE_STRETCH +
+                                            correction->stretch_order] +=
+                            correction->stretch;
+                    }
+                    engine->page_dimens[HSTEX_PAGE_SHRINK] +=
+                        correction->shrink;
                 }
                 int32_t size = packed_dimen(node.height);
                 int64_t wanted = insertion_size(size, factor);
