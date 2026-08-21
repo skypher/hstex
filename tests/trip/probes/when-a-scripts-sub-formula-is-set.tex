@@ -1,0 +1,55 @@
+% A SCRIPT'S SUB-FORMULA IS SET WHEN THE FORMULA IS, NOT WHEN ITS BRACE
+% CLOSES.
+%
+% The reference reads a whole formula into a list of lists and sets the
+% lot when the closing $ arrives. So everything the setting reports --
+% an undefined family here -- is reported at the $, however deep in the
+% formula the offending character stood. HSTeX set a script's braces as
+% soon as they closed, so the complaint came early and named the wrong
+% line.
+%
+% The markers below are on lines of their own: INNER is written when the
+% script's brace has closed, FORM when the formula has. The reference
+% draws INNER first and the complaint after it, in every case.
+%
+% A braced group that is NOT a script and holds one ordinary atom is
+% that atom, and never becomes a list of its own, so nothing is set for
+% it either way.
+%
+% trip line 269 has \mathaccent"161 {\fam13A9...} inside a script inside
+% the display that ends on line 285, and the reference reports its two
+% complaints on 285.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
+\message{[A a mathaccent over an undefined family]}
+\setbox0=\vbox{\noindent$B\mathaccent"161 {\fam13 A}%
+\message{INNER}%
+C$%
+\message{FORM}%
+\par}
+\message{[B the same in a script]}
+\setbox0=\vbox{\noindent$B^{\mathaccent"161 {\fam13 A}}%
+\message{INNER}%
+C$%
+\message{FORM}%
+\par}
+\message{[C a bare character as the nucleus]}
+\setbox0=\vbox{\noindent$B\fam13 \mathaccent"161 A%
+\message{INNER}%
+C$%
+\message{FORM}%
+\par}
+\message{[D no accent, just the character]}
+\setbox0=\vbox{\noindent$B{\fam13 A}%
+\message{INNER}%
+C$%
+\message{FORM}%
+\par}
+\message{[done]}
+\end

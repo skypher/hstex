@@ -34088,18 +34088,26 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "a script mark was left without a script");
     }
+    /* A sub-formula that fills a script or a radicand is NOT set when its
+       brace closes: the reference keeps the list and sets the whole formula
+       when the $ arrives, so whatever the setting reports -- an undefined
+       family, an overfull box -- is reported there and not here. Keeping a
+       style that no style can equal makes the setting happen when the field
+       is first asked for its box. See docs/DECISIONS.md,
+       when-a-sub-formula-is-set. */
+    bool deferred = outer->slot != (uint8_t)HSTEX_MATH_SLOT_NONE;
     /* The list is kept as well as the box, because a fraction sets each of
        its sides in a style that is not known until \over is read. */
     uint32_t record = 0U;
-    uint8_t item_style = inner->style;
+    uint8_t item_style = deferred ? (uint8_t)0xFFU : inner->style;
     int status = store_math_sublist(engine, inner, &record, error,
                                     error_capacity);
-    if (status == 0) {
+    if (status == 0 && !deferred) {
         status = translate_math_list(engine, inner, error, error_capacity);
     }
     engine->active_hbox_builder = previous;
     struct hstex_box box = {0};
-    if (status == 0) {
+    if (status == 0 && !deferred) {
         status = finalize_hbox(engine, &builder, false, false, 0, &box, error,
                                error_capacity);
     }
