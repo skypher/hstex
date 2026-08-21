@@ -1,0 +1,22 @@
+% What a packing report shows of its box goes by \showboxdepth and
+% \showboxbreadth, and a NEGATIVE depth shows nothing of it at all: ` []'
+% stands where the box would have been, on the line the text ended.
+\catcode`\{=1 \catcode`\}=2
+\font\tenrm=cmr10 \tenrm \tracingonline=1
+\message{[A an overfull hbox at depth -1]}
+\showboxbreadth=-1 \showboxdepth=-1
+\setbox0=\hbox to 1pt{\hbox{AB}}
+\message{[B at depth 0]}
+\showboxbreadth=-1 \showboxdepth=0
+\setbox0=\hbox to 1pt{\hbox{AB}}
+\message{[C at depth 0, breadth 1]}
+\showboxbreadth=1 \showboxdepth=0
+\setbox0=\hbox to 1pt{\hbox{AB}\hbox{CD}}
+\message{[D at depth 1, breadth 1]}
+\showboxbreadth=1 \showboxdepth=1
+\setbox0=\hbox to 1pt{\hbox{AB}\hbox{CD}}
+\message{[E an overfull vbox at depth -1]}
+\showboxbreadth=-1 \showboxdepth=-1
+\setbox0=\vbox to 1pt{\hbox{AB}}
+\message{[done]}
+\end

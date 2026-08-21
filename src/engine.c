@@ -12364,6 +12364,16 @@ static void report_packing(struct hstex_engine *engine,
         show_short_display_of(engine, items, count);
         print_line(engine);
     }
+    /* A NEGATIVE \showboxdepth shows nothing of the box at all: what stands
+       where it would have been is ` []', on the line the text ended, with
+       no blank line in front of it. */
+    if (engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH] < 0) {
+        print_text(engine, " []");
+        print_line(engine);
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
+        return;
+    }
     print_line(engine);
     print_formatted(engine, "%s(", kind);
     show_scaled(engine, box->height);
@@ -35388,10 +35398,15 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
                              char *error, size_t error_capacity)
 {
     struct hstex_align_entry *outer = engine->alignment_entry;
+    /* The line an alignment's rows are reported against is the line the
+       alignment itself began on, so one alignment inside another's entry
+       must give the outer one its line back. */
+    int32_t outer_line = engine->alignment_line;
     engine->alignment_entry = NULL;
     int status = execute_alignment_inner(engine, vertical, error,
                                          error_capacity);
     engine->alignment_entry = outer;
+    engine->alignment_line = outer_line;
     return status;
 }
 
@@ -35931,7 +35946,14 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
             }
         }
         struct hstex_box whole = {0};
-        whole.width = (int32_t)final_width;
+        /* The row of a \valign runs downwards, so what the alignment was set
+           to is its HEIGHT: measuring it as a width would report every row
+           against nothing at all. */
+        if (vertical) {
+            whole.height = (int32_t)final_width;
+        } else {
+            whole.width = (int32_t)final_width;
+        }
         engine->badness =
             packing_badness(natural, (int32_t)final_width, &preamble);
         int32_t previous_pack = engine->pack_begin_line;

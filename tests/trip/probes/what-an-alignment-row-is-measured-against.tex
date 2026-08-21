@@ -1,0 +1,31 @@
+% A \valign's rows run downwards, so what the alignment was set to is their
+% HEIGHT; and the line an alignment's rows are reported against is the line
+% the alignment itself began on, whatever alignments stand inside it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\font\tenrm=cmr10 \tenrm \tracingonline=1
+\showboxbreadth=-1 \showboxdepth=-1
+\message{[A a valign row set too small]}
+\setbox0=\hbox{\valign to 3pt{#\cr\hbox{A}\cr}}
+\message{[B a valign row set too large]}
+\setbox0=\hbox{\valign to 30pt{#\cr\hbox{A}\cr}}
+\message{[C a valign row spread]}
+\setbox0=\hbox{\valign spread 5pt{#\cr\hbox{A}\cr}}
+\message{[D an halign that spans several lines]}
+\setbox0=\vbox{\halign to 3pt{#\cr
+A\cr
+BB\cr
+CCC\cr
+}}
+\message{[E an alignment inside another one]}
+\setbox0=\vbox{\halign to 3pt{#\cr
+A\cr
+\valign to 3pt{#\cr X\cr}\cr
+D\cr
+}}
+\message{[F and the same with the valign first]}
+\setbox0=\vbox{\halign to 3pt{#\cr
+\valign to 3pt{#\cr X\cr}\cr
+BB\cr
+}}
+\message{[done]}
+\end
