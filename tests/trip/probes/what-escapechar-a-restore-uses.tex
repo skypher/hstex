@@ -1,0 +1,38 @@
+% A RESTORE NAMES THINGS BEHIND THE ESCAPE CHARACTER, whatever
+% \escapechar says that is -- and nothing at all where it is out of
+% range:
+%
+%   \escapechar=`|     {restoring |count5=7}   {restoring |m=macro:->a}
+%   \escapechar=-1     {restoring count5=7}    {restoring m=macro:->a}
+%   \escapechar=`\\    {restoring \count5=7}
+%
+% Every name in the line takes it: the register or parameter, a macro's
+% own name, a family's font (`{restoring |textfont2=|ff}' has two), the
+% font in use, and the `\ETC.' that ends a value shown to its limit.
+% hstex wrote a backslash into all of them.
+%
+% What is NOT behind it: `current font=' is words rather than a name, and
+% so are `macro:', `undefined' and `void'.
+%
+% RUN THIS UNDER `pdftex -ini'; it sets its own catcodes.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingrestores=1
+\count5=7 \dimen5=1pt \skip5=1pt \toks5={a}\def\m{a}\catcode`\q=12
+\fam=3 \everypar={p}\parshape=1 0pt 100pt \font\ff=cmr10 \textfont2=\ff
+\message{[A escapechar is a bar]}
+\escapechar=`|
+{\count5=8 \dimen5=2pt \skip5=2pt \toks5={b}\def\m{b}\catcode`\q=13
+ \fam=4 \everypar={q}\parshape=1 0pt 50pt \textfont2=\nullfont \undefinedxx}
+\message{[B escapechar out of range]}
+\escapechar=-1
+{\count5=9 \def\m{c}\fam=5 \let\zz=\relax}
+\message{[C escapechar back]}
+\escapechar=`\\
+{\count5=10 \def\m{d}}
+\message{[D the font in use]}
+\escapechar=`|
+\ff
+{\nullfont}
+\escapechar=`\\
+\message{[done]}
+\end

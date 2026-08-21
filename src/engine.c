@@ -15874,6 +15874,40 @@ static void trace_glue(struct hstex_engine *engine,
     }
 }
 
+/* A name behind the escape character. \escapechar decides what that is, and
+   out of range it is nothing at all: measured, `\escapechar=`|' makes a
+   restore read `{restoring |count5=7}' and `\escapechar=-1' makes it
+   `{restoring count5=7}'. */
+static void print_escaped_name(struct hstex_engine *engine, const char *name)
+{
+    int32_t escape =
+        engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+    if (escape >= 0 && escape <= 255) {
+        print_byte(engine, (char)(unsigned char)escape);
+    }
+    print_text(engine, name);
+}
+
+/* The same for a control sequence, named as it was written. */
+static void print_escaped_control_sequence(struct hstex_engine *engine,
+                                           hstex_cs_id identifier)
+{
+    enum hstex_symbol_kind kind;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&engine->lexical_state.symbols, identifier, &kind,
+                          &name, &length) != 0) {
+        print_text(engine, "an internal token");
+        return;
+    }
+    int32_t escape =
+        engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+    if (escape >= 0 && escape <= 255) {
+        print_byte(engine, (char)(unsigned char)escape);
+    }
+    print_bytes(engine, (const char *)name, length);
+}
+
 /* \tracingrestores writes a line for every save undone when a group ends,
    naming what it is putting back and what it is putting back to. See
    tests/trip/probes/what-tracingrestores-writes.tex. */
@@ -15898,10 +15932,7 @@ static void trace_restore(struct hstex_engine *engine,
     print_text(engine, retaining ? "{retaining " : "{restoring ");
     switch (save->kind) {
     case HSTEX_SAVE_MEANING: {
-        char named[192];
-        describe_token(engine, hstex_token_control_sequence(save->index),
-                       named, sizeof(named));
-        print_text(engine, named);
+        print_escaped_control_sequence(engine, save->index);
         print_byte(engine, '=');
         uint8_t *bytes = NULL;
         size_t count = 0U;
@@ -15918,7 +15949,7 @@ static void trace_restore(struct hstex_engine *engine,
                           sizeof(scratch)) == 0) {
             print_bytes(engine, (const char *)bytes, count);
             if (cut) {
-                print_text(engine, "\\ETC.");
+                print_escaped_name(engine, "ETC.");
             }
         }
         engine->meanings[save->index - 1U] = standing;
@@ -15926,55 +15957,64 @@ static void trace_restore(struct hstex_engine *engine,
         break;
     }
     case HSTEX_SAVE_CAT_CODE:
-        print_formatted(engine, "\\catcode%u=%u", (unsigned int)save->index,
+        print_escaped_name(engine, "catcode");
+        print_formatted(engine, "%u=%u", (unsigned int)save->index,
                         (unsigned int)save->previous.category);
         break;
     case HSTEX_SAVE_CODE:
-        print_formatted(engine, "\\%s%u=%d",
-                        code_names[(save->index / 256U) % 5U],
-                        (unsigned int)(save->index % 256U),
+        print_escaped_name(engine, code_names[(save->index / 256U) % 5U]);
+        print_formatted(engine, "%u=%d", (unsigned int)(save->index % 256U),
                         (int)save->previous.integer);
         break;
     case HSTEX_SAVE_COUNT:
-        print_formatted(engine, "\\count%u=%d", (unsigned int)save->index,
+        print_escaped_name(engine, "count");
+        print_formatted(engine, "%u=%d", (unsigned int)save->index,
                         (int)save->previous.integer);
         break;
     case HSTEX_SAVE_INTEGER_PARAMETER:
-        print_formatted(engine, "\\%s=%d",
-                        engine->integer_parameter_names[save->index],
-                        (int)save->previous.integer);
+        print_escaped_name(engine,
+                           engine->integer_parameter_names[save->index]);
+        print_formatted(engine, "=%d", (int)save->previous.integer);
         break;
     case HSTEX_SAVE_DIMEN:
-        print_formatted(engine, "\\dimen%u=", (unsigned int)save->index);
+        print_escaped_name(engine, "dimen");
+        print_formatted(engine, "%u=", (unsigned int)save->index);
         trace_scaled(engine, save->previous.integer);
         break;
     case HSTEX_SAVE_DIMEN_PARAMETER:
-        print_formatted(engine, "\\%s=",
-                        engine->dimen_parameter_names[save->index]);
+        print_escaped_name(engine,
+                           engine->dimen_parameter_names[save->index]);
+        print_byte(engine, '=');
         trace_scaled(engine, save->previous.integer);
         break;
     case HSTEX_SAVE_GLUE:
-        print_formatted(engine, "\\skip%u=", (unsigned int)save->index);
+        print_escaped_name(engine, "skip");
+        print_formatted(engine, "%u=", (unsigned int)save->index);
         trace_glue(engine, &save->previous.glue, false);
         break;
     case HSTEX_SAVE_MUGLUE:
-        print_formatted(engine, "\\muskip%u=", (unsigned int)save->index);
+        print_escaped_name(engine, "muskip");
+        print_formatted(engine, "%u=", (unsigned int)save->index);
         trace_glue(engine, &save->previous.glue, true);
         break;
     case HSTEX_SAVE_GLUE_PARAMETER:
         /* glue_parameter_name is written for the field a glue node carries,
            where nought means `not from a parameter', so it counts from one. */
-        print_formatted(engine, "\\%s=",
-                        glue_parameter_name((uint8_t)(save->index + 1U)));
+        print_escaped_name(engine,
+                           glue_parameter_name((uint8_t)(save->index + 1U)));
+        print_byte(engine, '=');
         trace_glue(engine, &save->previous.glue, false);
         break;
     case HSTEX_SAVE_MUGLUE_PARAMETER:
-        print_formatted(engine, "\\%s=",
-                        save->index < 3U ? mu_names[save->index] : "muskip");
+        print_escaped_name(engine,
+                           save->index < 3U ? mu_names[save->index]
+                                            : "muskip");
+        print_byte(engine, '=');
         trace_glue(engine, &save->previous.glue, true);
         break;
     case HSTEX_SAVE_BOX: {
-        print_formatted(engine, "\\box%u=", (unsigned int)save->index);
+        print_escaped_name(engine, "box");
+        print_formatted(engine, "%u=", (unsigned int)save->index);
         const struct hstex_box *box = &save->previous.box;
         if (box->kind == HSTEX_BOX_VOID) {
             print_text(engine, "void");
@@ -16002,10 +16042,11 @@ static void trace_restore(struct hstex_engine *engine,
     case HSTEX_SAVE_TOKEN_REGISTER:
     case HSTEX_SAVE_TOKEN_PARAMETER: {
         if (save->kind == HSTEX_SAVE_TOKEN_REGISTER) {
-            print_formatted(engine, "\\toks%u=", (unsigned int)save->index);
+            print_escaped_name(engine, "toks");
+            print_formatted(engine, "%u=", (unsigned int)save->index);
         } else {
-            print_formatted(engine, "\\%s=",
-                            token_parameter_name(save->index));
+            print_escaped_name(engine, token_parameter_name(save->index));
+            print_byte(engine, '=');
         }
         uint8_t *bytes = NULL;
         size_t count = 0U;
@@ -16020,7 +16061,7 @@ static void trace_restore(struct hstex_engine *engine,
                                    sizeof(scratch)) == 0) {
             print_bytes(engine, (const char *)bytes, count);
             if (cut) {
-                print_text(engine, "\\ETC.");
+                print_escaped_name(engine, "ETC.");
             }
         }
         free(bytes);
@@ -16032,18 +16073,18 @@ static void trace_restore(struct hstex_engine *engine,
         const struct hstex_font *font = font_by_identifier(
             engine, save->previous.integer >= 0
                         ? (uint32_t)save->previous.integer : 0U);
-        char named[128] = "\\nullfont";
+        print_escaped_name(engine, sizes[(save->index / 16U) % 3U]);
+        print_formatted(engine, "%u=", (unsigned int)(save->index % 16U));
         if (font != NULL && font->identifier_cs != 0U) {
-            describe_token(engine,
-                           hstex_token_control_sequence(font->identifier_cs),
-                           named, sizeof(named));
+            print_escaped_control_sequence(engine, font->identifier_cs);
+        } else {
+            print_escaped_name(engine, "nullfont");
         }
-        print_formatted(engine, "\\%s%u=%s", sizes[(save->index / 16U) % 3U],
-                        (unsigned int)(save->index % 16U), named);
         break;
     }
     case HSTEX_SAVE_PAR_SHAPE:
-        print_formatted(engine, "\\parshape=%d", (int)save->previous.integer);
+        print_escaped_name(engine, "parshape");
+        print_formatted(engine, "=%d", (int)save->previous.integer);
         break;
     case HSTEX_SAVE_FONT: {
         /* The font in use is not a named parameter; the reference calls it
@@ -16051,13 +16092,12 @@ static void trace_restore(struct hstex_engine *engine,
         const struct hstex_font *font = font_by_identifier(
             engine, save->previous.integer >= 0
                         ? (uint32_t)save->previous.integer : 0U);
-        char named[128] = "\\nullfont";
+        print_text(engine, "current font=");
         if (font != NULL && font->identifier_cs != 0U) {
-            describe_token(engine,
-                           hstex_token_control_sequence(font->identifier_cs),
-                           named, sizeof(named));
+            print_escaped_control_sequence(engine, font->identifier_cs);
+        } else {
+            print_escaped_name(engine, "nullfont");
         }
-        print_formatted(engine, "current font=%s", named);
         break;
     }
     default:
