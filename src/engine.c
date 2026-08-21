@@ -163,12 +163,6 @@ static void print_line(struct hstex_engine *engine);
 static void print_byte(struct hstex_engine *engine, char byte);
 static void print_bytes(struct hstex_engine *engine, const char *text,
                         size_t length);
-static void print_escaped_control_sequence(struct hstex_engine *engine,
-                                           hstex_cs_id identifier);
-static int append_token_description(struct hstex_engine *engine,
-                                    hstex_token token, uint8_t **bytes,
-                                    size_t *count, size_t *capacity,
-                                    char *error, size_t error_capacity);
 static bool character_needs_caret(uint8_t code);
 static FILE *diagnostic_stream(struct hstex_engine *engine);
 static uint8_t normalised_hyphen_min(int32_t value);
@@ -8718,79 +8712,6 @@ static void count_macro_body(struct hstex_macro *macro)
     macro->body_parameter_total = (uint16_t)total;
 }
 
-/* \tracingmacros draws the macro about to be expanded: a blank line, the
-   name, and then its parameter text, `->' and its body -- the same text
-   \show gives after the `macro:' it puts in front. What follows starts on a
-   fresh line with no blank of its own. */
-static void trace_macro_expansion(struct hstex_engine *engine,
-                                  hstex_token token)
-{
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] <= 0 ||
-        !hstex_token_is_control_sequence(token)) {
-        return;
-    }
-    uint8_t *bytes = NULL;
-    size_t count = 0U;
-    size_t capacity = 0U;
-    size_t after_prefix = 0U;
-    char scratch[256];
-    if (meaning_bytes(engine, token, &bytes, &count, &capacity, &after_prefix,
-                      0U, NULL, scratch, sizeof(scratch)) != 0 ||
-        after_prefix > count) {
-        free(bytes);
-        return;
-    }
-    uint8_t *named = NULL;
-    size_t named_count = 0U;
-    size_t named_capacity = 0U;
-    /* The name is written the way a control sequence is written when
-       something follows it: a control word and a single letter both take a
-       space after them, so the text reads `\A ->B' and `\d #1\d ->#1#1'. */
-    if (serialize_control_sequence(engine, token, &named, &named_count,
-                                   &named_capacity, true, scratch,
-                                   sizeof(scratch)) != 0) {
-        free(named);
-        free(bytes);
-        return;
-    }
-    print_line(engine);
-    print_fresh_line(engine);
-    print_bytes(engine, (const char *)named, named_count);
-    print_bytes(engine, (const char *)bytes + after_prefix,
-                count - after_prefix);
-    print_line(engine);
-    free(named);
-    free(bytes);
-}
-
-/* And one line per argument as it is matched: `#1<-' and what was taken. A
-   parameter character in an argument is shown doubled, as it is everywhere
-   a token list is shown. */
-static void trace_macro_argument(struct hstex_engine *engine, unsigned number,
-                                 const hstex_token *tokens, size_t count)
-{
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] <= 0) {
-        return;
-    }
-    uint8_t *bytes = NULL;
-    size_t bytes_count = 0U;
-    size_t capacity = 0U;
-    char scratch[256];
-    for (size_t index = 0U; index < count; ++index) {
-        if (append_token_description(engine, tokens[index], &bytes,
-                                     &bytes_count, &capacity, scratch,
-                                     sizeof(scratch)) != 0) {
-            free(bytes);
-            return;
-        }
-    }
-    print_fresh_line(engine);
-    print_formatted(engine, "#%u<-", number);
-    print_bytes(engine, (const char *)bytes, bytes_count);
-    print_line(engine);
-    free(bytes);
-}
-
 static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                              const struct hstex_macro *macro,
                              struct hstex_source_location call_location,
@@ -8900,8 +8821,6 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         }
         bounds[next_parameter - 1U].start = start;
         bounds[next_parameter - 1U].count = arena->count - start;
-        trace_macro_argument(engine, next_parameter, arena->data + start,
-                             arena->count - start);
         ++next_parameter;
     }
     if ((macro->shape & (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS) == 0U &&
@@ -9287,7 +9206,6 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
             return push_one(engine, token, location, error, error_capacity);
         }
         engine->expanding_macro_cs = hstex_token_control_sequence_id(token);
-        trace_macro_expansion(engine, token);
         return instantiate_macro(engine, meaning->value.macro_identifier, macro,
                                  location, error, error_capacity);
     }
@@ -9635,7 +9553,6 @@ static enum hstex_engine_result next_expanded_inner(
             }
             engine->expanding_macro_cs =
                 hstex_token_control_sequence_id(current);
-            trace_macro_expansion(engine, current);
             if (instantiate_macro(engine, meaning->value.macro_identifier,
                                   macro, *location, error,
                                   error_capacity) != 0) {
