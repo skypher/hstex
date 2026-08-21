@@ -1,0 +1,39 @@
+% \input MET WHILE A FILE NAME IS BEING SCANNED DOES NOT OPEN ITS FILE.
+%
+% It stands a \relax in front of itself and waits. The \relax ends
+% whatever was being scanned, and the \input is met again afterwards:
+%
+%   \font\zz=nosuchfont\input tripfile
+%
+%   {\font}
+%   {\input}                     <- expanded here, and it waits
+%   ! Font \zz=nosuchfont not loadable: Metric (TFM) file not found.
+%   <to be read again> \relax
+%   {\relax}                     <- the \relax it stood in front of itself
+%   {\input}                     <- met again, and NOW the file opens
+%   (./tripfile.tex
+%
+% The name being scanned is not only the font's own: the size that may
+% follow it counts too, and that is where this \input is met -- the font
+% name ended at the control sequence, and the \input turned up while
+% `at' was being looked for.
+%
+% \input IS EXPANDED, NOT OBEYED, which is what puts its trace line above
+% the fault rather than below it. hstex had it as a command of the main
+% loop, so it could only be traced after the font had been looked for and
+% failed.
+%
+% A CHARACTER THE FONT DOES NOT HAVE DOES NOT CARRY A RUN. A run of
+% characters is traced once, at its first -- but a character that joins no
+% list carries nothing, so the next one is traced too. With the font above
+% left at \nullfont, `hello' draws five lines where a real font draws one.
+%
+% RUN THIS UNDER `pdftex -ini'; it sets its own catcodes and wants a file
+% called tripfile.tex beside it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingcommands=2
+\message{[A a font that will not load, then an input]}
+\font\zz=nosuchfont\input tripfile
+\message{[B]}
+\tracingcommands=0
+\end

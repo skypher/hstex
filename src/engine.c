@@ -3696,7 +3696,26 @@ static int append_byte(uint8_t **bytes, size_t *count, size_t *capacity,
    left NULL and the caller decides. \input wants that -- measured, an
    \input with nothing after it is passed over in silence and the file
    carries on -- and nothing else does. */
+static int scan_input_filename_inner(struct hstex_engine *engine,
+                                     char **filename, bool allow_empty,
+                                     char *error, size_t error_capacity);
+
+/* A file name is scanned with the flag up, so that a \input inside one waits
+   rather than opening anything. */
 static int scan_input_filename(struct hstex_engine *engine, char **filename,
+                               bool allow_empty, char *error,
+                               size_t error_capacity)
+{
+    bool previous = engine->scanning_file_name;
+    engine->scanning_file_name = true;
+    int status = scan_input_filename_inner(engine, filename, allow_empty, error,
+                                           error_capacity);
+    engine->scanning_file_name = previous;
+    return status;
+}
+
+static int scan_input_filename_inner(struct hstex_engine *engine,
+                                     char **filename,
                                bool allow_empty, char *error,
                                size_t error_capacity)
 {
@@ -8935,6 +8954,9 @@ static int scan_if_cs_name(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
 static bool command_starts_conditional(enum hstex_command command);
 static bool command_is_expandable(enum hstex_command command);
+static int push_relax_before(struct hstex_engine *engine, hstex_token token,
+                             struct hstex_source_location location, char *error,
+                             size_t error_capacity);
 static void trace_command(struct hstex_engine *engine, hstex_token token);
 static void trace_words(struct hstex_engine *engine, const char *words);
 static int push_conditional(struct hstex_engine *engine, size_t *index,
@@ -9157,6 +9179,21 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     }
     if (meaning->command == HSTEX_COMMAND_PDF_LAST_MATCH) {
         return expand_pdf_last_match(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_INPUT) {
+        /* \input MET WHILE A FILE NAME IS BEING SCANNED does not open its
+           file. It stands a \relax in front of itself and waits: the \relax
+           ends whatever was being scanned, and the \input is met again
+           afterwards. Measured on `\font\zz=nosuchfont\input f', where the
+           reference traces {\input}, reports the font, then traces {\relax}
+           and {\input} again -- and opens the file only at the second. */
+        if (engine->scanning_file_name) {
+            return push_relax_before(engine, token, location, error,
+                                     error_capacity) == 0
+                       ? 0
+                       : -1;
+        }
+        return execute_input(engine, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_THE) {
         return expand_the_primitive(engine, location, error, error_capacity);
@@ -9527,6 +9564,19 @@ static enum hstex_engine_result next_expanded_inner(
         if (meaning->command == HSTEX_COMMAND_PDF_LAST_MATCH) {
             if (expand_pdf_last_match(engine, *location, error,
                                       error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_INPUT) {
+            /* See the note beside the other half of this chain: a \input met
+               while a file name is being scanned stands a \relax in front of
+               itself instead of opening anything. */
+            int taken = engine->scanning_file_name
+                            ? push_relax_before(engine, current, *location,
+                                                error, error_capacity)
+                            : execute_input(engine, error, error_capacity);
+            if (taken != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -10272,12 +10322,19 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
     int32_t scale = 0;
     bool matched_at = false;
     bool matched_scaled = false;
+    /* The size that may follow a font's name is still part of the name as far
+       as \input is concerned: `\font\zz=nosuchfont\input f' meets the
+       \input while looking for `at', and the \input waits. */
+    bool previous_name_scan = engine->scanning_file_name;
+    engine->scanning_file_name = true;
     if (try_keyword(engine, "at", &matched_at, error, error_capacity) != 0) {
+        engine->scanning_file_name = previous_name_scan;
         free(name);
         return -1;
     }
     if (matched_at) {
         if (scan_dimension(engine, &size, error, error_capacity) != 0) {
+            engine->scanning_file_name = previous_name_scan;
             free(name);
             return -1;
         }
@@ -10296,6 +10353,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         }
     } else if (try_keyword(engine, "scaled", &matched_scaled, error,
                            error_capacity) != 0) {
+        engine->scanning_file_name = previous_name_scan;
         free(name);
         return -1;
     } else if (matched_scaled) {
@@ -10305,6 +10363,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
         static const char *const help[] = {
             "The magnification ratio must be between 1 and 32768.", NULL};
         if (scan_integer(engine, &scale, error, error_capacity) != 0) {
+            engine->scanning_file_name = previous_name_scan;
             free(name);
             return -1;
         }
@@ -10315,6 +10374,7 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
             scale = 1000;
         }
     }
+    engine->scanning_file_name = previous_name_scan;
 
     uint32_t identifier = 0U;
     int status = 0;
@@ -15780,6 +15840,9 @@ static bool command_is_expandable(enum hstex_command command)
        command_starts_conditional does not list, since it opens none. */
     case HSTEX_COMMAND_IF_IN_CS_NAME:
     case HSTEX_COMMAND_CS_NAME:
+    /* \input is expanded rather than obeyed, which is why it is traced
+       before a font whose name it ends is even looked for. */
+    case HSTEX_COMMAND_INPUT:
     case HSTEX_COMMAND_DETOKENIZE:
     case HSTEX_COMMAND_ELSE:
     case HSTEX_COMMAND_EXPAND_AFTER:
@@ -26034,6 +26097,11 @@ static int append_horizontal_character(struct hstex_engine *engine,
         }
         engine->cancel_boundary = false;
         char_warning(engine, font, code);
+        /* A character the font does not have joins no list, so it does not
+           carry a run of characters on either: \tracingcommands draws a line
+           for the NEXT one as well. Measured, with \nullfont in force,
+           `hello' draws five lines where in a real font it draws one. */
+        engine->traced_character = false;
         return 0;
     }
     struct hstex_lig_item work[HSTEX_LIG_WORK];

@@ -2041,6 +2041,10 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* Set while a FILE NAME is being scanned, and while the size that may
+       follow a font's name is. \input met there does not open its file: it
+       stands a \relax in front of itself and waits. */
+    bool scanning_file_name;
     /* How many held-over insertions stand at the front of the contribution
        list. What an output routine builds goes in behind them, not in front:
        the reference puts its list on the page after the heldover insertions
