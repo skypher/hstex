@@ -21339,7 +21339,13 @@ static int build_page(struct hstex_engine *engine, char *error,
                                   engine->page_dimens[HSTEX_PAGE_TOTAL] -
                                   engine->page_dimens[HSTEX_PAGE_DEPTH];
                         if (factor != 1000) {
-                            allowed = allowed * 1000 / factor;
+                            /* Divided by the factor FIRST and then taken a
+                               thousand times, which is not the same number as
+                               the other way about. Measured: a hundred points
+                               of room at \count200=333 leaves 300.29297pt for
+                               the class, not the 300.3003pt that multiplying
+                               first gives. */
+                            allowed = allowed / factor * 1000;
                         }
                     }
                     int64_t limit = (int64_t)engine->dimens[number] -

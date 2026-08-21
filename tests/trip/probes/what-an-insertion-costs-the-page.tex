@@ -38,6 +38,19 @@
 % hstex kept \insertpenalties at nought, so every one of those costs was
 % out by the same amount.
 %
+% HOW MUCH ROOM A CLASS HAS is the room left on the page DIVIDED BY THE
+% FACTOR AND THEN TAKEN A THOUSAND TIMES, which is not the same number
+% as multiplying first. A hundred points of room at \count200=333:
+%
+%   % split200 to 300.29297,0.0 p=0      divide first
+%          not  300.3003                 multiply first
+%
+% -- 6553600/333 = 19680 (the remainder dropped), and 19680*1000 sp is
+% 300.29297pt. Measured at 333, 1500, 1, 999 and 1000, and at a negative
+% \vsize, which is trip's own `% split200 to -51.11694,0.0'. A factor of
+% 1000 is not scaled at all, and one of nought or less means the page
+% puts no limit on the class.
+%
 % AN INFINITE SHRINK COUNTS AS ITS AMOUNT. \skip101=1pt minus 2fil draws
 %
 %   ! Infinite glue shrinkage inserted from \skip101.
@@ -79,6 +92,20 @@
 \penalty23
 \message{[G insertpenalties]}\showthe\insertpenalties
 \penalty-10000
+\message{[H how much room a class has]}
+\dimen200=10000pt \count200=333 \skip200=0pt
+\dimen201=10000pt \count201=1500 \skip201=0pt
+\dimen202=10000pt \count202=1 \skip202=0pt
+\dimen203=10000pt \count203=1000 \skip203=0pt
+\dimen204=10000pt \count204=999 \skip204=0pt
+\vsize=100pt
+\hbox{}\insert200{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
+\hbox{}\insert201{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
+\hbox{}\insert202{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
+\hbox{}\insert203{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
+\hbox{}\insert204{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
+\vsize=-33pt
+\hbox{}\insert200{\hbox to 3pt{}\vskip1000pt\hbox to 3pt{}}\penalty-10000
 \message{[done]}
 \tracingpages=0
 \end
