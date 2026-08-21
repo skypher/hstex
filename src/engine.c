@@ -163,6 +163,7 @@ static void print_line(struct hstex_engine *engine);
 static void print_byte(struct hstex_engine *engine, char byte);
 static void print_bytes(struct hstex_engine *engine, const char *text,
                         size_t length);
+static bool character_needs_caret(uint8_t code);
 static FILE *diagnostic_stream(struct hstex_engine *engine);
 static uint8_t normalised_hyphen_min(int32_t value);
 /* The semantic nest \showlists walks. */
@@ -14179,6 +14180,15 @@ static void print_bytes(struct hstex_engine *engine, const char *text,
         if (newline >= 0 && newline <= 255 &&
             (unsigned char)byte == (unsigned char)newline) {
             byte = '\n';
+        } else if (character_needs_caret((uint8_t)byte)) {
+            /* What cannot be written as itself is written ^^ here, at the
+               one place everything printed goes through, since the
+               reference escapes it in a \message, a \show, a \write and a
+               box's contents alike. What the token list HOLDS is the
+               character itself; this is only how it is shown. */
+            print_bytes(engine, "^^", 2U);
+            byte = (char)((uint8_t)byte < 64U ? (uint8_t)byte + 64U
+                                              : (uint8_t)byte - 64U);
         }
         (void)fputc(byte, out);
         if (byte == '\n') {
