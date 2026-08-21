@@ -1,0 +1,23 @@
+% A math field that is neither a character nor a list gets a `{' in front of
+% it, and the fault is drawn over the token it choked on -- the brace is
+% never a frame of its own.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\font\tenrm=cmr10 \tenrm \tracingonline=1
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\tenrm \scriptfont1=\tenrm \scriptscriptfont1=\tenrm
+\textfont2=\tenrm \scriptfont2=\tenrm \scriptscriptfont2=\tenrm
+\textfont3=\tenrm \scriptfont3=\tenrm \scriptscriptfont3=\tenrm
+\message{[A a superscript that is a box]}
+\setbox0=\hbox{$x^\hbox{a}$}
+\message{[B a superscript in braces]}
+\setbox0=\hbox{$x^{ab}$}
+\message{[C a superscript that is a letter]}
+\setbox0=\hbox{$x^a$}
+\message{[D a mathaccent over a box]}
+\setbox0=\hbox{$\mathaccent"7016 \hbox{a}$}
+\message{[E an underline over a box]}
+\setbox0=\hbox{$\underline\hbox{a}$}
+\message{[F a superscript that is a rule]}
+\setbox0=\hbox{$x^\vrule$}
+\message{[done]}
+\end

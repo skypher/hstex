@@ -1,0 +1,14 @@
+% A field a formula is waiting for is read as a field before the command is
+% looked at at all: a \vfill there is `Missing { inserted' first, and only
+% then, inside the braces that made, `Missing $ inserted'.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \tenrm \tracingonline=1 \tracingcommands=1
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\tenrm \scriptfont1=\tenrm \scriptscriptfont1=\tenrm
+\textfont2=\tenrm \scriptfont2=\tenrm \scriptscriptfont2=\tenrm
+\textfont3=\tenrm \scriptfont3=\tenrm \scriptscriptfont3=\tenrm
+\message{[A mathaccent over a vertical command]}
+\setbox0=\hbox{$\mathaccent"7016 \vfill$}
+\tracingcommands=0
+\message{[done]}
+\end

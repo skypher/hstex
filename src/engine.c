@@ -30536,12 +30536,16 @@ static int insert_math_field_brace(struct hstex_engine *engine,
         "(If you're confused by all this, try typing `I}' now.)", NULL};
     hstex_token opener =
         hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{');
-    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
-        push_one(engine, opener, location, error, error_capacity) != 0) {
+    /* The reference reports over the token it choked on, and only then
+       takes the `{' it made: the brace is never a frame of its own in the
+       context, so it goes in behind the report. */
+    if (push_one(engine, offending, location, error, error_capacity) != 0) {
         return -1;
     }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, 0U);
     tex_error(engine, help, "Missing { inserted");
-    return 0;
+    return push_one(engine, opener, location, error, error_capacity);
 }
 
 /* A script mark attaches to the atom before it, or to a fresh ordinary atom
@@ -40153,6 +40157,24 @@ handle_token:
                 }
                 continue;
             }
+        }
+        /* A VERTICAL command where a formula is waiting for a field is read
+           as the field first: the reference is inside its field scan when
+           the token arrives, so `$\mathaccent"7016 \vfill$' draws
+           "Missing { inserted" and only then, inside the braces that made,
+           "Missing $ inserted". Everything else a field may not be is
+           caught further down, where the spaces and the \relax that stand
+           in front of a field have already been stepped over. */
+        if (engine->mode == HSTEX_MODE_MATH && math_field_is_wanted(engine) &&
+            hstex_token_is_control_sequence(*token) &&
+            command_wants_a_dollar(hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(*token))) &&
+            !token_can_be_math_field(engine, *token)) {
+            if (insert_math_field_brace(engine, *token, *location, error,
+                                        error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         }
         /* A vertical command inside a formula closes it first, and a math
            command outside one opens it: both put a $ in front of the
