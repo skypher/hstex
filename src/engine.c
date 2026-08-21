@@ -21241,6 +21241,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         contributions->count = returned_count;
     }
     free(returned);
+    engine->held_over_inserts = unplaced_count;
 
     /* \box255 is the page builder's own; a document that left something in
        it is told so, and what it left is thrown away. */
@@ -21347,6 +21348,10 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         status = -1;
     }
     engine->output_active = false;
+    /* \insertpenalties counts the insertions the page could not take while
+       the routine is running, and nothing once it has finished: the next
+       page is weighed with it at nought. Measured through \showthe. */
+    engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] = 0;
     /* The routine is closed by a right brace, which the reference obeys and
        traces like any other -- one {end-group character }} at the end of
        every output routine, in the mode the routine ran in. */
@@ -21364,18 +21369,28 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     }
     if (status == 0 && made.count != 0U) {
         struct hstex_vbox_builder *queue = engine->contribution_builder;
+        /* Behind the insertions the page could not take, and in front of
+           everything else: the reference puts the routine's list on the page
+           after those, and only then the whole page in front of what was
+           waiting. */
+        size_t behind = engine->held_over_inserts;
+        if (behind > queue->count) {
+            behind = queue->count;
+        }
         if (reserve_vbox_items(queue, queue->count + made.count, error,
                                error_capacity) != 0) {
             status = -1;
         } else {
-            memmove(queue->node_identifiers + made.count,
-                    queue->node_identifiers,
-                    queue->count * sizeof(*queue->node_identifiers));
-            memcpy(queue->node_identifiers, made.node_identifiers,
+            memmove(queue->node_identifiers + behind + made.count,
+                    queue->node_identifiers + behind,
+                    (queue->count - behind) *
+                        sizeof(*queue->node_identifiers));
+            memcpy(queue->node_identifiers + behind, made.node_identifiers,
                    made.count * sizeof(*made.node_identifiers));
             queue->count += made.count;
         }
     }
+    engine->held_over_inserts = 0U;
     free(made.node_identifiers);
     if (status == 0 && engine->boxes[255].kind != HSTEX_BOX_VOID) {
         /* The reference names it and throws the box away, which is what

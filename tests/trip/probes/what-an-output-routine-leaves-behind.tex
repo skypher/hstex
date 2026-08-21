@@ -1,0 +1,32 @@
+% WHAT AN OUTPUT ROUTINE LEAVES BEHIND, AND IN WHAT ORDER.
+%
+% When the routine ends, three lots of material are waiting, and they go
+% back to the contribution list in this order:
+%
+%   1. the insertions the page could not take, which were held over
+%   2. what the routine itself built
+%   3. what the page break left over
+%
+% hstex had 2 in front of 1. See
+% tests/trip/probes/where-an-output-routines-own-list-goes.tex for the
+% measurement that 2 comes before 3.
+%
+% \insertpenalties COUNTS THE HELD-OVER INSERTIONS WHILE THE ROUTINE
+% RUNS, AND NOTHING AFTER. Measured with \showthe: one insertion held
+% over reads 1 inside the routine, 0 inside the next routine, and 0
+% between them. It is the same number the page builder adds into the cost
+% of every break, so leaving it standing after the routine makes every
+% break on the next page cost that much too much -- in trip, 2.
+\tracingonline=1
+\output={\message{[in out: \the\insertpenalties]}\shipout\box255 }
+\vsize=20pt \maxdepth=0pt \topskip=0pt
+\dimen100=5pt \count100=1000 \skip100=0pt \splittopskip=0pt
+\message{[A]}
+\hbox to 3pt{}\insert100{\hbox to 3pt{}\vskip50pt\hbox to 3pt{}}
+\vskip30pt
+\hbox to 3pt{}
+\penalty-10000
+\message{[B after: \the\insertpenalties]}
+\hbox to 3pt{}\penalty-10000
+\message{[C after: \the\insertpenalties]}
+\end

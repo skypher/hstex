@@ -2041,6 +2041,11 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* How many held-over insertions stand at the front of the contribution
+       list. What an output routine builds goes in behind them, not in front:
+       the reference puts its list on the page after the heldover insertions
+       and then the whole page before the contributions. */
+    size_t held_over_inserts;
     /* Set once the command now in hand has been traced, so that a token put
        in its place and read again is not traced a second time. */
     bool command_traced;
