@@ -1,0 +1,37 @@
+% \everyhbox AND \everyvbox ARE READ BEFORE THE BODY.
+%
+% A box reads what its every-token-list holds once its own list and mode
+% are standing and before anything the body itself says. HSTeX kept both
+% parameters -- they could be set and read back -- and never inserted
+% them.
+%
+%   \everyvbox{ }        a blank space obeyed in internal vertical mode
+%   \everyvbox{\tolerance=1 }   the assignment made inside the box
+%   \everyhbox{ }        a blank space obeyed in restricted horizontal
+%
+% An empty one is not inserted at all, so nothing is traced for it.
+%
+% trip line 307 writes `\everyvbox{ }'.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingcommands=2
+\hsize=100pt \hbadness=10000 \vbadness=10000
+\message{[A everyvbox holding a space]}
+\everyvbox{ }
+\setbox0=\vbox{\hsize=50pt }
+\message{[B everyhbox holding a space]}
+\everyhbox{ }
+\setbox0=\hbox{ }
+\message{[C everyvbox holding a command]}
+\everyvbox{\tolerance=1 }
+\setbox0=\vbox{\hsize=50pt }
+\showthe\tolerance
+\message{[D both empty again]}
+\everyvbox{}\everyhbox{}
+\setbox0=\vbox{\hsize=50pt }
+\setbox0=\hbox{ }
+\message{[E a vbox inside a vbox reads it twice]}
+\everyvbox{\tolerance=2 }
+\setbox0=\vbox{\setbox1=\vbox{\hsize=50pt }}
+\tracingcommands=0
+\message{[done]}
+\end

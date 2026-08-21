@@ -174,6 +174,8 @@ static void nest_note(struct hstex_engine *engine);
 /* The `{' a box body or a list must begin with. */
 static int scan_left_brace(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
+static int insert_every_box(struct hstex_engine *engine, size_t which,
+                            char *error, size_t error_capacity);
 /* The text of a meaning and the name of a control sequence, both wanted by
    the show diagnostics before either is defined. */
 /* `limit' is how many bytes of a macro's text to show past the `macro:'
@@ -11940,7 +11942,8 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
     bool previous_has_pending = engine->has_pending_character;
     engine->space_factor = 1000;
     engine->has_pending_character = false;
-    int status = 0;
+    int status = insert_every_box(engine, (size_t)HSTEX_TOKEN_EVERY_HBOX,
+                                  error, error_capacity);
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -12522,6 +12525,10 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->prev_depth = starting_depth;
 
     int status = normal_paragraph(engine, error, error_capacity);
+    if (status == 0) {
+        status = insert_every_box(engine, (size_t)HSTEX_TOKEN_EVERY_VBOX,
+                                  error, error_capacity);
+    }
     while (status == 0) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -13606,6 +13613,37 @@ static int predefine_target(struct hstex_engine *engine,
     };
     return set_meaning(engine, identifier, standing, global, error,
                        error_capacity);
+}
+
+/* \everyhbox and \everyvbox are inserted at the head of a box's body, once
+   the box's own list and mode are standing, so what they hold is read
+   before anything the body itself says. trip line 307 writes
+   `\everyvbox{ }'. */
+static int insert_every_box(struct hstex_engine *engine, size_t which,
+                            char *error, size_t error_capacity)
+{
+    uint32_t identifier = engine->token_parameters[which];
+    if (identifier == 0U) {
+        return 0;
+    }
+    const struct hstex_token_list *list =
+        token_list_by_identifier(engine, identifier);
+    if (list == NULL) {
+        return set_error(error, error_capacity,
+                         "could not install an every-box token list");
+    }
+    if (list->count == 0U) {
+        return 0;
+    }
+    struct hstex_source_location location = {0};
+    if (hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+                          (uint32_t)which);
+    return 0;
 }
 
 static int scan_char_definition(struct hstex_engine *engine, char *error,
