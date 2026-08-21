@@ -15963,9 +15963,12 @@ static void print_escaped_control_sequence(struct hstex_engine *engine,
         print_text(engine, "an internal token");
         return;
     }
+    /* An ACTIVE CHARACTER is written as itself, with no escape character in
+       front: trip's `{\catcode`?=13 ...}' gives back `{restoring
+       ?=undefined}' and not `{restoring \?=undefined}'. */
     int32_t escape =
         engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
-    if (escape >= 0 && escape <= 255) {
+    if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255) {
         print_byte(engine, (char)(unsigned char)escape);
     }
     print_bytes(engine, (const char *)name, length);

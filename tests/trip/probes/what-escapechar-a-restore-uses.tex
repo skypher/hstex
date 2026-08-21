@@ -12,7 +12,9 @@
 % hstex wrote a backslash into all of them.
 %
 % What is NOT behind it: `current font=' is words rather than a name, and
-% so are `macro:', `undefined' and `void'.
+% so are `macro:', `undefined' and `void'. NOR IS AN ACTIVE CHARACTER,
+% which is written as itself whatever \escapechar says -- trip's
+% `{\catcode`?=13 ...}' gives back `{restoring ?=undefined}'.
 %
 % RUN THIS UNDER `pdftex -ini'; it sets its own catcodes.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
@@ -33,6 +35,12 @@
 \escapechar=`|
 \ff
 {\nullfont}
+\escapechar=`\\
+\message{[E active characters]}
+{\catcode`?=13 \def?{x}}
+{\catcode`!=13 \let!=\relax}
+\escapechar=-1
+{\catcode`;=13 \def;{y}}
 \escapechar=`\\
 \message{[done]}
 \end
