@@ -1,0 +1,46 @@
+% A BINARY OPERATOR OR A RELATION LEAVES NO PENALTY BEFORE A PENALTY.
+%
+% Setting a formula puts \binoppenalty behind every binary operator and
+% \relpenalty behind every relation, so that the line may break there.
+% Two things stop it:
+%
+%   what follows the atom      penalty appended
+%   an ordinary atom           yes
+%   a kern                     yes
+%   a penalty                  NO -- the list's own penalty is the one
+%                              that stands, and one break wants one
+%   a relation                 NO (and a \mathbin before a \mathrel is
+%                              an ordinary atom by then anyway, so it is
+%                              \relpenalty that appears, not \binoppenalty)
+%
+% trip line 257 writes `A+\penalty+1000A', where the + is binary: the
+% reference leaves \binoppenalty out and the paragraph has one feasible
+% break fewer for it.
+%
+% None of this happens inside an \hbox: the penalties are appended only
+% for a formula that is part of a paragraph, which is why every case
+% here sets a \vbox and starts a paragraph inside it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99 \hsize=200pt
+\parindent=0pt \hbadness=10000 \hfuzz=100pt
+\binoppenalty=-3333 \relpenalty=-2222
+\message{[A a binary operator with an ordinary atom after it]}
+\setbox0=\vbox{\noindent$A\mathbin{A}A$\par}\showbox0
+\message{[B a binary operator with a penalty after it]}
+\setbox0=\vbox{\noindent$A\mathbin{A}\penalty1000 A$\par}\showbox0
+\message{[C a relation with a penalty after it]}
+\setbox0=\vbox{\noindent$A\mathrel{A}\penalty1000 A$\par}\showbox0
+\message{[D a relation with an ordinary atom after it]}
+\setbox0=\vbox{\noindent$A\mathrel{A}A$\par}\showbox0
+\message{[E a binary operator with a kern after it]}
+\setbox0=\vbox{\noindent$A\mathbin{A}\kern2pt A$\par}\showbox0
+\message{[F a binary operator with a relation after it]}
+\setbox0=\vbox{\noindent$A\mathbin{A}\mathrel{A}A$\par}\showbox0
+\message{[done]}
+\end

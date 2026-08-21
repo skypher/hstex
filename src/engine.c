@@ -30779,13 +30779,20 @@ static int translate_math_list_with(struct hstex_engine *engine,
     int previous_class = -1;
     /* A binary operator or a relation is a place the line may break, so the
        reference leaves a penalty behind it -- but not when what follows is
-       itself a relation. See docs/DECISIONS.md, math-penalties. */
+       itself a relation, and not when what follows is a penalty already:
+       one place to break wants one penalty, and the list's own is the one
+       that stands. See docs/DECISIONS.md, math-penalties. */
     int32_t pending_penalty = HSTEX_INFINITE_PENALTY;
     for (size_t index = 0U; index < builder->count; ++index) {
         struct hstex_noad *noad = &builder->noads[index];
         if (pending_penalty < HSTEX_INFINITE_PENALTY) {
             bool relation = noad->kind == (uint8_t)HSTEX_NOAD_ATOM &&
                             noad->atom_class == (uint8_t)HSTEX_ATOM_REL;
+            if (!relation && noad->kind == (uint8_t)HSTEX_NOAD_NODE &&
+                noad->node != 0U && noad->node <= engine->node_count &&
+                engine->nodes[noad->node - 1U].kind == HSTEX_NODE_PENALTY) {
+                relation = true;
+            }
             if (!relation) {
                 struct hstex_node node = {
                     .kind = HSTEX_NODE_PENALTY,
