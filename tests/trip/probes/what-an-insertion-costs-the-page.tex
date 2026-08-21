@@ -29,7 +29,9 @@
 % -- the class, how much room there was for it, how much of it went, and
 % what the break was worth. That last is the penalty standing at the
 % break and nothing else: a break at glue reports p=0, one at \penalty55
-% reports p=55. It is then ADDED TO \insertpenalties, where it enters
+% reports p=55, and one at the END OF THE LIST -- an insertion with no
+% breakpoint inside it at all -- reports p=-10000, the eject that ends
+% every list. It is then ADDED TO \insertpenalties, where it enters
 % the cost of every break on the page after it:
 %
 %   % t=0.0 plus 3.0filll minus 9.0 g=1470.63013 b=0 p=0 c=-101#
@@ -92,7 +94,11 @@
 \penalty23
 \message{[G insertpenalties]}\showthe\insertpenalties
 \penalty-10000
-\message{[H how much room a class has]}
+\message{[H an insertion with no breakpoint inside it]}
+\dimen105=10000pt \count105=1000 \skip105=0pt
+\vsize=20pt
+\hbox to 3pt{}\insert105{\vskip50pt}\penalty-10000
+\message{[I how much room a class has]}
 \dimen200=10000pt \count200=333 \skip200=0pt
 \dimen201=10000pt \count201=1500 \skip201=0pt
 \dimen202=10000pt \count202=1 \skip202=0pt

@@ -12675,12 +12675,16 @@ static size_t vertical_break_measured(struct hstex_engine *engine,
                 }
                 if (at_penalty != NULL) {
                     /* What the break is worth is the penalty standing there
-                       and nothing else: a break at glue, or at the end of
-                       the list, is worth nought however the search reached
-                       it. Measured, an insertion split at glue reports
-                       `p=0' and one split at \penalty55 reports `p=55'. */
+                       and nothing else: a break at glue is worth nought
+                       however the search reached it, and a break at the END
+                       OF THE LIST is worth -10000, the eject that ends every
+                       list. Measured: an insertion split at glue reports
+                       `p=0', one split at \penalty55 reports `p=55', and one
+                       with no breakpoint inside it at all reports
+                       `p=-10000'. */
                     *at_penalty =
-                        node != NULL && node->kind == HSTEX_NODE_PENALTY
+                        node == NULL ? -HSTEX_INFINITE_PENALTY
+                        : node->kind == HSTEX_NODE_PENALTY
                             ? node->value.penalty
                             : 0;
                 }
