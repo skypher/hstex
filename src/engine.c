@@ -36880,11 +36880,35 @@ static bool meanings_equal(const struct hstex_engine *engine,
     }
 }
 
+/* A token \noexpand marked comes through as ITSELF when its meaning cannot
+   be expanded -- a \chardef, a register, a primitive, \relax -- and as
+   something \relax-like but not \relax when it can. So
+   `\expandafter\ifx\noexpand\x\x' is true exactly when \x is
+   unexpandable, which is how expl3 tells one of its variables from a macro
+   in a V-expansion. */
+static hstex_token normalize_noexpand_for_comparison(
+    const struct hstex_engine *engine, hstex_token token)
+{
+    if (!hstex_token_is_frozen_control_sequence(token)) {
+        return token;
+    }
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (command_is_expandable(meaning->command) ||
+        meaning->command == HSTEX_COMMAND_UNDEFINED) {
+        return token;
+    }
+    return hstex_token_control_sequence(
+        hstex_token_control_sequence_id(token));
+}
+
 static bool ifx_tokens_equal(const struct hstex_engine *engine,
                              hstex_token left, hstex_token right)
 {
     left = normalize_one_shot_token(left);
     right = normalize_one_shot_token(right);
+    left = normalize_noexpand_for_comparison(engine, left);
+    right = normalize_noexpand_for_comparison(engine, right);
     /* A control sequence \\let to a character is that character as far as
        \\ifx is concerned; LaTeX's prime machinery turns on it. */
     if (hstex_token_is_control_sequence(left) &&

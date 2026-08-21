@@ -1,0 +1,50 @@
+% A \noexpand'ED TOKEN IS ITSELF IF IT CANNOT BE EXPANDED.
+%
+% \noexpand does not hide what it marks. What comes back is:
+%
+%   the token itself          when its meaning cannot be expanded
+%                             -- a \chardef, a register, a primitive, \relax
+%   something \relax-like     when it can -- a macro, an undefined name --
+%   but NOT \relax            which is \ifx-different from \relax as well
+%
+% so `\expandafter\ifx\noexpand\x\x' is TRUE exactly when \x is
+% unexpandable. HSTeX kept a mark of its own on every \noexpand'ed control
+% sequence and \ifx saw the mark rather than the meaning, so the test was
+% false for everything.
+%
+% expl3 turns on this test: it is how a V-expansion tells one of its
+% variables from a macro. Without it \seq_gpush:NV pushed the name of a
+% \chardef'd read stream instead of its number, so every \ior_open after
+% the first drew "! Bad number (16)" -- 16 being the terminal stream that
+% a closed ior is \let back to -- and every LaTeX format load reported it.
+%
+% \ifx reads two tokens and skips no spaces, which is why the last case
+% compares a letter against the space in front of it and is false.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\chardef\ca=3
+\countdef\co=5
+\def\ma{x}
+\let\re=\relax
+\message{[A a chardef token]}
+\expandafter\ifx\noexpand\ca\ca\message{[same]}\else\message{[diff]}\fi
+\expandafter\ifx\noexpand\ca\relax\message{[relax]}\else\message{[notrelax]}\fi
+\message{[B a countdef token]}
+\expandafter\ifx\noexpand\co\co\message{[same]}\else\message{[diff]}\fi
+\message{[C a macro]}
+\expandafter\ifx\noexpand\ma\ma\message{[same]}\else\message{[diff]}\fi
+\expandafter\ifx\noexpand\ma\relax\message{[relax]}\else\message{[notrelax]}\fi
+\message{[D relax itself]}
+\expandafter\ifx\noexpand\re\re\message{[same]}\else\message{[diff]}\fi
+\message{[E a primitive]}
+\expandafter\ifx\noexpand\hbox\hbox\message{[same]}\else\message{[diff]}\fi
+\message{[F an undefined cs]}
+\expandafter\ifx\noexpand\zz\zz\message{[same]}\else\message{[diff]}\fi
+\expandafter\ifx\noexpand\zz\relax\message{[relax]}\else\message{[notrelax]}\fi
+\message{[G a cs let to a primitive]}
+\let\bx=\hbox
+\expandafter\ifx\noexpand\bx\hbox\message{[same]}\else\message{[diff]}\fi
+\message{[H what noexpand does to a character token]}
+\expandafter\ifx\noexpand A A\message{[same]}\else\message{[diff]}\fi
+\message{[done]}
+\end
