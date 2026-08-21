@@ -34,6 +34,22 @@
 % they are past the last line \parshape or \hangindent names -- ten pairs
 % of \parshape make lines eleven onward all one class -- so the bucket is
 % (fitness, line) up to that point and (fitness) after it.
+%
+% ATTEMPTED AND BACKED OUT. Bucketing the candidates by class and making
+% one set of active nodes per class is not enough on its own, because it
+% rests on THE ACTIVE LIST BEING IN LINE ORDER and hstex's is not. The
+% reference walks the list in order, and when it reaches a node whose
+% line number is past the class it was gathering it makes that class's
+% nodes and puts them IN AT THAT POINT -- which is both what keeps the
+% list sorted and what puts the `@@n:' lines between the `@ via' lines.
+% hstex appends new records at the end, so a class can be met twice and
+% the nodes come out in the wrong order:
+%
+%   @@3: line 2.0 t=200010000 -> @@2      hstex, decreasing
+%   @@4: line 1.0 t=100010000 -> @@0
+%
+% Doing this properly means inserting an active node at the walk's
+% position rather than at the end. That is the next piece.
 \tracingonline=1 \hsize=100pt \parindent=0pt \tracingparagraphs=1
 \pretolerance=-1 \tolerance=10000 \hbadness=10000
 \message{[A hangindent, so lines differ in width]}
