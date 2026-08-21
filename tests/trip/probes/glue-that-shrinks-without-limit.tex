@@ -1,0 +1,60 @@
+% GLUE THAT SHRINKS WITHOUT LIMIT IN A PARAGRAPH.
+%
+% It would let a paragraph of any length fit on one line, so the
+% reference says so and takes the shrinkage as finite:
+%
+%   ! Infinite glue shrinkage found in a paragraph.
+%   The paragraph just ended includes some glue that has
+%   infinite shrinkability, e.g., `\hskip 0pt minus 1fil'.
+%   Such glue doesn't belong there---it allows a paragraph
+%   of any length to fit on one line. But it's safe to proceed,
+%   since the offensive shrinkability has been made finite.
+%
+% THE AMOUNT IS KEPT AND THE ORDER DROPPED: `\hskip 3pt minus 1fil'
+% comes out of the line as `\glue 3.0 minus 1.0'. A \rightskip treated
+% that way stays treated -- `\showthe\rightskip' afterwards reads
+% `0.0pt minus 1.0pt' -- and it is not an assignment, so no save is made
+% and no group puts the fil back.
+%
+% ONCE A PARAGRAPH, however many offenders there are and whether they
+% were skip parameters or glue in the list.
+%
+% WHERE THE LINE COMES depends on which it was, and \tracingparagraphs
+% shows it:
+%
+%   \rightskip     the fault, then `@firstpass'
+%   glue in the list   `@firstpass', the breakpoint before the glue,
+%                      THEN the fault
+%
+% -- because the skips are looked at before the passes start and the
+% list's own glue is met during the first pass, at the glue. trip line
+% 210 is the first kind.
+%
+% AND THE TRACE IS CLOSED BEFORE THE FAULT AND OPENED AGAIN AFTER, which
+% leaves ONE MORE BLANK LINE above the `!' than there would be with
+% \tracingparagraphs off. That holds for both kinds -- the fault before
+% the first pass gets it too, because the trace's diagnostic is already
+% open by then, which is also why `@firstpass' comes out AFTER that
+% fault rather than before it.
+\tracingonline=1 \hsize=100pt \parindent=0pt \showboxdepth=5 \showboxbreadth=10
+\message{[A finite shrink draws nothing]}
+\noindent A\hskip 0pt minus 5pt B\par
+\message{[B glue in the list]}
+\setbox0=\vbox{\noindent A\hskip 3pt minus 1fil B\par}
+\showbox0
+\message{[C two offenders, one report]}
+\noindent A\hskip 0pt minus 1fil B\hskip 0pt minus 1fil C\par
+\message{[D a skip parameter]}
+\rightskip=0pt minus 1fil
+\setbox1=\vbox{\noindent A B\par}
+\showbox1
+\showthe\rightskip
+\rightskip=0pt
+\message{[E where the line comes]}
+\tracingparagraphs=1 \pretolerance=10000
+\noindent A\hskip 3pt minus 1fil B\par
+\rightskip=0pt minus 1fil
+\noindent A B\par
+\rightskip=0pt \tracingparagraphs=0
+\message{[done]}
+\end

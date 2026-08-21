@@ -26229,6 +26229,11 @@ struct hstex_break_trace {
 struct hstex_break_state {
     struct hstex_break_trace trace;
     struct hstex_break_totals *totals;
+    /* Where the paragraph's first glue that shrinks without limit stands,
+       and whether the fault has been reported: one report a paragraph,
+       whether it was a skip parameter or a glue in the list. */
+    size_t shrink_error_at;
+    bool shrink_error_reported;
     size_t node_count;
     struct hstex_break_record *records;
     size_t record_count;
@@ -26237,6 +26242,32 @@ struct hstex_break_state {
     size_t active_count;
     size_t active_capacity;
 };
+
+/* Glue that shrinks without limit would let a paragraph of any length fit
+   on one line, so the reference says so and takes the shrinkage as finite --
+   keeping the amount and dropping the order, so that `\hskip 3pt minus 1fil'
+   becomes `\glue 3.0 minus 1.0'. Once a paragraph, whether the offender was
+   \leftskip, \rightskip or a glue in the list. See
+   tests/trip/probes/glue-that-shrinks-without-limit.tex. */
+static void report_infinite_shrinkage(struct hstex_engine *engine)
+{
+    static const char *const help[] = {
+        "The paragraph just ended includes some glue that has",
+        "infinite shrinkability, e.g., `\\hskip 0pt minus 1fil'.",
+        "Such glue doesn't belong there---it allows a paragraph",
+        "of any length to fit on one line. But it's safe to proceed,",
+        "since the offensive shrinkability has been made finite.", NULL};
+    /* The paragraph trace is a diagnostic, and a fault reported while one is
+       open CLOSES IT FIRST -- which leaves a blank line -- and it is opened
+       again afterwards. Measured: with \tracingparagraphs on there is one
+       more blank line above the `!' than without, whether the fault comes
+       before the first pass or in the middle of it. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0) {
+        print_fresh_line(engine);
+        print_line(engine);
+    }
+    tex_error(engine, help, "Infinite glue shrinkage found in a paragraph");
+}
 
 static int emit_parameter_glue(struct hstex_engine *engine,
                                struct hstex_glue glue, int parameter,
@@ -27112,6 +27143,14 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                 return -1;
             }
         }
+        /* The glue that shrinks without limit is complained about HERE, once
+           the break in front of it has been weighed -- measured, the line
+           comes after the `@@1:' the breakpoint drew and before the next
+           one. */
+        if (index == state->shrink_error_at && !state->shrink_error_reported) {
+            state->shrink_error_reported = true;
+            report_infinite_shrinkage(engine);
+        }
         after_box = precedes_glue_break(node);
     }
     if (state->active_count == 0U) {
@@ -27472,6 +27511,7 @@ static int measure_break_totals(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "break totals allocation failed");
     }
+    state->shrink_error_at = SIZE_MAX;
     for (size_t index = 0U; index < count; ++index) {
         state->totals[index + 1U] = state->totals[index];
         uint32_t identifier = items[index];
@@ -27485,6 +27525,16 @@ static int measure_break_totals(struct hstex_engine *engine,
             if (up < 4U) {
                 state->totals[index + 1U].stretch[up] +=
                     node->value.glue.stretch;
+            }
+            /* Taken as finite before the totals are made, so that what the
+               passes weigh is what the line will hold. */
+            if (node->value.glue.shrink_order != 0U &&
+                node->value.glue.shrink != 0) {
+                engine->nodes[identifier - 1U].value.glue.shrink_order = 0U;
+                if (state->shrink_error_at == SIZE_MAX) {
+                    state->shrink_error_at = index;
+                }
+                node = &engine->nodes[identifier - 1U];
             }
             if (node->value.glue.shrink_order == 0U) {
                 state->totals[index + 1U].shrink += node->value.glue.shrink;
@@ -28367,6 +28417,24 @@ static int break_paragraph(struct hstex_engine *engine,
     size_t count = paragraph->count;
     const uint32_t *items = paragraph->node_identifiers;
     struct hstex_break_state state = {0};
+    /* \leftskip and \rightskip are looked at first, and their fault comes
+       out before the first pass: measured, a \rightskip that shrinks without
+       limit draws its line above `@firstpass' where a glue in the list draws
+       one during the pass, at the glue. The parameter itself is changed, and
+       not by an assignment -- no save is made and \showthe reads the finite
+       glue afterwards. */
+    for (size_t which = 0U; which < 2U; ++which) {
+        struct hstex_glue *skip =
+            &engine->glue_parameters[which == 0U ? HSTEX_GLUE_LEFT_SKIP
+                                                 : HSTEX_GLUE_RIGHT_SKIP];
+        if (skip->shrink_order != 0U && skip->shrink != 0) {
+            skip->shrink_order = 0U;
+            if (!state.shrink_error_reported) {
+                state.shrink_error_reported = true;
+                report_infinite_shrinkage(engine);
+            }
+        }
+    }
     if (measure_break_totals(engine, &state, items, count, error,
                              error_capacity) != 0) {
         return -1;
