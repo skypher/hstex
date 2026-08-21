@@ -6795,11 +6795,29 @@ static int scan_math_glue(struct hstex_engine *engine,
         status = set_error(error, error_capacity,
                            "end of input while scanning math glue");
     } else if (hstex_token_is_control_sequence(token)) {
-        int internal_result = math_glue_from_meaning(
-            engine,
-            hstex_engine_meaning(engine,
-                                 hstex_token_control_sequence_id(token)),
-            glue, error, error_capacity);
+        const struct hstex_meaning *internal = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        int internal_result =
+            math_glue_from_meaning(engine, internal, glue, error,
+                                   error_capacity);
+        if (internal_result == 0) {
+            /* Ordinary glue where math glue belongs: the reference reports
+               it and takes the numbers as they stand, ALL THREE of them --
+               `\muskip4=\skip1' with \skip1 at 1pt plus 2pt minus 3fil
+               comes to 1.0mu plus 2.0mu minus 3.0fil. This is the mirror of
+               the reading scan_glue has. */
+            int ordinary = glue_from_meaning(engine, internal, glue, error,
+                                             error_capacity);
+            if (ordinary < 0) {
+                internal_result = -1;
+            } else if (ordinary > 0) {
+                static const char *const help[] = {
+                    "I'm going to assume that 1mu=1pt when they're mixed.",
+                    NULL};
+                tex_error(engine, help, "Incompatible glue units");
+                internal_result = 1;
+            }
+        }
         if (internal_result < 0) {
             status = -1;
         } else if (internal_result == 0 &&

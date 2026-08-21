@@ -1,0 +1,19 @@
+% Ordinary glue where math glue belongs, and the other way about, is taken
+% WHOLE -- all three of its numbers, with 1mu=1pt -- after the reference
+% says `Incompatible glue units'.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\skip1=1pt plus 2pt minus 3fil
+\muskip1=5mu plus 4mu minus 2mu
+\message{[A advance a muglue by a glue]}
+\advance\muskip1 by \skip1 \showthe\muskip1
+\message{[B advance a glue by a muglue]}
+\skip2=1pt plus 2pt \advance\skip2 by \muskip1 \showthe\skip2
+\message{[C a skipdefd name]}
+\skipdef\sk=1 \muskip2=5mu \advance\muskip2 by \sk \showthe\muskip2
+\message{[D divide a muglue by a glue]}
+\muskip3=8mu plus 4mu minus 2mu \divide\muskip3 by \skip1 \showthe\muskip3
+\message{[E assign a glue to a muglue]}
+\muskip4=\skip1 \showthe\muskip4
+\message{[done]}
+\end

@@ -1,0 +1,18 @@
+% A sign in front of an internal muglue negates all three of its numbers.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\muskip1=4mu plus 1mu minus 2mu
+\message{[A a negated muskip register as a whole glue]}
+\muskip9=-\muskip1 \showthe\muskip9
+\message{[B a plain one]}
+\muskip10=\muskip1 \showthe\muskip10
+\message{[C a negated muglue parameter]}
+\thinmuskip=0mu minus 3mu
+\muskip11=-\thinmuskip \showthe\muskip11
+\message{[D twice negated]}
+\muskip12=--\muskip1 \showthe\muskip12
+\message{[E an infinite shrink negated]}
+\muskip13=0mu minus 0.00003fil
+\muskip14=-\muskip13 \showthe\muskip14
+\message{[done]}
+\end
