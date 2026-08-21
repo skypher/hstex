@@ -22418,12 +22418,17 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
        that \unvbox255es its page: the reference weighs the -5000 once and
        then reports `\outputpenalty' as 10000 on the page after, where hstex
        weighed it twice and reported -5000 again. */
-    if (split < page->count) {
-        uint32_t at = page->node_identifiers[split];
-        if (at != 0U && (size_t)at <= engine->node_count &&
-            engine->nodes[at - 1U].kind == HSTEX_NODE_PENALTY) {
-            engine->nodes[at - 1U].value.penalty = HSTEX_INFINITE_PENALTY;
-        }
+    uint32_t broke_at =
+        split < page->count
+            ? page->node_identifiers[split]
+            : (from < contributions->count
+                   ? contributions->node_identifiers[from]
+                   : 0U);
+    if (broke_at != 0U && (size_t)broke_at <= engine->node_count &&
+        engine->nodes[broke_at - 1U].kind == HSTEX_NODE_PENALTY &&
+        engine->nodes[broke_at - 1U].value.penalty ==
+            engine->best_page_penalty) {
+        engine->nodes[broke_at - 1U].value.penalty = HSTEX_INFINITE_PENALTY;
     }
     /* What follows the break, and whatever has not been moved yet, goes
        back to the front of the contribution list. */

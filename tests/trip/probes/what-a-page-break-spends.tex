@@ -1,0 +1,34 @@
+% WHAT A PAGE BREAK SPENDS.
+%
+% The penalty a page broke at is SPENT: \outputpenalty takes its value, and
+% the node itself is left at ten thousand, so that it can never be a
+% breakpoint again. The material after the break goes back to the
+% contribution list with that node still in it, and an output routine that
+% looks at the list sees the ten thousand:
+%
+%   \output={\showlists ...}
+%   \vsize=1pt \hbox{}\penalty-10000
+%
+%   ### recent contributions:
+%   \penalty 10000
+%
+% Without this the next page breaks at the same place for ever.
+%
+% HSTeX spent the penalty where the break was one it had WEIGHED and found
+% best, and not where the break was FORCED -- a penalty of -10000 or worse
+% fires the page builder from the node it is looking at, which has not been
+% moved to the page yet, and that one was left as it stood.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=8 \showboxdepth=8
+\vsize=100pt \hsize=100pt \topskip=10pt
+\message{[A a forced break]}
+\output={\message{<forced \the\outputpenalty>}\showlists
+  \global\setbox9=\box255}
+\hbox{}\penalty-10000
+\message{[B what the contribution list kept]}\showlists
+\message{[C a break the builder weighed and chose]}
+\output={\message{<weighed \the\outputpenalty>}\global\setbox9=\box255}
+\vsize=20pt \hbox{}\penalty-5000 \hbox{}\hbox{}\hbox{}
+\message{[D what the contribution list kept]}\showlists
+\message{[done]}
+\end
