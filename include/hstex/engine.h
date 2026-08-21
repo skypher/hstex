@@ -1983,6 +1983,11 @@ struct hstex_engine {
        only when it has changed since then, so the trace reads as a list of
        commands with the mode called out where it turns. */
     const char *traced_mode;
+    /* What each numbered parameter is called, filled in as the primitives
+       are registered so that it cannot drift from them. \tracingrestores
+       names a parameter rather than numbering it. */
+    const char *integer_parameter_names[HSTEX_INTEGER_PARAMETER_COUNT];
+    const char *dimen_parameter_names[HSTEX_DIMEN_PARAMETER_COUNT];
     /* Whether the last command traced was a character being set. A run of
        them is traced once, at its first: the reference's main loop stays
        inside itself for the rest and never comes back to the tracing. */

@@ -1,8 +1,10 @@
-% \tracingrestores, which this engine does not implement.
+% \tracingrestores.
 %
-% It is what is left of trip's log after \tracingcommands: 257 lines of
-% the oracle's 7292. Measured against pdftex so that writing it needs no
-% guessing. One line per save undone when a group ends, LIFO:
+% It was what was left of trip's log after \tracingcommands: 257 lines of
+% the oracle's 7292, against none here. This engine now writes 251 of
+% them and the whole log has gone from 5833 lines to 6116.
+%
+% One line per save undone when a group ends, LIFO:
 %
 %   {restoring \a=macro:->A}            a meaning, written as \meaning does
 %   {restoring \two=undefined}          a meaning that was not there before
@@ -30,10 +32,26 @@
 % and the box is written SHALLOW -- `[]' for its contents -- whatever
 % \showboxbreadth and \showboxdepth say.
 %
-% The save kinds are enumerated at include/hstex/engine.h:743 and the
-% record at 1520; every one of the eighteen needs a name and a value here.
-% \tracingcommands already has the machinery for the line itself:
-% trace_words() writes {...} with the mode prefix where it has changed.
+% TWO SAVE KINDS DRAW NOTHING: what \aftergroup put by, and the current
+% font. The reference traces neither.
+%
+% TWO TRAPS worth knowing:
+%   * glue_parameter_name() is written for the field a glue NODE carries,
+%     where nought means `not from a parameter', so it counts from one.
+%     Passing a save's index straight to it names the parameter before the
+%     one that was saved -- \parfillskip for \baselineskip.
+%   * A family's font is named by the control sequence \font gave it,
+%     which is what \the\textfont reports, and not by its metrics file:
+%     {restoring \textfont2=\gg}, not =\cmr10.
+%
+% NOT YET: this engine saves a value again on a second local assignment in
+% the same group, where the reference saves only what was there before the
+% group began. `\font\gg=cmr10' sets the control sequence twice on
+% purpose -- once to \nullfont so that the `at' clause is read with the
+% target already a font rather than a macro -- and so draws two restore
+% lines here and one in the reference. Skipping the save where the value's
+% level is already the current group level is the fix, and it wants doing
+% in each of the assign_ functions.
 \tracingonline=1
 \font\ff=cmr10
 \def\a{A}\catcode`\[=12 \count5=7 \dimen6=1pt \skip7=2pt plus 1fil

@@ -2863,6 +2863,12 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     for (size_t index = 0U;
          index < sizeof(integer_primitives) / sizeof(integer_primitives[0]);
          ++index) {
+        if ((size_t)integer_primitives[index].parameter <
+            (size_t)HSTEX_INTEGER_PARAMETER_COUNT) {
+            engine->integer_parameter_names[integer_primitives[index]
+                                                .parameter] =
+                integer_primitives[index].name;
+        }
         if (register_integer_primitive(
                 engine, integer_primitives[index].name,
                 HSTEX_COMMAND_INTEGER_PARAMETER,
@@ -2909,6 +2915,11 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     for (size_t index = 0U;
          index < sizeof(dimen_primitives) / sizeof(dimen_primitives[0]);
          ++index) {
+        if ((size_t)dimen_primitives[index].parameter <
+            (size_t)HSTEX_DIMEN_PARAMETER_COUNT) {
+            engine->dimen_parameter_names[dimen_primitives[index].parameter] =
+                dimen_primitives[index].name;
+        }
         if (register_integer_primitive(
                 engine, dimen_primitives[index].name,
                 HSTEX_COMMAND_DIMEN_PARAMETER,
@@ -15630,6 +15641,213 @@ static void trace_words(struct hstex_engine *engine, const char *words)
     print_byte(engine, '}');
     print_line(engine);
     engine->traced_character = false;
+    (void)fflush(diagnostic_stream(engine));
+}
+
+/* A dimension with its unit, the way \showthe writes it. */
+static void trace_scaled(struct hstex_engine *engine, int32_t value)
+{
+    char digits[64];
+    if (format_scaled_value(value, "pt", digits, sizeof(digits)) > 0) {
+        print_text(engine, digits);
+    }
+}
+
+/* One glue, written the way \showthe writes it. */
+static void trace_glue(struct hstex_engine *engine,
+                       const struct hstex_glue *glue, bool math)
+{
+    const char *unit = math ? "mu" : "pt";
+    char digits[64];
+    if (format_scaled_value(glue->width, unit, digits, sizeof(digits)) > 0) {
+        print_text(engine, digits);
+    }
+    const char *orders[] = {unit, "fil", "fill", "filll"};
+    const int32_t amounts[] = {glue->stretch, glue->shrink};
+    const uint8_t at[] = {glue->stretch_order, glue->shrink_order};
+    const char *labels[] = {" plus ", " minus "};
+    for (size_t part = 0U; part < 2U; ++part) {
+        if (amounts[part] == 0) {
+            continue;
+        }
+        print_text(engine, labels[part]);
+        if (format_scaled_value(amounts[part],
+                                at[part] <= 3U ? orders[at[part]] : unit,
+                                digits, sizeof(digits)) > 0) {
+            print_text(engine, digits);
+        }
+    }
+}
+
+/* \tracingrestores writes a line for every save undone when a group ends,
+   naming what it is putting back and what it is putting back to. See
+   tests/trip/probes/what-tracingrestores-writes.tex. */
+static void trace_restore(struct hstex_engine *engine,
+                          const struct hstex_save_entry *save)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_RESTORES] <= 0) {
+        return;
+    }
+    static const char *const code_names[5] = {"sfcode", "lccode", "uccode",
+                                              "mathcode", "delcode"};
+    static const char *const mu_names[3] = {"thinmuskip", "medmuskip",
+                                            "thickmuskip"};
+    static const char *const sizes[3] = {"textfont", "scriptfont",
+                                         "scriptscriptfont"};
+    const char *mode = mode_name(engine);
+    print_fresh_line(engine);
+    print_byte(engine, '{');
+    if (mode != engine->traced_mode) {
+        print_text(engine, mode);
+        print_text(engine, ": ");
+        engine->traced_mode = mode;
+    }
+    engine->traced_character = false;
+    print_text(engine, "restoring ");
+    switch (save->kind) {
+    case HSTEX_SAVE_MEANING: {
+        char named[192];
+        describe_token(engine, hstex_token_control_sequence(save->index),
+                       named, sizeof(named));
+        print_text(engine, named);
+        print_byte(engine, '=');
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        size_t capacity = 0U;
+        char scratch[256];
+        /* What is being put back has to be in place to be described, so it
+           goes in and comes straight out again; the switch below does the
+           restoring for real, and may decline to. */
+        struct hstex_meaning standing = engine->meanings[save->index - 1U];
+        engine->meanings[save->index - 1U] = save->previous.meaning;
+        if (meaning_bytes(engine, hstex_token_control_sequence(save->index),
+                          &bytes, &count, &capacity, NULL, scratch,
+                          sizeof(scratch)) == 0) {
+            print_bytes(engine, (const char *)bytes, count);
+        }
+        engine->meanings[save->index - 1U] = standing;
+        free(bytes);
+        break;
+    }
+    case HSTEX_SAVE_CAT_CODE:
+        print_formatted(engine, "\\catcode%u=%u", (unsigned int)save->index,
+                        (unsigned int)save->previous.category);
+        break;
+    case HSTEX_SAVE_CODE:
+        print_formatted(engine, "\\%s%u=%d",
+                        code_names[(save->index / 256U) % 5U],
+                        (unsigned int)(save->index % 256U),
+                        (int)save->previous.integer);
+        break;
+    case HSTEX_SAVE_COUNT:
+        print_formatted(engine, "\\count%u=%d", (unsigned int)save->index,
+                        (int)save->previous.integer);
+        break;
+    case HSTEX_SAVE_INTEGER_PARAMETER:
+        print_formatted(engine, "\\%s=%d",
+                        engine->integer_parameter_names[save->index],
+                        (int)save->previous.integer);
+        break;
+    case HSTEX_SAVE_DIMEN:
+        print_formatted(engine, "\\dimen%u=", (unsigned int)save->index);
+        trace_scaled(engine, save->previous.integer);
+        break;
+    case HSTEX_SAVE_DIMEN_PARAMETER:
+        print_formatted(engine, "\\%s=",
+                        engine->dimen_parameter_names[save->index]);
+        trace_scaled(engine, save->previous.integer);
+        break;
+    case HSTEX_SAVE_GLUE:
+        print_formatted(engine, "\\skip%u=", (unsigned int)save->index);
+        trace_glue(engine, &save->previous.glue, false);
+        break;
+    case HSTEX_SAVE_MUGLUE:
+        print_formatted(engine, "\\muskip%u=", (unsigned int)save->index);
+        trace_glue(engine, &save->previous.glue, true);
+        break;
+    case HSTEX_SAVE_GLUE_PARAMETER:
+        /* glue_parameter_name is written for the field a glue node carries,
+           where nought means `not from a parameter', so it counts from one. */
+        print_formatted(engine, "\\%s=",
+                        glue_parameter_name((uint8_t)(save->index + 1U)));
+        trace_glue(engine, &save->previous.glue, false);
+        break;
+    case HSTEX_SAVE_MUGLUE_PARAMETER:
+        print_formatted(engine, "\\%s=",
+                        save->index < 3U ? mu_names[save->index] : "muskip");
+        trace_glue(engine, &save->previous.glue, true);
+        break;
+    case HSTEX_SAVE_BOX: {
+        print_formatted(engine, "\\box%u=", (unsigned int)save->index);
+        const struct hstex_box *box = &save->previous.box;
+        if (box->kind == HSTEX_BOX_VOID) {
+            print_text(engine, "void");
+            break;
+        }
+        /* Shown shallow whatever \showboxdepth says. */
+        char prefix[256];
+        memset(prefix, '.', sizeof(prefix));
+        struct hstex_node node = {
+            .kind = HSTEX_NODE_LIST,
+            .width = box->width,
+            .height = box->height,
+            .depth = box->depth,
+            .value.list = {
+                .node_start = box->node_start,
+                .node_count = box->node_count,
+                .box_kind = box->kind,
+                .glue = box->glue,
+            },
+        };
+        print_line(engine);
+        show_node(engine, &node, prefix, 0U, 0U, 5U);
+        break;
+    }
+    case HSTEX_SAVE_TOKEN_REGISTER:
+    case HSTEX_SAVE_TOKEN_PARAMETER: {
+        if (save->kind == HSTEX_SAVE_TOKEN_REGISTER) {
+            print_formatted(engine, "\\toks%u=", (unsigned int)save->index);
+        } else {
+            print_formatted(engine, "\\%s=",
+                            token_parameter_name(save->index));
+        }
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        char scratch[256];
+        bool cut = false;
+        if (stored_token_list_text(engine, save->previous.token_list_identifier,
+                                   &bytes, &count, SIZE_MAX, &cut, scratch,
+                                   sizeof(scratch)) == 0) {
+            print_bytes(engine, (const char *)bytes, count);
+        }
+        free(bytes);
+        break;
+    }
+    case HSTEX_SAVE_MATH_FONT: {
+        /* A family's font is named by the control sequence \font gave it,
+           which is what \the\textfont reports, not by its metrics file. */
+        const struct hstex_font *font = font_by_identifier(
+            engine, save->previous.integer >= 0
+                        ? (uint32_t)save->previous.integer : 0U);
+        char named[128] = "\\nullfont";
+        if (font != NULL && font->identifier_cs != 0U) {
+            describe_token(engine,
+                           hstex_token_control_sequence(font->identifier_cs),
+                           named, sizeof(named));
+        }
+        print_formatted(engine, "\\%s%u=%s", sizes[(save->index / 16U) % 3U],
+                        (unsigned int)(save->index % 16U), named);
+        break;
+    }
+    case HSTEX_SAVE_PAR_SHAPE:
+        print_formatted(engine, "\\parshape=%d", (int)save->previous.integer);
+        break;
+    default:
+        print_text(engine, "?");
+        break;
+    }
+    print_byte(engine, '}');
+    print_line(engine);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -36474,6 +36692,10 @@ static int end_group(struct hstex_engine *engine, char *error,
     while (engine->save_count != 0U &&
            engine->saves[engine->save_count - 1U].level == leaving_level) {
         struct hstex_save_entry save = engine->saves[--engine->save_count];
+        if (save.kind != HSTEX_SAVE_AFTER_GROUP &&
+            save.kind != HSTEX_SAVE_FONT) {
+            trace_restore(engine, &save);
+        }
         switch (save.kind) {
         case HSTEX_SAVE_MEANING: {
             struct hstex_meaning *current =
