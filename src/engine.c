@@ -29823,7 +29823,7 @@ static void resolve_binary_atoms(struct hstex_math_builder *builder)
    have it -- which the reference reports and then carries on without, so
    the atom contributes nothing. */
 static int math_character_metric(struct hstex_engine *engine,
-                                 const struct hstex_math_field *field,
+                                 struct hstex_math_field *field,
                                  uint8_t size, const struct hstex_font **font,
                                  const struct hstex_char_metric **metric,
                                  bool complain, char *error,
@@ -29865,6 +29865,12 @@ static int math_character_metric(struct hstex_engine *engine,
         }
         tex_error(engine, help, "\\%s %u is undefined (character %s)",
                   sizes[size], (unsigned int)field->family, shown);
+        /* And the field is EMPTIED, so a second reading of it -- an accent
+           asks its nucleus twice, once for the skew and once for the box --
+           finds nothing there and says nothing more. Measured:
+           `\mathaccent"161 A' with \fam13 draws one complaint, not two. */
+        field->kind = (uint8_t)HSTEX_MATH_FIELD_EMPTY;
+        field->single_character = 0U;
         return 0;
     }
     if (resolved->characters == NULL ||
@@ -31895,7 +31901,7 @@ static int build_math_radical(struct hstex_engine *engine,
 /* The kern the nucleus's font gives against its skew character, which is how
    far the accent slides to the right. */
 static int accent_skew(struct hstex_engine *engine,
-                       const struct hstex_math_field *nucleus, uint8_t size,
+                       struct hstex_math_field *nucleus, uint8_t size,
                        int32_t *skew, char *error, size_t error_capacity)
 {
     *skew = 0;

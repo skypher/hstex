@@ -1,0 +1,31 @@
+% A CHARACTER FROM AN UNDEFINED FAMILY IS COMPLAINED ABOUT ONCE.
+%
+% Reading a character whose family still holds \nullfont draws
+%
+%   ! \textfont 13 is undefined (character A).
+%
+% and then EMPTIES THE FIELD it was read from, so that a second reading
+% of the same field finds nothing and says nothing. That matters for
+% \mathaccent, which asks its nucleus twice -- once for the skew the
+% accent slides by, once for the box the accent goes over. HSTeX read it
+% twice and complained twice.
+%
+% The complaint names the size the reading wanted, so the same character
+% draws \textfont, \scriptfont or \scriptscriptfont depending on where
+% it stands.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
+\message{[A a mathaccent over a group in an undefined family]}
+\setbox0=\vbox{\noindent$B\mathaccent"161 {\fam13 A}C$\par}
+\message{[B a bare character as the nucleus]}
+\setbox0=\vbox{\noindent$B\fam13 \mathaccent"161 AC$\par}
+\message{[C no accent, just the character]}
+\setbox0=\vbox{\noindent$B{\fam13 A}C$\par}
+\message{[done]}
+\end
