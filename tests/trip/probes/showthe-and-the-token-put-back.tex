@@ -1,0 +1,27 @@
+% \showthe of a register whose number ran to the end of a line.
+%
+% Measured against pdftex: what is shown is the value and nothing else.
+%
+% A register number is ended by the first token that cannot be part of it,
+% and that token is read again afterwards. At the end of a line, with
+% \catcode13=12, that token is the endline character itself -- an ordinary
+% character rather than a space. This engine showed it as part of the
+% value, so
+%
+%   \catcode13=12
+%   \toks0={a}\showthe\toks0
+%
+% printed `> ^^Ma.' where the reference prints `> a.'. The token list
+% itself was right all along: \the\toks0 and \edef both gave `a'. It was
+% only \showthe, which printed every frame the scan had left on the stack
+% rather than the one holding the value.
+%
+% \the pushes the value as one frame and it is the one on top, so that is
+% the one to show.
+\tracingonline=1
+\catcode13=12
+\toks0={a}\showthe\toks0
+\toks1={a^^Mb}\showthe\toks1
+\count5=42 \showthe\count5
+\skip5=3pt plus 1fil \showthe\skip5
+\end

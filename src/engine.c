@@ -15612,16 +15612,20 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
     print_fresh_line(engine);
     print_text(engine, "> ");
     int status = 0;
-    for (size_t index = base; index < engine->sources.count; ++index) {
-        struct hstex_source_frame *frame = &engine->sources.frames[index];
-        if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
-            continue;
-        }
-        const struct hstex_token_source *list = &frame->value.token_list;
-        for (uint32_t cursor = list->cursor;
-             cursor < list->count && status == 0; ++cursor) {
-            status = print_one_token(engine, list->tokens[cursor], true, error,
-                                     error_capacity);
+    /* \the pushes the value as one frame, and it is the one on top. What
+       may be under it is a token the scan put back -- the terminator of the
+       register number, which at the end of a line is the endline character
+       -- and that is no part of the value. */
+    if (engine->sources.count > base) {
+        struct hstex_source_frame *frame =
+            &engine->sources.frames[engine->sources.count - 1U];
+        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+            const struct hstex_token_source *list = &frame->value.token_list;
+            for (uint32_t cursor = list->cursor;
+                 cursor < list->count && status == 0; ++cursor) {
+                status = print_one_token(engine, list->tokens[cursor], true,
+                                         error, error_capacity);
+            }
         }
     }
     while (engine->sources.count > base) {
