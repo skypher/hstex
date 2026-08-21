@@ -22,6 +22,11 @@
 % the one it read and reads it again. `\let\bg={ \bg' draws one line, not
 % a {begin-group character {} for the brace on top of one for \bg.
 %
+% A RUN IS A HORIZONTAL-LIST THING. In MATH MODE every character is an
+% atom of its own and every one is traced: `\hbox{abc}' draws three lines
+% and so does `$abc$'. hstex drew three for the first and one for the
+% second.
+%
 % A \chardef'd control sequence, and \char, BELONG TO A RUN OF CHARACTERS
 % like the characters themselves: a run is traced once, at its first, so
 % `M\ch' draws {the letter M} and nothing for the \ch. Where the run has
@@ -39,5 +44,9 @@
 \tk={x}
 \sk=1pt
 \let\pp=\par \pp
+\message{[a run in horizontal mode and in math mode]}
+\hbox{abc}
+\setbox9=\hbox{$abc$}
+\setbox9=\hbox{$123$}
 \tracingcommands=0
 \end

@@ -16217,7 +16217,12 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
     if (mode_name(engine) != engine->traced_mode) {
         engine->traced_character = false;
     }
-    bool character_run = hstex_token_is_character(token) &&
+    /* A run is a horizontal-list thing. In MATH MODE every character is an
+       atom of its own and every one is traced: measured, `\hbox{abc}' draws
+       three lines and so does `$abc$', but hstex drew three for the first
+       and one for the second. */
+    bool character_run = engine->mode != HSTEX_MODE_MATH &&
+                         hstex_token_is_character(token) &&
                          (token_is_category(token, HSTEX_CAT_LETTER) ||
                           token_is_category(token, HSTEX_CAT_OTHER));
     /* A \chardef'd control sequence, and \char itself, put a character in
