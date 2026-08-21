@@ -1,0 +1,41 @@
+% WHAT A MARK SHOWS OF ITSELF.
+%
+% \show and \meaning give one of TeX's five marks its name, a colon, and
+% then the TEXT it holds -- the only primitives besides a macro that show
+% more than a name:
+%
+%   \show\botmark        > \botmark=\botmark:
+%                        om##ega.
+%   \meaning\botmark     \botmark:om##ega
+%
+% \show breaks the line after the colon, the way it breaks a macro's
+% between what it is and what it says; \meaning does not, for the same
+% reason it does not break a macro's.
+%
+% The text is written the way a token list is written anywhere, so a
+% parameter character in it is doubled.
+%
+% The marks CLASSES eTeX adds do NOT do this: `\show\botmarks' is
+% `> \botmarks=\botmarks.' and no more.
+%
+% HSTeX gave the name alone. trip line 320 writes \show\botmark.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\output={\global\setbox9=\box255}
+\vsize=10pt \hsize=100pt
+\message{[A every mark is empty to begin with]}
+\show\botmark
+\show\topmark
+\show\splitbotmark
+\mark{alpha}\hrule height 5pt \mark{om#ega}\hrule height 20pt
+\penalty-10000
+\message{[B a page has been made, so the marks hold what it left]}
+\show\topmark
+\show\firstmark
+\show\botmark
+\message{[C the same three, asked for as a meaning]}
+\message{<\meaning\topmark><\meaning\firstmark><\meaning\botmark>}
+\message{[D a \let to one shows the mark it names]}
+\let\bm=\botmark \show\bm
+\message{[done]}
+\end

@@ -24469,6 +24469,64 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                 free(bytes);
                 return -1;
             }
+        } else if (meaning->command == HSTEX_COMMAND_MARK_TEXT &&
+                   meaning->value.integer < 8) {
+            /* One of the five marks TeX82 has shows what it holds as well as
+               what it is: the name, a colon, and then the text, which \show
+               puts on a line of its own the way it does a macro's body.
+               \meaning gives the same two parts with nothing between them.
+               The marks CLASSES eTeX adds do not do this -- `\show\botmarks'
+               is `\botmarks.' and no more -- so only the five are here. */
+            if (serialize_control_sequence(
+                    engine,
+                    meaning->primitive_origin == 0U
+                        ? subject
+                        : hstex_token_control_sequence(
+                              meaning->primitive_origin),
+                    &bytes, &count, &capacity, false, error,
+                    error_capacity) != 0 ||
+                append_byte(&bytes, &count, &capacity, (uint8_t)':', error,
+                            error_capacity) != 0) {
+                free(bytes);
+                return -1;
+            }
+            if (after_prefix != NULL) {
+                *after_prefix = count;
+            }
+            const struct hstex_mark_class *entry =
+                mark_class_of(engine, 0U, false, error, error_capacity);
+            uint32_t identifier = 0U;
+            if (entry != NULL) {
+                switch (meaning->value.integer) {
+                case 0:
+                    identifier = entry->top;
+                    break;
+                case 1:
+                    identifier = entry->first;
+                    break;
+                case 2:
+                    identifier = entry->bot;
+                    break;
+                case 3:
+                    identifier = entry->split_first;
+                    break;
+                default:
+                    identifier = entry->split_bot;
+                    break;
+                }
+            }
+            const struct hstex_token_list *list =
+                identifier == 0U ? NULL
+                                 : token_list_by_identifier(engine, identifier);
+            for (size_t index = 0U; list != NULL && index < list->count;
+                 ++index) {
+                if (append_token_description(engine, list->tokens[index],
+                                             &bytes, &count, &capacity, error,
+                                             error_capacity) != 0) {
+                    free(bytes);
+                    return -1;
+                }
+            }
         } else if (defined_register_primitive(meaning->command) != NULL) {
             if (append_defined_register_meaning(engine, meaning, &bytes, &count,
                                                 &capacity, error,
