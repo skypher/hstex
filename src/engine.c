@@ -21332,6 +21332,43 @@ static int build_page(struct hstex_engine *engine, char *error,
                     trace_page_goal(engine);
                 }
                 engine->page_has_box = true;
+                /* The \topskip glue in front of the first box is a legal
+                   breakpoint like any other glue, if what already stands on
+                   the page permits one. Measured: a \write or a \mark
+                   before the first box draws
+                   `% t=0.0 g=50.0 b=10000 p=0 c=100000#' where a page with
+                   nothing on it draws no such line, and where a penalty
+                   before the first box -- which is discarded -- draws none
+                   either. */
+                if (page->count != 0U) {
+                    uint32_t standing =
+                        page->node_identifiers[page->count - 1U];
+                    enum hstex_node_kind before =
+                        engine->nodes[standing - 1U].kind;
+                    if (before != HSTEX_NODE_GLUE &&
+                        before != HSTEX_NODE_KERN &&
+                        before != HSTEX_NODE_PENALTY) {
+                        int32_t badness = 0;
+                        int64_t cost = page_break_cost(engine, 0, &badness);
+                        trace_page_cost(engine, 0, badness, cost,
+                                        cost <= engine->least_page_cost);
+                        if (cost <= engine->least_page_cost) {
+                            engine->best_page_break = page->count;
+                            engine->best_page_penalty = HSTEX_INFINITE_PENALTY;
+                            engine->best_page_size =
+                                engine->page_dimens[HSTEX_PAGE_GOAL];
+                            engine->least_page_cost = (int32_t)cost;
+                        }
+                        if (cost == HSTEX_AWFUL_BADNESS) {
+                            if (fire_up(engine, index, error,
+                                        error_capacity) != 0) {
+                                return -1;
+                            }
+                            fired = true;
+                            break;
+                        }
+                    }
+                }
                 struct hstex_glue top =
                     engine->glue_parameters[HSTEX_GLUE_TOP_SKIP];
                 int32_t height = packed_dimen(node.height);
