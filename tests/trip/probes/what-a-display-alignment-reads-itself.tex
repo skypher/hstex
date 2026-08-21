@@ -1,0 +1,40 @@
+% WHAT AN ALIGNMENT THAT REPLACED A DISPLAY READS FOR ITSELF IS NOT TRACED.
+%
+% When \halign stands in for a whole display, the display does not end at
+% the alignment's closing brace: the alignment's own finish goes on
+% reading, and it accepts assignments (and \relax, and the blanks between
+% them) until it meets the $$ that closes the display. It reads the two $
+% of that $$ as well.
+%
+% None of that reaches the main loop, so \tracingcommands=2 draws no line
+% for any of it -- not for the blank spaces, not for the assignments, not
+% for the shifts:
+%
+%   $$\halign{#\cr\cr}\global\count6=1 \dimen4=2pt $$    nothing traced
+%
+% Expandable tokens inside those assignments ARE traced, because the
+% expander does the expanding wherever it is called from:
+%
+%   $$\halign{#\cr\cr}\count6=\the\count5 $$             {\the} traced
+%
+% An assignment is where the reference stops: anything else closes the
+% display first and is read again, and THAT is traced, in the mode the
+% display left behind.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\$=3 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \parindent=0pt \tabskip=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=1000pt \vfuzz=1000pt
+\count5=7
+\message{[A assignments before the closing $$]}
+\tracingcommands=2
+$$\halign{#&#\cr\cr}\global\count6=1 \dimen4=2pt \relax $$
+\tracingcommands=0
+\message{[B an expandable inside one of them]}
+\tracingcommands=2
+$$\halign{#&#\cr\cr}\count6=\the\count5 $$
+\tracingcommands=0
+\message{[C something that is not an assignment]}
+\tracingcommands=2
+$$\halign{#&#\cr\cr}\kern3pt $$
+\tracingcommands=0
+\message{[done]}
+\end

@@ -35704,6 +35704,13 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
         engine->active_vbox_builder = engine->display_outer_vbox;
         if (status == 0) {
             engine->display_alignment = true;
+            /* The display is not over: the alignment's finish stands where
+               the display stood, and what it reads before the closing $$ is
+               read in display math mode. \tracingcommands=2 says so for an
+               expandable inside one of those assignments. end_display_
+               alignment puts vertical mode back. */
+            engine->mode = HSTEX_MODE_MATH;
+            engine->inner_mode = false;
         } else {
             free(engine->display_rows->node_identifiers);
             free(engine->display_rows);
@@ -37669,6 +37676,12 @@ static int insert_math_shift(struct hstex_engine *engine, hstex_token offending,
         push_one(engine, shift, location, error, error_capacity) != 0) {
         return -1;
     }
+    /* The $ is inserted rather than put back, and the context says so: it
+       stands as <inserted text> both while it is waiting and once it has
+       been read, where a token put back would say <to be read again> and
+       then <recently read>. */
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
     tex_error(engine, help, "Missing $ inserted");
     return 0;
 }
@@ -37686,15 +37699,15 @@ static int insert_display_close(struct hstex_engine *engine,
     static const char *const help[] = {
         "Displays can use special alignments (like \\eqalignno)",
         "only if nothing but the alignment itself is between $$'s.", NULL};
-    hstex_token shift =
-        hstex_token_character((uint8_t)HSTEX_CAT_MATH_SHIFT, (uint8_t)'$');
-    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
-        push_one(engine, shift, location, error, error_capacity) != 0 ||
-        push_one(engine, shift, location, error, error_capacity) != 0) {
+    /* Nothing is really inserted, whatever the message says: the reference
+       puts the offending command back and lets the alignment's own finish
+       close the display, so the context names that command and not a
+       shift. */
+    if (push_one(engine, offending, location, error, error_capacity) != 0) {
         return -1;
     }
     tex_error(engine, help, "Missing $$ inserted");
-    return 0;
+    return end_display_alignment(engine, error, error_capacity);
 }
 
 /* A formula closed while a \left group is still open. The reference puts
@@ -38687,6 +38700,30 @@ handle_token:
                 continue;
             }
         }
+        /* An alignment that filled a display admits only $$, an assignment
+           and \relax before the display closes; anything else closes it
+           first and is read again. */
+        if (engine->display_alignment &&
+            !token_is_category(*token, HSTEX_CAT_MATH_SHIFT) &&
+            !token_is_space(*token)) {
+            /* Blanks stand between the assignments the reference allows
+               here -- an alignment usually ends a line -- and it skips
+               them rather than closing the display on one. */
+            bool allowed = false;
+            if (hstex_token_is_control_sequence(*token)) {
+                const struct hstex_meaning *what = hstex_engine_meaning(
+                    engine, hstex_token_control_sequence_id(*token));
+                allowed = what->command == HSTEX_COMMAND_RELAX ||
+                          command_assigns(what->command);
+            }
+            if (!allowed) {
+                if (insert_display_close(engine, *token, *location, error,
+                                         error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+        }
         /* A vertical command inside a formula closes it first, and a math
            command outside one opens it: both put a $ in front of the
            command and read it again. Without the first an unclosed display
@@ -38723,44 +38760,20 @@ handle_token:
             }
             continue;
         }
-        /* An alignment that filled a display admits only $$, an assignment
-           and \relax before the display closes; anything else closes it
-           first and is read again. */
-        if (engine->display_alignment &&
-            !token_is_category(*token, HSTEX_CAT_MATH_SHIFT) &&
-            !token_is_space(*token)) {
-            /* Blanks stand between the assignments the reference allows
-               here -- an alignment usually ends a line -- and it skips
-               them rather than closing the display on one. */
-            bool allowed = false;
-            if (hstex_token_is_control_sequence(*token)) {
-                const struct hstex_meaning *what = hstex_engine_meaning(
-                    engine, hstex_token_control_sequence_id(*token));
-                allowed = what->command == HSTEX_COMMAND_RELAX ||
-                          command_assigns(what->command);
-            }
-            if (!allowed) {
-                if (insert_display_close(engine, *token, *location, error,
-                                         error_capacity) != 0) {
-                    return HSTEX_ENGINE_ERROR;
-                }
-                continue;
-            }
-        }
         if (hstex_token_is_character(*token)) {
             /* Unless this character is standing in for the control sequence
                that meant it -- one \let to a brace, one \chardef'd -- which
                was traced already. The reference draws one line for
                `\let\bg={ \bg', not two. Nor is anything traced while a
                prefix is waiting: what \global prefixes it reads itself. */
-            /* Nor either $ of the $$ that closes a display an alignment
-               stood in for: the alignment's own finish reads both, so
-               neither reaches the main loop for it to draw. */
-            bool closes_display =
-                engine->display_alignment &&
-                token_is_category(*token, HSTEX_CAT_MATH_SHIFT);
+            /* Nor anything an alignment that stood in for a display reads
+               before that display closes -- the blanks, the assignments,
+               and both shifts of the closing $$. The alignment's own
+               finish reads them, so none of them reaches the main loop for
+               it to draw. */
             if (!engine->command_traced && !engine->pending_global &&
-                engine->pending_macro_flags == 0U && !closes_display) {
+                engine->pending_macro_flags == 0U &&
+                !engine->display_alignment) {
                 trace_command(engine, *token);
             }
             /* A formula is delimited by math shifts rather than braces, so
@@ -39123,6 +39136,10 @@ handle_token:
            nothing for the \count, and so do \long, \outer, a second
            prefix, and a \relax standing between. */
         if ((!engine->pending_global && engine->pending_macro_flags == 0U) &&
+            /* And an alignment that stood in for a display reads the
+               assignments before the closing $$ itself, so they are not
+               traced either. */
+            !engine->display_alignment &&
             (!engine->immediate_pending ||
             (meaning->command != (int)HSTEX_COMMAND_WRITE &&
              meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
