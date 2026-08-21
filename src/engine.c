@@ -32998,6 +32998,16 @@ static int equation_number_fits(struct hstex_engine *engine,
         *fits = false;
         return 0;
     }
+    /* A NUMBER OF NO WIDTH DOES NOT GO BESIDE THE EQUATION. Measured:
+       `$$\hbox{}\eqno\hbox{}$$' sets the number on a line of its own, where
+       `$$\hbox{}\eqno\hbox to 10pt{}$$' sets it beside. What the reference
+       measures is the number's own width, and nought means there is nothing
+       to set beside -- the same answer it gives when there is no number at
+       all. */
+    if (number->width == 0) {
+        *fits = false;
+        return 0;
+    }
     int32_t quad = 0;
     if (math_symbol_parameter(engine, (uint8_t)HSTEX_MATH_TEXT, 6U, &quad,
                               error, error_capacity) != 0) {

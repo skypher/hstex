@@ -1,0 +1,50 @@
+% AN EQUATION NUMBER OF NO WIDTH DOES NOT GO BESIDE THE EQUATION.
+%
+% What decides is the number's own width, and nought means there is
+% nothing to set beside -- the same answer the reference gives when
+% there is no number at all. So:
+%
+%   $$\hbox{}\eqno\hbox{}$$          the number on a line of its own
+%   $$\hbox{}\eqno\hbox to 10pt{}$$  the number beside the equation
+%
+% and a number that is wide enough to push the pair past \displaywidth
+% goes on its own line too:
+%
+%   \hsize=100pt
+%   $$\hbox to 50pt{}\eqno\hbox to 10pt{}$$   beside  (50+10+quad <= 100)
+%   $$\hbox to 90pt{}\eqno\hbox to 10pt{}$$   below   (90+10+quad >  100)
+%
+% -- the quad being \fontdimen6 of \textfont2, ten points for cmsy10.
+%
+% A NUMBER ON ITS OWN LINE comes after \penalty10000 and the interline
+% glue, shifted flush against the right edge, and the glue below the
+% display goes away entirely rather than being set to nothing.
+%
+% STILL DIFFERING, and it is the next thing: \predisplaysize. For a
+% paragraph whose last line holds a single character the reference gives
+% the line's width plus two quads -- 27.50005pt for `\noindent A$$' at
+% \hsize=100pt -- and hstex gives -16383.99998pt, which is what it says
+% when there was no line at all. Four characters (`\noindent AAAA$$')
+% agree at 63.7501pt, and so does an empty line. It matters because
+% \predisplaysize is what chooses between \abovedisplayskip and
+% \abovedisplayshortskip, so the wrong one is picked whenever the display
+% follows a very short line.
+\tracingonline=1 \showboxdepth=1 \showboxbreadth=10
+\baselineskip=10pt \abovedisplayskip=0pt \belowdisplayskip=0pt
+\abovedisplayshortskip=0pt \belowdisplayshortskip=0pt
+\predisplaypenalty=0 \postdisplaypenalty=0 \hsize=100pt
+\message{[A empty equation, empty number]}
+\setbox1=\vbox{\noindent A$$\hbox{}\eqno\hbox{}$$B}\showbox1
+\message{[B empty equation, 10pt number]}
+\setbox2=\vbox{\noindent A$$\hbox{}\eqno\hbox to 10pt{}$$B}\showbox2
+\message{[C 50pt equation, 10pt number]}
+\setbox3=\vbox{\noindent A$$\hbox to 50pt{}\eqno\hbox to 10pt{}$$B}\showbox3
+\message{[D 90pt equation, 10pt number]}
+\setbox4=\vbox{\noindent A$$\hbox to 90pt{}\eqno\hbox to 10pt{}$$B}\showbox4
+\message{[E leqno with no width]}
+\setbox5=\vbox{\noindent A$$\hbox{}\leqno\hbox{}$$B}\showbox5
+\message{[F what predisplaysize reads]}
+\noindent A$$\showthe\predisplaysize \hbox to 50pt{}$$B
+\noindent AAAA$$\showthe\predisplaysize \hbox to 50pt{}$$B
+\message{[done]}
+\end
