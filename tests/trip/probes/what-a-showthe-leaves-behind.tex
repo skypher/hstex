@@ -1,0 +1,38 @@
+% WHAT \showthe LEAVES BEHIND.
+%
+% \showthe prints what \the would have produced -- and that is ALL it
+% consumes. The scan that reads a register number stops at the first
+% token that cannot be part of it and puts that token back, and \showthe
+% has no business with it: the reference names it under the answer,
+%
+%   > 0.
+%   <to be read again>
+%                      X
+%
+% and the X is read again afterwards, so `\hbox{\showthe\count0X}' holds
+% an X. HSTeX took EVERYTHING the stack had gained back off it, which
+% swallowed the terminator: the box came out empty, and in a formula the
+% swallowed token was the `$' that should have closed it, so the rest of
+% the run was one long recovery.
+%
+% A value \the gives is an inserted list and a token put back is not,
+% which is what tells the two apart when the value is empty and no list
+% was pushed for it at all.
+%
+% trip line 319 writes `\showbox22\kern3pt', and lines 273 and 317 ask
+% \showthe\lastskip in the middle of a formula.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\rip=trip \rip
+\tracingonline=1 \showboxbreadth=5 \showboxdepth=5
+\message{[A the terminator is a letter, and is set]}
+\setbox1=\hbox{\showthe\count0A}\showbox1
+\message{[B the terminator ends a glue register's number]}
+\setbox1=\hbox{\showthe\skip0A}\showbox1
+\message{[C the terminator is the $ that closes a formula]}
+\setbox0=\hbox{$A\showthe\count0$}
+\message{[D a space after the number is eaten, and nothing is put back]}
+\setbox1=\hbox{\showthe\count0 A}\showbox1
+\message{[E nothing is put back after a quantity that reads no number]}
+\setbox1=\hbox{\showthe\parindent A}\showbox1
+\message{[done]}
+\end

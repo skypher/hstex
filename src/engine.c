@@ -7678,9 +7678,23 @@ static int expand_the_primitive(struct hstex_engine *engine,
                 return set_error(error, error_capacity,
                                  "the requires a defined font");
             }
-            return push_one(engine,
+            /* Pushed as a value and not as a token read again, the way every
+               other answer \the gives is: what \showthe takes back off the
+               stack is told apart from a terminator the scan put there by
+               which of the two it is. */
+            struct hstex_token_vector named_font = {0};
+            if (vector_push(&named_font,
                             hstex_token_control_sequence(font->identifier_cs),
-                            location, error, error_capacity);
+                            error, error_capacity) != 0) {
+                vector_destroy(&named_font);
+                return -1;
+            }
+            if (push_owned_vector(engine, &named_font, location, error,
+                                  error_capacity) != 0) {
+                vector_destroy(&named_font);
+                return -1;
+            }
+            return 0;
         }
         /* Anything else that is an internal integer -- \count and its
            relatives, a \countdef'd or \chardef'd control sequence, an
@@ -17337,24 +17351,28 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
     print_fresh_line(engine);
     print_text(engine, "> ");
     int status = 0;
-    /* \the pushes the value as one frame, and it is the one on top. What
+    /* \the pushes the value as ONE frame, and it is the one on top. What
        may be under it is a token the scan put back -- the terminator of the
-       register number, which at the end of a line is the endline character
-       -- and that is no part of the value. */
+       register number -- and that is no part of the value and is left where
+       it stands, to be read again: the reference says so in the context it
+       prints under the answer, and a `\showthe\count0X' still sets the X.
+       A value is an inserted frame and a token read again is not, which is
+       what tells the two apart when the value is empty and no frame was
+       pushed for it at all. */
     if (engine->sources.count > base) {
         struct hstex_source_frame *frame =
             &engine->sources.frames[engine->sources.count - 1U];
-        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST &&
+            frame->value.token_list.source_kind ==
+                (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED) {
             const struct hstex_token_source *list = &frame->value.token_list;
             for (uint32_t cursor = list->cursor;
                  cursor < list->count && status == 0; ++cursor) {
                 status = print_one_token(engine, list->tokens[cursor], true,
                                          error, error_capacity);
             }
+            hstex_source_pop(&engine->sources);
         }
-    }
-    while (engine->sources.count > base) {
-        hstex_source_pop(&engine->sources);
     }
     if (status != 0) {
         return -1;
