@@ -27436,13 +27436,29 @@ static void trace_short_display(struct hstex_engine *engine,
             print_byte(engine, '|');
             trace->column = true;
             break;
-        case HSTEX_NODE_GLUE:
-            if (node->width != 0 || node->value.glue.stretch != 0 ||
-                node->value.glue.shrink != 0) {
+        case HSTEX_NODE_GLUE: {
+            /* A space for every glue but the SHARED ZERO one. A parameter or
+               a register assigned nothing at all becomes that shared glue --
+               an untouched \rightskip, or one set to 0pt -- and shows
+               nothing. Glue written out keeps a spec of its own however
+               empty it is, so `\hskip0pt' between two letters does show a
+               space. A kern is not glue and never shows one. See
+               docs/DECISIONS.md, a-short-display-of-glue. */
+            bool empty = node->width == 0 && node->value.glue.stretch == 0 &&
+                         node->value.glue.shrink == 0;
+            /* Math spacing is worked out from a mu parameter rather than
+               taken from it, so it has a glue of its own however empty it
+               comes out, and shows a space. Its name is beyond the ordinary
+               glue parameters. */
+            bool own_glue =
+                node->value.glue.parameter == 0U ||
+                node->value.glue.parameter > (uint8_t)HSTEX_GLUE_PARAMETER_COUNT;
+            if (!empty || own_glue) {
                 print_byte(engine, ' ');
                 trace->column = true;
             }
             break;
+        }
         case HSTEX_NODE_MATH:
             print_byte(engine, '$');
             trace->column = true;

@@ -1,0 +1,47 @@
+% A SHORT DISPLAY SHOWS A SPACE FOR EVERY GLUE BUT THE SHARED ZERO ONE.
+%
+% The short display a box's report is followed by writes each character
+% as itself, a box or a whatsit as `[]', a rule as `|', a formula's edge
+% as `$' -- and a glue as a SPACE. Every glue but one: a glue parameter
+% or register assigned nothing at all becomes the engine's single shared
+% zero glue, and that one shows nothing.
+%
+%   \hskip0pt between two letters      shows a space
+%   an untouched \rightskip            shows nothing
+%   \rightskip=0pt                     shows nothing
+%   \rightskip=5pt                     shows a space
+%   a kern, of any size                shows nothing -- it is not glue
+%
+% So being empty is not what decides it: `\hskip0pt' is as empty as a
+% zeroed \rightskip and still shows a space, because glue written out
+% keeps a glue of its own however empty it comes out.
+%
+% Math spacing is the same: it is WORKED OUT from \thinmuskip and its
+% kin rather than taken from them, so it has a glue of its own and shows
+% a space even when the mu parameter is zero -- `$A\mathbin{A}A$' with
+% \medmuskip at nothing comes out `$\teni A A A$' and not `$\teni AAA$'.
+%
+% HSTeX showed a space for any glue that was not empty, which got the
+% zeroed parameters right by accident and the other two wrong.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\hsize=200pt \parindent=0pt
+\message{[A math spacing that comes out zero]}
+\setbox0=\vbox{\noindent$A\mathbin{A}A$\par}
+\message{[B an explicit zero hskip]}
+\setbox0=\vbox{\noindent A\hskip0pt B\par}
+\message{[C an untouched rightskip and parfillskip]}
+\setbox0=\vbox{\noindent AB\par}
+\message{[D both set to zero explicitly]}
+\rightskip=0pt \parfillskip=0pt
+\setbox0=\vbox{\noindent AB\par}
+\message{[E a kern shows nothing]}
+\setbox0=\vbox{\noindent A\kern5pt B\par}
+\message{[done]}
+\end
