@@ -1,0 +1,48 @@
+% AN ALIGNMENT CHANGES THE MODE BEFORE IT READS ITS SPEC.
+%
+% \halign to<dimen> and \valign to<dimen> are met in one mode and run
+% their entries in another. The change happens FIRST, before the `to' or
+% `spread' keyword is looked for, so the <dimen> after it is scanned in
+% the mode the entries will run in -- not the mode the alignment was met
+% in. \tracingcommands=2 says so, because it names the mode whenever the
+% mode has changed since the line it last drew:
+%
+%   met in                  the spec is read in
+%   vertical mode           internal vertical mode      \halign
+%   internal vertical       internal vertical mode      \halign
+%   display math            internal vertical mode      \halign
+%   horizontal mode         restricted horizontal mode  \valign
+%
+% So `\halign to\the\hsize{...}' in vertical mode draws
+%
+%   {internal vertical mode: \the}
+%
+% and an \halign that replaces a display draws the same, whether or not
+% the display had anything in it for the "Improper \halign inside $$'s"
+% fault to throw away. The mode is already internal vertical by the time
+% the fault is reported.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\$=3 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \parindent=0pt \tabskip=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=1000pt \vfuzz=1000pt
+\message{[A \halign in vertical mode]}
+\tracingcommands=2
+\halign to\the\hsize{#&#\cr\cr}
+\tracingcommands=0
+\message{[B \valign in horizontal mode]}
+\tracingcommands=2
+\noindent A\valign to\the\hsize{#\cr\cr}B\par
+\tracingcommands=0
+\message{[C \halign in internal vertical mode]}
+\tracingcommands=2
+\setbox0=\vbox{\halign to\the\hsize{#&#\cr\cr}}
+\tracingcommands=0
+\message{[D \halign that replaces an empty display]}
+\tracingcommands=2
+$$\halign to\the\displaywidth{#&#\cr\cr}$$
+\tracingcommands=0
+\message{[E \halign after something in a display]}
+\tracingcommands=2
+$$x\halign to\the\displaywidth{#&#\cr\cr}$$
+\tracingcommands=0
+\message{[done]}
+\end

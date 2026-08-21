@@ -35312,6 +35312,31 @@ static int reserve_align_rows(struct hstex_align_row **rows, size_t *capacity,
    align and gather. The rows are then gathered aside so that the display's
    penalties and skips can be read at the closing $$; see
    docs/DECISIONS.md, display-alignments. */
+/* The `to <dimen>' or `spread <dimen>' an alignment may be given, and the
+   brace that opens its preamble. */
+static int scan_alignment_spec(struct hstex_engine *engine, bool *matched_to,
+                               bool *matched_spread, int32_t *requested_width,
+                               char *error, size_t error_capacity)
+{
+    if (try_keyword(engine, "to", matched_to, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (!*matched_to &&
+        try_keyword(engine, "spread", matched_spread, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if ((*matched_to || *matched_spread) &&
+        scan_dimension(engine, requested_width, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* The body's brace is sought as any other mandatory one is: \relax is
+       stepped over, a control sequence \let to a `{' will do, and where
+       there is none the reference says "Missing { inserted" and reads the
+       token again as the first of the preamble. */
+    return scan_left_brace(engine, error, error_capacity);
+}
+
 static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
                                    char *error, size_t error_capacity)
 {
@@ -35351,23 +35376,21 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     bool matched_to = false;
     bool matched_spread = false;
     int32_t requested_width = 0;
-    if (try_keyword(engine, "to", &matched_to, error, error_capacity) != 0) {
-        return -1;
-    }
-    if (!matched_to &&
-        try_keyword(engine, "spread", &matched_spread, error,
-                    error_capacity) != 0) {
-        return -1;
-    }
-    if ((matched_to || matched_spread) &&
-        scan_dimension(engine, &requested_width, error, error_capacity) != 0) {
-        return -1;
-    }
-    /* The body's brace is sought as any other mandatory one is: \relax is
-       stepped over, a control sequence \let to a `{' will do, and where
-       there is none the reference says "Missing { inserted" and reads the
-       token again as the first of the preamble. */
-    if (scan_left_brace(engine, error, error_capacity) != 0) {
+    /* The mode changes before the spec is read, not after: whatever the
+       alignment was met in, its spec is scanned in the mode its entries will
+       run in -- internal vertical for \halign, restricted horizontal for
+       \valign.  That is visible in \tracingcommands, which names the mode
+       for `to\the\hsize'.  See docs/DECISIONS.md,
+       the-mode-an-alignment-spec-is-read-in. */
+    int32_t outer_mode = engine->mode;
+    bool outer_inner = engine->inner_mode;
+    engine->mode = vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL;
+    engine->inner_mode = true;
+    int spec = scan_alignment_spec(engine, &matched_to, &matched_spread,
+                                   &requested_width, error, error_capacity);
+    engine->mode = outer_mode;
+    engine->inner_mode = outer_inner;
+    if (spec != 0) {
         return -1;
     }
 
@@ -38730,8 +38753,14 @@ handle_token:
                was traced already. The reference draws one line for
                `\let\bg={ \bg', not two. Nor is anything traced while a
                prefix is waiting: what \global prefixes it reads itself. */
+            /* Nor either $ of the $$ that closes a display an alignment
+               stood in for: the alignment's own finish reads both, so
+               neither reaches the main loop for it to draw. */
+            bool closes_display =
+                engine->display_alignment &&
+                token_is_category(*token, HSTEX_CAT_MATH_SHIFT);
             if (!engine->command_traced && !engine->pending_global &&
-                engine->pending_macro_flags == 0U) {
+                engine->pending_macro_flags == 0U && !closes_display) {
                 trace_command(engine, *token);
             }
             /* A formula is delimited by math shifts rather than braces, so
