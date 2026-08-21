@@ -7458,11 +7458,34 @@ static int expand_the_primitive(struct hstex_engine *engine,
                             hstex_token_control_sequence(font->identifier_cs),
                             location, error, error_capacity);
         }
+        /* Anything else that is an internal integer -- \count and its
+           relatives, a \countdef'd or \chardef'd control sequence, an
+           integer parameter -- yields its value. */
+        int32_t number = 0;
+        result = integer_from_control_sequence(engine, meaning, &number, error,
+                                               error_capacity);
+        if (result < 0) {
+            return -1;
+        }
+        if (result == 0) {
+            return push_integer_expansion(engine, number, location, error,
+                                          error_capacity);
+        }
     }
-    if (push_one(engine, subject, subject_location, error, error_capacity) != 0) {
-        return -1;
+    /* NOTHING THAT CAN BE ASKED FOR. \the takes an internal quantity and
+       nothing else -- not a digit, not a character, not \relax -- and the
+       reference names what it found, forgets it and hands back nought. The
+       token is SWALLOWED, not read again: measured, `\message{[\the$]}'
+       writes `[0]' and not `[0$]'. */
+    {
+        char named[192];
+        describe_token(engine, subject, named, sizeof(named));
+        static const char *const help[] = {
+            "I'm forgetting what you said and using zero instead.", NULL};
+        tex_error(engine, help, "You can't use `%s' after \\the", named);
     }
-    return expand_integer_primitive(engine, location, error, error_capacity);
+    (void)subject_location;
+    return push_integer_expansion(engine, 0, location, error, error_capacity);
 }
 
 /* The room a name was built in, given back: the engine's own room is kept

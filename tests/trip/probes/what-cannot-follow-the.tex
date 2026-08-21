@@ -1,0 +1,47 @@
+% \the TAKES AN INTERNAL QUANTITY AND NOTHING ELSE.
+%
+% Met with anything else the reference names what it found, forgets it,
+% and hands back nought:
+%
+%   \showthe$          ! You can't use `math shift character $' after \the.
+%   \showthe\relax     ! You can't use `\relax' after \the.
+%   \showthe A         ! You can't use `the letter A' after \the.
+%   \showthe5          ! You can't use `the character 5' after \the.
+%
+% with the help line `I'm forgetting what you said and using zero
+% instead.' hstex read the token again and scanned it as a number, so
+% every one of these drew `Missing number, treated as zero' -- and
+% `\showthe5' drew no fault at all and answered 5.
+%
+% THE TOKEN IS SWALLOWED, not read again: `\message{[\the$]}' writes
+% `[0]', not `[0$]'.
+%
+% ONLY \the. `\count5=\relax' and `\dimen5=\relax' still draw `Missing
+% number, treated as zero', and `\dimen5=\relax' draws `Illegal unit of
+% measure' after it -- those go through a different scan and were already
+% right.
+%
+% STILL DIFFERING, and it is on the list under its own name: an undefined
+% control sequence met while EXPANDING. `\showthe\undefinedzz' draws
+% `Undefined control sequence' in the reference, which forgets it, and
+% then `You can't use `\message' after \the.' about whatever came next.
+% hstex is silent about the undefined one and complains about it instead.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\$=3
+\tracingonline=1
+\message{[A showthe a math shift]}
+\showthe$
+\message{[B the of a math shift]}
+\message{[\the$]}
+\message{[C showthe relax]}
+\showthe\relax
+\message{[D showthe a letter]}
+\showthe A
+\message{[E showthe a digit]}
+\showthe5
+\message{[F a real quantity still works]}
+\count5=7 \showthe\count5 \showthe\catcode`A
+\message{[G other scans are unchanged]}
+\count6=\relax \showthe\count6
+\dimen6=\relax \showthe\dimen6
+\message{[done]}
+\end
