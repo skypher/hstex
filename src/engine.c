@@ -34181,10 +34181,14 @@ static int end_math(struct hstex_engine *engine, char *error,
 }
 
 /* \textfont, \scriptfont and \scriptscriptfont: a family number, then a font.
-   The assignment is local, like a register's. */
+   The assignment is local like a register's, and \global makes it global
+   like a register's -- trip line 268 writes `\global\scriptscriptfont0=
+   \trip' and nothing is restored for it. The prefix is read before the
+   operands, as every prefix is. */
 static int execute_math_font(struct hstex_engine *engine, int32_t size,
                              char *error, size_t error_capacity)
 {
+    bool global = assignment_is_global(engine, engine->pending_global);
     int32_t family = 0;
     if (scan_four_bit_int(engine, &family, error, error_capacity) != 0) {
         return -1;
@@ -34200,7 +34204,6 @@ static int execute_math_font(struct hstex_engine *engine, int32_t size,
         return set_error(error, error_capacity, "invalid math font size");
     }
     uint32_t index = (uint32_t)size * 16U + (uint32_t)family;
-    bool global = assignment_is_global(engine, false);
     uint32_t *level = &engine->math_font_levels[size][family];
     if (!global && engine->group_level != 0U) {
         if (save_value(engine, HSTEX_SAVE_MATH_FONT, index, *level,

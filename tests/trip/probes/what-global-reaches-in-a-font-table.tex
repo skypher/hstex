@@ -1,0 +1,39 @@
+% \global REACHES A FAMILY'S FONT, AND \globaldefs REACHES IT TOO.
+%
+% \textfont, \scriptfont and \scriptscriptfont assign like registers do:
+% locally by default, globally under \global, and globally or locally as
+% \globaldefs says whatever the prefix. HSTeX read the prefix for every
+% other assignment and not for these, so trip line 268's
+%
+%   \global\scriptscriptfont0=\trip
+%
+% was undone at the end of the group that held it, and \tracingrestores
+% drew a line the reference does not draw.
+%
+% \fontdimen and the choice of the current font are the same: measured
+% here for contrast, since both stand next to these in the reference.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingrestores=1
+\font\ff=cmr10 \font\gg=cmr10 at 5pt
+\message{[A a local assignment to a family font]}
+{\scriptscriptfont0=\ff \showthe\scriptscriptfont0 }
+\showthe\scriptscriptfont0
+\message{[B a global one]}
+{\global\scriptscriptfont0=\gg \showthe\scriptscriptfont0 }
+\showthe\scriptscriptfont0
+\message{[C textfont and scriptfont, globally]}
+{\global\textfont1=\ff \global\scriptfont2=\gg }
+\showthe\textfont1 \showthe\scriptfont2
+\message{[D under globaldefs=1, with no prefix]}
+{\globaldefs=1 \textfont4=\ff }
+\showthe\textfont4
+\message{[E under globaldefs=-1, with the prefix]}
+{\globaldefs=-1 \global\textfont5=\ff \showthe\textfont5 }
+\showthe\textfont5
+\message{[F a fontdimen, globally]}
+{\global\fontdimen1 \ff=3pt }
+\showthe\fontdimen1 \ff
+\message{[G the current font, globally]}
+{\global\ff \showthe\fontdimen1 \font }
+\message{[done]}
+\end
