@@ -7854,6 +7854,47 @@ static unsigned int tokens_read_plainly_after(
     }
 }
 
+/* An \outer control sequence met while a macro's argument was being
+   gathered. The reference shows what had been collected, puts a \par in
+   front of the offending name and hands the name BACK, reports, and then
+   forgets the whole call -- whether or not the macro is \long, and without
+   a second word about the \par it just made. A TEXT is closed with a `}'
+   instead and goes on; only an argument is given up. */
+static int report_forbidden_in_argument(
+    struct hstex_engine *engine, hstex_token token,
+    struct hstex_source_location location,
+    const struct hstex_token_vector *partial, const char *prefix, char *error,
+    size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I suspect you have forgotten a `}', causing me",
+        "to read past where you wanted me to stop.",
+        "I'll try to recover; but if the error is serious,",
+        "you'd better type `E' or `X' now and fix your file.", NULL};
+    report_runaway_list(engine, "argument", NULL, prefix, partial);
+    if (push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, 0U);
+    hstex_token paragraph = hstex_token_control_sequence(
+        engine->lexical_state.paragraph_control_sequence);
+    if (push_one(engine, paragraph, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    char named[128];
+    describe_token(engine,
+                   hstex_token_control_sequence(engine->expanding_macro_cs),
+                   named, sizeof(named));
+    tex_error(engine, help,
+              "Forbidden control sequence found while scanning use of %s",
+              named);
+    engine->argument_abandoned = true;
+    return 0;
+}
+
 static int scan_balanced_group(struct hstex_engine *engine,
                                struct hstex_token_vector *argument, bool long_macro,
                                const char *scanning, bool expanded, char *error,
@@ -7966,16 +8007,14 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 "to read past where you wanted me to stop.",
                 "I'll try to recover; but if the error is serious,",
                 "you'd better type `E' or `X' now and fix your file.", NULL};
-            /* The reference closes a runaway ARGUMENT with an inserted \par
-               and a runaway text with a }. HSTeX puts a } in both cases,
-               because the \par is not just a different token: the
-               reference marks the macro outer_call for the rest of the
-               scan, and its own \par then ABANDONS THE WHOLE CALL --
-               silently, where a document's \par would have drawn
-               "Paragraph ended before ... was complete". Inserting the
-               \par without abandoning the call reads the offending name
-               again and loops. Abandoning it is a change to what
-               instantiate_macro promises its caller, so it waits. */
+            /* An ARGUMENT is given up here: see
+               report_forbidden_in_argument. */
+            if (scanning == NULL) {
+                (void)report_forbidden_in_argument(engine, token, location,
+                                                   argument, "{", error,
+                                                   error_capacity);
+                return -1;
+            }
             hstex_token inserted = hstex_token_character(
                 (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
             if (push_one(engine, token, location, error, error_capacity) != 0 ||
@@ -7986,11 +8025,7 @@ static int scan_balanced_group(struct hstex_engine *engine,
             /* What is put in is inserted, and the context says so. */
             hstex_source_name_top(&engine->sources,
                                   (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
-            /* An argument is shown with the brace that opened it; a text
-               stands on its own. */
-            report_runaway_list(engine, scanning != NULL ? "text" : "argument",
-                                NULL, scanning != NULL ? NULL : "{",
-                                argument);
+            report_runaway_list(engine, "text", NULL, NULL, argument);
             char what[160];
             if (scanning != NULL) {
                 (void)snprintf(what, sizeof(what), "%s", scanning);
@@ -8607,6 +8642,20 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                              "runaway delimited macro argument");
         }
         token = normalize_unexpanded_control_sequence(token);
+        /* An \outer control sequence may not stand in an argument, however
+           far the delimiter still is. */
+        if (hstex_token_is_control_sequence(token) &&
+            token_is_outer_macro(engine, token)) {
+            struct hstex_token_vector partial = {
+                .data = argument->data + base,
+                .count = argument->count - base,
+                .capacity = 0U,
+            };
+            (void)report_forbidden_in_argument(engine, token, location,
+                                               &partial, NULL, error,
+                                               error_capacity);
+            return -1;
+        }
         bool paragraph = !long_macro && token_is_paragraph(engine, token);
         if (vector_push(argument, token, error, error_capacity) != 0) {
             return -1;
@@ -9000,6 +9049,16 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                 goto cleanup;
             }
             first = normalize_unexpanded_control_sequence(first);
+            if (hstex_token_is_control_sequence(first) &&
+                token_is_outer_macro(engine, first)) {
+                /* Nothing had been collected, so the runaway shows a name
+                   and no text at all. */
+                struct hstex_token_vector nothing = {0};
+                (void)report_forbidden_in_argument(engine, first, location,
+                                                   &nothing, NULL, error,
+                                                   error_capacity);
+                goto cleanup;
+            }
             if (!long_macro && token_is_paragraph(engine, first)) {
                 {
             static const char *const help[] = {

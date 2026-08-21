@@ -1,0 +1,30 @@
+% An \outer control sequence may not stand in a macro's argument. The
+% reference shows what had been collected, puts a \par in front of the
+% offending name and hands the name BACK, and then forgets the whole call --
+% whether or not the macro is \long. A TEXT is closed with a `}' instead and
+% goes on.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\outer\def\z{Z}
+\message{[A an outer cs in an undelimited argument]}
+\def\T#1{[#1]}
+\T\z
+\message{[B an outer cs in a delimited argument]}
+\def\U#1\stop{[#1]}
+\U ab\z cd\stop
+\message{[C an outer cs in a braced argument]}
+\def\V#1{[#1]}
+\V{ab\z cd}
+\message{[D an outer cs in a definition]}
+\def\W{ab\z cd}
+\message{[E an outer cs in a message]}
+\message{ab\z cd}
+\errorcontextlines=5
+\message{[F a long macro gives up the same way]}
+\long\def\L#1{[#1]}
+\L\z
+\message{[G and a long delimited one]}
+\long\def\M#1\stop{[#1]}
+\M ab\z cd\stop
+\message{[done]}
+\end
