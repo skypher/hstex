@@ -1,0 +1,19 @@
+% A tab or \cr that ends an alignment entry is taken by the scanner on its
+% way to the template's other half, so it never draws a \tracingcommands
+% line -- however far inside the entry it was reached.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\font\tenrm=cmr10 \tenrm \hsize=100pt \tracingonline=1
+\message{[A crcr where a row would begin]}
+\tracingcommands=1
+\setbox0=\vbox{\halign{#\cr A\cr\crcr}}
+\message{[B crcr right after the preamble]}
+\setbox0=\vbox{\halign{#\cr\crcr A\cr}}
+\message{[C crcr in the middle of a row]}
+\setbox0=\vbox{\halign{#\cr A\crcr B\cr}}
+\message{[D two crcr in a row]}
+\setbox0=\vbox{\halign{#\cr A\cr\crcr\crcr}}
+\message{[E crcr with a blank line and a relax before it]}
+\setbox0=\vbox{\halign{#\cr A\cr \relax\crcr}}
+\tracingcommands=0
+\message{[done]}
+\end

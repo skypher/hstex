@@ -40128,6 +40128,11 @@ handle_token:
                waiting for its character, read the assignments in front of
                them themselves, so those are not traced either. */
             !engine->display_alignment && !engine->accent_pending &&
+            /* A tab or \cr that ends an entry is taken by the scanner, on
+               its way to putting the template's other half in front of what
+               follows -- it is never a command the main loop obeyed, so it
+               draws no line however it was reached. */
+            !ends_an_entry &&
             (!engine->immediate_pending ||
             (meaning->command != (int)HSTEX_COMMAND_WRITE &&
              meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
