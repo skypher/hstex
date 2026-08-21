@@ -1,0 +1,46 @@
+% \tracingrestores, which this engine does not implement.
+%
+% It is what is left of trip's log after \tracingcommands: 257 lines of
+% the oracle's 7292. Measured against pdftex so that writing it needs no
+% guessing. One line per save undone when a group ends, LIFO:
+%
+%   {restoring \a=macro:->A}            a meaning, written as \meaning does
+%   {restoring \two=undefined}          a meaning that was not there before
+%   {restoring \gg=\mathchar"321D}      any other meaning, the same way
+%   {restoring \catcode91=12}           a code, by number
+%   {restoring \lccode65=66}            the other code tables likewise
+%   {restoring \count5=7}               a register, by number
+%   {restoring \dimen6=1.0pt}
+%   {restoring \skip7=2.0pt plus 1.0fil}
+%   {restoring \muskip8=3.0mu}
+%   {restoring \toks9=x}                the token list's text
+%   {restoring \hbadness=3}             an integer parameter, BY NAME
+%   {restoring \parindent=4.0pt}        a dimen parameter
+%   {restoring \baselineskip=10.0pt}    a glue parameter
+%   {restoring \thinmuskip=5.0mu}       a muglue parameter
+%   {restoring \everypar=p}             a token parameter
+%   {restoring \textfont2=\gg}          a math family font, naming the font
+%   {restoring \parshape=1}             just the count of pairs
+%
+% A BOX TAKES TWO LINES, the closing brace going after the box:
+%
+%   {restoring \box10=
+%   \hbox(6.83331+0.0)x7.50002 []}
+%
+% and the box is written SHALLOW -- `[]' for its contents -- whatever
+% \showboxbreadth and \showboxdepth say.
+%
+% The save kinds are enumerated at include/hstex/engine.h:743 and the
+% record at 1520; every one of the eighteen needs a name and a value here.
+% \tracingcommands already has the machinery for the line itself:
+% trace_words() writes {...} with the mode prefix where it has changed.
+\tracingonline=1
+\font\ff=cmr10
+\def\a{A}\catcode`\[=12 \count5=7 \dimen6=1pt \skip7=2pt plus 1fil
+\muskip8=3mu \toks9={x}\hbadness=3 \parindent=4pt
+\baselineskip=10pt \thinmuskip=5mu \everypar={p}\textfont2=\ff
+\tracingrestores=1
+{\def\a{B}\catcode`\[=1 \count5=9 \dimen6=2pt \skip7=3pt \muskip8=4mu
+ \toks9={y}\hbadness=4 \parindent=5pt \baselineskip=11pt \thinmuskip=6mu
+ \everypar={q}\textfont2=\nullfont \def\new{N}}
+\end
