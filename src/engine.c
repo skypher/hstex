@@ -4798,6 +4798,30 @@ static int integer_from_control_sequence(
 /* back_error with "Missing number": the token that was not a number is put
    back where it stood, the reference's complaint is made, and the scan hands
    back zero. */
+/* One digit of a number, with the reference's own limit: the constant may
+   reach 2147483647 and no further, and the first digit that would carry it
+   past says so ONCE and leaves it at the limit -- the digits after that are
+   read and thrown away. The test is made before the multiplication, so a
+   run of digits cannot overflow on the way. */
+static void accumulate_digit(struct hstex_engine *engine, int32_t *value,
+                             bool *within_range, int digit, int32_t radix,
+                             int32_t most)
+{
+    if (*value >= most &&
+        (*value > most || digit > 7 || radix != 10)) {
+        if (*within_range) {
+            static const char *const help[] = {
+                "I can only go up to 2147483647='17777777777=\"7FFFFFFF,",
+                "so I'm using that number instead of yours.", NULL};
+            tex_error(engine, help, "Number too big");
+            *value = INT32_MAX;
+            *within_range = false;
+        }
+        return;
+    }
+    *value = *value * radix + digit;
+}
+
 static int missing_number(struct hstex_engine *engine, hstex_token token,
                           struct hstex_source_location location, int32_t *value,
                           char *error, size_t error_capacity)
@@ -4907,8 +4931,10 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
                token_is_other_character(token, (uint8_t)'"')) {
         unsigned int radix =
             token_is_other_character(token, (uint8_t)'\'') ? 8U : 16U;
-        uint64_t accumulated = 0U;
+        int32_t accumulated = 0;
         bool saw_digit = false;
+        bool within_range = true;
+        const int32_t most = INT32_MAX / (int32_t)radix;
         for (;;) {
             enum hstex_engine_result result = hstex_engine_next_expanded(
                 engine, &token, &location, error, error_capacity);
@@ -4928,14 +4954,10 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
                 break;
             }
             saw_digit = true;
-            accumulated = accumulated * radix + (unsigned int)digit;
-            if (accumulated > (uint64_t)INT32_MAX + 1U) {
-                return set_error(error, error_capacity,
-                                 "integer constant overflow");
-            }
+            accumulate_digit(engine, &accumulated, &within_range, digit,
+                             (int32_t)radix, most);
         }
-        if (!saw_digit ||
-            (sign > 0 && accumulated > (uint64_t)INT32_MAX)) {
+        if (!saw_digit) {
             char found[128];
             describe_token(engine, token, found, sizeof(found));
             uint32_t line = 0U;
@@ -4946,19 +4968,17 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
                              found, executing_name(engine), origin,
                              (unsigned int)line);
         }
-        *value = sign > 0 ? (int32_t)accumulated
-                          : (int32_t)(-(int64_t)accumulated);
+        *value = sign > 0 ? accumulated : -accumulated;
         return 0;
     } else if (token_is_decimal_digit(token)) {
-        int64_t accumulated = 0;
+        int32_t accumulated = 0;
+        bool within_range = true;
+        const int32_t most = INT32_MAX / 10;
         for (;;) {
-            accumulated = accumulated * 10 +
-                          (int64_t)(hstex_token_character_code(token) -
-                                    (uint8_t)'0');
-            if (accumulated > (int64_t)INT32_MAX + 1) {
-                return set_error(error, error_capacity,
-                                 "integer constant overflow");
-            }
+            accumulate_digit(
+                engine, &accumulated, &within_range,
+                (int)(hstex_token_character_code(token) - (uint8_t)'0'), 10,
+                most);
             enum hstex_engine_result result = hstex_engine_next_expanded(
                 engine, &token, &location, error, error_capacity);
             if (result == HSTEX_ENGINE_EOF) {
@@ -4976,11 +4996,7 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
             }
             break;
         }
-        if ((sign > 0 && accumulated > INT32_MAX) ||
-            (sign < 0 && accumulated > (int64_t)INT32_MAX + 1)) {
-            return set_error(error, error_capacity, "integer constant overflow");
-        }
-        *value = sign > 0 ? (int32_t)accumulated : (int32_t)(-accumulated);
+        *value = sign > 0 ? accumulated : -accumulated;
         return 0;
     } else if (hstex_token_is_control_sequence(token)) {
         const struct hstex_meaning *meaning = hstex_engine_meaning(

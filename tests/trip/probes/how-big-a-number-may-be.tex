@@ -1,0 +1,45 @@
+% A NUMBER MAY REACH 2147483647 AND NO FURTHER.
+%
+% The first digit that would carry a constant past the limit draws
+%
+%   ! Number too big.
+%   I can only go up to 2147483647='17777777777="7FFFFFFF,
+%   so I'm using that number instead of yours.
+%
+% ONCE, leaves the number at 2147483647, and reads the digits after it
+% without complaining again. The sign is applied afterwards, so
+% `\penalty-2147483648' reports and leaves -2147483647 behind -- it is
+% not the two's-complement number it looks like.
+%
+% The test is made before the multiplication, digit by digit: at
+% 214748364 a further 0..7 is taken and an 8 or a 9 is not. In another
+% radix nothing is taken there at all, which is why "FFFFFFFF and
+% '77777777777 both report.
+%
+% HSTeX accepted -2147483648 and stopped the run on anything larger.
+% trip line 326 writes `\penalty-2147483648 % see?'.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A a negative number one past the limit]}
+\penalty-2147483648
+\message{[<\the\lastpenalty>]}
+\message{[B a positive one past the limit]}
+\count5=2147483648
+\showthe\count5
+\message{[C the limit itself]}
+\count5=2147483647
+\showthe\count5
+\message{[D a negative limit]}
+\count5=-2147483647
+\showthe\count5
+\message{[E far past it]}
+\count5=99999999999
+\showthe\count5
+\message{[F in hex]}
+\count5="FFFFFFFF
+\showthe\count5
+\message{[G in octal]}
+\count5='77777777777
+\showthe\count5
+\message{[done]}
+\end
