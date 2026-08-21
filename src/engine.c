@@ -20470,6 +20470,13 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     }
     free(returned);
 
+    /* \box255 is the page builder's own; a document that left something in
+       it is told so, and what it left is thrown away. */
+    if (engine->boxes[255].kind != HSTEX_BOX_VOID) {
+        static const char *const help[] = {
+            "You shouldn't use \\box255 except in \\output routines.", NULL};
+        tex_error(engine, help, "\\box255 is not void");
+    }
     if (assign_box(engine, 255U, packed, true, error, error_capacity) != 0 ||
         assign_integer_parameter(engine,
                                  (uint32_t)HSTEX_INTEGER_OUTPUT_PENALTY,
@@ -20545,8 +20552,16 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         status = -1;
     }
     if (status == 0 && engine->boxes[255].kind != HSTEX_BOX_VOID) {
-        status = set_error(error, error_capacity,
-                           "the output routine left \\box255 behind");
+        /* The reference names it and throws the box away, which is what
+           lets the next page be built at all. */
+        static const char *const help[] = {
+            "Your \\output commands should empty \\box255,",
+            "e.g., by saying `\\shipout\\box255'.", NULL};
+        tex_error(engine, help,
+                  "Output routine didn't use all of \\box255");
+        struct hstex_box empty = {0};
+        empty.kind = HSTEX_BOX_VOID;
+        status = assign_box(engine, 255U, empty, true, error, error_capacity);
     }
     return status;
 }

@@ -1,0 +1,25 @@
+% \box255 used outside an \output routine, and left behind by one.
+%
+% Measured against pdftex, both reported and both recovered from:
+%
+%   * A \box255 that already holds something when the page builder wants
+%     it draws "! \box255 is not void." with "You shouldn't use \box255
+%     except in \output routines." What it held is thrown away and the
+%     page goes in.
+%   * An \output routine that finishes with \box255 still holding
+%     something draws "! Output routine didn't use all of \box255." with
+%     "Your \output commands should empty \box255, / e.g., by saying
+%     `\shipout\box255'." The box is thrown away, which is what lets the
+%     next page be built at all.
+%
+% \shipout\box255, \unvbox255 and \setbox9=\box255 all empty it and draw
+% nothing. This engine said nothing for the first and stopped the run for
+% the second.
+%
+% trip draws the first on line 150.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\output={\shipout\box255}
+\setbox255=\hbox to 7pt{}
+\hbox{}\vfill\penalty-10000
+\showbox255
+\end
