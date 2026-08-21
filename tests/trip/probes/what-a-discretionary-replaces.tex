@@ -1,44 +1,29 @@
-% WHAT A DISCRETIONARY REPLACES IS NOT LOOKED AT FOR BREAKS.
-%
-% The nodes a discretionary stands in front of belong to it, and the
-% line breaker steps straight over them. With
-%
-%   AAAA\discretionary{}{\kern2pt-}{B\kern2pt} CCCC
-%
-% the reference's second breakpoint is the SPACE after the B, and
-% \tracingparagraphs shows it as `@ via'. hstex was breaking at the
-% \kern2pt inside the replacement -- `@\kern via' -- because a kern
-% followed by glue is a legal break anywhere else.
-%
-% Their widths still count. It is only the search that skips them.
-%
-% AND THEY ARE NOT SHOWN EITHER. \tracingparagraphs prints the stretch
-% of text before each breakpoint, and a discretionary is shown there as
-% its two texts -- pre-break then post-break -- with the replaced nodes
-% passed over. So the stretch after the discretionary above begins at
-% the space:
-%
-%   \tenrm AAAA-        <- the A's, then the `-' of the post-break text
-%   @\discretionary via @@0 ...
-%    (a space)          <- NOT `B '
-%   @ via @@0 ...
-%
-% hstex skipped them inside one stretch and not across a breakpoint,
-% which is where they show.
-%
-% THE SYMPTOM THAT LED HERE was a kern of the wrong width in the
-% finished line: breaking at the replacement's kern discarded it, and
-% what came out was `\kern 0.0' where the reference has `\kern 2.0'.
-\tracingonline=1 \hsize=60pt \parindent=0pt \tracingparagraphs=1
-\pretolerance=-1 \tolerance=10000 \showboxdepth=5 \showboxbreadth=20
-\message{[A a discretionary with a replacement]}
-\setbox0=\vbox{\noindent AAAA\discretionary{}{\kern2pt-}{B\kern2pt} CCCC\par}
-\showbox0
-\message{[B kerns in all three lists, unbroken]}
-\setbox1=\hbox{A\discretionary{\kern1pt X}{\kern2pt Y}{\kern3pt Z}B}
-\showbox1
-\message{[C a kern alone in the replacement]}
-\setbox2=\hbox{A\discretionary{}{}{\kern5pt}B}
-\showbox2
+% What a discretionary replaces sits on the enclosing list behind it, and
+% belongs to it -- \unkern and its relatives leave it alone. What may not
+% stand in a discretionary part at all is deleted, and shown as it goes.
+\catcode`\{=1 \catcode`\}=2
+\font\tenrm=cmr10 \tenrm
+\tracingonline=1 \hsize=100pt \parindent=0pt
+\message{[A a kern inside a discretionary's replace text]}
+\setbox0=\hbox{A\discretionary{}{}{B\kern2pt}\unkern\showthe\lastkern}
+\message{[B a kern on the list itself]}
+\setbox0=\hbox{A\kern2pt\unkern\showthe\lastkern}
+\message{[C a kern after the replace text]}
+\setbox0=\hbox{A\discretionary{}{}{B}\kern2pt\unkern\showthe\lastkern}
+\message{[D glue inside the replace text]}
+\setbox0=\hbox{A\discretionary{}{}{B\hskip2pt}\unskip\showthe\lastskip}
+\message{[E a penalty inside the replace text]}
+\setbox0=\hbox{A\discretionary{}{}{B\penalty7}\unpenalty\showthe\lastpenalty}
+\message{[F three nodes after the offender]}
+\setbox0=\hbox{A\discretionary{}{}{B\hskip2pt C\kern3pt\lower1pt\hbox{D}}}
+\showboxbreadth=100 \showboxdepth=100
+\message{[G a nested box after the offender]}
+\setbox0=\hbox{\discretionary{X\penalty5 \hbox{Y}}{}{}}
+\showboxbreadth=-1 \showboxdepth=-1
+\message{[H nothing may be shown of it at all]}
+\setbox0=\hbox{A\discretionary{}{}{B\hskip2pt C\hbox{D}}}
+\showboxbreadth=2 \showboxdepth=0
+\message{[I past the breadth]}
+\setbox0=\hbox{\discretionary{\penalty1 \penalty2 \penalty3 \penalty4 }{}{}}
 \message{[done]}
 \end

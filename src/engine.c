@@ -105,6 +105,9 @@ static const struct hstex_node *current_list_last_node(
     const struct hstex_engine *engine);
 static const struct hstex_node *last_item_node(
     const struct hstex_engine *engine);
+static void report_deleted_discretionary_sublist(struct hstex_engine *engine,
+                                                 const uint32_t *items,
+                                                 size_t count);
 static int32_t last_node_type(const struct hstex_node *node);
 static void spec_flush(struct hstex_engine *engine);
 static void digest_bytes(uint64_t *digest, const void *bytes, size_t length);
@@ -12513,6 +12516,9 @@ static int scan_discretionary_list(struct hstex_engine *engine,
                 "Discretionary lists must contain only boxes and kerns.",
                 NULL};
             tex_error(engine, help, "Improper discretionary list");
+            report_deleted_discretionary_sublist(
+                engine, builder.node_identifiers + index,
+                builder.count - index);
             builder.count = index;
             break;
         }
@@ -13006,6 +13012,48 @@ static int drop_last_list_node(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* What a discretionary replaces sits on the enclosing list behind it, and
+   belongs to it: the last node of the list may be the last node the
+   discretionary would drop when the line breaks there. Taking that one away
+   would leave the count pointing past the end, so it is left alone. */
+static bool last_node_is_replaced_by_a_discretionary(
+    const struct hstex_engine *engine)
+{
+    const uint32_t *identifiers = NULL;
+    size_t count = 0U;
+    if (engine->mode == HSTEX_MODE_HORIZONTAL) {
+        if (engine->active_hbox_builder == NULL) {
+            return false;
+        }
+        identifiers = engine->active_hbox_builder->node_identifiers;
+        count = engine->active_hbox_builder->count;
+    } else if (engine->mode == HSTEX_MODE_VERTICAL) {
+        if (engine->active_vbox_builder == NULL) {
+            return false;
+        }
+        identifiers = engine->active_vbox_builder->node_identifiers;
+        count = engine->active_vbox_builder->count;
+    }
+    if (identifiers == NULL || count == 0U) {
+        return false;
+    }
+    for (size_t index = 0U; index + 1U < count; ++index) {
+        uint32_t identifier = identifiers[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind != HSTEX_NODE_DISCRETIONARY) {
+            continue;
+        }
+        size_t replaced = node->value.disc.replace_count;
+        if (replaced != 0U && index + replaced >= count - 1U) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* \unskip, \unkern and \unpenalty each remove the last node if it is of
    their own kind, and do nothing otherwise. */
 static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
@@ -13016,6 +13064,9 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
     }
     const struct hstex_node *node = current_list_last_node(engine);
     if (node == NULL || node->kind != (enum hstex_node_kind)kind) {
+        return 0;
+    }
+    if (last_node_is_replaced_by_a_discretionary(engine)) {
         return 0;
     }
     return drop_last_list_node(engine, error, error_capacity);
@@ -16930,6 +16981,41 @@ static void report_deleted_box(struct hstex_engine *engine,
     print_fresh_line(engine);
     print_text(engine, "The following box has been deleted:");
     show_box_under_limits(engine, box);
+    print_line(engine);
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
+/* What is dropped from an improper discretionary part is shown as it goes,
+   under the same two limits, and the run is shown as a bare list rather
+   than as a box: the nodes stand at the left margin with no dots. */
+static void report_deleted_discretionary_sublist(struct hstex_engine *engine,
+                                                 const uint32_t *items,
+                                                 size_t count)
+{
+    print_fresh_line(engine);
+    print_text(engine,
+               "The following discretionary sublist has been deleted:");
+    int32_t threshold =
+        engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
+    int32_t breadth =
+        engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
+    if (breadth <= 0) {
+        breadth = 5;
+    }
+    if (threshold < 0) {
+        if (count != 0U) {
+            print_text(engine, " []");
+        }
+    } else {
+        if (threshold > 255) {
+            threshold = 255;
+        }
+        char prefix[256];
+        memset(prefix, '.', sizeof(prefix));
+        show_node_list(engine, items, count, prefix, 0U, (size_t)threshold,
+                       (size_t)breadth, '.');
+    }
     print_line(engine);
     print_line(engine);
     (void)fflush(diagnostic_stream(engine));
