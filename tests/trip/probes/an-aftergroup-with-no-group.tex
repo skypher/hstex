@@ -1,0 +1,16 @@
+% \aftergroup written where no group is open.
+%
+% Measured against pdftex: the token is kept for a group that never ends,
+% which is to say it is dropped, in silence. `\aftergroup\vis' at the
+% outer level never runs \vis and draws no fault at all. This engine
+% stopped the run.
+%
+% Inside a group it works as it always did, and an \hbox counts as a
+% group. A prefix in front of it is still a fault, but its own one: it is
+% the prefix that is wrong, not the missing group.
+\tracingonline=1
+\def\vis{\message{[VIS -- should never appear]}}
+\aftergroup\vis
+\message{[after]}
+{\aftergroup\vis}
+\end

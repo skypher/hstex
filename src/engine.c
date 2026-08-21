@@ -3568,10 +3568,23 @@ static int scan_after_assignment(struct hstex_engine *engine, char *error,
 static int scan_after_group(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
-    if (engine->group_level == 0U || engine->pending_global ||
-        engine->pending_macro_flags != 0U) {
+    if (engine->pending_global || engine->pending_macro_flags != 0U) {
         return set_error(error, error_capacity,
-                         "aftergroup requires an unprefixed active group");
+                         "aftergroup does not accept prefixes");
+    }
+    if (engine->group_level == 0U) {
+        /* There is no group to come after, so the token is kept for one
+           that never ends -- which is to say it is dropped, in silence.
+           Measured: `\aftergroup\vis' at the outer level never runs \vis
+           and draws nothing. */
+        hstex_token ignored = 0U;
+        struct hstex_source_location where;
+        if (raw_next(engine, &ignored, &where, error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input after aftergroup");
+        }
+        return 0;
     }
     hstex_token token = 0U;
     struct hstex_source_location location;
