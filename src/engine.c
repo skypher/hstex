@@ -7724,6 +7724,20 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
     return 0;
 }
 
+/* The control sequence the primitive \relax was registered under, whatever
+   it may mean now: a meaning that stands for \relax names itself by it. */
+static hstex_cs_id relax_primitive(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, (const uint8_t *)"relax", 5U,
+                            &identifier, error, error_capacity) != 0) {
+        return 0U;
+    }
+    return identifier;
+}
+
 static int expand_cs_name(struct hstex_engine *engine,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity)
@@ -7745,11 +7759,19 @@ static int expand_cs_name(struct hstex_engine *engine,
     release_cs_name(engine, name);
     if (hstex_engine_meaning(engine, identifier)->command ==
         HSTEX_COMMAND_UNDEFINED) {
+        /* What \csname leaves behind IS the primitive \relax, not a name of
+           its own: `\expandafter\show\csname qq\endcsname' draws
+           `> \qq=\relax.' and \tracingcommands draws `{\relax}' when it is
+           reached, so the meaning has to remember where it came from. */
         struct hstex_meaning relax = {
             .command = HSTEX_COMMAND_RELAX,
             .level = 0U,
+            .primitive_origin = relax_primitive(engine, error, error_capacity),
             .value = {.macro_identifier = 0U},
         };
+        if (relax.primitive_origin == 0U) {
+            return -1;
+        }
         if (set_meaning(engine, identifier, relax, false, error,
                         error_capacity) != 0) {
             return -1;

@@ -1,0 +1,25 @@
+% \csname on a name nothing is defined under leaves the primitive \relax
+% there, not a meaning named after the control sequence itself.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\message{[A what csname leaves behind]}
+\expandafter\show\csname qq\endcsname
+\message{[B its meaning]}
+\message{\meaning\qq}
+\message{[C it is the same as relax]}
+\expandafter\ifx\csname rr\endcsname\relax\message{same}\else\message{other}\fi
+\message{[D it does not survive the group]}
+{\expandafter\show\csname ss\endcsname}\show\ss
+\message{[E a target predefined by dimendef]}
+\dimendef\vv=222 \show\vv
+\message{[F traced when it is reached]}
+\tracingcommands=1 \csname tt\endcsname
+\message{[G a let to relax, for comparison]}
+\let\yy\relax \yy
+\message{[H relax itself]}
+\relax
+\tracingcommands=0
+\message{[I a name of one character]}
+\expandafter\show\csname#\endcsname
+\message{[done]}
+\end
