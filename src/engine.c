@@ -7672,9 +7672,6 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 struct hstex_align_entry *cell = engine->alignment_entry;
                 if (cell != NULL && !cell->after_pushed && braces != 0) {
                     cell->nesting += braces;
-                    if (cell->nesting < 0) {
-                        cell->nesting = 0;
-                    }
                 }
                 if (taken != 0U) {
                     if (vector_reserve(argument, argument->count + taken, error,
@@ -32885,9 +32882,14 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
            reads its `{' three times over, once for each thing the token
            might have been -- and only the first of those is the entry's. */
         if (!from_pushback) {
+            /* The count runs below nought as readily as above it. A cell
+               may close a brace it did not open -- the opening one having
+               been swallowed by whatever put the cell's text together --
+               and holding the count at nought there loses the closing, so
+               the next `{' leaves it looking one deep for good. */
             if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
                 ++entry->nesting;
-            } else if (entry->nesting != 0) {
+            } else {
                 --entry->nesting;
             }
         }
@@ -32909,12 +32911,11 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
     } else {
         return 0;
     }
-    if (entry->nesting != 0) {
+    if (entry->nesting > 0) {
         /* NOT YET: the reference puts in the } the column wants and reads
-           the tab again -- "Missing } inserted". The count is close enough
-           now to be worth reporting from for four of the five corpus
-           documents and not for testmath, whose amsmath alignments still
-           end a cell holding one brace it never opened. See
+           the tab again -- "Missing } inserted". The count is right for the
+           corpus but for the amsmath align family, which still ends a cell
+           holding a brace it never opened. See
            tests/trip/probes/a-brace-in-an-alignment-template.tex. */
         return 0;
     }
