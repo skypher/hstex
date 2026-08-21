@@ -12286,14 +12286,24 @@ static void report_packing(struct hstex_engine *engine,
             print_text(engine, vertical ? "pt too high" : "pt too wide");
             reported = true;
         }
-    } else if (excess <= 0 && total->stretch_order == 0U &&
+    } else if (excess > 0) {
+        /* Too big, but the shrink covers it: the reference calls that TIGHT
+           however bad it is, where a box that is too small is Underfull or
+           Loose depending. */
+        if (total->shrink_order == 0U && engine->badness > badness_limit) {
+            print_line(engine);
+            print_fresh_line(engine);
+            print_formatted(engine, "Tight %s (badness %d", kind,
+                            engine->badness);
+            reported = true;
+        }
+    } else if (total->stretch_order == 0U &&
                engine->badness > badness_limit) {
         print_line(engine);
         print_fresh_line(engine);
         print_formatted(engine, "%s %s (badness %d",
-                        engine->badness > 100 ? (excess > 0 ? "Tight" : "Underfull")
-                                              : (excess > 0 ? "Tight" : "Loose"),
-                        kind, engine->badness);
+                        engine->badness > 100 ? "Underfull" : "Loose", kind,
+                        engine->badness);
         reported = true;
     }
     if (!reported) {

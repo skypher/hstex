@@ -1,0 +1,35 @@
+% A BOX THAT DOES NOT FIT IS CALLED BY WHICH WAY IT MISSED.
+%
+% Too small, and the name depends on how bad it is:
+%
+%   badness over 100    Underfull \hbox (badness N)
+%   badness 100 or less Loose \hbox (badness N)
+%
+% Too big, and there is only one name however bad it is, so long as the
+% shrink covers the excess:
+%
+%   Tight \hbox (badness N)
+%
+% and when the shrink does NOT cover it, that is the overfull case and
+% carries the excess rather than a badness. HSTeX could never say Tight:
+% the test that would have chosen the word was written inside the branch
+% for a box that is too SMALL, where the excess is never positive, so it
+% was unreachable and every tight box went unreported.
+%
+% Each is reported only when the badness beats \hbadness -- \vbadness for
+% a vertical one -- and each is followed by the short display and the box.
+\catcode`\{=1 \catcode`\}=2
+\font\tenrm=cmr10 \tenrm
+\tracingonline=1 \hsize=100pt \parindent=0pt
+\message{[A squeezed, and the shrink covers it]}
+\setbox0=\hbox to 20pt{A\hskip20pt minus 15pt B}
+\message{[B squeezed harder, still covered]}
+\setbox0=\hbox to 12pt{A\hskip20pt minus 15pt B}
+\message{[C stretched a little]}
+\setbox0=\hbox to 30pt{A\hskip5pt plus 15pt B}
+\message{[D stretched a lot]}
+\setbox0=\hbox to 60pt{A\hskip5pt plus 15pt B}
+\message{[E squeezed past what the shrink covers]}
+\setbox0=\hbox to 1pt{A\hskip20pt minus 2pt B}
+\message{[done]}
+\end
