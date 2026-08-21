@@ -2041,6 +2041,9 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* Set once the command now in hand has been traced, so that a token put
+       in its place and read again is not traced a second time. */
+    bool command_traced;
     /* Set while a text is being gathered with expansion -- \edef, \message,
        \write, \mark. What such a text does with \the it does for itself,
        so \tracingcommands draws no line for it there. */

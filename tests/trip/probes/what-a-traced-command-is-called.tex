@@ -1,0 +1,43 @@
+% \tracingcommands NAMES WHAT A COMMAND MEANS, NOT WHAT IT IS CALLED.
+%
+% The line is the text \meaning would give for the token, not the token's
+% own name:
+%
+%   \let\foo=\relax    \foo    {\relax}
+%   \countdef\cc=7     \cc     {\count7}
+%   \dimendef\dd=3     \dd     {\dimen3}
+%   \toksdef\tk=4      \tk     {\toks4}
+%   \skipdef\sk=5      \sk     {\skip5}
+%   \let\bg={          \bg     {begin-group character {}
+%   \let\pp=\par       \pp     {\par}
+%   \chardef\ch=65     \ch     {\char"41}
+%   an undefined one           {undefined}
+%
+% This is what trip's `\let\paR=\par' was showing: hstex drew {\paR} where
+% the reference draws {\par}, three times over. It also explains the
+% {undefined} and the {|relax} lines the pass-two log was missing --
+% |relax being \relax with \escapechar set to `|'.
+%
+% ONE LINE PER COMMAND, even where the engine puts a token in the place of
+% the one it read and reads it again. `\let\bg={ \bg' draws one line, not
+% a {begin-group character {} for the brace on top of one for \bg.
+%
+% A \chardef'd control sequence, and \char, BELONG TO A RUN OF CHARACTERS
+% like the characters themselves: a run is traced once, at its first, so
+% `M\ch' draws {the letter M} and nothing for the \ch. Where the run has
+% not started, \ch draws {\char"41} -- the meaning, not the character.
+\tracingonline=1 \let\foo=\relax \countdef\cc=7 \dimendef\dd=3
+\let\bg={ \let\eg=} \chardef\ch=65 \toksdef\tk=4 \skipdef\sk=5
+\def\mac{M}\let\mm=\mac
+\tracingcommands=2
+\foo
+\cc=1
+\dd=1pt
+\setbox0=\hbox{\bg\eg}
+\mm
+\ch
+\tk={x}
+\sk=1pt
+\let\pp=\par \pp
+\tracingcommands=0
+\end

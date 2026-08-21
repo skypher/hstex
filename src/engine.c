@@ -15949,29 +15949,44 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
     bool character_run = hstex_token_is_character(token) &&
                          (token_is_category(token, HSTEX_CAT_LETTER) ||
                           token_is_category(token, HSTEX_CAT_OTHER));
+    /* A \chardef'd control sequence, and \char itself, put a character in
+       the list like any other and belong to the same run: measured,
+       `\chardef\ch=65 M\ch' traces the M and not the \ch. */
+    if (!character_run && hstex_token_is_control_sequence(token)) {
+        const struct hstex_meaning *its = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        character_run = its != NULL &&
+                        (its->command == (int)HSTEX_COMMAND_CHAR_GIVEN ||
+                         its->command == (int)HSTEX_COMMAND_CHAR);
+    }
     if (character_run && engine->traced_character) {
         return;
     }
     engine->traced_character = character_run;
     char named[192];
-    /* Selecting a font gets a line of its own naming the font, in place of
-       naming the command that selected it. */
-    size_t at = 0U;
+    /* THE TRACE NAMES WHAT A COMMAND MEANS, NOT WHAT IT IS CALLED. A
+       control sequence \let to \relax draws {\relax}, a \countdef'd one
+       draws {\count7}, one \let to a brace draws {begin-group character {},
+       and one that means nothing draws {undefined}. Which is to say: the
+       text \meaning gives, and it is \meaning that is asked. */
     if (hstex_token_is_control_sequence(token)) {
-        const struct hstex_meaning *meaning = hstex_engine_meaning(
-            engine, hstex_token_control_sequence_id(token));
-        if (meaning != NULL &&
-            meaning->command == (int)HSTEX_COMMAND_FONT_GIVEN) {
-            const struct hstex_font *font =
-                font_by_identifier(engine, (uint32_t)meaning->value.integer);
-            (void)snprintf(named + at, sizeof(named) - at, "select font %s",
-                           font != NULL && font->name != NULL ? font->name
-                                                              : "nullfont");
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        size_t capacity = 0U;
+        char scratch[256];
+        if (meaning_bytes(engine, token, &bytes, &count, &capacity, NULL,
+                          scratch, sizeof(scratch)) != 0) {
+            describe_token(engine, token, named, sizeof(named));
         } else {
-            describe_token(engine, token, named + at, sizeof(named) - at);
+            if (count > sizeof(named) - 1U) {
+                count = sizeof(named) - 1U;
+            }
+            memcpy(named, bytes, count);
+            named[count] = '\0';
         }
+        free(bytes);
     } else {
-        describe_token(engine, token, named + at, sizeof(named) - at);
+        describe_token(engine, token, named, sizeof(named));
     }
     const char *mode = mode_name(engine);
     print_fresh_line(engine);
@@ -37524,6 +37539,7 @@ static enum hstex_engine_result next_output(
         return HSTEX_ENGINE_EOF;
     }
     for (;;) {
+        engine->command_traced = false;
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, token, location, error, error_capacity);
         if (result == HSTEX_ENGINE_EOF) {
@@ -37701,7 +37717,13 @@ handle_token:
             }
         }
         if (hstex_token_is_character(*token)) {
-            trace_command(engine, *token);
+            /* Unless this character is standing in for the control sequence
+               that meant it -- one \let to a brace, one \chardef'd -- which
+               was traced already. The reference draws one line for
+               `\let\bg={ \bg', not two. */
+            if (!engine->command_traced) {
+                trace_command(engine, *token);
+            }
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
@@ -38046,6 +38068,7 @@ handle_token:
              meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
              meaning->command != (int)HSTEX_COMMAND_CLOSE_OUT)) {
             trace_command(engine, *token);
+            engine->command_traced = true;
         }
         record_executing_name(engine, *token);
         /* \immediate reaches exactly as far as the command it stands in
@@ -39138,6 +39161,7 @@ handle_token:
             continue;
         case HSTEX_COMMAND_TOKEN_ALIAS:
             *token = meaning->value.token;
+            engine->command_traced = true;
             goto handle_token;
         case HSTEX_COMMAND_MACRO:
             return HSTEX_ENGINE_TOKEN;
@@ -39149,6 +39173,7 @@ handle_token:
             }
             *token = hstex_token_character(
                 (uint8_t)HSTEX_CAT_OTHER, (uint8_t)meaning->value.integer);
+            engine->command_traced = true;
             goto handle_token;
         case HSTEX_COMMAND_MATH_CHAR_GIVEN:
             /* A \mathchardef is an atom wherever a \mathchar would be. */
