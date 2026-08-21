@@ -1,0 +1,48 @@
+% A math field that is neither a character nor a braced list.
+%
+% Measured against pdftex: the reference puts a { in front of it, so the
+% field becomes a list of its own, and says so --
+%
+%   ! Missing { inserted.
+%   A left brace was mandatory here, so I've put one in.
+%   ...
+%
+% -- and the } it wants turns up later, when the formula or the group
+% above it ends:
+%
+%   {math mode: \mathord}
+%   ! Missing { inserted.
+%   {\radical}
+%   {math shift character $}
+%   ! Missing } inserted.
+%
+% So `$\mathord\radical"161 x$' draws BOTH, and the box that comes out is
+% the same one this engine already builds in silence.
+%
+% Which commands can stand as a field without the brace: a character, and
+% \char, \mathchar and \delimiter (and a { of course). Everything else
+% draws the pair -- \radical, \hbox, \vcenter, \mathop were all measured.
+% \relax is skipped before the field is looked for and draws nothing.
+%
+% WHERE THIS ENGINE STANDS: it builds the right box and says nothing,
+% except for a field-taking command met while a field is already expected
+% -- `$\underline\radical"161 x$' -- which stops the run.
+%
+% NOT YET. hstex has no scan-a-math-field step: \mathord sets a forced
+% class and \underline sets a slot for whatever comes next to fill, so
+% there is no single place the brace would be inserted. What makes this
+% worth doing is that the closing half is already right: hstex reports
+% "Missing } inserted" for a group left open in a formula, so opening a
+% real math group at the right moment would give both messages. What it
+% needs is a list of the commands that may stand as a field, and getting
+% that list wrong moves boxes rather than diagnostics.
+%
+% trip draws this on lines 272, 396, 402 and 409 among others.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{$\mathord\radical"161 x$}\showbox0
+\setbox1=\hbox{$\mathord\hbox{Q}$}\showbox1
+\setbox2=\hbox{$\mathord\mathchar"161 $}\showbox2
+\setbox3=\hbox{$\mathord X$}\showbox3
+\setbox4=\hbox{$\mathord\relax x$}\showbox4
+\end
