@@ -1,0 +1,59 @@
+% WHAT A FAILED FONT DECLARATION LEAVES BEHIND.
+%
+% A font is named after the control sequence that declared it, and the
+% naming happens once the declaration is OVER -- so a declaration whose
+% metrics could not be read, which is over at \nullfont, renames the NULL
+% FONT:
+%
+%   \font\mumble=mumble           ! Font \mumble=mumble not loadable...
+%   \fontdimen1000=20pt           ! Missing font identifier.
+%                                 ! Font \mumble has only 7 fontdimen
+%                                   parameters.
+%
+% and every later fault that names the null font says \mumble. What the
+% null font is CALLED does not change: \fontname\nullfont is `nullfont'
+% still, and \show\nullfont is `select font nullfont'.
+%
+% The name is the declaring sequence itself, except for the two kinds that
+% have no name of their own:
+%
+%   an active character `?'    \FONT?
+%   \csname\endcsname         \FONT
+%   \+                        \+          (a one-character name is its own)
+%
+% A declaration that SUCCEEDS leaves the null font alone.
+%
+% Found and left open: the reference's context under [B] carries
+% `<recently read> \mumble' -- the frame the number scan left when it read
+% \mumble looking for another digit and put it back. HSTeX pushes the same
+% frame and reads it again, but drops it as soon as anything else is
+% pushed, where the reference keeps an exhausted frame until the next token
+% is asked for.
+%
+% HSTeX left the null font named \nullfont whatever failed. trip line 211
+% fails \font\mumble=mumble and line 213 fails two declarations with an
+% active `?', so the reference reports the null font as \FONT? at line 404
+% where HSTeX said \nullfont.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A a failed load with a multi-letter name]}
+\font\mumble=mumble
+\fontdimen1000=20pt
+\message{[B the null font answers to that name now]}
+\show\mumble \message{<\fontname\mumble>} \showthe\fontdimen1\mumble
+\message{[C an active character]}
+{\catcode`?=13 \font?xyzzy at0pt}
+\fontdimen1000=20pt
+\message{[D a single-character control sequence]}
+\font\+=xyzzy
+\fontdimen1000=20pt
+\message{[E the empty name]}
+\expandafter\font\csname\endcsname=xyzzy
+\fontdimen1000=20pt
+\message{[F what the null font still shows and is called]}
+\show\nullfont \message{<\fontname\nullfont>}
+\message{[G a load that succeeds leaves the null font alone]}
+\font\good=trip\relax
+\fontdimen1000=20pt
+\message{[done]}
+\end

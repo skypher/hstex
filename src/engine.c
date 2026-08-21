@@ -10990,6 +10990,43 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
                              error_capacity);
 }
 
+/* The name a font takes from the control sequence that declared it. A
+   multi-letter name and a single-character one are that sequence itself; the
+   two kinds that have no name of their own are given one -- the NULL control
+   sequence becomes `FONT', and an ACTIVE CHARACTER becomes `FONT' with the
+   character after it. trip line 213 declares a font with an active `?', and
+   the font it fails to load leaves \FONT? behind. */
+static int font_identifier_name(struct hstex_engine *engine,
+                                hstex_token target, hstex_cs_id *identifier,
+                                char *error, size_t error_capacity)
+{
+    hstex_cs_id given = hstex_token_control_sequence_id(target);
+    enum hstex_symbol_kind kind;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&engine->lexical_state.symbols, given, &kind, &name,
+                          &length) != 0) {
+        return set_error(error, error_capacity,
+                         "invalid control sequence declaring a font");
+    }
+    if (kind == HSTEX_SYMBOL_REGULAR && length != 0U) {
+        *identifier = given;
+        return 0;
+    }
+    uint8_t spelled[8] = {(uint8_t)'F', (uint8_t)'O', (uint8_t)'N',
+                          (uint8_t)'T'};
+    size_t count = 4U;
+    for (size_t index = 0U;
+         kind == HSTEX_SYMBOL_ACTIVE && index < length &&
+         count < sizeof(spelled);
+         ++index) {
+        spelled[count++] = name[index];
+    }
+    return hstex_symbol_intern(&engine->lexical_state.symbols,
+                               HSTEX_SYMBOL_REGULAR, spelled, count,
+                               identifier, error, error_capacity);
+}
+
 static int scan_font_definition(struct hstex_engine *engine, char *error,
                                 size_t error_capacity)
 {
@@ -11154,6 +11191,22 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
                                 error, error_capacity) != 0) {
             return -1;
         }
+        /* THE NULL FONT TAKES THE NAME THE FAILED DECLARATION USED. The
+           reference names a font after the sequence that declared it once
+           the declaration is over, and a declaration that could not read
+           its metrics is over at \nullfont -- so `\font\mumble=mumble'
+           leaves the null font answering to \mumble, and every later fault
+           that names it says \mumble. trip fails four declarations, the
+           last two of them with an active `?'. */
+        struct hstex_font *renamed = font_by_identifier(engine, identifier);
+        hstex_cs_id null_name = 0U;
+        if (renamed != NULL) {
+            if (font_identifier_name(engine, target, &null_name, error,
+                                     error_capacity) != 0) {
+                return -1;
+            }
+            renamed->identifier_cs = null_name;
+        }
         struct hstex_meaning null_meaning = {
             .command = HSTEX_COMMAND_FONT_GIVEN,
             .level = 0U,
@@ -11170,7 +11223,12 @@ static int scan_font_definition(struct hstex_engine *engine, char *error,
        so \the\font reports the most recent declaration. */
     struct hstex_font *declared = font_by_identifier(engine, identifier);
     if (declared != NULL) {
-        declared->identifier_cs = hstex_token_control_sequence_id(target);
+        hstex_cs_id declared_name = 0U;
+        if (font_identifier_name(engine, target, &declared_name, error,
+                                 error_capacity) != 0) {
+            return -1;
+        }
+        declared->identifier_cs = declared_name;
     }
     struct hstex_meaning meaning = {
         .command = HSTEX_COMMAND_FONT_GIVEN,
