@@ -5,3 +5,12 @@
 *.so
 *.dylib
 *.exe
+
+# What a test run leaves in the working tree: the engine test writes a PDF
+# per temporary format it makes, a profiling build drops gmon.out, and a
+# document whose font is missing leaves missfont.log. Probe logs written at
+# the root are the same kind of thing.
+/hstex-engine-test-*
+/gmon.out
+/missfont.log
+/*.log
