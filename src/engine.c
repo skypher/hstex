@@ -182,6 +182,8 @@ static const char *runaway_partial_prefix = NULL;
 static void print_escaped_name(struct hstex_engine *engine, const char *name);
 static const char *token_parameter_name(uint32_t parameter);
 static void report_runaway(struct hstex_engine *engine, const char *what);
+static void show_glue_set(struct hstex_engine *engine,
+                          struct hstex_glue_set set);
 static void report_runaway_list(struct hstex_engine *engine, const char *what,
                                 const struct hstex_token_vector *lead,
                                 const char *prefix,
@@ -12331,6 +12333,8 @@ static void report_packing(struct hstex_engine *engine,
     print_byte(engine, ')');
     print_text(engine, "x");
     show_scaled(engine, box->width);
+    /* The box is shown as any other is, glue set and all. */
+    show_glue_set(engine, box->glue);
     show_list_at_top(engine, items, count);
     print_line(engine);
     print_line(engine);
@@ -15698,6 +15702,31 @@ static void show_node_list(struct hstex_engine *engine,
                            size_t depth, size_t threshold, size_t breadth,
                            char mark);
 
+/* How far a box's glue was stretched or shrunk, where it was. */
+static void show_glue_set(struct hstex_engine *engine,
+                          struct hstex_glue_set set)
+{
+    if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_NORMAL || set.total == 0) {
+        return;
+    }
+    print_text(engine, ", glue set ");
+    if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING) {
+        print_text(engine, "- ");
+    }
+    /* The ratio is kept as the two numbers it came from, so the figure the
+       reference prints is exactly this rounding. */
+    int64_t scaled =
+        ((int64_t)set.needed * 65536 + (int64_t)set.total / 2) / set.total;
+    if (scaled > INT64_C(20000) * 65536) {
+        print_byte(engine,
+                   set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING ? '<' : '>');
+        print_byte(engine, ' ');
+        show_glue_amount(engine, 20000 * 65536, set.order);
+    } else {
+        show_glue_amount(engine, (int32_t)scaled, set.order);
+    }
+}
+
 /* One box, rule, glue, kern, penalty or character of a list. */
 static void show_node(struct hstex_engine *engine,
                       const struct hstex_node *node, char *prefix,
@@ -15711,25 +15740,7 @@ static void show_node(struct hstex_engine *engine,
         show_scaled(engine, packed_dimen(node->depth));
         print_text(engine, ")x");
         show_scaled(engine, packed_dimen(node->width));
-        const struct hstex_glue_set set = node->value.list.glue;
-        if (set.sign != (uint8_t)HSTEX_GLUE_SIGN_NORMAL && set.total != 0) {
-            print_text(engine, ", glue set ");
-            if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING) {
-                print_text(engine, "- ");
-            }
-            /* The ratio is kept as the two numbers it came from, so the
-               figure the reference prints is exactly this rounding. */
-            int64_t scaled = ((int64_t)set.needed * 65536 +
-                              (int64_t)set.total / 2) /
-                             set.total;
-            if (scaled > INT64_C(20000) * 65536) {
-                print_byte(engine, set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING ? '<' : '>');
-                print_byte(engine, ' ');
-                show_glue_amount(engine, 20000 * 65536, set.order);
-            } else {
-                show_glue_amount(engine, (int32_t)scaled, set.order);
-            }
-        }
+        show_glue_set(engine, node->value.list.glue);
         if (node->shift != 0) {
             print_text(engine, ", shifted ");
             show_scaled(engine, node->shift);
