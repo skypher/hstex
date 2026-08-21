@@ -22299,6 +22299,27 @@ static int build_page(struct hstex_engine *engine, char *error,
                     engine->page_dimens[HSTEX_PAGE_STRETCH +
                                         node.value.glue.stretch_order] +=
                         node.value.glue.stretch;
+                    /* Glue that shrinks without limit may not stand on a
+                       page: the reference says so and makes it finite, and
+                       what it leaves behind is the finite part. It says so
+                       once for each such glue, as each reaches the page. */
+                    if (node.value.glue.shrink_order != 0U) {
+                        static const char *const help[] = {
+                            "The page about to be output contains some infinitely",
+                            "shrinkable glue, e.g., `\\vss' or `\\vskip 0pt minus 1fil'.",
+                            "Such glue doesn't belong there; but you can safely proceed,",
+                            "since the offensive shrinkability has been made finite.",
+                            NULL};
+                        tex_error(engine, help,
+                                  "Infinite glue shrinkage found on current "
+                                  "page");
+                        node.value.glue.shrink_order = 0U;
+                        if (identifier != 0U &&
+                            (size_t)identifier <= engine->node_count) {
+                            engine->nodes[identifier - 1U]
+                                .value.glue.shrink_order = 0U;
+                        }
+                    }
                     engine->page_dimens[HSTEX_PAGE_SHRINK] +=
                         node.value.glue.shrink;
                 }

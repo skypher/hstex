@@ -1,0 +1,34 @@
+% GLUE THAT SHRINKS WITHOUT LIMIT MAY NOT STAND ON A PAGE.
+%
+% When such glue reaches the page the reference draws
+%
+%   ! Infinite glue shrinkage found on current page.
+%   The page about to be output contains some infinitely
+%   shrinkable glue, e.g., `\vss' or `\vskip 0pt minus 1fil'.
+%   Such glue doesn't belong there; but you can safely proceed,
+%   since the offensive shrinkability has been made finite.
+%
+% and makes it finite, so \pageshrink counts only the finite part and
+% nothing is drawn for that glue again. It says so once for each such
+% glue, as each reaches the page -- fil and fill alike.
+%
+% HSTeX already made it finite and counted it right; it said nothing.
+% This is the page's rule; a paragraph has its own, with its own words,
+% which HSTeX already had.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \hsize=100pt \vsize=200pt \maxdepth=2pt \topskip=10pt
+\parindent=0pt \hbadness=10000 \vbadness=10000
+\output={\shipout\box255 }
+\message{[A a page holding infinitely shrinkable glue]}
+\vbox{}\vskip 0pt minus 1fil
+\vbox{}\penalty5
+\message{[<\the\pagegoal|\the\pageshrink>]}
+\message{[B and again, now that it is finite]}
+\vbox{}\penalty6
+\message{[<\the\pageshrink>]}
+\message{[C fill shrinkage]}
+\vbox{}\vskip 0pt minus 1fill
+\vbox{}\penalty7
+\message{[<\the\pageshrink>]}
+\message{[done]}
+\end
