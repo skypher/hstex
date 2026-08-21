@@ -1,0 +1,19 @@
+% \prevdepth is not a variable \advance, \multiply or \divide can work on,
+% in any mode. Reading one outside vertical mode is `Improper \prevdepth'
+% and gives zero; assigning one there names the mode.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A advance prevdepth in restricted horizontal mode]}
+\setbox9\hbox{\advance\prevdepth 1pt }
+\message{[B read prevdepth there]}
+\setbox9\hbox{\showthe\prevdepth}
+\message{[C assign prevdepth there]}
+\setbox9\hbox{\prevdepth=3pt }
+\message{[D advance prevdepth in vertical mode]}
+\advance\prevdepth 1pt \showthe\prevdepth
+\message{[E prevgraf in horizontal mode]}
+\setbox9\hbox{\showthe\prevgraf}
+\message{[F spacefactor in vertical mode]}
+\showthe\spacefactor
+\message{[done]}
+\end

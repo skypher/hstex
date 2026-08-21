@@ -23233,17 +23233,24 @@ struct arithmetic_variable {
     uint32_t index;
 };
 
+/* Returns 0 for a variable the operation can work on, 1 for anything else --
+   which the caller reports and forgets -- and -1 for a failure. */
 static int scan_arithmetic_variable(struct hstex_engine *engine,
                                     struct arithmetic_variable *variable,
-                                    char *error, size_t error_capacity)
+                                    hstex_token *offending, char *error,
+                                    size_t error_capacity)
 {
     hstex_token token = 0U;
     struct hstex_source_location location;
+    *offending = 0U;
     if (expanded_next_non_space(engine, &token, &location, error,
-                                error_capacity) != HSTEX_ENGINE_TOKEN ||
-        !hstex_token_is_control_sequence(token)) {
+                                error_capacity) != HSTEX_ENGINE_TOKEN) {
         return set_error(error, error_capacity,
                          "arithmetic operation requires a variable");
+    }
+    *offending = token;
+    if (!hstex_token_is_control_sequence(token)) {
+        return 1;
     }
     const struct hstex_meaning *meaning = hstex_engine_meaning(
         engine, hstex_token_control_sequence_id(token));
@@ -23300,15 +23307,9 @@ static int scan_arithmetic_variable(struct hstex_engine *engine,
         variable->index = (uint32_t)meaning->value.integer;
         return 0;
     }
-    if (meaning->command == HSTEX_COMMAND_PREV_DEPTH) {
-        if (engine->mode != HSTEX_MODE_VERTICAL) {
-            return set_error(error, error_capacity,
-                             "prevdepth arithmetic requires vertical mode");
-        }
-        variable->kind = ARITHMETIC_VARIABLE_PREV_DEPTH;
-        variable->index = 0U;
-        return 0;
-    }
+    /* \prevdepth is NOT one of them, in any mode: the reference draws
+       "You can't use `\prevdepth' after \advance" and changes nothing.
+       trip line 434 writes `\advance\prevdepth' inside an \hbox. */
     if (meaning->command == HSTEX_COMMAND_SKIP_REGISTER &&
         meaning->value.integer >= 0 &&
         (size_t)meaning->value.integer < engine->count_capacity) {
@@ -23359,8 +23360,7 @@ static int scan_arithmetic_variable(struct hstex_engine *engine,
         variable->index = (uint32_t)meaning->value.integer;
         return 0;
     }
-    return set_error(error, error_capacity,
-                     "arithmetic target is not a supported variable");
+    return 1;
 }
 
 static bool token_has_character(hstex_token token, uint8_t character)
@@ -23508,9 +23508,32 @@ static int execute_arithmetic(struct hstex_engine *engine,
                               size_t error_capacity)
 {
     struct arithmetic_variable variable = {0};
-    if (scan_arithmetic_variable(engine, &variable, error, error_capacity) !=
-            0 ||
-        scan_optional_by(engine, error, error_capacity) != 0) {
+    hstex_token offending = 0U;
+    int found = scan_arithmetic_variable(engine, &variable, &offending, error,
+                                         error_capacity);
+    if (found < 0) {
+        return -1;
+    }
+    if (found > 0) {
+        /* Nothing behind it is read: the `by' and the amount are left where
+           they stand and become whatever they would have been anyway. */
+        static const char *const help[] = {
+            "I'm forgetting what you said and not changing anything.", NULL};
+        char named[128];
+        char operation_name[64];
+        describe_token(engine, offending, named, sizeof(named));
+        (void)snprintf(operation_name, sizeof(operation_name), "\\%s",
+                       operation == HSTEX_COMMAND_ADVANCE
+                           ? "advance"
+                           : (operation == HSTEX_COMMAND_MULTIPLY ? "multiply"
+                                                                  : "divide"));
+        tex_error(engine, help, "You can't use `%s' after %s", named,
+                  operation_name);
+        engine->pending_global = false;
+        engine->pending_macro_flags = 0U;
+        return 0;
+    }
+    if (scan_optional_by(engine, error, error_capacity) != 0) {
         return -1;
     }
 
@@ -39175,6 +39198,9 @@ static int off_save(struct hstex_engine *engine, hstex_token offending,
         push_one(engine, closer, location, error, error_capacity) != 0) {
         return -1;
     }
+    /* What is put in is inserted, and the context says so. */
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
     tex_error(engine, help, "Missing %s inserted", group_closer_name(kind));
     return 0;
 }
@@ -41847,6 +41873,24 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_END:
+            /* Inside a box there is no job to finish. In a RESTRICTED
+               horizontal list the reference closes the box and reads the
+               \end again -- "Missing } inserted" -- the way it does for a
+               vertical command met there; in an INTERNAL vertical list it
+               names the mode and drops it. trip line 442 ends inside an
+               \hbox. */
+            if (engine->mode == HSTEX_MODE_HORIZONTAL && engine->inner_mode) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+            if (engine->mode == HSTEX_MODE_VERTICAL &&
+                engine->active_vbox_builder != engine->contribution_builder) {
+                report_illegal_case(engine, *token);
+                continue;
+            }
             /* \end finishes the job only once the page and what is waiting
                for it are empty and no output cycle is pending. Otherwise it
                is read again behind material that forces the last pages out;

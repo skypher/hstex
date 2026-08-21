@@ -13399,7 +13399,10 @@ static int test_dimensions_and_glue(void)
 {
     const char source[] =
         "\\dimen14=\\prevdepth {\\prevdepth=2pt} \\dimen15=\\prevdepth "
-        "\\advance\\prevdepth by 1pt \\dimen16=\\prevdepth "
+        /* \prevdepth is not a variable arithmetic can work on -- the
+           reference draws "You can't use `\prevdepth' after \advance" --
+           so it is set outright here. */
+        "\\prevdepth=3pt \\dimen16=\\prevdepth "
         "\\dimendef\\d=5 \\d=1.5pt {\\d=2pt} "
         "\\dimendef\\twice=6 \\twice=2\\d "
         "\\dimendef\\largest=7 \\largest=16383.99999pt "

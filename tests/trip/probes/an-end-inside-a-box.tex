@@ -1,0 +1,7 @@
+% \end inside a RESTRICTED horizontal list closes the box and is read again
+% -- `Missing } inserted' -- the way a vertical command met there is.
+\catcode`\{=1 \catcode`\}=2
+\font\tenrm=cmr10 \tenrm \hsize=100pt
+\tracingonline=1 \tracingcommands=1
+\message{[an end inside an hbox]}
+\hbox{A\end}
