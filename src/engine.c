@@ -4313,6 +4313,28 @@ static enum hstex_engine_result expanded_next_non_space(
     }
 }
 
+/* Blanks and \relax alike are stepped over where the reference asks for
+   "the next non-blank non-relax non-call token" -- before a delimiter and
+   before a subformula, but NOT before a number, which \relax ends. */
+static enum hstex_engine_result expanded_next_non_space_non_relax(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity)
+{
+    for (;;) {
+        enum hstex_engine_result result = expanded_next_non_space(
+            engine, token, location, error, error_capacity);
+        if (result != HSTEX_ENGINE_TOKEN ||
+            !hstex_token_is_control_sequence(*token)) {
+            return result;
+        }
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(*token));
+        if (meaning->command != HSTEX_COMMAND_RELAX) {
+            return result;
+        }
+    }
+}
+
 static enum hstex_engine_result expanded_next_non_space_unrestricted(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
@@ -9823,15 +9845,6 @@ static int scan_target_control_sequence(struct hstex_engine *engine,
                                         hstex_token *target, char *error,
                                         size_t error_capacity)
 {
-    struct hstex_source_location location;
-    int taken =
-        raw_next_non_space(engine, target, &location, error, error_capacity);
-    if (taken == HSTEX_ENGINE_TOKEN) {
-        *target = normalize_frozen_control_sequence(*target);
-        if (hstex_token_is_control_sequence(*target)) {
-            return 0;
-        }
-    }
     static const char *const help[] = {
         "Please don't say `\\def cs{...}', say `\\def\\cs{...}'.",
         "I've inserted an inaccessible control sequence so that your",
@@ -9839,19 +9852,38 @@ static int scan_target_control_sequence(struct hstex_engine *engine,
         "You can recover graciously from this error, if you're",
         "careful; see exercise 27.2 in The TeXbook.", NULL};
     static const uint8_t name[] = "inaccessible";
-    hstex_cs_id spare = 0U;
-    if (hstex_symbol_intern(&engine->lexical_state.symbols,
-                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
-                            &spare, error, error_capacity) != 0) {
-        return -1;
+    for (;;) {
+        struct hstex_source_location location;
+        int taken = raw_next_non_space(engine, target, &location, error,
+                                       error_capacity);
+        if (taken == HSTEX_ENGINE_TOKEN) {
+            *target = normalize_frozen_control_sequence(*target);
+            if (hstex_token_is_control_sequence(*target)) {
+                return 0;
+            }
+        }
+        hstex_cs_id spare = 0U;
+        if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                                &spare, error, error_capacity) != 0) {
+            return -1;
+        }
+        /* The unusable token is put back and the spare one INSERTED in
+           front of it, and the definition then reads the spare the way it
+           would have read any other name -- so the context names it as
+           <inserted text>, not as one put back. */
+        if (taken == HSTEX_ENGINE_TOKEN &&
+            push_one(engine, *target, location, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (push_one(engine, hstex_token_control_sequence(spare), location,
+                     error, error_capacity) != 0) {
+            return -1;
+        }
+        hstex_source_name_top(&engine->sources,
+                              (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+        tex_error(engine, help, "Missing control sequence inserted");
     }
-    if (taken == HSTEX_ENGINE_TOKEN &&
-        push_one(engine, *target, location, error, error_capacity) != 0) {
-        return -1;
-    }
-    tex_error(engine, help, "Missing control sequence inserted");
-    *target = hstex_token_control_sequence(spare);
-    return 0;
 }
 
 static int scan_definition(struct hstex_engine *engine, bool inherent_global,
@@ -32623,8 +32655,9 @@ static int scan_delimiter(struct hstex_engine *engine, int32_t *code,
 {
     hstex_token token = 0U;
     struct hstex_source_location location;
-    if (expanded_next_non_space(engine, &token, &location, error,
-                                error_capacity) != HSTEX_ENGINE_TOKEN) {
+    if (expanded_next_non_space_non_relax(engine, &token, &location, error,
+                                          error_capacity) !=
+        HSTEX_ENGINE_TOKEN) {
         return set_error(error, error_capacity,
                          "end of input while scanning a delimiter");
     }

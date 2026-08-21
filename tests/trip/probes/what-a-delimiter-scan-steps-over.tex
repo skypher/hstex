@@ -1,0 +1,44 @@
+% A DELIMITER SCAN STEPS OVER \relax; A NUMBER SCAN DOES NOT.
+%
+% The reference asks for "the next non-blank non-relax non-call token"
+% where it wants a delimiter -- after \left, after \right, and for both
+% delimiters of \atopwithdelims and its kin. So \relax standing there is
+% skipped, and what is reported when no delimiter follows is the token
+% AFTER the \relax:
+%
+%   $\left\relax\mathchardef ...   <to be read again> \mathchardef
+%
+% A number scan does not step over \relax: \relax ends it, and the
+% "Missing number" that follows names the \relax itself. \radical and
+% \mathaccent read numbers, so
+%
+%   $\radical\relax"270370 x$      <to be read again> \relax
+%
+% and the \relax put back there is skipped by the SUBFORMULA scan that
+% comes next, which asks for a non-blank non-relax non-call token too --
+% so it is never obeyed and never traced.
+%
+% A delimiter that is not one at all -- INITEX gives every character a
+% \delcode of -1 but for `.' -- is put back after the report, so the
+% character is read again and traced as itself.
+%
+% ALSO: a definition given something that cannot be a name puts that
+% token back and INSERTS \inaccessible in front of it. The context names
+% the inserted one, and the definition then reads it as it would read any
+% other name.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \tracingcommands=2
+\message{[A \left and \right with \relax before the delimiter]}
+$\left\relax(x\right\relax)$
+\message{[B a non-delimiter after \relax]}
+$\left\relax\mathchardef x\right.$
+\message{[C \atopwithdelims]}
+$1\atopwithdelims\relax(\relax)2$
+\message{[D \radical reads a number, which \relax ends]}
+$\radical\relax"270370 x$
+\message{[E \mathaccent, the same]}
+$\mathaccent\relax"7016 x$
+\message{[F \delimiter, the same]}
+$\delimiter\relax"0 x$
+\message{[done]}
+\end
