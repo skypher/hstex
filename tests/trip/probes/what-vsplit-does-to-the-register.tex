@@ -23,6 +23,18 @@
 % ends -- the comment in trip says so in as many words. Without it the
 % reference's `! Output routine didn't use all of \box255.' never comes.
 %
+% USING A BOX EMPTIES ITS REGISTER THE SAME WAY. \box<n> and \unhbox /
+% \unvbox all empty the register they took the box from, and none of them
+% is an assignment either:
+%
+%   {\setbox3=\hbox to 5pt{}\setbox9=\box3 }   \box3 reverts
+%   {\setbox5=\vbox{...}\setbox9=\vbox{\unvbox5}}   \box5 reverts
+%
+% A group that had NOT touched the register keeps the emptying, because
+% there is no save to put anything back -- the same answer a global
+% assignment gives, which is why hstex's global assignment went unnoticed
+% until a group set the register first.
+%
 % STILL MISSING, seen here and not implemented: `Underfull \vbox (badness
 % 10000) detected at line 5' and the box under it, which the reference
 % reports for a \vsplit to a height the material cannot fill.
@@ -32,6 +44,14 @@
 \setbox0=\vbox{\hbox to 1pt{}\vskip10pt\hbox to 2pt{}}
 {\setbox1=\vsplit0 to 1pt }
 \showbox0
+\message{[Ab box used in a group that had set it]}
+\setbox6=\hbox to 1pt{}
+{\setbox6=\hbox to 5pt{}\setbox9=\box6 }
+\showbox6
+\message{[Ac unboxed in a group that had set it]}
+\setbox7=\vbox{\hbox to 1pt{}}
+{\setbox7=\vbox{\hbox to 5pt{}}\setbox9=\vbox{\unvbox7}}
+\showbox7
 \message{[B vsplit inside a group, after a local setbox of the same register]}
 \setbox2=\vbox{\hbox to 1pt{}\vskip10pt\hbox to 2pt{}}
 \setbox3=\vbox{\hbox to 9pt{}}

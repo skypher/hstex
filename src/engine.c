@@ -1813,6 +1813,24 @@ static int assign_muglue(struct hstex_engine *engine, uint32_t index,
     return 0;
 }
 
+/* Emptying a register because its box has been USED is not an assignment:
+   no save is made for it and the register's level is left where it stood.
+   Measured: `{\setbox3=\hbox to 5pt{}\setbox9=\box3 }' still puts back what
+   \box3 held before the group, where a global assignment takes the save over
+   and leaves the register void. A group that had NOT touched the register
+   keeps the emptying, because there is no save to put anything back -- which
+   is the same answer a global assignment gives, and is why this went
+   unnoticed. */
+static void empty_box_register(struct hstex_engine *engine, uint32_t index)
+{
+    if ((size_t)index >= engine->count_capacity) {
+        return;
+    }
+    struct hstex_box empty = {0};
+    empty.kind = HSTEX_BOX_VOID;
+    engine->boxes[(size_t)index] = empty;
+}
+
 static int assign_box(struct hstex_engine *engine, uint32_t index,
                       struct hstex_box value, bool requested_global,
                       char *error, size_t error_capacity)
@@ -13037,13 +13055,7 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
     }
         *box = engine->boxes[(size_t)index];
         if (meaning->command == HSTEX_COMMAND_BOX) {
-            struct hstex_box empty = {0};
-            /* Emptying a register outlives the group it happened in. */
-            empty.kind = HSTEX_BOX_VOID;
-            if (assign_box(engine, (uint32_t)index, empty, true, error,
-                           error_capacity) != 0) {
-                return -1;
-            }
+            empty_box_register(engine, (uint32_t)index);
         }
         return 0;
     }
@@ -13154,13 +13166,7 @@ static int execute_box_reference(struct hstex_engine *engine,
     }
     struct hstex_box box = engine->boxes[(size_t)index];
     if (command == HSTEX_COMMAND_BOX) {
-        struct hstex_box empty = {0};
-        /* Emptying a register outlives the group it happened in. */
-        empty.kind = HSTEX_BOX_VOID;
-        if (assign_box(engine, (uint32_t)index, empty, true, error,
-                       error_capacity) != 0) {
-            return -1;
-        }
+        empty_box_register(engine, (uint32_t)index);
     }
     if (box.kind == HSTEX_BOX_VOID) {
         return 0;
@@ -25339,11 +25345,8 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
     if (keep) {
         return 0;
     }
-    struct hstex_box empty = {0};
-    /* Emptying a register outlives the group it happened in. */
-    empty.kind = HSTEX_BOX_VOID;
-    return assign_box(engine, (uint32_t)index, empty, true, error,
-                      error_capacity);
+    empty_box_register(engine, (uint32_t)index);
+    return 0;
 }
 
 /* \indent puts an empty box of width \parindent in the horizontal list;
