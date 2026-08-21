@@ -27887,6 +27887,83 @@ static int math_append_atom(struct hstex_engine *engine,
     return math_append(engine, noad, error, error_capacity);
 }
 
+/* What may stand as a math field with no brace round it: a character that
+   is a letter or an other, a brace (which opens a list of its own), and
+   \char, \mathchar and \delimiter with the things \chardef and
+   \mathchardef make. Measured against the reference, everything else draws
+   a brace instead -- \radical, \hbox, \vcenter, \mathop, \kern, \penalty,
+   a \countdef'd register, and every character of another catcode. */
+static bool token_can_be_math_field(struct hstex_engine *engine,
+                                    hstex_token token)
+{
+    if (hstex_token_is_character(token)) {
+        return token_is_category(token, HSTEX_CAT_LETTER) ||
+               token_is_category(token, HSTEX_CAT_OTHER) ||
+               token_is_category(token, HSTEX_CAT_BEGIN_GROUP);
+    }
+    if (!hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    /* A control sequence \let to a `{' opens a list just as the character
+       does -- plain's \bgroup, which is how gentle writes a good many of
+       its fields. */
+    if (token_is_effective_begin_group(engine, token)) {
+        return true;
+    }
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, hstex_token_control_sequence_id(token));
+    if (meaning == NULL) {
+        return false;
+    }
+    switch (meaning->command) {
+    case HSTEX_COMMAND_CHAR:
+    case HSTEX_COMMAND_CHAR_GIVEN:
+    case HSTEX_COMMAND_MATH_CHAR:
+    case HSTEX_COMMAND_MATH_CHAR_GIVEN:
+    case HSTEX_COMMAND_DELIMITER:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* A field that is none of those: the reference puts a `{' in front of it, so
+   the field becomes a list of its own, and says so. The `}' it wants turns
+   up by itself when the formula or the group above it ends. This is asked
+   where the token is about to be obeyed rather than by looking ahead, since
+   looking ahead expands it a moment too early and moves what the engine
+   makes of the characters around it. */
+static bool math_field_is_wanted(struct hstex_engine *engine)
+{
+    const struct hstex_math_builder *builder =
+        engine->mode == HSTEX_MODE_MATH ? current_math_list(engine) : NULL;
+    if (builder == NULL) {
+        return false;
+    }
+    return builder->slot != (uint8_t)HSTEX_MATH_SLOT_NONE ||
+           builder->forced_class >= 0;
+}
+
+static int insert_math_field_brace(struct hstex_engine *engine,
+                                   hstex_token offending,
+                                   struct hstex_source_location location,
+                                   char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A left brace was mandatory here, so I've put one in.",
+        "You might want to delete and/or insert some corrections",
+        "so that I will find a matching right brace soon.",
+        "(If you're confused by all this, try typing `I}' now.)", NULL};
+    hstex_token opener =
+        hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{');
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, opener, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    tex_error(engine, help, "Missing { inserted");
+    return 0;
+}
+
 /* A script mark attaches to the atom before it, or to a fresh ordinary atom
    with nothing in it when there is none. */
 static int begin_math_script(struct hstex_engine *engine, bool superscript,
@@ -37185,6 +37262,19 @@ handle_token:
                     0 ||
                 push_one(engine, paragraph, *location, error,
                          error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        /* A math field that is neither a character nor a list gets a `{'
+           in front of it, so that it becomes a list of its own. \relax is
+           stepped over before the field is looked for, so it does not draw
+           one. */
+        if (meaning->command != HSTEX_COMMAND_RELAX &&
+            math_field_is_wanted(engine) &&
+            !token_can_be_math_field(engine, *token)) {
+            if (insert_math_field_brace(engine, *token, *location, error,
+                                        error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;

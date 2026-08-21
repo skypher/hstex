@@ -24,18 +24,24 @@
 % draws the pair -- \radical, \hbox, \vcenter, \mathop were all measured.
 % \relax is skipped before the field is looked for and draws nothing.
 %
-% WHERE THIS ENGINE STANDS: it builds the right box and says nothing,
-% except for a field-taking command met while a field is already expected
-% -- `$\underline\radical"161 x$' -- which stops the run.
+% A control sequence \let to a `{' -- plain's \bgroup -- counts as a list
+% and draws nothing. That one is easy to leave out and expensive to: it is
+% how gentle writes a good many of its fields, and forgetting it turns
+% every one of them into an inserted brace.
 %
-% NOT YET. hstex has no scan-a-math-field step: \mathord sets a forced
-% class and \underline sets a slot for whatever comes next to fill, so
-% there is no single place the brace would be inserted. What makes this
-% worth doing is that the closing half is already right: hstex reports
-% "Missing } inserted" for a group left open in a formula, so opening a
-% real math group at the right moment would give both messages. What it
-% needs is a list of the commands that may stand as a field, and getting
-% that list wrong moves boxes rather than diagnostics.
+% HOW IT IS DONE HERE. There is no scan-a-math-field step to hang this on
+% -- \mathord sets a forced class and \underline sets a slot for whatever
+% comes next to fill -- so the question is asked where the token is about
+% to be OBEYED: if a field is wanted and this token cannot be one, a `{'
+% goes in front of it and it is read again. The closing half needed
+% nothing: a group left open in a formula already draws "Missing }
+% inserted".
+%
+% LOOKING AHEAD DOES NOT WORK, and the difference is worth knowing. The
+% first attempt peeked the next token from the field-taking command
+% itself. That expands it a moment too early -- before the main loop has
+% flushed the character it was holding for a ligature or a kern -- and
+% gentle's output moved. Asking at the point of obeying moves nothing.
 %
 % trip draws this on lines 272, 396, 402 and 409 among others.
 \tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
