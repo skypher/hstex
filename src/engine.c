@@ -3028,6 +3028,7 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
     null_font_entry->hyphen_character = 45;
     null_font_entry->skew_character = -1;
     engine->current_font = null_font;
+    engine->null_font = null_font;
     /* Every math family starts as \nullfont, so \the\textfont7 names a font
        even before any family has been set up. */
     for (size_t size = 0U; size < (size_t)HSTEX_MATH_SIZE_COUNT; ++size) {
@@ -28304,7 +28305,8 @@ static int math_character_metric(struct hstex_engine *engine,
                                  const struct hstex_math_field *field,
                                  uint8_t size, const struct hstex_font **font,
                                  const struct hstex_char_metric **metric,
-                                 char *error, size_t error_capacity)
+                                 bool complain, char *error,
+                                 size_t error_capacity)
 {
     const struct hstex_font *resolved =
         math_family_font(engine, size, field->family);
@@ -28312,6 +28314,37 @@ static int math_character_metric(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "math family %u has no font in this size",
                          (unsigned int)field->family);
+    }
+    /* A family still holding \nullfont is one the document never set up.
+       The reference names it, with the size it wanted and the character it
+       wanted, and goes on without that character. */
+    if (complain && field->family < 16U &&
+        size < (uint8_t)HSTEX_MATH_SIZE_COUNT &&
+        engine->math_fonts[size][field->family] == engine->null_font) {
+        static const char *const help[] = {
+            "Somewhere in the math formula just ended, you used the",
+            "stated character from an undefined font family. For example,",
+            "plain TeX doesn't allow \\it or \\sl in subscripts. Proceed,",
+            "and I'll try to forget that I needed that character.", NULL};
+        static const char *const sizes[] = {"textfont", "scriptfont",
+                                            "scriptscriptfont"};
+        /* The character is written the way the log writes any character it
+           cannot write as itself, and building it here rather than passing
+           the byte keeps a character zero from ending the message. */
+        char shown[8];
+        uint8_t code = (uint8_t)(field->character & 0xFFU);
+        if (character_needs_caret(code)) {
+            shown[0] = '^';
+            shown[1] = '^';
+            shown[2] = (char)(code < 64U ? code + 64U : code - 64U);
+            shown[3] = '\0';
+        } else {
+            shown[0] = (char)code;
+            shown[1] = '\0';
+        }
+        tex_error(engine, help, "\\%s %u is undefined (character %s)",
+                  sizes[size], (unsigned int)field->family, shown);
+        return 0;
     }
     if (resolved->characters == NULL ||
         resolved->characters[field->character].tag < 0) {
@@ -28355,8 +28388,11 @@ static int apply_math_ligatures(struct hstex_engine *engine,
         left->text_character = true;
         const struct hstex_font *font = NULL;
         const struct hstex_char_metric *metric = NULL;
+        /* The ligature pass is only looking, not setting: the reading that
+           wants the character reports for it. */
         int present = math_character_metric(engine, &left->nucleus, size, &font,
-                                            &metric, error, error_capacity);
+                                            &metric, false, error,
+                                            error_capacity);
         if (present < 0) {
             return -1;
         }
@@ -29472,7 +29508,7 @@ static int translate_math_list_with(struct hstex_engine *engine,
             const struct hstex_font *font = NULL;
             const struct hstex_char_metric *metric = NULL;
             int present = math_character_metric(engine, &noad->nucleus, size,
-                                                &font, &metric, error,
+                                                &font, &metric, true, error,
                                                 error_capacity);
             if (present < 0) {
                 return -1;
@@ -30328,6 +30364,7 @@ static int accent_skew(struct hstex_engine *engine,
     const struct hstex_font *font = NULL;
     const struct hstex_char_metric *metric = NULL;
     int present = math_character_metric(engine, nucleus, size, &font, &metric,
+                                        true,
                                         error, error_capacity);
     if (present <= 0) {
         return present;
@@ -30531,7 +30568,7 @@ static int build_operator_box(struct hstex_engine *engine,
     const struct hstex_font *font = NULL;
     const struct hstex_char_metric *metric = NULL;
     int present = math_character_metric(engine, &noad->nucleus, size, &font,
-                                        &metric, error, error_capacity);
+                                        &metric, true, error, error_capacity);
     if (present < 0) {
         return -1;
     }
@@ -30639,6 +30676,7 @@ static int build_math_accent(struct hstex_engine *engine,
     const struct hstex_font *font = NULL;
     const struct hstex_char_metric *metric = NULL;
     int present = math_character_metric(engine, &accent, size, &font, &metric,
+                                        true,
                                         error, error_capacity);
     if (present < 0) {
         return -1;

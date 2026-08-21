@@ -1970,6 +1970,10 @@ struct hstex_engine {
     /* \textfont, \scriptfont and \scriptscriptfont, by family, with the
        group level each was last set at so they restore like other registers. */
     uint32_t math_fonts[HSTEX_MATH_SIZE_COUNT][16];
+    /* \nullfont, which every family starts as. A family still holding it
+       when a character of that family is wanted is an undefined family,
+       which the reference reports by name. */
+    uint32_t null_font;
     uint32_t math_font_levels[HSTEX_MATH_SIZE_COUNT][16];
     /* True while an alignment is reading its body, so that \cr and its
        relatives are recognised instead of being errors. */

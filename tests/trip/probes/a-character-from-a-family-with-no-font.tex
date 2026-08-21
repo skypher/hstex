@@ -1,0 +1,38 @@
+% A math character whose family has never been given a font.
+%
+% Measured against pdftex: named and dropped --
+%
+%   ! \textfont 0 is undefined (character ^^G).
+%   Somewhere in the math formula just ended, you used the
+%   stated character from an undefined font family. For example,
+%   plain TeX doesn't allow \it or \sl in subscripts. Proceed,
+%   and I'll try to forget that I needed that character.
+%
+% The size is named as well as the family, so the same character in a
+% subscript draws \scriptfont and one two levels down \scriptscriptfont.
+% The character is written the way the log writes any character.
+%
+% The box is the same either way -- the character was already being
+% dropped here -- so this is a difference in what is reported and not in
+% what is set.
+%
+% The ligature pass looks characters up too, to decide about kerns. It
+% says nothing: the reading that wants the character is the one that
+% reports for it, or `$\mathchar"07\mathchar"08$' would name the first of
+% them twice.
+%
+% NOT YET, and it is not this message's doing: the reference writes
+% character 200 as `^^c8' in trip's log and as the byte itself in a run
+% under the ordinary format. That is INITEX having eight-bit printing off
+% where a preloaded format has it on -- it applies to everything printed,
+% not to this message, and docs/DECISIONS.md's
+% a-character-the-log-writes-as-itself was measured under the format that
+% has it on.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\textfont0=\nullfont \setbox0=\hbox{$\mathchar"0007$}\showbox0
+\setbox1=\hbox{$\mathchar"0007\mathchar"0008$}\showbox1
+{\scriptfont0=\nullfont \setbox2=\hbox{$x^{\mathchar"0007}$}\showbox2}
+{\scriptscriptfont0=\nullfont \setbox3=\hbox{$x^{y^{\mathchar"0007}}$}\showbox3}
+{\textfont5=\nullfont \setbox4=\hbox{$\mathchar"0507$}\showbox4}
+\setbox5=\hbox{$\mathchar"0041$}\showbox5
+\end
