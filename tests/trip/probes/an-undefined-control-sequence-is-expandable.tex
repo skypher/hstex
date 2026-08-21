@@ -1,0 +1,32 @@
+% AN UNDEFINED CONTROL SEQUENCE IS EXPANDABLE, AND EXPANDS TO NOTHING.
+%
+% The reference reports one where it is EXPANDED, not where it would have
+% been obeyed. Three things follow, and HSTeX had none of them:
+%
+%   \expandafter\relax\undefA   the report comes BEFORE the \relax the
+%                               \expandafter held is obeyed, and nothing
+%                               is put back -- so no <recently read> line
+%   \edef\z{X\undefC Y}         reported while the text is gathered, and
+%                               \z is XY
+%   \ifnum1=1 \undefE\fi        reported while the branch is read
+%
+% and the trace is the expander's, drawn at \tracingcommands=2 and above
+% like any other expansion rather than by the main loop.
+%
+% An undefined control sequence met with nothing expanding it reads the
+% same either way: the expander reports it before the main loop can.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A an undefined cs reached past by expandafter]}
+\tracingcommands=2
+\expandafter\relax\undefA
+\message{[B an undefined cs met plainly]}
+\undefB
+\message{[C an undefined cs in an edef]}
+\edef\z{X\undefC Y}
+\show\z
+\message{[D an undefined cs after a conditional]}
+\ifnum1=1 \undefE\fi
+\tracingcommands=0
+\message{[done]}
+\end
