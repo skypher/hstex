@@ -1,0 +1,20 @@
+% What mode the engine stands in once a paragraph inside a \vbox ends.
+%
+% Measured against pdftex with \ifinner: the vertical list the paragraph
+% goes back to is the one that held it, so inside a \vbox it is an
+% INTERNAL vertical list. This engine went back to the outer one.
+%
+%   \vbox{hello\par \ifinner ... }        inner
+%   hello\par \ifinner ... }              outer
+%   \vbox{\ifinner ... }                  inner, with no paragraph at all
+%
+% It showed up first as a \tracingcommands line -- the reference writes
+% `{internal vertical mode: end-group character }}' where this engine
+% wrote `{vertical mode: ...}' -- and \ifinner confirmed it was the mode
+% and not the trace that was wrong.
+\tracingonline=1
+\font\tt=cmr10 \tt
+\setbox0=\vbox{hello\par \ifinner\message{[INNER]}\else\message{[OUTER]}\fi}
+\setbox1=\vbox{\ifinner\message{[INNER]}\else\message{[OUTER]}\fi}
+\setbox2=\vbox{\vbox{hi\par \ifinner\message{[INNER]}\else\message{[OUTER]}\fi}}
+\end

@@ -27529,7 +27529,12 @@ static int finish_paragraph_line(struct hstex_engine *engine,
     int status = break_paragraph(engine, out_line, error, error_capacity);
     engine->active_hbox_builder = NULL;
     engine->mode = HSTEX_MODE_VERTICAL;
-    engine->inner_mode = false;
+    /* The vertical list the paragraph goes back to is the one that held it,
+       which inside a \vbox is an internal one. Measured with \ifinner:
+       `\vbox{hello\par \ifinner...}' is inner in the reference and was
+       outer here. */
+    engine->inner_mode =
+        engine->nest_count != 0U && engine->nest[engine->nest_count - 1U].inner;
     engine->building_paragraph = false;
     engine->has_pending_character = false;
     return status;
