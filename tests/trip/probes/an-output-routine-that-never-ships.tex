@@ -1,0 +1,23 @@
+% An \output routine that empties \box255 without shipping anything.
+%
+% Measured against pdftex: after \maxdeadcycles rounds of it the reference
+% gives up on the routine and ships the page itself --
+%
+%   ! Output loop---25 consecutive dead cycles.
+%   I've concluded that your \output is awry; it never does a
+%   \shipout, so I'm shipping \box255 out myself. Next time
+%   increase \maxdeadcycles if you want me to be more patient!
+%
+% -- and carries on, the count going back to nought. This engine stopped
+% the run there, on the reasoning that there was nothing to carry on
+% with; there is, and it is the page.
+%
+% \maxdeadcycles is what the count is measured against, so setting it to
+% three gives up after three. An \output that does ship, or that is empty
+% (which means \shipout\box255), never reaches it.
+%
+% trip sets \maxdeadcycles to 3 and draws this on line 442.
+\tracingonline=1
+\output={\global\setbox9=\box255 \relax}
+\hbox{}\vfill\penalty-10000
+\end

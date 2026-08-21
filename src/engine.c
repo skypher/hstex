@@ -20482,11 +20482,17 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     if (list != NULL && list->count != 0U &&
         engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] >=
             engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES]) {
-        /* The reference complains and ships the page itself; there is no
-           carrying on from an error here. */
-        return set_error(error, error_capacity,
-                         "output loop: %d consecutive dead cycles",
-                         engine->page_integers[HSTEX_PAGE_DEAD_CYCLES]);
+        /* The reference complains and then ships the page itself, which is
+           how a routine that never ships still gets its pages out. */
+        static const char *const help[] = {
+            "I've concluded that your \\output is awry; it never does a",
+            "\\shipout, so I'm shipping \\box255 out myself. Next time",
+            "increase \\maxdeadcycles if you want me to be more patient!",
+            NULL};
+        tex_error(engine, help, "Output loop---%d consecutive dead cycles",
+                  engine->page_integers[HSTEX_PAGE_DEAD_CYCLES]);
+        engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
+        return ship_out_box(engine, 255U, error, error_capacity);
     }
     engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] += 1;
     if (list == NULL || list->count == 0U) {
