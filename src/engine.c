@@ -107,6 +107,8 @@ static const struct hstex_node *current_list_last_node(
     const struct hstex_engine *engine);
 static const struct hstex_node *last_item_node(
     const struct hstex_engine *engine);
+static const struct hstex_noad *last_math_noad(
+    const struct hstex_engine *engine);
 static void report_deleted_discretionary_sublist(struct hstex_engine *engine,
                                                  const uint32_t *items,
                                                  size_t count);
@@ -5396,6 +5398,14 @@ static int dimen_from_meaning(struct hstex_engine *engine,
     }
     if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
         meaning->value.integer == (int32_t)HSTEX_LAST_KERN) {
+        /* A \mkern's measure is in mu, and \lastkern hands it back as it
+           stands: the reference shows `\mkern9mu' as 9.0pt, since a kern is
+           a dimension whatever it was written in. */
+        const struct hstex_noad *noad = last_math_noad(engine);
+        if (noad != NULL && noad->kind == (uint8_t)HSTEX_NOAD_MU_KERN) {
+            *value = noad->kern;
+            return 1;
+        }
         const struct hstex_node *node = last_item_node(engine);
         *value = node != NULL && node->kind == HSTEX_NODE_KERN ? node->width : 0;
         return 1;
@@ -6386,6 +6396,14 @@ static int glue_from_meaning(struct hstex_engine *engine,
 {
     if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
         meaning->value.integer == (int32_t)HSTEX_LAST_SKIP) {
+        /* An \mskip at the end of a formula makes \lastskip a MATH glue,
+           which is not this reading: it is left to math_glue_from_meaning, so
+           that \the writes it in mu and a scan that wants ordinary glue
+           reports the mixture the way every other mu-for-pt does. */
+        const struct hstex_noad *noad = last_math_noad(engine);
+        if (noad != NULL && noad->kind == (uint8_t)HSTEX_NOAD_MU_GLUE) {
+            return 0;
+        }
         const struct hstex_node *node = last_item_node(engine);
         memset(value, 0, sizeof(*value));
         if (node != NULL && node->kind == HSTEX_NODE_GLUE) {
@@ -6439,6 +6457,15 @@ static int math_glue_from_meaning(struct hstex_engine *engine,
                                   struct hstex_glue *value, char *error,
                                   size_t error_capacity)
 {
+    if (meaning->command == HSTEX_COMMAND_LAST_ITEM &&
+        meaning->value.integer == (int32_t)HSTEX_LAST_SKIP) {
+        const struct hstex_noad *noad = last_math_noad(engine);
+        if (noad == NULL || noad->kind != (uint8_t)HSTEX_NOAD_MU_GLUE) {
+            return 0;
+        }
+        *value = noad->glue;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_MUSKIP_REGISTER) {
         int32_t index = meaning->value.integer;
         if (index < 0 || (size_t)index >= engine->count_capacity) {
@@ -25710,11 +25737,37 @@ static const struct hstex_node *current_list_last_node(
     return &engine->nodes[identifier - 1U];
 }
 
+/* The last thing in the formula being built. A math list is made of noads
+   rather than of nodes, so a last-item query in math mode has to look at it
+   here. Glue, a kern and a penalty written in a formula keep the shape they
+   have anywhere else and are held inside a noad; \mskip and \mkern do not,
+   and are looked at where each query wants them. */
+static const struct hstex_noad *last_math_noad(const struct hstex_engine *engine)
+{
+    if (engine->mode != HSTEX_MODE_MATH || engine->math_depth == 0U) {
+        return NULL;
+    }
+    const struct hstex_math_builder *builder =
+        &engine->math_stack[engine->math_depth - 1U];
+    if (builder->count == 0U || builder->noads == NULL) {
+        return NULL;
+    }
+    return &builder->noads[builder->count - 1U];
+}
+
 /* \lastnodetype and its relatives look at the contribution list, and when
    the page builder has emptied that they report the last node it took; see
    docs/DECISIONS.md, the-last-node-of-a-page. */
 static const struct hstex_node *last_item_node(const struct hstex_engine *engine)
 {
+    if (engine->mode == HSTEX_MODE_MATH) {
+        const struct hstex_noad *noad = last_math_noad(engine);
+        if (noad == NULL || noad->kind != (uint8_t)HSTEX_NOAD_NODE ||
+            noad->node == 0U || (size_t)noad->node > engine->node_count) {
+            return NULL;
+        }
+        return &engine->nodes[noad->node - 1U];
+    }
     const struct hstex_node *node = current_list_last_node(engine);
     if (node != NULL || engine->mode != HSTEX_MODE_VERTICAL ||
         engine->active_vbox_builder != engine->contribution_builder ||

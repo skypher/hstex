@@ -1,0 +1,47 @@
+% WHAT A LAST-ITEM QUERY FINDS AT THE END OF A FORMULA.
+%
+% A formula is a list like any other as far as \lastskip, \lastkern and
+% \lastpenalty are concerned: each looks at the last thing in it and hands
+% back its own kind or nothing.
+%
+%   \mskip9mu minus1fil   \lastskip    9.0mu minus 1.0fil   -- MATH glue
+%   \mkern9mu             \lastkern    9.0pt                -- a dimension
+%   \hskip3pt plus2fil    \lastskip    3.0pt plus 2.0fil
+%   \kern3pt              \lastkern    3.0pt
+%   \penalty7             \lastpenalty 7
+%   an ordinary atom      all three    nothing
+%
+% The one that is not obvious is the first. An \mskip leaves MATH glue
+% behind, so \lastskip is a mu quantity there: \the writes it in mu, a
+% \muskip takes it as it stands, and a \skip or a \dimen draws
+%
+%   ! Incompatible glue units.
+%   I'm going to assume that 1mu=1pt when they're mixed.
+%
+% the same way every other mu-for-pt mixture does. An \mkern is not like
+% that: a kern is a dimension whatever it was written in, so \lastkern
+% after `\mkern9mu' is 9.0pt and no complaint is made.
+%
+% HSTeX built formulas out of noads rather than nodes and its last-item
+% queries looked only at node lists, so every one of these was nothing.
+% trip line 276 asks for \lastskip after an \mskip inside a script.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\rip=trip \rip
+\tracingonline=1
+\message{[A mskip]}\setbox0=\hbox{$A\mskip9mu minus1fil \showthe\lastskip$}
+\message{[B mkern]}\setbox0=\hbox{$A\mkern9mu \showthe\lastkern$}
+\message{[C hskip]}\setbox0=\hbox{$A\hskip3pt plus2fil \showthe\lastskip$}
+\message{[D kern]}\setbox0=\hbox{$A\kern3pt \showthe\lastkern$}
+\message{[E penalty]}\setbox0=\hbox{$A\penalty7 \showthe\lastpenalty$}
+\message{[F an atom, which is none of them]}
+\setbox0=\hbox{$A\showthe\lastkern\showthe\lastpenalty$}
+\message{[G a mu lastskip into a skip]}
+\setbox0=\hbox{$A\mskip9mu \skip0=\lastskip \showthe\skip0$}
+\message{[H a mu lastskip into a muskip]}
+\setbox0=\hbox{$A\mskip9mu \muskip0=\lastskip \showthe\muskip0$}
+\message{[I a mu lastskip into a dimen]}
+\setbox0=\hbox{$A\mskip9mu \dimen0=\lastskip \showthe\dimen0$}
+\message{[J an ordinary lastskip into a muskip]}
+\setbox0=\hbox{$A\hskip3pt \muskip0=\lastskip \showthe\muskip0$}
+\message{[done]}
+\end
