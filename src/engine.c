@@ -34868,7 +34868,7 @@ static int define_read_tokens(struct hstex_engine *engine, hstex_cs_id target,
    line after it, and a `}' that closes nothing ends the \read where it
    stands -- measured, a line reading `close } here' yields `close ' and
    the rest of it is gone. */
-static int append_read_line(struct hstex_engine *engine,
+static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
                             struct hstex_token_vector *replacement,
                             const uint8_t *line, size_t length,
                             int32_t *balance, char *error,
@@ -34895,6 +34895,36 @@ static int append_read_line(struct hstex_engine *engine,
         if (result == HSTEX_MOUTH_ERROR) {
             hstex_mouth_destroy(&mouth);
             return -1;
+        }
+        /* A \read builds a definition, and an \outer macro may no more
+           stand in one of those than in any other: measured, a line reading
+           `text \lz more' with \lz declared \outer gives a macro holding
+           `text ' and draws the fault. */
+        if (hstex_token_is_control_sequence(token) &&
+            token_is_outer_macro(engine, token)) {
+            static const char *const help[] = {
+                "I suspect you have forgotten a `}', causing me",
+                "to read past where you wanted me to stop.",
+                "I'll try to recover; but if the error is serious,",
+                "you'd better type `E' or `X' now and fix your file.", NULL};
+            char named[128];
+            describe_token(engine, hstex_token_control_sequence(target), named,
+                           sizeof(named));
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning "
+                      "definition of %s",
+                      named);
+            /* The line's own ending is still put on: measured, a line
+               reading `a\lz' gives `a ' and one reading `\lz more' gives a
+               single space. */
+            hstex_token ending =
+                hstex_token_character((uint8_t)HSTEX_CAT_SPACE, (uint8_t)' ');
+            if (vector_push(replacement, ending, error, error_capacity) != 0) {
+                hstex_mouth_destroy(&mouth);
+                return -1;
+            }
+            *balance = 0;
+            break;
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++*balance;
@@ -34994,7 +35024,7 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
             engine->pending_macro_flags = 0U;
             return status;
         }
-        status = append_read_line(engine, &replacement,
+        status = append_read_line(engine, target, &replacement,
                                   (const uint8_t *)line, (size_t)length,
                                   &balance, error, error_capacity);
         free(line);

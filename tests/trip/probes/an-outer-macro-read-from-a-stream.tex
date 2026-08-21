@@ -1,0 +1,36 @@
+% An \outer macro in a line a \read is building a definition out of.
+%
+% Measured against pdftex: a \read builds a definition, and an \outer
+% macro may no more stand in one of those than in a \def body --
+%
+%   ! Forbidden control sequence found while scanning definition of \a.
+%
+% -- and what the macro ends up holding is everything before it, plus the
+% line's own ending:
+%
+%   `text \lz more'  ->  `text  '   (the text, its space, and the ending)
+%   `a\lz'           ->  `a '
+%   `\lz more'       ->  ` '        (the ending alone)
+%
+% \readline is not affected: under its catcodes there are no control
+% sequences to be \outer.
+%
+% This engine kept the whole line and said nothing. trip reads stream 0 in
+% a loop over tripos.tex, which it writes itself and which holds an
+% \uppercase that line 415 has just made \outer.
+%
+% NOT YET: the reference prints a runaway display before the message --
+%
+%   Runaway definition?
+%   ->text
+%
+% -- which this engine does not print for any of the runaway faults, and
+% it puts the } it inserts in as <inserted text> where this engine backs
+% it up.
+\tracingonline=1
+\outer\def\lz{Z}
+\immediate\openout0 oread.tex
+\immediate\write0{text \noexpand\lz more}
+\immediate\closeout0
+\openin0 oread.tex \read0to\a \show\a \closein0
+\end
