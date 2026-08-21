@@ -16704,6 +16704,12 @@ static void nest_note(struct hstex_engine *engine)
     if (level->fixed) {
         return;
     }
+    /* A formula's level holds a math list and none of the rest: the box
+       builders that stand under it are the enclosing list's, not its own. */
+    if (level->math != 0U) {
+        level->inner = engine->inner_mode;
+        return;
+    }
     level->mode = (uint8_t)engine->mode;
     level->inner = engine->inner_mode;
     level->hbox = engine->active_hbox_builder;
@@ -16738,6 +16744,396 @@ static const char *nest_mode_name(const struct hstex_nest_level *level)
     default:
         return level->inner ? "internal vertical mode" : "vertical mode";
     }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Showing a math list.                                                    */
+/*                                                                         */
+/* \showlists run inside a formula writes the noads the formula holds, and  */
+/* nothing else writes them: a formula is turned into a horizontal list at  */
+/* its closing shift, so \showbox never sees one. Each noad stands on a     */
+/* line of its own, and the three fields an atom may have are written under */
+/* it with a marker of their own -- `.' for the nucleus, `^' for the        */
+/* superscript, `_' for the subscript -- which is also the recursion        */
+/* history \showboxdepth counts. See docs/DECISIONS.md, showlists-in-math.  */
+/* ---------------------------------------------------------------------- */
+
+static void show_noad_list(struct hstex_engine *engine,
+                           const struct hstex_noad *noads, size_t count,
+                           const struct hstex_math_sublist *fraction,
+                           char *prefix, size_t depth, size_t threshold,
+                           size_t breadth, char mark);
+
+static const char *math_style_name(uint8_t style)
+{
+    static const char *const names[4] = {"\\displaystyle", "\\textstyle",
+                                         "\\scriptstyle",
+                                         "\\scriptscriptstyle"};
+    return names[(style / 2U) & 3U];
+}
+
+static const char *atom_class_name(uint8_t class_number)
+{
+    static const char *const names[HSTEX_ATOM_CLASS_COUNT] = {
+        "\\mathord",  "\\mathop",    "\\mathbin",   "\\mathrel",
+        "\\mathopen", "\\mathclose", "\\mathpunct", "\\mathinner"};
+    return names[class_number < (uint8_t)HSTEX_ATOM_CLASS_COUNT ? class_number
+                                                                : 0U];
+}
+
+/* A delimiter is written as the TWENTY-FOUR bit code it was given, in hex
+   behind a quote: `\left"162362'. The class a \delimiter carries in front
+   of those -- `\delimiter"4162362' -- is no part of the delimiter and is
+   not written. */
+static void show_math_delimiter(struct hstex_engine *engine, int32_t code)
+{
+    if (code < 0) {
+        print_formatted(engine, "%d", code);
+        return;
+    }
+    char digits[16];
+    size_t length = 0U;
+    int32_t value = code & 0x00FFFFFF;
+    do {
+        int32_t nibble = value & 0xF;
+        digits[length++] = (char)(nibble < 10 ? '0' + nibble
+                                              : 'A' + (nibble - 10));
+        value >>= 4;
+    } while (value != 0 && length < sizeof(digits));
+    print_byte(engine, '"');
+    while (length > 0U) {
+        print_byte(engine, digits[--length]);
+    }
+}
+
+/* The sub-formula a field kept, if it kept one. */
+static const struct hstex_math_sublist *math_sublist_of(
+    const struct hstex_engine *engine, uint32_t record)
+{
+    if (record == 0U || (size_t)record > engine->math_sublist_count) {
+        return NULL;
+    }
+    return &engine->math_sublists[record - 1U];
+}
+
+static void show_math_sublist(struct hstex_engine *engine, uint32_t record,
+                              char *prefix, size_t depth, size_t threshold,
+                              size_t breadth, char mark)
+{
+    const struct hstex_math_sublist *list = math_sublist_of(engine, record);
+    if (list == NULL) {
+        return;
+    }
+    show_noad_list(engine, engine->math_items + list->start, list->count,
+                   list->has_fraction ? list : NULL, prefix, depth, threshold,
+                   breadth, mark);
+}
+
+/* One of the three fields a noad may have. An EMPTY field writes nothing;
+   a sub-formula that was kept as a list writes the list, and one that was
+   read as nothing at all writes `{}'. */
+static void show_math_field(struct hstex_engine *engine,
+                            const struct hstex_math_field *field, char marker,
+                            char *prefix, size_t depth, size_t threshold,
+                            size_t breadth)
+{
+    bool empty = field->kind == (uint8_t)HSTEX_MATH_FIELD_EMPTY &&
+                 field->sublist == 0U;
+    if (depth >= threshold) {
+        if (!empty) {
+            print_text(engine, " []");
+        }
+        return;
+    }
+    if (empty) {
+        return;
+    }
+    if (field->kind == (uint8_t)HSTEX_MATH_FIELD_CHARACTER) {
+        prefix[depth] = marker;
+        print_byte(engine, '\n');
+        print_bytes(engine, prefix, depth + 1U);
+        print_formatted(engine, "\\fam%d ", (int)field->family);
+        show_ascii(engine, (uint8_t)field->character);
+        return;
+    }
+    /* A sub-formula kept as a list is the list the reference kept too; the
+       box HSTeX also made of it is not what a formula holds. */
+    if (field->sublist != 0U) {
+        const struct hstex_math_sublist *list =
+            math_sublist_of(engine, field->sublist);
+        if (list != NULL && list->count == 0U && !list->has_fraction) {
+            prefix[depth] = marker;
+            print_byte(engine, '\n');
+            print_bytes(engine, prefix, depth + 1U);
+            print_text(engine, "{}");
+            return;
+        }
+        show_math_sublist(engine, field->sublist, prefix, depth + 1U,
+                          threshold, breadth, marker);
+        return;
+    }
+    if (field->node != 0U && (size_t)field->node <= engine->node_count) {
+        show_node_list(engine, &field->node, 1U, prefix, depth + 1U, threshold,
+                       breadth, marker);
+    }
+}
+
+/* A generalized fraction, which is a whole list rather than an item in one:
+   the noads in front of the \over are its numerator and the ones behind are
+   its denominator. */
+static void show_math_fraction(struct hstex_engine *engine,
+                               const struct hstex_math_sublist *fraction,
+                               const struct hstex_noad *noads, size_t count,
+                               bool waiting, char *prefix, size_t depth,
+                               size_t threshold, size_t breadth)
+{
+    print_text(engine, "\\fraction, thickness ");
+    if (fraction->fraction_default_thickness) {
+        print_text(engine, "= default");
+    } else {
+        show_scaled(engine, fraction->fraction_thickness);
+    }
+    if (fraction->fraction_left != 0) {
+        print_text(engine, ", left-delimiter ");
+        show_math_delimiter(engine, fraction->fraction_left);
+    }
+    if (fraction->fraction_right != 0) {
+        print_text(engine, ", right-delimiter ");
+        show_math_delimiter(engine, fraction->fraction_right);
+    }
+    size_t split = fraction->fraction_at < count ? fraction->fraction_at
+                                                 : count;
+    if (depth >= threshold) {
+        if (split != 0U || split != count) {
+            print_text(engine, " []");
+        }
+        return;
+    }
+    if (split != 0U) {
+        show_noad_list(engine, noads, split, NULL, prefix, depth + 1U,
+                       threshold, breadth, '\\');
+    } else {
+        /* A numerator is a list from the moment the \over is read, so an
+           empty one is written `{}' where a denominator still waiting for
+           its list writes nothing at all. */
+        prefix[depth] = '\\';
+        print_byte(engine, '\n');
+        print_bytes(engine, prefix, depth + 1U);
+        print_text(engine, "{}");
+    }
+    if (split != count) {
+        show_noad_list(engine, noads + split, count - split, NULL, prefix,
+                       depth + 1U, threshold, breadth, '/');
+    } else if (!waiting) {
+        /* A fraction whose denominator turned out to be nothing keeps an
+           empty list, which is written `{}'. One still WAITING for its
+           denominator has no such list yet and writes nothing. */
+        prefix[depth] = '/';
+        print_byte(engine, '\n');
+        print_bytes(engine, prefix, depth + 1U);
+        print_text(engine, "{}");
+    }
+}
+
+static void show_noad(struct hstex_engine *engine,
+                      const struct hstex_noad *noad, char *prefix,
+                      size_t depth, size_t threshold, size_t breadth)
+{
+    switch ((enum hstex_noad_kind)noad->kind) {
+    case HSTEX_NOAD_STYLE:
+        print_text(engine, math_style_name(noad->atom_class));
+        return;
+    case HSTEX_NOAD_NODE:
+        if (noad->node != 0U && (size_t)noad->node <= engine->node_count) {
+            show_node(engine, &engine->nodes[noad->node - 1U], prefix, depth,
+                      threshold, breadth);
+        }
+        return;
+    case HSTEX_NOAD_MU_KERN:
+        print_text(engine, "\\mkern");
+        show_scaled(engine, noad->kern);
+        print_text(engine, "mu");
+        return;
+    case HSTEX_NOAD_MU_GLUE:
+        /* Math glue is written in mu, and a finite stretch or shrink is
+           written in mu too; an infinite one keeps its own order. */
+        print_text(engine, "\\glue(\\mskip) ");
+        show_scaled(engine, noad->glue.width);
+        print_text(engine, "mu");
+        if (noad->glue.stretch != 0) {
+            print_text(engine, " plus ");
+            show_glue_amount(engine, noad->glue.stretch,
+                             noad->glue.stretch_order);
+            if (noad->glue.stretch_order == 0U) {
+                print_text(engine, "mu");
+            }
+        }
+        if (noad->glue.shrink != 0) {
+            print_text(engine, " minus ");
+            show_glue_amount(engine, noad->glue.shrink,
+                             noad->glue.shrink_order);
+            if (noad->glue.shrink_order == 0U) {
+                print_text(engine, "mu");
+            }
+        }
+        return;
+    case HSTEX_NOAD_NONSCRIPT:
+        print_text(engine, "\\glue(\\nonscript)");
+        return;
+    case HSTEX_NOAD_CHOICE: {
+        static const char marks[4] = {'D', 'T', 'S', 's'};
+        print_text(engine, "\\mathchoice");
+        for (size_t branch = 0U; branch < 4U; ++branch) {
+            show_math_sublist(engine, noad->choices[branch], prefix,
+                              depth + 1U, threshold, breadth, marks[branch]);
+        }
+        return;
+    }
+    case HSTEX_NOAD_MIDDLE:
+        print_text(engine, "\\middle");
+        show_math_delimiter(engine, noad->delimiter);
+        return;
+    case HSTEX_NOAD_ATOM:
+        /* A \vcenter is set and spaced as an ordinary atom but is not one,
+           and the reference names it for what it is. */
+        print_text(engine, noad->vcentered ? "\\vcenter"
+                                           : atom_class_name(noad->atom_class));
+        break;
+    case HSTEX_NOAD_OVERLINE:
+        print_text(engine, "\\overline");
+        break;
+    case HSTEX_NOAD_UNDERLINE:
+        print_text(engine, "\\underline");
+        break;
+    case HSTEX_NOAD_RADICAL:
+        print_text(engine, "\\radical");
+        show_math_delimiter(engine, noad->delimiter);
+        break;
+    case HSTEX_NOAD_ACCENT:
+        print_text(engine, "\\accent");
+        print_formatted(engine, "\\fam%d ", (int)((noad->delimiter >> 8) & 0xF));
+        show_ascii(engine, (uint8_t)(noad->delimiter & 0xFF));
+        break;
+    case HSTEX_NOAD_FENCE:
+        /* \left ... \right is one inner atom holding a list that begins with
+           its opening delimiter and ends with its closing one, which is how
+           the reference writes it. */
+        print_text(engine, atom_class_name(noad->atom_class));
+        break;
+    }
+    if (noad->kind == (uint8_t)HSTEX_NOAD_ATOM &&
+        noad->atom_class == (uint8_t)HSTEX_ATOM_OP && noad->limits != 0U) {
+        print_text(engine, noad->limits == 1U ? "\\limits" : "\\nolimits");
+    }
+    if (noad->kind == (uint8_t)HSTEX_NOAD_FENCE) {
+        if (depth < threshold) {
+            prefix[depth] = '.';
+            print_byte(engine, '\n');
+            print_bytes(engine, prefix, depth + 1U);
+            print_text(engine, "\\left");
+            show_math_delimiter(engine, noad->left_delimiter);
+            show_math_sublist(engine, noad->nucleus.sublist, prefix,
+                              depth + 1U, threshold, breadth, '.');
+            print_byte(engine, '\n');
+            print_bytes(engine, prefix, depth + 1U);
+            print_text(engine, "\\right");
+            show_math_delimiter(engine, noad->delimiter);
+        } else {
+            print_text(engine, " []");
+        }
+    } else {
+        show_math_field(engine, &noad->nucleus, '.', prefix, depth, threshold,
+                        breadth);
+    }
+    show_math_field(engine, &noad->superscript, '^', prefix, depth, threshold,
+                    breadth);
+    show_math_field(engine, &noad->subscript, '_', prefix, depth, threshold,
+                    breadth);
+}
+
+static void show_noad_list(struct hstex_engine *engine,
+                           const struct hstex_noad *noads, size_t count,
+                           const struct hstex_math_sublist *fraction,
+                           char *prefix, size_t depth, size_t threshold,
+                           size_t breadth, char mark)
+{
+    if (depth > threshold) {
+        if (count != 0U || fraction != NULL) {
+            print_text(engine, " []");
+        }
+        return;
+    }
+    if (depth != 0U) {
+        prefix[depth - 1U] = mark;
+    }
+    /* A list with an \over in it IS a fraction: the reference keeps one noad
+       for the whole list rather than the noads on either side of it. */
+    if (fraction != NULL) {
+        print_byte(engine, '\n');
+        print_bytes(engine, prefix, depth);
+        show_math_fraction(engine, fraction, noads, count, false, prefix,
+                           depth, threshold, breadth);
+        return;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        print_byte(engine, '\n');
+        print_bytes(engine, prefix, depth);
+        if (index >= breadth) {
+            print_text(engine, "etc.");
+            return;
+        }
+        show_noad(engine, &noads[index], prefix, depth, threshold, breadth);
+    }
+}
+
+/* A formula's own list, written the way \showlists writes one: the noads it
+   holds, and where an \over has been read, the denominator so far and the
+   fraction that is waiting for it. */
+static void show_math_level(struct hstex_engine *engine,
+                            const struct hstex_nest_level *level,
+                            char *prefix, size_t threshold, size_t breadth)
+{
+    if (level->math == 0U || (size_t)level->math > engine->math_depth) {
+        return;
+    }
+    const struct hstex_math_builder *list =
+        &engine->math_stack[level->math - 1U];
+    /* The delimiter a \left opened stands at the head of the list it opened. */
+    if (list->is_left_group) {
+        print_byte(engine, '\n');
+        print_text(engine, "\\left");
+        show_math_delimiter(engine, list->left_delimiter);
+    }
+    size_t from = 0U;
+    if (list->has_fraction) {
+        from = list->fraction_at < list->count ? list->fraction_at
+                                               : list->count;
+    }
+    show_noad_list(engine, list->noads + from, list->count - from, NULL,
+                   prefix, 0U, threshold, breadth, '.');
+    if (list->pending_atom != 0U) {
+        print_byte(engine, '\n');
+        print_text(engine, atom_class_name((uint8_t)(list->pending_atom - 1U)));
+    }
+    if (!list->has_fraction) {
+        return;
+    }
+    struct hstex_math_sublist waiting = {
+        .start = 0U,
+        .count = (uint32_t)from,
+        .style = list->style,
+        .has_fraction = true,
+        .fraction_at = from,
+        .fraction_thickness = list->fraction_thickness,
+        .fraction_default_thickness = list->fraction_default_thickness,
+        .fraction_left = list->fraction_left,
+        .fraction_right = list->fraction_right,
+    };
+    print_byte(engine, '\n');
+    print_text(engine, "this will begin denominator of:");
+    print_byte(engine, '\n');
+    show_math_fraction(engine, &waiting, list->noads, from, true, prefix, 0U,
+                       threshold, breadth);
 }
 
 /* The totals the page builder holds, written the way a glue is: the height,
@@ -16866,6 +17262,11 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
         }
         if (level->output_routine) {
             print_text(engine, " (\\output routine)");
+        }
+        if (level->math != 0U) {
+            show_math_level(engine, level, prefix, (size_t)threshold,
+                            (size_t)breadth);
+            continue;
         }
         if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
             if (level->hbox != NULL) {
@@ -30772,6 +31173,19 @@ static int push_math_list(struct hstex_engine *engine, uint8_t style,
     builder->style = style;
     builder->current_style = style;
     builder->saved_inner_mode = engine->inner_mode;
+    /* A formula is a level of the nest of its own, which is what \showlists
+       walks: the reference writes a `### math mode entered at line' for
+       every sub-formula that is open, innermost first, with the noads it
+       holds under each. */
+    if (nest_push(engine, error, error_capacity) != 0) {
+        --engine->math_depth;
+        return -1;
+    }
+    struct hstex_nest_level *level = &engine->nest[engine->nest_count - 1U];
+    level->mode = (uint8_t)HSTEX_MODE_MATH;
+    level->math = (uint32_t)engine->math_depth;
+    level->prev_depth = HSTEX_IGNORE_DEPTH;
+    level->space_factor = 1000;
     /* A list nested inside a formula is internal, even when the formula is
        a display: \ifinner is true in `$${...}$$' and in a script, and the
        reference names the mode "math mode" there rather than "display math
@@ -30788,8 +31202,12 @@ static void pop_math_list(struct hstex_engine *engine)
     if (engine->math_depth == 0U) {
         return;
     }
+    nest_pop(engine);
     struct hstex_math_builder *builder =
         &engine->math_stack[--engine->math_depth];
+    if (engine->math_depth != 0U) {
+        engine->math_stack[engine->math_depth - 1U].pending_atom = 0U;
+    }
     if (engine->math_depth >= engine->math_floor + 1U) {
         engine->inner_mode = builder->saved_inner_mode;
     }
@@ -35494,6 +35912,18 @@ static int begin_math_group(struct hstex_engine *engine, char *error,
         } else if (outer->slot == (uint8_t)HSTEX_MATH_SLOT_RADICAND) {
             style = math_cramped_style(outer->current_style);
         }
+    }
+    /* A sub-formula that stands as an ordinary atom is the NUCLEUS of a noad
+       the reference has already put in the list around it; HSTeX makes that
+       noad when the braces close, so the list remembers it is coming and
+       \showlists writes it. A sub-formula filling a script or a branch of a
+       \mathchoice fills a noad that is there already. */
+    if (outer != NULL && outer->choice_remaining == 0U &&
+        outer->slot == (uint8_t)HSTEX_MATH_SLOT_NONE) {
+        outer->pending_atom =
+            (uint8_t)(1U + (outer->forced_class >= 0
+                                ? (uint8_t)outer->forced_class
+                                : (uint8_t)HSTEX_ATOM_ORD));
     }
     return push_math_list(engine, style, error, error_capacity);
 }

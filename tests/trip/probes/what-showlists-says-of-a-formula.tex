@@ -1,0 +1,96 @@
+% WHAT \showlists SAYS OF A FORMULA.
+%
+% A formula is a list of its own and a level of the nest of its own, and
+% \showlists is the only thing that ever writes it: a formula becomes a
+% horizontal list at its closing shift, so \showbox never sees one.
+%
+%   ### math mode entered at line 10
+%   \mathord
+%   .\fam1 A
+%   \mathord
+%   .\fam0 +
+%
+% Every noad stands on a line of its own. The three fields an atom may have
+% are written under it with a marker of their own -- `.' for the nucleus,
+% `^' for the superscript, `_' for the subscript -- and that marker is also
+% the recursion history \showboxdepth counts:
+%
+%   \mathord         an atom, named for its class
+%   \vcenter         an atom \vcenter made, named for what it is
+%   \mathop\limits   the limit controls, where they are not the default
+%   \overline        \underline
+%   \radical"161     the delimiter, as its twenty-four bit code in hex
+%   \accent\fam0 ^^V a \mathaccent, named for the character it puts on
+%   \displaystyle    a style, and its three fellows
+%   \mkern3.0mu      \glue(\mskip) 4.0mu plus 1.0fil     \glue(\nonscript)
+%   \mathchoice      with its four lists under D, T, S and s
+%   \left"0 ...      the delimiter a \left group opened, at the head of it
+%
+% A \fam and a character make a field: `.\fam1 A'. A field that is a
+% sub-formula is written as the LIST it is, not as any box that was made of
+% it, and one that came out empty is `{}'. A glue, a kern, a penalty or a
+% box written in a formula is a node like any other and is written as one.
+%
+% A sub-formula that stands as an ORDINARY ATOM is the nucleus of a noad
+% that is already in the list around it, so that list ends with a bare
+% `\mathord' -- or `\mathop', or whatever class was forced on it -- while
+% the braces are open. A sub-formula filling a script, a radicand, a
+% \mathchoice branch or a \vcenter fills a noad that is there already, or
+% none at all, and adds nothing.
+%
+% An \over makes the whole list a fraction: what stands after it is the
+% denominator so far, and the fraction waiting for the rest is written under
+% `this will begin denominator of:' with its numerator behind a `\' and its
+% denominator behind a `/'. A numerator is a list from the moment the \over
+% is read, so an empty one is `{}'; a denominator still waiting for its list
+% writes nothing.
+%
+% HSTeX wrote no formula at all: a formula was not a level of the nest, and
+% the level under it was stamped with the formula's own mode instead. trip
+% asks at lines 284 and 439.
+%
+% Found and left open: a \vcenter is hung on the axis when its box is made,
+% where the reference hangs it when the atom is SET -- so the box a formula
+% holds shows the axis already taken off, and in a script, where the axis is
+% a different one, the box comes out a different size as well.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \fontdimen22\rip=7pt \rip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont1=\rip \scriptfont1=\rip \scriptscriptfont1=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\message{[A a plain formula]}
+\setbox0=\hbox{$A+B\showlists$}
+\message{[B a braced sub-formula]}
+\setbox0=\hbox{$A{B\showlists}$}
+\message{[C a script]}
+\setbox0=\hbox{$A^{B\showlists}$}
+\message{[D a fraction waiting for its denominator]}
+\setbox0=\hbox{$A\over B\showlists$}
+\message{[E classes, styles and mu glue]}
+\setbox0=\hbox{$\mathbin{A}\scriptstyle\mkern3mu\mskip4mu plus1fil\nonscript B\showlists$}
+\message{[F an overline, an underline and a radical]}
+\setbox0=\hbox{$\overline A\underline B\radical"161 C\showlists$}
+\message{[G a mathchoice]}
+\setbox0=\hbox{$\mathchoice{A}{B}{C}{D}\showlists$}
+\message{[H an accent and a vcenter]}
+\setbox0=\hbox{$\mathaccent"7016 A\vcenter{\hbox{}}\showlists$}
+\message{[I a left group]}
+\setbox0=\hbox{$\left(A\showlists\right)$}
+\message{[J a box and a node in a formula]}
+\setbox0=\hbox{$A\hbox{x}\penalty5 \kern3pt\showlists$}
+\message{[K what a group of each kind leaves in the list around it]}
+\setbox0=\hbox{$X{A\showlists}$}
+\setbox0=\hbox{$X\mathop{A\showlists}$}
+\setbox0=\hbox{$X\mathbin{A\showlists}$}
+\setbox0=\hbox{$X\overline{A\showlists}$}
+\setbox0=\hbox{$X\underline{A\showlists}$}
+\setbox0=\hbox{$X\radical"161{A\showlists}$}
+\setbox0=\hbox{$X\mathaccent"7016{A\showlists}$}
+\setbox0=\hbox{$X\vcenter{\hbox{}\showlists}$}
+\setbox0=\hbox{$X^{B}_{C\showlists}$}
+\setbox0=\hbox{$X\mathchoice{A\showlists}{}{}{}$}
+\setbox0=\hbox{$X{Y{A\showlists}}$}
+\message{[done]}
+\end

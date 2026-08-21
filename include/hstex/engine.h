@@ -1040,6 +1040,10 @@ struct hstex_nest_level {
     bool fixed;
     /* The list an \output routine builds, which \showlists says so of. */
     bool output_routine;
+    /* One more than the index of the math list this level is building, or
+       zero where the level is building none. A formula is a list of its own
+       and a level of its own, which is what \showlists walks. */
+    uint32_t math;
     uint32_t line;
     struct hstex_hbox_builder *hbox;
     struct hstex_vbox_builder *vbox;
@@ -1239,6 +1243,10 @@ struct hstex_math_builder {
        not itself one. */
     bool outer_inner_mode;
     bool outer_displayed;
+    /* An atom whose nucleus is the sub-formula now being read: the noad
+       belongs to THIS list and is not made until its braces close, so
+       \showlists writes it from here. One more than the class, or zero. */
+    uint8_t pending_atom;
     /* Branches of a \mathchoice still to be read, and which one is next. */
     uint8_t choice_remaining;
     uint8_t choice_index;
