@@ -3511,6 +3511,19 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
                     struct hstex_source_location location, char *error,
                     size_t error_capacity)
 {
+    /* Putting a brace back undoes the reading of it, so what the alignment
+       entry made of that reading is undone too. Without this a `{' that
+       several scanners look at in turn -- \hbox reads one three times over,
+       once for each thing the token might have been -- counts once per
+       reading while its `}' counts once. */
+    struct hstex_align_entry *entry = engine->alignment_entry;
+    if (entry != NULL && !entry->after_pushed) {
+        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            --entry->nesting;
+        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            ++entry->nesting;
+        }
+    }
     return hstex_source_push_one(&engine->sources, token, location, error,
                                  error_capacity);
 }
@@ -32881,17 +32894,16 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
            look at in turn is put back between them and read again -- \hbox
            reads its `{' three times over, once for each thing the token
            might have been -- and only the first of those is the entry's. */
-        if (!from_pushback) {
-            /* The count runs below nought as readily as above it. A cell
-               may close a brace it did not open -- the opening one having
-               been swallowed by whatever put the cell's text together --
-               and holding the count at nought there loses the closing, so
-               the next `{' leaves it looking one deep for good. */
-            if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
-                ++entry->nesting;
-            } else {
-                --entry->nesting;
-            }
+        (void)from_pushback;
+        /* The count runs below nought as readily as above it. A cell may
+           close a brace it did not open -- the opening one having been
+           swallowed by whatever put the cell's text together -- and holding
+           the count at nought there loses the closing, so the next `{'
+           leaves it looking one deep for good. */
+        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            ++entry->nesting;
+        } else {
+            --entry->nesting;
         }
         return 0;
     }
