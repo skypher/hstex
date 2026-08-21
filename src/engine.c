@@ -6519,6 +6519,20 @@ static int scan_glue(struct hstex_engine *engine, struct hstex_glue *glue,
         }
     }
     engine->inhibit_protected_expansion = previous_inhibition;
+    /* Glue that stretches or shrinks by nothing has no order to do it in.
+       Both engines SHOW `1pt minus 0fil' as plain `1pt', but the order has
+       to go at the point the glue is read rather than the point it is
+       shown: added to something that shrinks by 10fil it is otherwise taken
+       for the higher order and the real shrink is lost. trip's \\skip200 is
+       `minus 0 fill' and is advanced onto a \\skip100 shrinking by 10fil. */
+    if (status == 0 && glue != NULL) {
+        if (glue->stretch == 0) {
+            glue->stretch_order = 0U;
+        }
+        if (glue->shrink == 0) {
+            glue->shrink_order = 0U;
+        }
+    }
     return status;
 }
 

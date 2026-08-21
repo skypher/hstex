@@ -1,0 +1,30 @@
+% Glue whose stretch or shrink is zero in an infinite order.
+%
+% Measured against pdftex: it has no order at all. Both engines SHOW
+% `1pt minus 0fil' as plain `1pt', but the order has to be dropped where
+% the glue is READ and not where it is shown, because arithmetic can tell
+% the difference:
+%
+%   \skip0=1pt minus 10fil
+%   \skip1=2pt minus 0fill
+%   \advance\skip0 by \skip1     -> 3.0pt minus 10.0fil
+%
+% Adding glue keeps the higher of the two orders, and `0fill' is the
+% higher one only if it still counts as fill. This engine kept it, so the
+% 10fil was thrown away and the result shrank by nothing.
+%
+% trip line 32 writes \skip200 = 10pt plus 5filll minus 0 fill and line 35
+% advances it onto a \skip100 that shrinks by 10fil, so this decides
+% whether trip's \skip100 ends as its own comment says it should:
+% -6pt plus 3filll minus 9fil.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\skip0=1pt minus 10fil \skip1=2pt minus 0fill \advance\skip0 by \skip1 \showthe\skip0
+\skip2=1pt plus 10fil \skip3=2pt plus 0fill \advance\skip2 by \skip3 \showthe\skip2
+\skip4=1pt minus 10fil \skip5=2pt minus 1fil \advance\skip4 by \skip5 \showthe\skip4
+\skip6=1pt minus 10fil \skip7=2pt minus 1fill \advance\skip6 by \skip7 \showthe\skip6
+\skip200 = 10pt plUs5fil\ifdim\hsize<\hsize\fi lllminus 0 fill
+\skipdef\shkip100\shkip -18pt plus\catcode`\}fil minus 10fil
+\advance\shkip by \skip200 \dimen33=3pt \count33=-\dimen33
+\divide\shkip by \count33 \multiply\shkip by \count33
+\showthe\skip100
+\end
