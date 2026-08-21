@@ -8441,11 +8441,23 @@ static bool regular_control_sequence_needs_space(
     const struct hstex_engine *engine, enum hstex_symbol_kind kind,
     const uint8_t *name, size_t name_length)
 {
+    /* The null control sequence is spelled out as two control words, so it
+       takes the space a control word takes. */
     return kind == HSTEX_SYMBOL_REGULAR &&
-           (name_length > 1U ||
-            (name_length == 1U &&
-             hstex_catcode_get(&engine->lexical_state.catcodes, name[0]) ==
-                 (uint8_t)HSTEX_CAT_LETTER));
+           (name_length != 1U ||
+            hstex_catcode_get(&engine->lexical_state.catcodes, name[0]) ==
+                (uint8_t)HSTEX_CAT_LETTER);
+}
+
+/* The NULL control sequence -- the one `\csname\endcsname' makes -- has no
+   name at all, and the reference spells it out as the two control words that
+   make it rather than as a lone escape character: \show of it writes
+   `\csname\endcsname=\relax', and \string of it writes the same eighteen
+   characters. */
+static bool control_sequence_is_null(enum hstex_symbol_kind kind,
+                                     size_t name_length)
+{
+    return kind == HSTEX_SYMBOL_REGULAR && name_length == 0U;
 }
 
 static int expand_detokenize(struct hstex_engine *engine,
@@ -8512,9 +8524,30 @@ static int expand_detokenize(struct hstex_engine *engine,
         }
         int32_t escape =
             engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
-        if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255 &&
-            push_detokenized_character(&output, (uint8_t)escape, error,
-                                       error_capacity) != 0) {
+        static const char *const null_parts[2] = {"csname", "endcsname"};
+        if (control_sequence_is_null(kind, name_length)) {
+            for (size_t part = 0U; part < 2U; ++part) {
+                if (escape >= 0 && escape <= 255 &&
+                    push_detokenized_character(&output, (uint8_t)escape, error,
+                                               error_capacity) != 0) {
+                    vector_destroy(&input);
+                    vector_destroy(&output);
+                    return -1;
+                }
+                for (size_t byte = 0U; null_parts[part][byte] != '\0'; ++byte) {
+                    if (push_detokenized_character(
+                            &output, (uint8_t)null_parts[part][byte], error,
+                            error_capacity) != 0) {
+                        vector_destroy(&input);
+                        vector_destroy(&output);
+                        return -1;
+                    }
+                }
+            }
+        } else if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 &&
+                   escape <= 255 &&
+                   push_detokenized_character(&output, (uint8_t)escape, error,
+                                              error_capacity) != 0) {
             vector_destroy(&input);
             vector_destroy(&output);
             return -1;
@@ -16892,6 +16925,16 @@ static void print_escaped_control_sequence(struct hstex_engine *engine,
        ?=undefined}' and not `{restoring \?=undefined}'. */
     int32_t escape =
         engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+    if (control_sequence_is_null(kind, length)) {
+        static const char *const parts[2] = {"csname", "endcsname"};
+        for (size_t part = 0U; part < 2U; ++part) {
+            if (escape >= 0 && escape <= 255) {
+                print_byte(engine, (char)(unsigned char)escape);
+            }
+            print_text(engine, parts[part]);
+        }
+        return;
+    }
     if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255) {
         print_byte(engine, (char)(unsigned char)escape);
     }
@@ -23938,15 +23981,29 @@ static int serialize_control_sequence(struct hstex_engine *engine,
     }
     int32_t escape =
         engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
-    if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255 &&
-        append_byte(bytes, count, capacity, (uint8_t)escape, error,
-                    error_capacity) != 0) {
-        return -1;
-    }
-    for (size_t index = 0U; index < length; ++index) {
-        if (append_byte(bytes, count, capacity, name[index], error,
+    static const char *const null_parts[2] = {"csname", "endcsname"};
+    size_t parts = control_sequence_is_null(kind, length) ? 2U : 1U;
+    for (size_t part = 0U; part < parts; ++part) {
+        if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255 &&
+            append_byte(bytes, count, capacity, (uint8_t)escape, error,
                         error_capacity) != 0) {
             return -1;
+        }
+        if (parts == 2U) {
+            for (size_t index = 0U; null_parts[part][index] != '\0'; ++index) {
+                if (append_byte(bytes, count, capacity,
+                                (uint8_t)null_parts[part][index], error,
+                                error_capacity) != 0) {
+                    return -1;
+                }
+            }
+            continue;
+        }
+        for (size_t index = 0U; index < length; ++index) {
+            if (append_byte(bytes, count, capacity, name[index], error,
+                            error_capacity) != 0) {
+                return -1;
+            }
         }
     }
     if (terminate_control_word &&
@@ -24128,19 +24185,34 @@ static int expand_string(struct hstex_engine *engine,
         } else {
             int32_t escape =
                 engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
-            if (escape >= 0 && escape <= 255 &&
-                append_string_character(&bytes, &count, &capacity,
-                                        (uint8_t)escape, error,
-                                        error_capacity) != 0) {
-                free(bytes);
-                return -1;
-            }
-            for (size_t index = 0U; index < length; ++index) {
-                if (append_string_character(&bytes, &count, &capacity,
-                                            name[index], error,
+            static const char *const null_parts[2] = {"csname", "endcsname"};
+            size_t parts = control_sequence_is_null(kind, length) ? 2U : 1U;
+            for (size_t part = 0U; part < parts; ++part) {
+                if (escape >= 0 && escape <= 255 &&
+                    append_string_character(&bytes, &count, &capacity,
+                                            (uint8_t)escape, error,
                                             error_capacity) != 0) {
                     free(bytes);
                     return -1;
+                }
+                const char *spelled = parts == 2U ? null_parts[part] : NULL;
+                for (size_t index = 0U;
+                     spelled != NULL && spelled[index] != '\0'; ++index) {
+                    if (append_string_character(&bytes, &count, &capacity,
+                                                (uint8_t)spelled[index], error,
+                                                error_capacity) != 0) {
+                        free(bytes);
+                        return -1;
+                    }
+                }
+                for (size_t index = 0U; spelled == NULL && index < length;
+                     ++index) {
+                    if (append_string_character(&bytes, &count, &capacity,
+                                                name[index], error,
+                                                error_capacity) != 0) {
+                        free(bytes);
+                        return -1;
+                    }
                 }
             }
         }

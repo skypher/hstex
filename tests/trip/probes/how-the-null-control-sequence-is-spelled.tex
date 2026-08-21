@@ -1,0 +1,40 @@
+% HOW THE NULL CONTROL SEQUENCE IS SPELLED.
+%
+% `\csname\endcsname' makes a control sequence with NO NAME, and wherever
+% the reference writes that one it writes the two control words that make
+% it rather than a lone escape character:
+%
+%   \show      > \csname\endcsname=\relax.
+%   \string    \csname\endcsname
+%   context    <recently read> \csname\endcsname
+%   a trace    \csname\endcsname ->X
+%
+% It takes the trailing space a control word takes, because that is what
+% it is spelled as -- eTeX's \detokenize of it is `\csname\endcsname '
+% with the space, where a one-character name would have none.
+%
+% A control sequence made this way is \relax to begin with, the way any
+% name \csname invents is.
+%
+% HSTeX wrote the escape character and the empty name, which came out as
+% `\' on its own. trip line 402 writes `\csname\endcsname' where an
+% alignment wants a \cr, and the fault the reference draws for it names
+% the sequence: `Use of \csname\endcsname doesn't match its definition.'
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingmacros=2 \tracingcommands=2
+\message{[A what csname invents it as]}
+\expandafter\show\csname\endcsname
+\message{[B defined, then shown]}
+\expandafter\def\csname\endcsname{X}
+\expandafter\show\csname\endcsname
+\message{[C used, so the trace names it]}
+\setbox0=\hbox{\csname\endcsname}
+\message{[D let away, then invented again]}
+\expandafter\let\csname\endcsname=\undefined
+\expandafter\show\csname\endcsname
+\message{[E written out as characters]}
+\message{<\expandafter\string\csname\endcsname>}
+\message{[F what it means]}
+\message{<\expandafter\meaning\csname\endcsname>}
+\message{[done]}
+\end
