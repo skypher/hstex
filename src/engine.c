@@ -9242,7 +9242,32 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     return push_one(engine, token, location, error, error_capacity);
 }
 
+static enum hstex_engine_result next_expanded_inner(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error,
+    size_t error_capacity);
+
+/* A text gathered with expansion takes \the for itself, but only the token
+   it asks for directly: a \the met while something the expander is already
+   expanding scans an operand -- \romannumeral-\the\outputpenalty -- is
+   the expander's, and is traced. Depth is what tells the two apart. */
 enum hstex_engine_result hstex_engine_next_expanded(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error,
+    size_t error_capacity)
+{
+    if (engine == NULL) {
+        return next_expanded_inner(engine, token, location, error,
+                                   error_capacity);
+    }
+    ++engine->expander_depth;
+    enum hstex_engine_result result =
+        next_expanded_inner(engine, token, location, error, error_capacity);
+    --engine->expander_depth;
+    return result;
+}
+
+static enum hstex_engine_result next_expanded_inner(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error,
     size_t error_capacity)
@@ -9303,7 +9328,8 @@ enum hstex_engine_result hstex_engine_next_expanded(
             command_is_expandable(meaning->command) &&
             meaning->command != HSTEX_COMMAND_MACRO &&
             !(meaning->command == HSTEX_COMMAND_THE &&
-              engine->gathering_expanded_text)) {
+              engine->gathering_expanded_text &&
+              engine->expander_depth == 1U)) {
             trace_command(engine, current);
         }
         /* Which \if this is, for a message the skipped text may draw. */

@@ -2045,6 +2045,9 @@ struct hstex_engine {
        \write, \mark. What such a text does with \the it does for itself,
        so \tracingcommands draws no line for it there. */
     bool gathering_expanded_text;
+    /* How many expansions deep the reader is. One means the token was asked
+       for by whatever is gathering; more means the expander asked for it. */
+    uint32_t expander_depth;
     /* A \write's text is expanded in a mode of its own, which the reference
        calls `no mode' and which \tracingcommands names like any other. */
     bool in_no_mode;
