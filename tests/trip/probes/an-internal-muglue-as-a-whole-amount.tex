@@ -1,0 +1,23 @@
+% An internal muglue may stand for a whole mu dimension, with no factor in
+% front of it and no unit behind: its WIDTH is the amount. A factor in
+% front is a different reading -- the muglue is the unit then.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\muskip1=4mu plus 1mu minus 2mu
+\message{[A a muskip register after plus]}
+\muskip2=5mu plus \muskip1 minus 3mu \showthe\muskip2
+\message{[B a muskip register after minus]}
+\muskip3=5mu minus \muskip1 \showthe\muskip3
+\message{[C a muglue parameter after plus]}
+\thinmuskip=7mu plus 8mu
+\muskip4=1mu plus \thinmuskip \showthe\muskip4
+\message{[D a muskip register as the whole amount]}
+\muskip5=\muskip1 \showthe\muskip5
+\message{[E a coefficient in front of one]}
+\muskip6=1mu plus 2\muskip1 \showthe\muskip6
+\message{[F a muskipdefd name after plus]}
+\muskipdef\mm=1 \muskip7=1mu plus \mm \showthe\muskip7
+\message{[G no space between the register and what follows]}
+\muskip8=1mu plus \muskip1minus.5\muskip1 \showthe\muskip8
+\message{[done]}
+\end

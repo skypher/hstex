@@ -6464,6 +6464,57 @@ static int scan_mu_dimension_component(struct hstex_engine *engine,
                                        uint8_t *order, char *error,
                                        size_t error_capacity)
 {
+    /* An internal muglue may stand for the whole amount, with no factor in
+       front of it and no unit behind: `\muskip2=5mu plus \muskip1' takes
+       \muskip1's WIDTH as the stretch. trip line 368 writes
+       `\shmip=5mu plus \muskip3minus.5\shmip'. What a factor in FRONT of
+       one means is a different reading -- the muglue is the unit then --
+       and that is further down. */
+    int32_t sign = 1;
+    hstex_token first = 0U;
+    struct hstex_source_location first_location;
+    for (;;) {
+        if (expanded_next_non_space(engine, &first, &first_location, error,
+                                    error_capacity) != HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input while scanning a math glue");
+        }
+        if (token_is_other_character(first, (uint8_t)'+')) {
+            continue;
+        }
+        if (token_is_other_character(first, (uint8_t)'-')) {
+            sign = -sign;
+            continue;
+        }
+        break;
+    }
+    if (hstex_token_is_control_sequence(first)) {
+        struct hstex_glue whole = {0};
+        int whole_result = math_glue_from_meaning(
+            engine,
+            hstex_engine_meaning(engine,
+                                 hstex_token_control_sequence_id(first)),
+            &whole, error, error_capacity);
+        if (whole_result < 0) {
+            return -1;
+        }
+        if (whole_result > 0) {
+            *value = sign < 0 ? -whole.width : whole.width;
+            *order = 0U;
+            return 0;
+        }
+    }
+    /* Not one of those: the token goes back, with a sign in front of it if
+       the signs came to one, and the amount is read the ordinary way. */
+    if (push_one(engine, first, first_location, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (sign < 0 &&
+        push_one(engine,
+                 hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'-'),
+                 first_location, error, error_capacity) != 0) {
+        return -1;
+    }
     struct decimal_factor factor;
     bool direct_dimen = false;
     int32_t direct_value = 0;
