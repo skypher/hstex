@@ -34721,7 +34721,12 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 break;
             }
             carriage = hstex_token_control_sequence(cr_id);
-            hstex_token *inserted = malloc(2U * sizeof(*inserted));
+            /* Asked for from the pool, because the source layer gives an
+               owned run back by its LENGTH alone: a bare malloc of two
+               tokens is filed as the eight-token block that length rounds
+               up to, and the next taker of an eight-token block writes off
+               the end of it. */
+            hstex_token *inserted = token_block_alloc(2U);
             if (inserted == NULL) {
                 status = set_error(error, error_capacity,
                                    "preamble recovery allocation failed");
@@ -34735,7 +34740,7 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 hstex_source_push_owned_tokens(&engine->sources, inserted, 2U,
                                                location, error,
                                                error_capacity) != 0) {
-                free(inserted);
+                token_block_free(inserted, 2U);
                 status = -1;
                 break;
             }
@@ -36714,8 +36719,16 @@ static int execute_error_message(struct hstex_engine *engine, char *error,
         stored_token_list_text(engine, errhelp, &given, &given_count, 0U, NULL,
                                error, error_capacity) == 0 &&
         given_count != 0U) {
-        offered[0] = (const char *)given;
-        help = offered;
+        /* The help is handed on as a C string, and what \errhelp holds is
+           counted bytes with no terminator: without one the printer reads
+           past the end of the allocation. */
+        uint8_t *terminated = realloc(given, given_count + 1U);
+        if (terminated != NULL) {
+            given = terminated;
+            given[given_count] = (uint8_t)'\0';
+            offered[0] = (const char *)given;
+            help = offered;
+        }
     }
     tex_error(engine, help, "%.*s", precision,
               bytes == NULL ? "" : (const char *)bytes);
