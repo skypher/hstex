@@ -1,0 +1,19 @@
+% An invalid character is reported and read past, and it LEAVES THE READING
+% STATE ALONE: a space behind one is skipped where a space behind a letter
+% is not.
+\catcode`\{=1 \catcode`\}=2
+\font\tenrm=cmr10 \tenrm \tracingonline=1 \hsize=100pt
+\catcode`\@=15
+\message{[A an invalid character after a control word]}
+\tracingcommands=1
+\def\zz{}\noindent\zz@ A\par
+\message{[B an invalid character after a letter]}
+\noindent A@ B\par
+\message{[C an invalid character at the start of a line]}
+\noindent
+@ A\par
+\message{[D an invalid character after a space]}
+\noindent A @ B\par
+\tracingcommands=0
+\message{[done]}
+\end

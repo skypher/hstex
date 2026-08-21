@@ -354,8 +354,11 @@ enum hstex_mouth_result hstex_mouth_next(
             mouth->state = HSTEX_MOUTH_NEW_LINE;
             continue;
         case HSTEX_CAT_INVALID:
-            /* Read past and handed up: the engine reports it and goes on. */
-            mouth->state = HSTEX_MOUTH_MIDDLE_LINE;
+            /* Read past and handed up: the engine reports it and goes on.
+               It LEAVES THE STATE ALONE, so a space behind one is skipped
+               where a space behind a letter is not: `\zz@ A' draws no blank
+               space, and neither does an invalid character at the head of a
+               line. trip line 351 ends `\a^^@^^@a@ %'. */
             *location = character.location;
             return HSTEX_MOUTH_INVALID;
         case HSTEX_CAT_BEGIN_GROUP:
