@@ -173,8 +173,19 @@ static void print_escaped_control_sequence(struct hstex_engine *engine,
    `[!1][!2]' -- both with the LAST character its parameter text used, not
    with the one each was written with. */
 static uint8_t shown_parameter_character = (uint8_t)'#';
+/* What a runaway had read so far. The engine keeps a pointer to whatever
+   vector is being filled, because the \outer check that catches a runaway
+   text or definition lives in the expander, which cannot see the caller's
+   list. */
+static const struct hstex_token_vector *runaway_partial = NULL;
+static const char *runaway_partial_prefix = NULL;
 static void print_escaped_name(struct hstex_engine *engine, const char *name);
 static const char *token_parameter_name(uint32_t parameter);
+static void report_runaway(struct hstex_engine *engine, const char *what);
+static void report_runaway_list(struct hstex_engine *engine, const char *what,
+                                const struct hstex_token_vector *lead,
+                                const char *prefix,
+                                const struct hstex_token_vector *partial);
 static void trace_token_parameter(struct hstex_engine *engine, size_t which);
 static int append_token_description(struct hstex_engine *engine,
                                     hstex_token token, uint8_t **bytes,
@@ -7917,15 +7928,26 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 "to read past where you wanted me to stop.",
                 "I'll try to recover; but if the error is serious,",
                 "you'd better type `E' or `X' now and fix your file.", NULL};
-            hstex_token close = hstex_token_character(
+            /* The reference puts a \par here for a runaway ARGUMENT and a
+               } for a runaway text, and marks the macro long so the \par
+               draws no "Paragraph ended before ..." of its own. HSTeX puts
+               a } in both cases; putting the \par in gets the context line
+               right and then diverges further down, so it waits. */
+            hstex_token inserted = hstex_token_character(
                 (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
             if (push_one(engine, token, location, error, error_capacity) != 0 ||
-                push_one(engine, close, location, error, error_capacity) != 0) {
+                push_one(engine, inserted, location, error,
+                         error_capacity) != 0) {
                 return -1;
             }
-            /* The } is inserted, and the context says so. */
+            /* What is put in is inserted, and the context says so. */
             hstex_source_name_top(&engine->sources,
                                   (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+            /* An argument is shown with the brace that opened it; a text
+               stands on its own. */
+            report_runaway_list(engine, scanning != NULL ? "text" : "argument",
+                                NULL, scanning != NULL ? NULL : "{",
+                                argument);
             char what[160];
             if (scanning != NULL) {
                 (void)snprintf(what, sizeof(what), "%s", scanning);
@@ -9672,6 +9694,10 @@ static enum hstex_engine_result next_expanded_inner(
                 hstex_source_name_top(&engine->sources,
                                       (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED,
                                       0U);
+                report_runaway(engine,
+                               engine->expanded_text_name != NULL
+                                   ? "text"
+                                   : "definition");
                 if (engine->expanded_text_name != NULL) {
                     tex_error(engine, help,
                               "Forbidden control sequence found while "
@@ -10302,6 +10328,13 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                 vector_destroy(&replacement);
                 return -1;
             }
+            /* The } is inserted, and the context says so. */
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+            /* A definition is shown from the `->' between what it matches
+               and what it says. */
+            report_runaway_list(engine, "definition", &parameter_text, "->",
+                                &replacement);
             tex_error(engine, help,
                       "Forbidden control sequence found while scanning "
                       "definition of %s",
@@ -23330,6 +23363,74 @@ static int append_text_bytes(uint8_t **bytes, size_t *count, size_t *capacity,
     return 0;
 }
 
+/* The reference shows what it had read when a runaway is caught: the kind
+   on one line and the partial list on the next, cut to within ten
+   characters of the width it prints to and finished with \ETC. See
+   tests/trip/probes/what-a-runaway-shows.tex. */
+static void report_runaway_list(struct hstex_engine *engine, const char *what,
+                                const struct hstex_token_vector *lead,
+                                const char *prefix,
+                                const struct hstex_token_vector *partial)
+{
+    if (partial == NULL) {
+        return;
+    }
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    bool cut = false;
+    char scratch[256];
+    const size_t limit = (size_t)HSTEX_PRINT_LINE - 10U;
+    /* Whatever stands in front of the part that ran away -- a definition
+       shows the parameter text it had matched before its `->'. */
+    for (size_t index = 0U; lead != NULL && index < lead->count; ++index) {
+        if (append_token_description(engine, lead->data[index], &bytes, &count,
+                                     &capacity, scratch,
+                                     sizeof(scratch)) != 0) {
+            free(bytes);
+            return;
+        }
+    }
+    if (prefix != NULL) {
+        for (const char *at = prefix; *at != '\0'; ++at) {
+            if (append_byte(&bytes, &count, &capacity, (uint8_t)*at, scratch,
+                            sizeof(scratch)) != 0) {
+                free(bytes);
+                return;
+            }
+        }
+    }
+    for (size_t index = 0U; index < partial->count; ++index) {
+        if (count >= limit) {
+            cut = true;
+            break;
+        }
+        if (append_token_description(engine, partial->data[index],
+                                     &bytes, &count, &capacity, scratch,
+                                     sizeof(scratch)) != 0) {
+            free(bytes);
+            return;
+        }
+    }
+    print_fresh_line(engine);
+    print_formatted(engine, "Runaway %s?", what);
+    print_line(engine);
+    if (count != 0U) {
+        print_bytes(engine, (const char *)bytes, count);
+    }
+    if (cut) {
+        print_text(engine, "\\ETC.");
+    }
+    free(bytes);
+}
+
+/* The same, from whatever list the engine is filling. */
+static void report_runaway(struct hstex_engine *engine, const char *what)
+{
+    report_runaway_list(engine, what, NULL, runaway_partial_prefix,
+                        runaway_partial);
+}
+
 static int append_token_description(struct hstex_engine *engine,
                                     hstex_token token, uint8_t **bytes,
                                     size_t *count, size_t *capacity, char *error,
@@ -23939,7 +24040,11 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
 {
     size_t depth = 1U;
     const char *previous_text_name = engine->expanded_text_name;
+    const struct hstex_token_vector *previous_partial = runaway_partial;
+    const char *previous_prefix = runaway_partial_prefix;
     engine->expanded_text_name = scanning;
+    runaway_partial = text;
+    runaway_partial_prefix = NULL;
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -23953,6 +24058,8 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
         engine->gathering_expanded_text = previous_gathering;
         if (result != HSTEX_ENGINE_TOKEN) {
             engine->expanded_text_name = previous_text_name;
+            runaway_partial = previous_partial;
+            runaway_partial_prefix = previous_prefix;
             if (result == HSTEX_ENGINE_EOF) {
                 return set_error(error, error_capacity,
                                  "File ended while scanning %s", scanning);
@@ -23963,6 +24070,8 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
             --depth;
             if (depth == 0U) {
                 engine->expanded_text_name = previous_text_name;
+                runaway_partial = previous_partial;
+                runaway_partial_prefix = previous_prefix;
                 return 0;
             }
         } else if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
@@ -23970,6 +24079,8 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
         }
         if (vector_push(text, token, error, error_capacity) != 0) {
             engine->expanded_text_name = previous_text_name;
+            runaway_partial = previous_partial;
+            runaway_partial_prefix = previous_prefix;
             return -1;
         }
     }

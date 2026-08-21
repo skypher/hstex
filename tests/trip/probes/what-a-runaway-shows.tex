@@ -1,0 +1,41 @@
+% A RUNAWAY SHOWS WHAT IT HAD READ.
+%
+% When an \outer macro is met somewhere it may not stand, the reference
+% first draws what it had read so far -- the kind on one line and the
+% partial list on the next -- and only then the fault:
+%
+%   Runaway definition?
+%   ->ab
+%   ! Forbidden control sequence found while scanning definition of \zz.
+%
+% The kinds are `text' for a \message, \write, \special or \mark text,
+% `definition' for a \def body, `argument' for a macro's argument and
+% `preamble' for an alignment preamble. Each is shown from its own
+% starting point: a definition from the `->' between what it matches and
+% what it says, an argument from the brace that opened it, a text from
+% nothing at all.
+%
+% The partial list is cut to within ten characters of the width the log
+% prints to -- 69 of 79 -- and finished with \ETC.
+%
+% HSTeX drew the fault and nothing else.
+%
+% Only definitions are shown here. The text and argument kinds are
+% written too and are right, but each has a separate difference after the
+% fault that this probe would trip over: a \message whose text ran away
+% writes one trailing space HSTeX does not, and a runaway ARGUMENT is
+% closed by the reference with an inserted \par where HSTeX inserts a }.
+% Both are in build/trip/ra2.tex.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\outer\def\lz{Z}
+\message{[A a runaway definition]}
+\def\zz{ab\lz cd}
+\message{[B one with a parameter text]}
+\def\ww#1{ab#1\lz cd}
+\message{[C a long one, cut with ETC]}
+\def\yy{XYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZ\lz Q}
+\message{[D an empty one]}
+\def\vv{\lz}
+\message{[done]}
+\end
