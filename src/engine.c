@@ -9293,9 +9293,17 @@ enum hstex_engine_result hstex_engine_next_expanded(
            what is obeyed. Only what the expander will actually expand: the
            rest passes through here on its way to the main loop and is
            traced there. */
+        /* \the is the one exception, and only while a text is being
+           gathered: measured, \message{\the\count5} and
+           \edef\z{\the\dimen5} draw no line where \number and
+           \romannumeral in the same place do, while \hbox{\the\count5}
+           and \count6=\the\count5 draw one. What a gathered text does
+           with \the it does for itself, so the expander never sees it. */
         if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1 &&
             command_is_expandable(meaning->command) &&
-            meaning->command != HSTEX_COMMAND_MACRO) {
+            meaning->command != HSTEX_COMMAND_MACRO &&
+            !(meaning->command == HSTEX_COMMAND_THE &&
+              engine->gathering_expanded_text)) {
             trace_command(engine, current);
         }
         /* Which \if this is, for a message the skipped text may draw. */
@@ -9871,11 +9879,13 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         hstex_token current = 0U;
         struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
+        bool previous_gathering = engine->gathering_expanded_text;
         const char *previous_definition_name =
             engine->expanded_definition_name;
         char definition_named[128];
         if (expanded_replacement) {
             engine->inhibit_protected_expansion = true;
+            engine->gathering_expanded_text = true;
             describe_token(engine, target, definition_named,
                            sizeof(definition_named));
             engine->expanded_definition_name = definition_named;
@@ -9886,6 +9896,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
                                              error_capacity)
                 : raw_next(engine, &current, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
+        engine->gathering_expanded_text = previous_gathering;
         engine->expanded_definition_name = previous_definition_name;
         /* Tokens delivered by \unexpanded or \the are inserted verbatim and
            are not rescanned for parameter markers. */
@@ -22735,10 +22746,13 @@ static int expand_to_bytes(struct hstex_engine *engine, uint8_t **bytes,
         hstex_token token = 0U;
         struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
+        bool previous_gathering = engine->gathering_expanded_text;
         engine->inhibit_protected_expansion = true;
+        engine->gathering_expanded_text = true;
         enum hstex_engine_result expansion_result = hstex_engine_next_expanded(
             engine, &token, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
+        engine->gathering_expanded_text = previous_gathering;
         if (expansion_result == HSTEX_ENGINE_EOF) {
             if (hstex_source_pop_boundary(&engine->sources, error,
                                           error_capacity) != 0) {
@@ -22837,10 +22851,13 @@ static int expand_to_tokens(struct hstex_engine *engine,
         hstex_token token = 0U;
         struct hstex_source_location location;
         bool previous_inhibition = engine->inhibit_protected_expansion;
+        bool previous_gathering = engine->gathering_expanded_text;
         engine->inhibit_protected_expansion = true;
+        engine->gathering_expanded_text = true;
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, &token, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
+        engine->gathering_expanded_text = previous_gathering;
         if (result == HSTEX_ENGINE_EOF) {
             return hstex_source_pop_boundary(&engine->sources, error,
                                              error_capacity);

@@ -2041,6 +2041,10 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* Set while a text is being gathered with expansion -- \edef, \message,
+       \write, \mark. What such a text does with \the it does for itself,
+       so \tracingcommands draws no line for it there. */
+    bool gathering_expanded_text;
     /* A \write's text is expanded in a mode of its own, which the reference
        calls `no mode' and which \tracingcommands names like any other. */
     bool in_no_mode;

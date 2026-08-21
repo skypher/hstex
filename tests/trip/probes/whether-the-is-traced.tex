@@ -1,0 +1,47 @@
+% \the IS TRACED WHERE IT IS EXPANDED, AND NOT WHERE A TEXT TAKES IT.
+%
+% \tracingcommands=2 draws a line for every expandable command the
+% expander expands. \the is the one exception, and only in one place:
+%
+%   \hbox{\the\count5}        {\the}   traced
+%   \count6=\the\count5       {\the}   traced
+%   \message{\the\count5}              not traced
+%   \edef\z{\the\dimen5}               not traced
+%   \message{\the\ff}                  not traced
+%   \message{\the\toks3}               not traced
+%
+% A text gathered with expansion -- \edef, \message, \write, \mark --
+% does its own thing with \the, keeping what it delivers verbatim rather
+% than rescanning it. The expander never sees it there, so nothing traces
+% it. Where the expander does the expanding, it is traced like anything
+% else.
+%
+% EVERY OTHER EXPANDABLE IS TRACED IN BOTH PLACES. Measured inside a
+% \message text: \number, \romannumeral, \string, \meaning, \jobname,
+% \csname, \expandafter, \noexpand, \fontname, \ifnum and its \fi. Only
+% \the is missing.
+%
+% \showthe is not \the and is traced as the command it is.
+\tracingonline=1 \count5=3 \dimen5=1pt \toks3={T}\def\x{X}\font\ff=cmr10
+\tracingcommands=2
+\message{[1]\number\count5}
+\message{[2]\the\count5}
+\message{[3]\the\toks3}
+\message{[4]\romannumeral5}
+\message{[5]\string\x}
+\message{[6]\meaning\x}
+\message{[7]\jobname}
+\message{[8]\csname relax\endcsname}
+\message{[9]\expandafter\x\relax}
+\message{[10]\noexpand\x}
+\message{[11]\ifnum1<2 y\fi}
+\message{[12]\x}
+\message{[13]\fontname\nullfont}
+\message{[a]}\setbox0=\hbox{\the\count5}
+\message{[b]}\edef\z{\the\dimen5}
+\message{[c]}\count6=\the\count5
+\message{[d]}\message{\the\ff}
+\message{[e]}\message{\the\toks3}
+\message{[f]}\showthe\count5
+\tracingcommands=0
+\end
