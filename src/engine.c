@@ -13767,6 +13767,13 @@ static int scan_last_box(struct hstex_engine *engine, hstex_token token,
 {
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_VOID;
+    /* A formula is not a list boxes can be taken off. */
+    if (engine->mode == HSTEX_MODE_MATH) {
+        static const char *const help[] = {
+            "Sorry; this \\lastbox will be void.", NULL};
+        report_wrong_mode(engine, token, help);
+        return 0;
+    }
     const struct hstex_node *node = current_list_last_node(engine);
     /* What has gone to the page cannot be taken back; the reference says so
        and hands back a void box. */

@@ -1,0 +1,15 @@
+% A formula is not a list boxes can be taken off: \lastbox in math mode is
+% named and hands back a void box.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \tenrm \tracingonline=1
+\message{[A lastbox in math mode]}
+\setbox0=\hbox{$\setbox1=\lastbox$}
+\message{[B lastbox in display math]}
+\message{[C lastbox in restricted horizontal, with a box before it]}
+\setbox0=\hbox{\hbox{A}\setbox1=\lastbox}\showthe\wd1
+\message{[D lastbox in an empty hbox]}
+\setbox0=\hbox{\setbox1=\lastbox}\showthe\wd1
+\message{[E lastbox in an internal vertical list]}
+\setbox0=\vbox{\hbox{A}\setbox1=\lastbox}\showthe\wd1
+\message{[done]}
+\end
