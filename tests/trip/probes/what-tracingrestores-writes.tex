@@ -48,7 +48,16 @@
 % is what stood before the group began. `\font\gg=cmr10' sets the control
 % sequence twice on purpose -- once to \nullfont so that the `at' clause
 % is read with the target already a font rather than a macro -- and draws
-% one restore line, not two. Six shapes measured, including two
+% one restore line, not two.
+%
+% THE FONT IN USE DRAWS A LINE TOO: `{restoring current font=\ff}',
+% naming the control sequence \font gave it. That went unwritten for six
+% turns because every probe for it was run under the PRELOADED pdftex
+% format, where selecting a font is an assignment like any other and the
+% eTeX rule about assigning what is already there hides it. Under
+% `pdftex -ini', which is what trip runs, it is drawn every time --
+% including where the same font is selected again, and where the group
+% is a box. See docs/DECISIONS.md, which-tex-hstex-is-measured-against. Six shapes measured, including two
 % assignments to the same register, a nested group, and a \global one
 % before a local one.
 %

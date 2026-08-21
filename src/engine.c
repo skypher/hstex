@@ -37764,13 +37764,14 @@ static int end_group(struct hstex_engine *engine, char *error,
     while (engine->save_count != 0U &&
            engine->saves[engine->save_count - 1U].level == leaving_level) {
         struct hstex_save_entry save = engine->saves[--engine->save_count];
-        /* What \aftergroup put by draws nothing. Nor does the font in use:
-           the reference writes `{restoring current font=\ip}' four times in
-           trip and none at all in any probe that selects a font inside a
-           group, so what draws it there is not yet known -- and tracing
-           every one of them is further off than tracing none. */
-        if (save.kind != HSTEX_SAVE_AFTER_GROUP &&
-            save.kind != HSTEX_SAVE_FONT) {
+        /* What \aftergroup put by draws nothing. The font in use DOES draw a
+           line -- `{restoring current font=\ff}' -- which no probe had shown
+           because they were all run under the preloaded pdftex format, where
+           selecting a font is an assignment like any other and the eTeX
+           rule about assigning what is already there hides it. Under
+           `pdftex -ini' it is drawn every time. See
+           tests/trip/probes/what-tracingrestores-writes.tex. */
+        if (save.kind != HSTEX_SAVE_AFTER_GROUP) {
             struct hstex_save_entry standing;
             bool taken_over =
                 save_was_taken_over(engine, &save, leaving_level, &standing);

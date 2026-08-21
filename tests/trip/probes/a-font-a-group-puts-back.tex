@@ -1,0 +1,26 @@
+% THE FONT IN USE IS RESTORED LIKE ANY OTHER VALUE, AND SAYS SO.
+%
+%   {restoring current font=\ff}
+%
+% naming the control sequence \font gave it, not the metrics file. Drawn
+% every time a group that selected a font ends -- including where the
+% font selected was the one already in use, and where the group is a box.
+%
+% RUN THIS UNDER `pdftex -ini'. It is why the line went unwritten for six
+% turns: under the preloaded pdftex format, which is eTeX, selecting the
+% font already in use assigns nothing and so restores nothing, and a
+% probe run that way shows a line for [A] and [C] but not [B]. trip runs
+% `pdftex -ini' and draws all three. See docs/DECISIONS.md,
+% which-tex-hstex-is-measured-against.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingrestores=1
+\font\ff=cmr10 \font\gg=cmr7
+\ff
+\message{[A a different font in a group]}
+{\gg}
+\message{[B the same font again]}
+{\ff}
+\message{[C a font in a box]}
+\setbox0=\hbox{\gg}
+\message{[done]}
+\end
