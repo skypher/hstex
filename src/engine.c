@@ -32954,18 +32954,19 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
         report_illegal_case(engine, engine->executing_token);
         return 0;
     }
-    struct hstex_box equation = {0};
-    if (package_displayed_formula(engine, &equation, error, error_capacity) !=
-        0) {
-        return -1;
-    }
-    engine->displayed_equation = equation;
+    /* The display's own list STAYS ON THE STACK while the number is read.
+       The reference measures the number first and the equation afterwards,
+       which is what puts its two `Insufficient extension fonts' either side
+       of the complaint about a display closed by one $. Raising the floor
+       keeps the number's list looking like the outermost one, so that a
+       group opened inside it is still told apart from the formula. */
     engine->reading_equation_number = true;
     engine->equation_number_on_left = left;
     /* An equation number is set in text style and is internal: \ifinner is
        true inside one, and the reference names the mode "math mode" rather
        than "display math mode" when it refuses a second \eqno there. */
     engine->inner_mode = true;
+    ++engine->math_floor;
     return push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
                           error_capacity);
 }
@@ -33148,18 +33149,26 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
 
 /* The closing $$ centres the formula in \displaywidth, surrounds it with the
    display penalties and skips, and lets the paragraph carry on. */
-static int end_display_math(struct hstex_engine *engine, char *error,
+static int end_display_math(struct hstex_engine *engine,
+                            struct hstex_box packaged, char *error,
                             size_t error_capacity)
 {
     bool numbered = engine->reading_equation_number;
     bool left = engine->equation_number_on_left;
-    struct hstex_box packaged = {0};
-    if (package_displayed_formula(engine, &packaged, error, error_capacity) !=
-        0) {
-        return -1;
-    }
-    struct hstex_box equation = numbered ? engine->displayed_equation : packaged;
+    struct hstex_box equation = packaged;
     struct hstex_box number = packaged;
+    if (numbered) {
+        /* What was in hand was the NUMBER; the equation is measured now, so
+           its own `Insufficient extension fonts' comes after the complaint
+           about the single $ rather than before it. */
+        if (engine->math_floor != 0U) {
+            --engine->math_floor;
+        }
+        if (package_displayed_formula(engine, &equation, error,
+                                      error_capacity) != 0) {
+            return -1;
+        }
+    }
     engine->reading_equation_number = false;
     /* The group the display opened is closed only once the display has been
        put on the vertical list, so that the glue in front of it is the glue
@@ -38347,6 +38356,15 @@ handle_token:
                     }
                     /* A display closes on the second of two shifts. */
                     if (engine->displayed_math) {
+                        /* The formula in hand is measured FIRST -- the
+                           number's, where there is one -- because the
+                           reference reports its `Insufficient extension
+                           fonts' before it complains about the single $. */
+                        struct hstex_box packaged = {0};
+                        if (package_displayed_formula(engine, &packaged, error,
+                                                      error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
+                        }
                         hstex_token second = 0U;
                         struct hstex_source_location where;
                         int taken = raw_next(engine, &second, &where,
@@ -38361,8 +38379,8 @@ handle_token:
                                 return HSTEX_ENGINE_ERROR;
                             }
                         }
-                        if (end_display_math(engine, error, error_capacity) !=
-                            0) {
+                        if (end_display_math(engine, packaged, error,
+                                             error_capacity) != 0) {
                             return HSTEX_ENGINE_ERROR;
                         }
                         continue;

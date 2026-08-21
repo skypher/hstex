@@ -1,0 +1,37 @@
+% A DISPLAY CHECKS ITS EXTENSION FONTS WHEN THE CLOSING $ ARRIVES, NOT
+% WHEN \eqno DOES.
+%
+% \eqno does not end the equation. It starts a list of its own for the
+% number and leaves the display's list standing underneath, so with
+% \textfont3 and its fellows unfit the reference reports
+%
+%   {math shift character $}
+%   ! Math formula deleted: Insufficient extension fonts.   <- the NUMBER
+%   ! Display math should end with $$.
+%   ! Math formula deleted: Insufficient extension fonts.   <- the EQUATION
+%
+% -- three lines in that order, all after the `$'. hstex measured the
+% equation at the \eqno, so its first line came out four commands early
+% and the two font faults straddled the complaint the other way round.
+%
+% What decides the order is which list is IN HAND when the `$' is met:
+% the number's, if there is one. The equation's own list is measured
+% afterwards, inside the closing.
+%
+% A display with no number has one list and one check, and an inline
+% formula the same.
+\tracingonline=1 \tracingcommands=2
+\textfont3=\nullfont \scriptfont3=\nullfont \scriptscriptfont3=\nullfont
+\message{[A eqno in a display, closed with one dollar]}
+$$\eqno^{}$
+\message{[B a plain display]}
+$$x$$
+\message{[C an inline formula]}
+$x$
+\message{[D leqno]}
+$$y\leqno z$$
+\message{[E a display closed properly, with a number]}
+$$w\eqno v$$
+\message{[done]}
+\tracingcommands=0
+\end
