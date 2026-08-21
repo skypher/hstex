@@ -1,0 +1,49 @@
+% EVERY CANDIDATE BREAK IS WEIGHED AGAINST ITS OWN LINE'S WIDTH.
+%
+% A break that would start line five is measured against the width line
+% five will have, not against whatever line the first active node
+% happens to sit on. hstex used one width for every candidate at a
+% breakpoint, which is right only while all the lines are the same
+% width -- and wrong the moment \hangindent or \parshape makes them
+% differ.
+%
+% With \hangindent=30pt \hangafter=1 over a paragraph of short words,
+% \tracingparagraphs shows it at once:
+%
+%   ref:    @ via @@1 b=6396 p=0 d=41036836
+%   hstex:  @ via @@1 b=10000 p=0 d=100000000
+%
+% -- the candidate from @@1 would begin a hung line thirty points
+% narrower, and measuring it against the full width made every such
+% break look infinitely bad. The paragraph then broke into fewer lines,
+% and the feasible breaks the reference keeps -- one active node per
+% line number where the widths differ -- never appeared at all.
+%
+% The last paragraph here has no hanging and is the control: it agreed
+% before the fix and after it.
+%
+% STILL DIFFERING, in the \parshape case only: the reference keeps ONE
+% ACTIVE NODE PER LINE NUMBER where the widths differ, and hstex keeps
+% one per fitness class however the line numbers fall. So at one
+% breakpoint the reference records
+%
+%   @@2: line 1.0 t=100010000 -> @@0
+%   @@3: line 2.0 t=200010000 -> @@1
+%
+% and hstex records only the first. The line numbers stop mattering once
+% they are past the last line \parshape or \hangindent names -- ten pairs
+% of \parshape make lines eleven onward all one class -- so the bucket is
+% (fitness, line) up to that point and (fitness) after it.
+\tracingonline=1 \hsize=100pt \parindent=0pt \tracingparagraphs=1
+\pretolerance=-1 \tolerance=10000 \hbadness=10000
+\message{[A hangindent, so lines differ in width]}
+\hangindent=30pt \hangafter=1
+\noindent aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp\par
+\message{[B parshape]}
+\parshape=3 0pt 40pt 10pt 60pt 0pt 100pt
+\noindent aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp\par
+\message{[C no hanging, the control]}
+\hangindent=0pt
+\noindent aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp\par
+\message{[done]}
+\end

@@ -26801,11 +26801,15 @@ static const char *trace_break_name(const struct hstex_engine *engine,
     }
 }
 
+/* The width a line of the given number is set to; \parshape and \hangindent
+   make it differ from line to line. */
+static int32_t line_width_for(const struct hstex_engine *engine, int32_t line);
+
 static int try_break_at(struct hstex_engine *engine,
                         struct hstex_break_state *state,
                         const uint32_t *items, size_t count,
                         const struct hstex_break_totals *background,
-                        int32_t line_width, size_t breakpoint,
+                        size_t breakpoint,
                         const struct hstex_break_site *site, int32_t threshold,
                         bool final_pass, char *error, size_t error_capacity)
 {
@@ -26851,7 +26855,14 @@ static int try_break_at(struct hstex_engine *engine,
                          state->totals[record->start].shrink;
         uint8_t fitness = (uint8_t)HSTEX_FIT_DECENT;
         int32_t badness =
-            line_badness((int64_t)line_width - totals.width, &totals, &fitness);
+            /* EVERY CANDIDATE IS WEIGHED AGAINST ITS OWN LINE'S WIDTH. A
+               break that would start line five is measured against line
+               five, not against whatever line the first active node happens
+               to sit on -- which only shows where \parshape or \hangindent
+               makes the widths differ. */
+            line_badness((int64_t)line_width_for(engine, record->line + 1) -
+                             totals.width,
+                         &totals, &fitness);
 
         bool artificial = false;
         bool stays_active = true;
@@ -27151,10 +27162,8 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                              : line_start_after(engine, items, count, after);
         }
         if (legal && state->active_count != 0U) {
-            int32_t line = state->records[state->active[0]].line + 1;
             if (try_break_at(engine, state, items, count, background,
-                             line_width_for(engine, line), index, &site,
-                             threshold, final_pass, error,
+                             index, &site, threshold, final_pass, error,
                              error_capacity) != 0) {
                 return -1;
             }
@@ -27187,7 +27196,6 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         *best = SIZE_MAX;
         return 0;
     }
-    int32_t last_line = state->records[state->active[0]].line + 1;
     /* The forced break at the end counts as a hyphenated one, so that a
        hyphen on the second-to-last line costs \finalhyphendemerits. */
     struct hstex_break_site final_site = {0};
@@ -27195,7 +27203,7 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
     final_site.start = SIZE_MAX;
     final_site.hyphenated = true;
     if (try_break_at(engine, state, items, count, background,
-                     line_width_for(engine, last_line), count, &final_site,
+                     count, &final_site,
                      threshold, final_pass, error, error_capacity) != 0) {
         return -1;
     }
