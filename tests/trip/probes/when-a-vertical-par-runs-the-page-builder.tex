@@ -1,0 +1,19 @@
+% \par in a vertical list runs the page builder, so what is waiting to be
+% contributed goes down at the \par rather than at whatever comes after it.
+% \vskip does not run it, which is what makes the two tell apart.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingpages=1 \vsize=100pt \maxdepth=2pt
+\output={\setbox0=\box255}
+\message{[A a box, then glue, then par]}
+\hbox{}
+\vskip3pt
+\message{[the par]}
+\par
+\message{[B glue then a penalty, for comparison]}
+\vskip4pt
+\penalty7
+\message{[C glue then par again]}
+\vskip5pt
+\par
+\message{[done]}
+\end

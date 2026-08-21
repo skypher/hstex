@@ -41784,10 +41784,14 @@ handle_token:
                 }
                 continue;
             }
-            /* \par in a vertical list does nothing but clear the shape the
-               next paragraph would otherwise inherit. */
+            /* \par in a vertical list clears the shape the next paragraph
+               would otherwise inherit, AND runs the page builder -- so
+               whatever is waiting to be contributed goes down at the \par
+               rather than at whatever comes after it. trip line 389 reaches
+               a \par through an \else in vertical mode. */
             if (engine->mode == HSTEX_MODE_VERTICAL &&
-                normal_paragraph(engine, error, error_capacity) != 0) {
+                (normal_paragraph(engine, error, error_capacity) != 0 ||
+                 contribute_page(engine, error, error_capacity) != 0)) {
                 return HSTEX_ENGINE_ERROR;
             }
             /* Inside an \hbox there is no paragraph to end and nothing to
