@@ -1,0 +1,33 @@
+% AN OUTPUT ROUTINE BUILDS A VERTICAL LIST OF ITS OWN, AND THAT LIST GOES
+% BACK IN FRONT OF WHAT THE PAGE GAVE BACK.
+%
+% The routine runs in internal vertical mode with a list of its own, not
+% on the contribution list where it stands. When it ends, what it built
+% -- what \unvbox255 put there, and anything it appended after -- goes to
+% the FRONT of the contribution list, before whatever the page break left
+% over, not behind it.
+%
+% Measured with a routine that ships the page and, once, appends a box
+% seven points wide, against material that breaks into three pages:
+%
+%   [page wd=5.0pt]     the first page
+%   [page wd=7.0pt]     the routine's own box, next
+%   [A]
+%   [page wd=2.0pt]     and only then what was left over
+%
+% hstex appended the routine's material to the end of the contribution
+% list, so its box came out LAST and one page fewer was made: 5.0 then
+% 7.0 and nothing else. Same material, different order, and the page
+% breaks that follow are all different.
+\tracingonline=1 \showboxdepth=5 \showboxbreadth=10
+\vsize=20pt \maxdepth=0pt \topskip=0pt \baselineskip=0pt \lineskiplimit=-100pt
+\lineskip=0pt \count9=0
+\output={\message{[page wd=\the\wd255\space ht=\the\ht255]}\shipout\box255
+  \ifnum\count9=0 \global\count9=1 \hbox to 7pt{}\fi}
+\hbox to 5pt{}\vskip30pt
+\hbox to 1pt{}\vskip1pt
+\hbox to 2pt{}\vskip1pt
+\message{[A]}
+\penalty-10000
+\message{[done]}
+\end

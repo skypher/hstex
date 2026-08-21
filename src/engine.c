@@ -21271,6 +21271,22 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     bool previous_output_inner = engine->inner_mode;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
+    /* And it builds a VERTICAL LIST OF ITS OWN. What \unvbox255 puts in it
+       does not join the contributions where they stand: when the routine
+       ends, its list goes back to the FRONT of the contribution list, in
+       front of whatever the page gave back rather than behind it. */
+    struct hstex_vbox_builder made = {0};
+    struct hstex_vbox_builder *previous_output_builder =
+        engine->active_vbox_builder;
+    struct hstex_hbox_builder *previous_output_hbox =
+        engine->active_hbox_builder;
+    int32_t previous_output_depth = engine->prev_depth;
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->active_vbox_builder = &made;
+    engine->active_hbox_builder = NULL;
+    engine->prev_depth = HSTEX_IGNORE_DEPTH;
     engine->output_active = true;
     struct hstex_source_location location = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
@@ -21318,9 +21334,28 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
                                         (uint8_t)'}'));
     engine->mode = previous_output_mode;
     engine->inner_mode = previous_output_inner;
+    engine->active_vbox_builder = previous_output_builder;
+    engine->active_hbox_builder = previous_output_hbox;
+    engine->prev_depth = previous_output_depth;
+    nest_pop(engine);
     if (end_group(engine, error, error_capacity) < 0) {
         status = -1;
     }
+    if (status == 0 && made.count != 0U) {
+        struct hstex_vbox_builder *queue = engine->contribution_builder;
+        if (reserve_vbox_items(queue, queue->count + made.count, error,
+                               error_capacity) != 0) {
+            status = -1;
+        } else {
+            memmove(queue->node_identifiers + made.count,
+                    queue->node_identifiers,
+                    queue->count * sizeof(*queue->node_identifiers));
+            memcpy(queue->node_identifiers, made.node_identifiers,
+                   made.count * sizeof(*made.node_identifiers));
+            queue->count += made.count;
+        }
+    }
+    free(made.node_identifiers);
     if (status == 0 && engine->boxes[255].kind != HSTEX_BOX_VOID) {
         /* The reference names it and throws the box away, which is what
            lets the next page be built at all. */
