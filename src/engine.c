@@ -20575,6 +20575,18 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
     while (last > 0U && engine->counts[last] == 0) {
         --last;
     }
+    /* \tracingoutput shows the page as it goes. The heading stands on a line
+       of its own with a blank line above it, the counts close with their `]'
+       here rather than after the page is written, and the box is shown under
+       \showboxdepth and \showboxbreadth like any other. See
+       tests/trip/probes/what-tracingoutput-writes.tex. */
+    bool tracing_shipout =
+        engine->integer_parameters[HSTEX_INTEGER_TRACING_OUTPUT] > 0;
+    if (tracing_shipout) {
+        print_fresh_line(engine);
+        print_line(engine);
+        print_text(engine, "Completed box being shipped out");
+    }
     if (engine->message_column > HSTEX_PRINT_LINE - 9) {
         print_line(engine);
     } else if (engine->message_column > 0) {
@@ -20586,6 +20598,13 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
         if (index < last) {
             print_byte(engine, '.');
         }
+    }
+    if (tracing_shipout) {
+        print_byte(engine, ']');
+        show_box_under_limits(engine, box);
+        print_line(engine);
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
     }
     /* Whatever the page was carrying is done now, in the order it was
        written; see docs/DECISIONS.md, whatsits. */
@@ -20600,7 +20619,9 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
             : pdf_ship(engine, box, error, error_capacity) != 0) {
         return -1;
     }
-    print_byte(engine, ']');
+    if (!tracing_shipout) {
+        print_byte(engine, ']');
+    }
     (void)fflush(diagnostic_stream(engine));
     engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
     engine->shipped_pages += 1;
