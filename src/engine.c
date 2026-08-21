@@ -8878,6 +8878,9 @@ static int scan_if_defined(struct hstex_engine *engine, char *error,
 static int scan_if_cs_name(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
 static bool command_starts_conditional(enum hstex_command command);
+static bool command_is_expandable(enum hstex_command command);
+static void trace_command(struct hstex_engine *engine, hstex_token token);
+static void trace_words(struct hstex_engine *engine, const char *words);
 static int push_conditional(struct hstex_engine *engine, size_t *index,
                             char *error, size_t error_capacity);
 static int finish_conditional(struct hstex_engine *engine, size_t index,
@@ -9253,6 +9256,15 @@ enum hstex_engine_result hstex_engine_next_expanded(
         *token = current;
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(current));
+        /* At two and above the trace takes in what is expanded as well as
+           what is obeyed. Only what the expander will actually expand: the
+           rest passes through here on its way to the main loop and is
+           traced there. */
+        if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1 &&
+            command_is_expandable(meaning->command) &&
+            meaning->command != HSTEX_COMMAND_MACRO) {
+            trace_command(engine, current);
+        }
         /* Which \if this is, for a message the skipped text may draw. */
         if (command_starts_conditional(meaning->command)) {
             engine->conditional_opener =
@@ -15548,11 +15560,79 @@ static const char *mode_name(const struct hstex_engine *engine)
     }
 }
 
+/* The commands the expander expands, which is exactly the chain in
+   hstex_engine_next_expanded. \tracingcommands at two and above traces
+   these where they are expanded; everything else is traced where it is
+   obeyed, and tracing both would name the unexpandable ones twice. */
+static bool command_is_expandable(enum hstex_command command)
+{
+    if (command_starts_conditional(command)) {
+        return true;
+    }
+    switch (command) {
+    /* \ifincsname is a conditional the expander handles but which
+       command_starts_conditional does not list, since it opens none. */
+    case HSTEX_COMMAND_IF_IN_CS_NAME:
+    case HSTEX_COMMAND_CS_NAME:
+    case HSTEX_COMMAND_DETOKENIZE:
+    case HSTEX_COMMAND_ELSE:
+    case HSTEX_COMMAND_EXPAND_AFTER:
+    case HSTEX_COMMAND_EXPANDED:
+    case HSTEX_COMMAND_FI:
+    case HSTEX_COMMAND_FONT_NAME:
+    case HSTEX_COMMAND_JOB_NAME:
+    case HSTEX_COMMAND_MACRO:
+    case HSTEX_COMMAND_MARK_TEXT:
+    case HSTEX_COMMAND_MEANING:
+    case HSTEX_COMMAND_NO_EXPAND:
+    case HSTEX_COMMAND_NUMBER:
+    case HSTEX_COMMAND_OR:
+    case HSTEX_COMMAND_PDF_COLOR_STACK_INIT:
+    case HSTEX_COMMAND_PDF_ESCAPE_HEX:
+    case HSTEX_COMMAND_PDF_ESCAPE_NAME:
+    case HSTEX_COMMAND_PDF_ESCAPE_STRING:
+    case HSTEX_COMMAND_PDF_FILE_SIZE:
+    case HSTEX_COMMAND_PDF_LAST_MATCH:
+    case HSTEX_COMMAND_PDF_MATCH:
+    case HSTEX_COMMAND_PDF_STRING_COMPARE:
+    case HSTEX_COMMAND_PDF_TEX_REVISION:
+    case HSTEX_COMMAND_PDF_UNESCAPE_HEX:
+    case HSTEX_COMMAND_ROMAN_NUMERAL:
+    case HSTEX_COMMAND_SCAN_TOKENS:
+    case HSTEX_COMMAND_STRING:
+    case HSTEX_COMMAND_THE:
+    case HSTEX_COMMAND_UNEXPANDED:
+    case HSTEX_COMMAND_UNLESS:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool math_field_is_wanted(struct hstex_engine *engine);
 
 /* \tracingcommands writes a line for every command the main loop obeys,
    naming the mode only where it has changed. See
    tests/trip/probes/what-tracingcommands-writes.tex. */
+/* A trace line whose command is a phrase rather than a token: {true},
+   {case 3}, {end of alignment template}. */
+static void trace_words(struct hstex_engine *engine, const char *words)
+{
+    const char *mode = mode_name(engine);
+    print_fresh_line(engine);
+    print_byte(engine, '{');
+    if (mode != engine->traced_mode) {
+        print_text(engine, mode);
+        print_text(engine, ": ");
+        engine->traced_mode = mode;
+    }
+    print_text(engine, words);
+    print_byte(engine, '}');
+    print_line(engine);
+    engine->traced_character = false;
+    (void)fflush(diagnostic_stream(engine));
+}
+
 static void trace_command(struct hstex_engine *engine, hstex_token token)
 {
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] <= 0) {
@@ -15582,6 +15662,7 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
     char named[192];
     /* Selecting a font gets a line of its own naming the font, in place of
        naming the command that selected it. */
+    size_t at = 0U;
     if (hstex_token_is_control_sequence(token)) {
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(token));
@@ -15589,14 +15670,14 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
             meaning->command == (int)HSTEX_COMMAND_FONT_GIVEN) {
             const struct hstex_font *font =
                 font_by_identifier(engine, (uint32_t)meaning->value.integer);
-            (void)snprintf(named, sizeof(named), "select font %s",
+            (void)snprintf(named + at, sizeof(named) - at, "select font %s",
                            font != NULL && font->name != NULL ? font->name
                                                               : "nullfont");
         } else {
-            describe_token(engine, token, named, sizeof(named));
+            describe_token(engine, token, named + at, sizeof(named) - at);
         }
     } else {
-        describe_token(engine, token, named, sizeof(named));
+        describe_token(engine, token, named + at, sizeof(named) - at);
     }
     const char *mode = mode_name(engine);
     print_fresh_line(engine);
@@ -33203,19 +33284,7 @@ static int end_alignment_entry(struct hstex_engine *engine,
     /* The reference reads a frozen \endtemplate here and traces it as a
        command of its own. */
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 0) {
-        const char *mode = mode_name(engine);
-        print_fresh_line(engine);
-        print_byte(engine, '{');
-        if (mode != engine->traced_mode) {
-            print_text(engine, mode);
-            print_text(engine, ": ");
-            engine->traced_mode = mode;
-        }
-        print_text(engine, "end of alignment template");
-        print_byte(engine, '}');
-        print_line(engine);
-        engine->traced_character = false;
-        (void)fflush(diagnostic_stream(engine));
+        trace_words(engine, "end of alignment template");
     }
     struct hstex_source_location origin = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
@@ -35701,6 +35770,11 @@ static int finish_conditional(struct hstex_engine *engine, size_t index,
     }
     engine->conditionals[index].evaluated = true;
     engine->conditionals[index].branch_true = condition;
+    /* The trace says which way a conditional went, on a line of its own
+       after the \if that asked. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1) {
+        trace_words(engine, condition ? "true" : "false");
+    }
     if (!condition) {
         return skip_conditional(engine, index, true, error, error_capacity);
     }
@@ -35944,6 +36018,12 @@ static int scan_if_case(struct hstex_engine *engine, char *error,
         return -1;
     }
     engine->conditionals[conditional].evaluated = true;
+    /* An \ifcase says which case it took rather than true or false. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1) {
+        char said[64];
+        (void)snprintf(said, sizeof(said), "case %d", (int)selection);
+        trace_words(engine, said);
+    }
     if (selection == 0) {
         engine->conditionals[conditional].branch_true = true;
         return 0;

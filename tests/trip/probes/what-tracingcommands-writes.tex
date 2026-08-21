@@ -54,29 +54,36 @@
 % And one thing the reference traces that this engine had no token for:
 % `{end of alignment template}', written where an entry ends.
 %
-% LEVEL TWO IS NOT DONE, and here is what it wants and where it snagged.
-% At two and above every EXPANDABLE command is traced as well, and a
-% conditional is followed by {true} or {false}:
-%
-%   \message{\number5 \romannumeral7 }
-%   \count1=5 \ifnum1<2 \relax\else\relax\fi
+% LEVEL TWO. Every command the EXPANDER expands is traced as well, and a
+% conditional says which way it went:
 %
 %   level 1: {\message} {blank space  } {\count} {\relax} {\end}
 %   level 2: {\message} {\number} {\romannumeral} {blank space  }
 %            {\count} {\ifnum} {true} {\relax} {\else} {\end}
 %
-% A \write's text is expanded in a mode of its own, written `no mode':
-%   {\immediate} {no mode: \number} {vertical mode: blank space  }
+% An \ifcase says which case it took -- {case 1} -- rather than true or
+% false.
 %
-% TRIED: tracing at the top of the expander's dispatch in
-% hstex_engine_next_expanded. It traces the expandable ones correctly and
-% ALSO traces every unexpandable one a second time, since they pass
-% through the expander on their way to the main loop and are traced again
-% there. What is wanted is a test for `this command is one the expander
-% will expand', which hstex has nowhere -- the expander is a chain of ifs
-% ending in a fallthrough that returns the token. Either enumerate the
-% expandable commands in a switch beside the chain, or trace inside each
-% branch. Backed out rather than half-written.
+% A MACRO IS NOT TRACED, at any level. `\def\m{\relax}\m\m' traces two
+% \relax and no \m, which is easy to get wrong since a macro is the
+% commonest thing the expander expands.
+%
+% Knowing WHICH commands the expander will expand is the whole difficulty:
+% everything else passes through the expander on its way to the main loop
+% and is traced there, so tracing both places names the unexpandable ones
+% twice. The list is exactly the chain in hstex_engine_next_expanded and
+% is written out in command_is_expandable(). It was verified rather than
+% eyeballed -- a temporary check at the chain's one fallthrough, and a
+% second check that nothing expanded was called plain, run over testmath,
+% sample2e, gentle and both trip passes. That found \ifincsname, which the
+% chain handles and command_starts_conditional does not list.
+%
+% NOT YET, two small ones:
+%   * `\unless\ifnum' is traced as {\unless} and then {\unless\ifnum},
+%     two lines with the first repeated inside the second.
+%   * \the inside a \message text is traced here and not by the
+%     reference, though \number and \romannumeral in the same place are
+%     traced by both.
 %
 % \tracingrestores is the companion and is also missing: 257 lines of
 % {restoring \x=...} in the oracle. Its format is in
