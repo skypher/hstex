@@ -34667,6 +34667,10 @@ static int scan_align_preamble(struct hstex_engine *engine,
     struct hstex_token_vector before = {0};
     struct hstex_token_vector after = {0};
     bool seen_marker = false;
+    /* A tab or a \cr inside braces belongs to whatever the braces hold and
+       does not end a column: trip line 332 writes a whole \halign inside a
+       template. See tests/trip/probes/what-ends-a-preamble-column.tex. */
+    int depth = 0;
     int status = 0;
 
     for (;;) {
@@ -34686,6 +34690,63 @@ static int scan_align_preamble(struct hstex_engine *engine,
            sequence and is kept. See docs/DECISIONS.md,
            where-a-template-begins. */
         if (!seen_marker && before.count == 0U && token_is_space(token)) {
+            continue;
+        }
+        if (hstex_token_is_control_sequence(token) &&
+            token_is_outer_macro(engine, token)) {
+            /* An \outer macro may not stand in a preamble either. The
+               reference names the alignment, inserts the `\cr }' that would
+               have closed it, and reads the macro again -- which is how
+               trip line 363's runaway preamble is stopped at all. */
+            static const char *const help[] = {
+                "I suspect you have forgotten a `}', causing me",
+                "to read past where you wanted me to stop.",
+                "I'll try to recover; but if the error is serious,",
+                "you'd better type `E' or `X' now and fix your file.", NULL};
+            hstex_token close = hstex_token_character(
+                (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+            hstex_token carriage = 0U;
+            static const uint8_t cr_name[] = "cr";
+            hstex_cs_id cr_id = 0U;
+            if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                    HSTEX_SYMBOL_REGULAR, cr_name,
+                                    sizeof(cr_name) - 1U, &cr_id, error,
+                                    error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            carriage = hstex_token_control_sequence(cr_id);
+            hstex_token *inserted = malloc(2U * sizeof(*inserted));
+            if (inserted == NULL) {
+                status = set_error(error, error_capacity,
+                                   "preamble recovery allocation failed");
+                break;
+            }
+            inserted[0] = carriage;
+            inserted[1] = close;
+            /* The two go in as ONE inserted list, which is how the context
+               shows them: `<inserted text> \cr }'. */
+            if (push_one(engine, token, location, error, error_capacity) != 0 ||
+                hstex_source_push_owned_tokens(&engine->sources, inserted, 2U,
+                                               location, error,
+                                               error_capacity) != 0) {
+                free(inserted);
+                status = -1;
+                break;
+            }
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+            /* The braces that were left open are what the runaway ran
+               through; the inserted \cr closes the column whatever depth
+               they had reached. */
+            depth = 0;
+            char named[128];
+            describe_token(engine, engine->executing_token, named,
+                           sizeof(named));
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning "
+                      "preamble of %s",
+                      named);
             continue;
         }
         if (hstex_token_is_control_sequence(token)) {
@@ -34724,7 +34785,7 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 }
                 continue;
             }
-            if (meaning->command == HSTEX_COMMAND_CR) {
+            if (meaning->command == HSTEX_COMMAND_CR && depth == 0) {
                 /* A column with no # gets one at the end of what was read,
                    so the whole of it becomes the part before the entry and
                    the part after is empty. */
@@ -34759,6 +34820,16 @@ static int scan_align_preamble(struct hstex_engine *engine,
             continue;
         }
         if (token_is_effective_category(engine, token,
+                                        (uint8_t)HSTEX_CAT_BEGIN_GROUP)) {
+            ++depth;
+        } else if (token_is_effective_category(engine, token,
+                                               (uint8_t)HSTEX_CAT_END_GROUP)) {
+            if (depth > 0) {
+                --depth;
+            }
+        }
+        if (depth == 0 &&
+            token_is_effective_category(engine, token,
                                         (uint8_t)HSTEX_CAT_ALIGNMENT_TAB)) {
             /* A tab where a column would start marks the point the preamble
                repeats from -- that is what && means, and a preamble that

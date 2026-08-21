@@ -1,0 +1,41 @@
+% A TAB OR A \cr INSIDE BRACES DOES NOT END A PREAMBLE COLUMN.
+%
+% The templates of an alignment are read as tokens, not obeyed, and the &
+% and \cr that divide them count only at the outer brace level. Braces
+% written into a template carry their own, so
+%
+%   \halign{\iffalse{\cr}\fi#&#\cr A&B\cr}
+%
+% has two columns, not three: the \cr inside the braces belongs to what
+% the braces hold. HSTeX counted every \cr and every &, so trip line 332,
+% which writes a whole `\vbox{\halign to 0pt{...\crcr}}' into a template,
+% lost the alignment there and drew four faults that are not the
+% reference's.
+%
+% ALSO, and this is what keeps trip line 363 from reading to the end of
+% the file: an \outer macro may not stand in a preamble. The reference
+% names the alignment, inserts the `\cr }' that would have closed it, and
+% reads the macro again. The braces the runaway ran through are gone by
+% then, so the inserted \cr closes the column whatever depth they had
+% reached.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \parindent=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=1000pt \vfuzz=1000pt
+\message{[A a cr inside braces in a template]}
+\tracingcommands=2
+\halign{\iffalse{\cr}\fi#&#\cr A&B\cr}
+\tracingcommands=0
+\message{[B a tab inside braces in a template]}
+\tracingcommands=2
+\halign{\iffalse{&}\fi#&#\cr A&B\cr}
+\tracingcommands=0
+\message{[C braces nested twice]}
+\tracingcommands=2
+\halign{\iffalse{{\cr}&{\cr}}\fi#&#\cr A&B\cr}
+\tracingcommands=0
+\message{[D the braces of a template that really runs]}
+\tracingcommands=2
+\halign{\hbox{x}#&#\cr A&B\cr}
+\tracingcommands=0
+\message{[done]}
+\end
