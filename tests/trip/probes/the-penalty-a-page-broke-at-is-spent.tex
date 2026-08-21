@@ -1,0 +1,46 @@
+% THE PENALTY THE PAGE BROKE AT IS SPENT.
+%
+% When the page builder fires at a penalty, two things happen to that
+% penalty at once: \outputpenalty takes its value, and the NODE is set to
+% ten thousand so that it can never be a breakpoint again.
+%
+% It matters because the node itself goes back. The page ends in front of
+% it, so the penalty is the first thing on the contribution list
+% afterwards -- and an output routine that puts its page back with
+% \unvbox255 hands the builder the same material again. Without spending
+% the penalty the page breaks at the same place for ever.
+%
+% Measured with a routine that \unvbox255es its first page:
+%
+%   ref                              hstex, before
+%   % t=1.0 g=20.0 b=10000 p=-5000   % t=1.0 g=20.0 b=10000 p=-5000
+%   ...                              ...
+%   [out p=-5000]                    [out p=-5000]
+%   %% goal height=20.0              %% goal height=20.0
+%   % t=0.0 g=20.0 b=10000 p=0       % t=0.0 g=20.0 b=10000 p=0
+%   % t=31.0 g=20.0 b=* p=-10000     % t=1.0 g=20.0 b=10000 p=-5000   <- again
+%                                    % t=31.0 g=20.0 b=* p=-10000
+%   [out p=10000]                    [out p=-5000]
+%
+% -- the reference does not weigh it a second time and reports
+% \outputpenalty as 10000, which is what it reports when a page breaks
+% anywhere that is not a penalty.
+%
+% This is trip's own shape: its first \output routine ends
+% `\unvbox255\penalty\countz' with \countz=\outputpenalty, so the page
+% comes back with a penalty of its own added, and the two engines' third
+% shipped page differed only in \count0 -- 10000 there against -5000
+% here.
+\tracingonline=1 \tracingpages=1
+\vsize=20pt \maxdepth=0pt \topskip=0pt \baselineskip=0pt \lineskiplimit=-100pt
+\lineskip=0pt \count9=0
+\output={\message{[out p=\the\outputpenalty]}%
+  \ifnum\count9=0 \global\count9=1 \unvbox255 \else\shipout\box255 \fi}
+\message{[A]}
+\hbox to 3pt{}\vskip1pt\hbox to 3pt{}\penalty-5000
+\vskip30pt\hbox to 3pt{}
+\message{[B]}
+\penalty-10000
+\message{[done]}
+\tracingpages=0
+\end

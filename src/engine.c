@@ -21089,6 +21089,21 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     if (split > page->count) {
         split = page->count;
     }
+    /* THE PENALTY THE PAGE BROKE AT IS SPENT. \outputpenalty takes its
+       value, and the node itself is set to ten thousand so that it can
+       never be a breakpoint again: the material goes back to the
+       contribution list with the penalty still in it, and without this the
+       next page breaks at the same place for ever. Measured with a routine
+       that \unvbox255es its page: the reference weighs the -5000 once and
+       then reports `\outputpenalty' as 10000 on the page after, where hstex
+       weighed it twice and reported -5000 again. */
+    if (split < page->count) {
+        uint32_t at = page->node_identifiers[split];
+        if (at != 0U && (size_t)at <= engine->node_count &&
+            engine->nodes[at - 1U].kind == HSTEX_NODE_PENALTY) {
+            engine->nodes[at - 1U].value.penalty = HSTEX_INFINITE_PENALTY;
+        }
+    }
     /* What follows the break, and whatever has not been moved yet, goes
        back to the front of the contribution list. */
     size_t leftover = page->count - split;
