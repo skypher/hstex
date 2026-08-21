@@ -94,9 +94,19 @@
 % NOT YET, and it is the whole of what is left: an align cell still ends
 % holding one brace it never opened, 105 of them over testmath, where
 % gather, multline and sample2e's tabular are all exactly right. The
-% history of one such cell shows a `}' arriving with no `{' before it that
-% the entry ever saw -- swallowed whole, somewhere the bulk accounting
-% does not reach. Turning the report on stops testmath at line 317.
+% history of one such cell shows two `{' PUT BACK before the entry had
+% counted them -- the undo runs for a reading that never happened -- and
+% later a `}' arriving with no `{' the entry ever saw.
+%
+% TRIED: undoing only a reading the entry actually made, by remembering
+% the last brace counted and compensating only for that one. Much worse --
+% testmath's count of would-be fix-ups went from 105 to 536 and sample2e
+% from none to one -- so most tokens put back ARE ones the entry read, and
+% the unconditional undo is right in the main. The two braces put back
+% before the entry counted them are the exception, and what is wanted is a
+% way to tell that case from the ordinary one, not a different rule.
+%
+% Turning the report on stops testmath at line 317.
 %
 % Measured while looking: the reference does NOT suspend the count inside
 % a box in a cell. `\halign{#\cr \hbox{A&B}\cr}' draws "Missing }
