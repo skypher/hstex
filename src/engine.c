@@ -16302,6 +16302,60 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
     return 0;
 }
 
+/* A box shown the way \showbox shows one, under \showboxdepth and
+   \showboxbreadth. A NEGATIVE DEPTH SHOWS NOTHING OF IT AT ALL: the
+   reference writes ` []' on the line it stands on rather than the box, so
+   `\showboxdepth=-1 \showbox100' is one line reading `> \box100= []'.
+   Measured at -1, 0, 1 and 5. */
+static void show_box_under_limits(struct hstex_engine *engine,
+                                  const struct hstex_box *box)
+{
+    int32_t threshold =
+        engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
+    int32_t breadth =
+        engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
+    if (breadth <= 0) {
+        breadth = 5;
+    }
+    if (threshold < 0) {
+        print_text(engine, " []");
+        return;
+    }
+    if (threshold > 255) {
+        threshold = 255;
+    }
+    char prefix[256];
+    memset(prefix, '.', sizeof(prefix));
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {
+            .node_start = box->node_start,
+            .node_count = box->node_count,
+            .box_kind = box->kind,
+            .glue = box->glue,
+        },
+    };
+    print_byte(engine, '\n');
+    show_node(engine, &node, prefix, 0U, (size_t)threshold, (size_t)breadth);
+}
+
+/* A box the reference throws away is shown as it goes, under the same two
+   limits: `\box255 is not void' and an \insert into a register holding an
+   \hbox both draw it. */
+static void report_deleted_box(struct hstex_engine *engine,
+                               const struct hstex_box *box)
+{
+    print_fresh_line(engine);
+    print_text(engine, "The following box has been deleted:");
+    show_box_under_limits(engine, box);
+    print_line(engine);
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
 static int execute_show_box(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
@@ -16336,34 +16390,7 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
         (void)fflush(diagnostic_stream(engine));
         return 0;
     }
-    int32_t threshold = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_DEPTH];
-    int32_t breadth = engine->integer_parameters[HSTEX_INTEGER_SHOW_BOX_BREADTH];
-    if (breadth <= 0) {
-        breadth = 5;
-    }
-    if (threshold < 0) {
-        threshold = 0;
-    }
-    if (threshold > 255) {
-        threshold = 255;
-    }
-    char prefix[256];
-    memset(prefix, '.', sizeof(prefix));
-    struct hstex_node node = {
-        .kind = HSTEX_NODE_LIST,
-        .width = box.width,
-        .height = box.height,
-        .depth = box.depth,
-        .value.list = {
-            .node_start = box.node_start,
-            .node_count = box.node_count,
-            .box_kind = box.kind,
-            .glue = box.glue,
-        },
-    };
-    print_byte(engine, '\n');
-    show_node(engine, &node, prefix, 0U, (size_t)threshold,
-              (size_t)breadth);
+    show_box_under_limits(engine, &box);
     /* The reference ends the list with a newline whatever column it stands
        at, and then leaves a blank line, so a last line that exactly filled
        the width is followed by two rather than one. */
@@ -21198,8 +21225,10 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
        it is told so, and what it left is thrown away. */
     if (engine->boxes[255].kind != HSTEX_BOX_VOID) {
         static const char *const help[] = {
-            "You shouldn't use \\box255 except in \\output routines.", NULL};
+            "You shouldn't use \\box255 except in \\output routines.",
+            "Proceed, and I'll discard its present contents.", NULL};
         tex_error(engine, help, "\\box255 is not void");
+        report_deleted_box(engine, &engine->boxes[255]);
     }
     if (assign_box(engine, 255U, packed, true, error, error_capacity) != 0 ||
         assign_integer_parameter(engine,
@@ -21352,6 +21381,33 @@ static int build_page(struct hstex_engine *engine, char *error,
                     trace_page_goal(engine);
                 }
                 uint16_t number = node.value.insert.number;
+                /* The class's own box is where the insertion will end up, so
+                   it may not already hold an hbox. This is the PAGE
+                   BUILDER's complaint, not \insert's: measured, the
+                   `%% goal height=' the page draws as it freezes comes
+                   FIRST, and the fault after it, even where both are drawn
+                   by the same \insert. What is thrown away is the box's
+                   present contents, shown as they go, and not the
+                   insertion. */
+                if ((size_t)number < engine->count_capacity &&
+                    engine->boxes[number].kind == HSTEX_BOX_HLIST) {
+                    static const char *const help[] = {
+                        "Tut tut: You're trying to \\insert into a",
+                        "\\box register that now contains an \\hbox.",
+                        "Proceed, and I'll discard its present contents.",
+                        NULL};
+                    tex_error(engine, help,
+                              "Insertions can only be added to a vbox");
+                    struct hstex_box standing = engine->boxes[number];
+                    report_deleted_box(engine, &standing);
+                    struct hstex_box empty = {0};
+                    if (assign_box(engine, number, empty, true, error,
+                                   error_capacity) != 0) {
+                        return -1;
+                    }
+                    /* Storing may have moved the arena. */
+                    node = engine->nodes[identifier - 1U];
+                }
                 int32_t factor = engine->counts[number];
                 struct hstex_page_insert *record =
                     page_insert_of(engine, number, false, error,
@@ -32356,23 +32412,6 @@ static int execute_insert(struct hstex_engine *engine, char *error,
     free(builder.node_identifiers);
     if (status != 0) {
         return -1;
-    }
-    /* The class's own box is where the insertion will end up, so it may
-       not already hold an hbox. The reference says so once the insertion
-       has been read -- its log shows `<recently read> }' -- and throws the
-       box's present contents away rather than the insertion. */
-    if (number >= 0 && (size_t)number < engine->count_capacity &&
-        engine->boxes[(size_t)number].kind == HSTEX_BOX_HLIST) {
-        static const char *const help[] = {
-            "Tut tut: You're trying to \\insert into a",
-            "\\box register that now contains an \\hbox.",
-            "Proceed, and I'll discard its present contents.", NULL};
-        tex_error(engine, help, "Insertions can only be added to a vbox");
-        struct hstex_box empty = {0};
-        if (assign_box(engine, (uint32_t)number, empty, true, error,
-                       error_capacity) != 0) {
-            return -1;
-        }
     }
     struct hstex_node node = {
         .kind = HSTEX_NODE_INSERT,

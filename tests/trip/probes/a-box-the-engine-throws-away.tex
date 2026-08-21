@@ -1,0 +1,63 @@
+% WHEN THE ENGINE THROWS A BOX AWAY IT SHOWS IT AS IT GOES.
+%
+% Two faults do this, and both say the same thing in the same words:
+%
+%   ! Insertions can only be added to a vbox.
+%   ...
+%   Proceed, and I'll discard its present contents.
+%
+%   The following box has been deleted:
+%   \hbox(2.0+0.0)x3.4
+%   .\hbox(2.0+0.0)x0.4
+%   ..\rule(2.0+*)x0.4
+%   .\kern 3.0
+%
+% and `! \box255 is not void.', whose help ALSO ends with `Proceed, and
+% I'll discard its present contents.' -- hstex had only the first line of
+% that one, and neither showed the box.
+%
+% THE BOX IS SHOWN UNDER \showboxdepth AND \showboxbreadth, the same two
+% limits \showbox obeys. Which turned up a third thing: A NEGATIVE
+% \showboxdepth SHOWS NOTHING OF A BOX AT ALL. The reference writes ` []'
+% on the line the box would have started, so
+%
+%   \showboxdepth=-1 \showbox100     > \box100= []
+%
+% is one line, where hstex wrote the box's own line and then ` []' under
+% it. Measured at -1, 0, 1 and 5.
+%
+% THE COMPLAINT ABOUT AN \insert BELONGS TO THE PAGE BUILDER, not to
+% \insert. The `%% goal height=' the page draws as it freezes comes
+% FIRST and the fault after it, even where the same \insert draws both --
+% which is how it shows up in trip, where hstex had the two the other way
+% round.
+\tracingonline=1 \tracingpages=1
+\output={\shipout\box255 }
+\vsize=100pt \maxdepth=2pt \topskip=0pt
+\dimen100=50pt \count100=1000 \skip100=0pt
+\dimen101=50pt \count101=1000 \skip101=0pt
+\dimen102=50pt \count102=1000 \skip102=0pt
+\message{[A insert into an hbox, on an empty page]}
+\setbox100=\hbox{\hbox{\vrule height2pt}\kern3pt}
+\insert100{\hbox to 3pt{}}
+\message{[B]}
+\hbox to 3pt{}
+\message{[C insert into an hbox, on a page that has one]}
+\setbox101=\hbox{\hbox{\vrule height2pt}\kern3pt}
+\insert101{\hbox to 3pt{}}
+\message{[D with both limits negative]}
+\showboxdepth=-1 \showboxbreadth=-1
+\setbox102=\hbox{\hbox{\vrule height2pt}\kern3pt}
+\insert102{\hbox to 3pt{}}
+\message{[E box255 is not void]}
+\showboxdepth=5 \showboxbreadth=5
+\setbox255=\vbox{\hbox{\vrule height2pt}}
+\penalty-10000
+\message{[F what \showbox does at each depth]}
+\setbox103=\hbox{\hbox{\vrule height2pt}\kern3pt}
+\showboxdepth=-1 \showboxbreadth=-1 \showbox103
+\showboxdepth=0 \showboxbreadth=-1 \showbox103
+\showboxdepth=1 \showboxbreadth=1 \showbox103
+\showboxdepth=5 \showboxbreadth=5 \showbox103
+\message{[done]}
+\end
