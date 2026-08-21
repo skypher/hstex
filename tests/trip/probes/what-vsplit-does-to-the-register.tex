@@ -1,0 +1,41 @@
+% \vsplit PUTS THE REST BACK WITHOUT ASSIGNING IT.
+%
+% What is left of the box goes into the register, but not as an
+% assignment: no save is made for it, and the register's level is left
+% where it stood. So a \vsplit inside a group does not stop the group
+% from putting back what the register held before it:
+%
+%   \setbox2=\vbox{...}\setbox3=\vbox{...}
+%   {\setbox2=\copy3 \setbox4=\vsplit2 to 1pt }
+%   \showbox2                            <- what \box2 held before
+%
+% and \tracingrestores writes `{restoring \box2=\vbox(22.0+0.0)x2.0 []}'.
+% hstex assigned the rest GLOBALLY, which took the save over, so the
+% group ended with `{retaining \box2=void}' and the register empty.
+%
+% WHERE NOTHING WAS SAVED the two come to the same thing: a \vsplit in a
+% group that had not touched the register leaves the rest there
+% afterwards, because there is no save to put anything back.
+%
+% This is trip's third output routine, which does
+% `\setbox255\copy255 ... \vsplit 255 to 55pt' inside the group the
+% \output was defined in, and depends on \box255 reverting when the group
+% ends -- the comment in trip says so in as many words. Without it the
+% reference's `! Output routine didn't use all of \box255.' never comes.
+%
+% STILL MISSING, seen here and not implemented: `Underfull \vbox (badness
+% 10000) detected at line 5' and the box under it, which the reference
+% reports for a \vsplit to a height the material cannot fill.
+\tracingonline=1 \showboxdepth=3 \showboxbreadth=5 \tracingrestores=1
+\splittopskip=0pt \splitmaxdepth=0pt
+\message{[A vsplit inside a group, no prior setbox]}
+\setbox0=\vbox{\hbox to 1pt{}\vskip10pt\hbox to 2pt{}}
+{\setbox1=\vsplit0 to 1pt }
+\showbox0
+\message{[B vsplit inside a group, after a local setbox of the same register]}
+\setbox2=\vbox{\hbox to 1pt{}\vskip10pt\hbox to 2pt{}}
+\setbox3=\vbox{\hbox to 9pt{}}
+{\setbox2=\copy3 \setbox4=\vsplit2 to 1pt }
+\showbox2
+\message{[done]}
+\end

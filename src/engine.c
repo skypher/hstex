@@ -12944,9 +12944,18 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
         return -1;
     }
     /* Both halves are as wide as what is in them, not as wide as the box
-       they came from. */
-    return assign_box(engine, (uint32_t)index, rest, true, error,
-                      error_capacity);
+       they came from. What is left goes back into the register WITHOUT being
+       assigned: no save is made for it, and the register's level is left
+       where it stood. Measured: `{\setbox2=\copy3 \setbox4=\vsplit2 to 1pt}'
+       still puts back what \box2 held before the group, where a global
+       assignment would take the save over and leave the register void. */
+    if ((size_t)index >= engine->count_capacity) {
+        return set_error(error, error_capacity,
+                         "box register %d is outside 0..%zu", index,
+                         engine->count_capacity - 1U);
+    }
+    engine->boxes[(size_t)index] = rest;
+    return 0;
 }
 
 /* \lastbox takes the last box off the list being built. The builder's totals
