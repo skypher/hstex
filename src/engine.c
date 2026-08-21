@@ -27350,6 +27350,43 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
             chosen = index;
         }
     }
+    /* \looseness ASKS FOR A PARAGRAPH SO MANY LINES LONGER than the best
+       way of breaking it. The reference takes the way whose line count comes
+       closest to that, and among equals the cheapest. Measured: a paragraph
+       that breaks into three lines becomes four at \looseness=1, five at 2
+       and twelve at 9, and stays at three when asked to be shorter than it
+       can be. */
+    int32_t looseness = engine->integer_parameters[HSTEX_INTEGER_LOOSENESS];
+    if (chosen != SIZE_MAX && looseness != 0) {
+        int32_t best_line = state->records[chosen].line;
+        int32_t actual = 0;
+        int64_t fewest = state->records[chosen].demerits;
+        size_t wanted = chosen;
+        for (size_t slot = 0U; slot < state->active_count; ++slot) {
+            size_t index = state->active[slot];
+            if (state->records[index].breakpoint != count) {
+                continue;
+            }
+            int32_t difference = state->records[index].line - best_line;
+            if ((difference < actual && looseness <= difference) ||
+                (difference > actual && looseness >= difference)) {
+                wanted = index;
+                actual = difference;
+                fewest = state->records[index].demerits;
+            } else if (difference == actual &&
+                       state->records[index].demerits < fewest) {
+                wanted = index;
+                fewest = state->records[index].demerits;
+            }
+        }
+        chosen = wanted;
+        /* What was asked for could not be had, so the reference tries again
+           with more tolerance rather than settling for this. */
+        if (actual != looseness && !final_pass) {
+            *best = SIZE_MAX;
+            return 0;
+        }
+    }
     *best = chosen;
     return chosen == SIZE_MAX ? 0 : 1;
 }

@@ -1,0 +1,45 @@
+% \looseness ASKS FOR A PARAGRAPH SO MANY LINES LONGER THAN THE BEST.
+%
+% The reference takes the way of breaking whose line count comes closest
+% to best+\looseness, and among equals the cheapest. A paragraph that
+% breaks into three lines:
+%
+%   \looseness=0    3 lines
+%   \looseness=1    4
+%   \looseness=2    5
+%   \looseness=9   12
+%   \looseness=-1   3      it cannot be made shorter, so it is not
+%
+% hstex ignored the parameter and always took the cheapest, so every one
+% of those was three.
+%
+% IT ALSO CHANGES WHICH BREAKS ARE ALIKE. With any \looseness at all,
+% every line number is its own class, whatever \parshape and \hangindent
+% say -- see
+% tests/trip/probes/every-break-is-weighed-against-its-own-line.tex --
+% because the line count is now part of the answer and cannot be
+% collapsed away.
+%
+% AND WHAT CANNOT BE HAD IS TRIED FOR AGAIN. If the asked-for looseness
+% is not reached, the reference goes round another pass with more
+% tolerance rather than settling; only the final pass takes what it can
+% get. trip line 208 sets \looseness 5 over a paragraph that can only
+% just manage it.
+%
+% \looseness belongs to one paragraph: \par gives it back to nought.
+\tracingonline=1 \hsize=100pt \parindent=0pt \tolerance=10000 \hbadness=10000
+\def\body{aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv}
+\message{[A looseness=0]}
+\setbox0=\vbox{\noindent\body\par\message{[lines=\the\prevgraf]}}
+\message{[B looseness=1]}
+\setbox1=\vbox{\looseness=1 \noindent\body\par\message{[lines=\the\prevgraf]}}
+\message{[C looseness=2]}
+\setbox2=\vbox{\looseness=2 \noindent\body\par\message{[lines=\the\prevgraf]}}
+\message{[D looseness=-1]}
+\setbox3=\vbox{\looseness=-1 \noindent\body\par\message{[lines=\the\prevgraf]}}
+\message{[E looseness=9]}
+\setbox4=\vbox{\looseness=9 \noindent\body\par\message{[lines=\the\prevgraf]}}
+\message{[F looseness is given back]}
+\setbox5=\vbox{\looseness=1 \noindent\body\par\message{[after=\the\looseness]}}
+\message{[done]}
+\end
