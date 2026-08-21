@@ -1444,7 +1444,7 @@ static int test_whatsits(void)
         "> \\box254=void\n\n! OK.\nl.1 \\tracingonline=1 \\"
         "showbox254 \n                                 \\tr"
         "acingonline=1 \\showboxdepth=10 \\showboxb...\n\n"
-        "\n\\openout1 = `%s'.\n\n> \\box0=\n\\hbox(0.0+0.0)"
+        "\n\\openout1 = `%s.tex'.\n\n> \\box0=\n\\hbox(0.0+0.0)"
         "x0.0\n.\\write1{now \\x }\n.\\special{ps 7}\n.\\op"
         "enout2=zz\n.\\closeout2\n.\\write-{}\n.\\write*{}"
         "\n\n! OK.\nl.1 ... \\closeout2 \\write-5{}\\write1"
@@ -1459,6 +1459,11 @@ static int test_whatsits(void)
         return 1;
     }
     int status = run_document(source, expected);
+    /* The stream was opened on the name and `.tex', which is where the
+       \openin found it again. */
+    char written[80];
+    (void)snprintf(written, sizeof(written), "%s.tex", stream_path);
+    (void)unlink(written);
     (void)unlink(stream_path);
     return status;
 }

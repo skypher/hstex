@@ -23914,6 +23914,21 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
         free(filename);
         return 0;
     }
+    /* A stream opened on a name with no extension is opened on that name and
+       `.tex': the reference notes `\openout0 = `8terminal.tex'.' for trip's
+       `\openout-'78terminal', and writes the file under that name, so that
+       an \input of the bare name finds it again. A name that HAS an
+       extension keeps it, whatever it is. */
+    if (!filename_has_extension(filename)) {
+        char *extended = append_tex_extension(filename);
+        if (extended == NULL) {
+            free(filename);
+            return set_error(error, error_capacity,
+                             "output name allocation failed");
+        }
+        free(filename);
+        filename = extended;
+    }
     char *path = output_path(engine, filename);
     char *name = filename;
     if (path == NULL) {

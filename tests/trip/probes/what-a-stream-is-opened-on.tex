@@ -1,0 +1,40 @@
+% WHAT A STREAM IS OPENED ON.
+%
+% \openout takes a file name, and a name with NO EXTENSION is opened on
+% that name and `.tex':
+%
+%   \openout3=zzowtest        \openout3 = `zzowtest.tex'.
+%   \openout4=zzowtest2.dat   \openout4 = `zzowtest2.dat'.
+%   \openout5=zzow.test3.x    \openout5 = `zzow.test3.x'.
+%
+% The file on disk is named that way too, not just the log line, so that an
+% \input or an \openin of the bare name finds it again. An extension is a
+% dot in the last part of the name, whatever follows it.
+%
+% HSTeX opened the bare name. That is invisible until a run writes a file
+% and reads it back, which trip does twice: line 94 writes tripos with
+% `\openout10=tr\romannumeral1 \gobble\newcs pos', and lines 211 and 424
+% read it with \input.
+%
+% Found and left open: the reference writes ` [the bare name is found
+% again]' on a line of its own and `(./zzowtest.tex)' on the next, where
+% HSTeX writes both where the last line left off. The reference keeps TWO
+% column counters -- one for the terminal and one for the log -- and a
+% \message and an \input break their line by the TERMINAL's, which the
+% \openout notes moved without moving the log's. HSTeX keeps one.
+%
+% This probe leaves three files behind; run it where that is welcome.
+\catcode`\{=1 \catcode`\}=2
+\immediate\openout3=zzowtest
+\immediate\write3{one}
+\immediate\closeout3
+\immediate\openout4=zzowtest2.dat
+\immediate\write4{two}
+\immediate\closeout4
+\immediate\openout5=zzow.test3.x
+\immediate\write5{three}
+\immediate\closeout5
+\message{[the bare name is found again]}
+\input zzowtest
+\message{[done]}
+\end
