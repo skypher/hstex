@@ -12608,7 +12608,7 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
 static size_t vertical_break_measured(struct hstex_engine *engine,
                                       const uint32_t *items, size_t count,
                                       int32_t height, int32_t depth,
-                                      int32_t *reached)
+                                      int32_t *reached, int32_t *at_penalty)
 {
     int64_t total = 0;
     int64_t stretch[4] = {0, 0, 0, 0};
@@ -12673,6 +12673,17 @@ static size_t vertical_break_measured(struct hstex_engine *engine,
                 if (reached != NULL) {
                     *reached = (int32_t)(total + previous_depth);
                 }
+                if (at_penalty != NULL) {
+                    /* What the break is worth is the penalty standing there
+                       and nothing else: a break at glue, or at the end of
+                       the list, is worth nought however the search reached
+                       it. Measured, an insertion split at glue reports
+                       `p=0' and one split at \penalty55 reports `p=55'. */
+                    *at_penalty =
+                        node != NULL && node->kind == HSTEX_NODE_PENALTY
+                            ? node->value.penalty
+                            : 0;
+                }
             }
             if (cost == HSTEX_AWFUL_BADNESS ||
                 penalty <= -HSTEX_INFINITE_PENALTY) {
@@ -12708,7 +12719,8 @@ static size_t vertical_break(struct hstex_engine *engine,
                              const uint32_t *items, size_t count,
                              int32_t height, int32_t depth)
 {
-    return vertical_break_measured(engine, items, count, height, depth, NULL);
+    return vertical_break_measured(engine, items, count, height, depth, NULL,
+                                  NULL);
 }
 
 /* What is left after a split starts again with \splittopskip, and whatever
@@ -20529,6 +20541,25 @@ static void print_page_amount(struct hstex_engine *engine, int32_t value,
     }
 }
 
+/* \tracingpages says where an insertion had to be split, how much room
+   there was for it, how much of it went, and what the break was worth. */
+static void trace_page_split(struct hstex_engine *engine, uint32_t number,
+                             int32_t allowed, int32_t reached,
+                             int32_t penalty)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PAGES] <= 0) {
+        return;
+    }
+    print_fresh_line(engine);
+    print_formatted(engine, "%% split%u to ", (unsigned int)number);
+    print_page_amount(engine, allowed, "");
+    print_byte(engine, ',');
+    print_page_amount(engine, reached, "");
+    print_formatted(engine, " p=%d", (int)penalty);
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
 /* \tracingpages announces each page's goal as the page starts. */
 static void trace_page_goal(struct hstex_engine *engine)
 {
@@ -21323,10 +21354,19 @@ static int build_page(struct hstex_engine *engine, char *error,
                         allowed = INT64_C(1073741823);
                     }
                     int32_t reached = 0;
+                    int32_t at_penalty = 0;
                     size_t at = vertical_break_measured(
                         engine, engine->list_items + node.value.insert.node_start,
                         node.value.insert.node_count, (int32_t)allowed,
-                        node.value.insert.split_max_depth, &reached);
+                        node.value.insert.split_max_depth, &reached,
+                        &at_penalty);
+                    trace_page_split(engine, number, (int32_t)allowed, reached,
+                                     at_penalty);
+                    /* What the break was worth is carried by the page, where
+                       it enters the cost of every break after it. Measured
+                       through \showthe\insertpenalties. */
+                    engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] +=
+                        at_penalty;
                     record->split = true;
                     record->broken = identifier;
                     record->break_at = (uint32_t)at;

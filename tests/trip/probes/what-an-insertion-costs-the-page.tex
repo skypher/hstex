@@ -22,6 +22,22 @@
 % ONLY THE FIRST OF A CLASS. A second insertion of the same class takes
 % room from the goal and adds no more correction glue.
 %
+% AN INSERTION THAT MUST BE SPLIT SAYS SO, AND THE BREAK COSTS THE PAGE.
+%
+%   % split100 to 20.0,0.0 p=-101
+%
+% -- the class, how much room there was for it, how much of it went, and
+% what the break was worth. That last is the penalty standing at the
+% break and nothing else: a break at glue reports p=0, one at \penalty55
+% reports p=55. It is then ADDED TO \insertpenalties, where it enters
+% the cost of every break on the page after it:
+%
+%   % t=0.0 plus 3.0filll minus 9.0 g=1470.63013 b=0 p=0 c=-101#
+%
+% is trip's own, and the -101 in the cost is the -101 of the split.
+% hstex kept \insertpenalties at nought, so every one of those costs was
+% out by the same amount.
+%
 % AN INFINITE SHRINK COUNTS AS ITS AMOUNT. \skip101=1pt minus 2fil draws
 %
 %   ! Infinite glue shrinkage inserted from \skip101.
@@ -45,6 +61,24 @@
 \penalty4
 \penalty-10000
 \message{[D what \skip101 still reads]}\showthe\skip101
+\message{[E an insertion that must split]}
+\splittopskip=0pt
+\dimen102=20pt \count102=1000 \skip102=0pt
+\dimen103=20pt \count103=1000 \skip103=0pt
+\dimen104=20pt \count104=1000 \skip104=0pt
+\hbox{}\penalty20
+\insert102{\hbox to 3pt{}\penalty-101 \vskip10pt\hbox to 3pt{}\penalty-7
+  \vskip10pt\hbox to 3pt{}}
+\penalty21
+\message{[F insertpenalties]}\showthe\insertpenalties
+\insert103{\hbox to 3pt{}\vskip10pt\hbox to 3pt{}\vskip10pt\hbox to 3pt{}%
+  \vskip10pt\hbox to 3pt{}}
+\penalty22
+\insert104{\hbox to 3pt{}\penalty55 \vskip10pt\hbox to 3pt{}\penalty66
+  \vskip10pt\hbox to 3pt{}}
+\penalty23
+\message{[G insertpenalties]}\showthe\insertpenalties
+\penalty-10000
 \message{[done]}
 \tracingpages=0
 \end
