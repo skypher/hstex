@@ -1,0 +1,37 @@
+% AN \accent READS THE ASSIGNMENTS IN FRONT OF ITS CHARACTER ITSELF.
+%
+% Once \accent has its character number it goes on reading, and it takes
+% blanks, \relax and any assignment before the character it will go over.
+% That reading is the accent's own, not the main loop's, so
+% \tracingcommands draws no line for any of it -- HSTeX drew one for
+% every assignment and every \relax.
+%
+% Anything that is not one of those ends the wait, and \setbox among them
+% is refused where it stands:
+%
+%   ! Improper \setbox.
+%   Sorry, \setbox is not allowed after \halign in a display,
+%   or between \accent and an accented character.
+%
+% which is the same rule, and the same words, as the assignments a
+% display alignment reads before its closing $$.
+%
+% trip line 322 writes `\accent\space"42 \def\^^M{\ } ; \char'101'.
+\catcode`\{=1 \catcode`\}=2
+\font\ff=cmr10 \ff
+\tracingonline=1 \hsize=100pt \hbadness=10000 \hfuzz=100pt
+\message{[A assignments between an accent and its character]}
+\tracingcommands=2
+\setbox0=\hbox{\accent`A \count5=1 \def\z{}\relax B}
+\tracingcommands=0
+\showthe\count5
+\message{[B a non-assignment stops the run]}
+\tracingcommands=2
+\setbox0=\hbox{\accent`A \count5=2 \kern3pt B}
+\tracingcommands=0
+\message{[C setbox is refused there]}
+\tracingcommands=2
+\setbox0=\hbox{\accent`A \setbox1=\hbox{} B}
+\tracingcommands=0
+\message{[done]}
+\end

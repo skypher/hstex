@@ -39118,12 +39118,13 @@ handle_token:
                prefix is waiting: what \global prefixes it reads itself. */
             /* Nor anything an alignment that stood in for a display reads
                before that display closes -- the blanks, the assignments,
-               and both shifts of the closing $$. The alignment's own
-               finish reads them, so none of them reaches the main loop for
-               it to draw. */
+               and both shifts of the closing $$ -- nor the assignments an
+               \accent reads while it waits for its character. Their own
+               finishes read them, so none of them reaches the main loop
+               for it to draw. */
             if (!engine->command_traced && !engine->pending_global &&
                 engine->pending_macro_flags == 0U &&
-                !engine->display_alignment) {
+                !engine->display_alignment && !engine->accent_pending) {
                 trace_command(engine, *token);
             }
             /* A formula is delimited by math shifts rather than braces, so
@@ -39507,10 +39508,10 @@ handle_token:
            nothing for the \count, and so do \long, \outer, a second
            prefix, and a \relax standing between. */
         if ((!engine->pending_global && engine->pending_macro_flags == 0U) &&
-            /* And an alignment that stood in for a display reads the
-               assignments before the closing $$ itself, so they are not
-               traced either. */
-            !engine->display_alignment &&
+            /* And an alignment that stood in for a display, and an \accent
+               waiting for its character, read the assignments in front of
+               them themselves, so those are not traced either. */
+            !engine->display_alignment && !engine->accent_pending &&
             (!engine->immediate_pending ||
             (meaning->command != (int)HSTEX_COMMAND_WRITE &&
              meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
