@@ -1,0 +1,17 @@
+% A \valign entry that is still filling a paragraph ends it at the boundary
+% the template ran out on -- so a \span carries on into the next column with
+% the paragraph already broken and the mode back to internal vertical.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\font\tenrm=cmr10 \tenrm \hsize=100pt \parindent=0pt \tracingonline=1
+\message{[A a span in the middle of a valign entry]}
+\tracingcommands=1
+\setbox0=\hbox{\valign{#&#\cr A\span\cr B\span\cr}}
+\message{[B no span, one entry only]}
+\setbox0=\hbox{\valign{#&#\cr A&B\cr}}
+\message{[C two spans in a row]}
+\setbox0=\hbox{\valign{#&#&#\cr A\span\span\cr B&C&D\cr}}
+\message{[D an entry that never started a paragraph]}
+\setbox0=\hbox{\valign{#&#\cr \hbox{A}\span\cr \hbox{B}&\hbox{C}\cr}}
+\tracingcommands=0
+\message{[done]}
+\end

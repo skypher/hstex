@@ -35689,6 +35689,18 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                 0) {
                 trace_words(engine, "end of alignment template");
             }
+            /* A vertical entry that was still filling a paragraph ends it
+               HERE, at the boundary the template ran out on, rather than
+               when the whole entry is done: a \span carries on into the
+               next column with the paragraph already broken and the mode
+               back to internal vertical, so the endv that follows draws
+               its mode. trip line 337 spans this way twice. */
+            if (vertical && engine->building_paragraph) {
+                status = finish_paragraph(engine, error, error_capacity);
+                if (status != 0) {
+                    break;
+                }
+            }
             if (hstex_source_pop_boundary(&engine->sources, error,
                                           error_capacity) != 0) {
                 status = -1;
