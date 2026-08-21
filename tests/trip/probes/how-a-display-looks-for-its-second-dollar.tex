@@ -18,6 +18,10 @@
 %
 % What \expandafter expands is traced like anything the expander expands,
 % so {\csname} is drawn there too.
+%
+% An equation NUMBER's closing $ is different: the list that ends there
+% was part of the display, and the display is still standing, so the mode
+% for the second $ is display math mode.
 \catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\#=6
 \tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
 \def\dollar{$}
@@ -32,6 +36,14 @@
 \message{[C the second $ comes from \expandafter]}
 \tracingcommands=2
 \setbox0=\vbox{\noindent x$$y$\expandafter$\csname dollar\endcsname z\par}
+\tracingcommands=0
+\message{[D an equation number closed with expansion between the shifts]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y\eqno z$\expandafter$\csname dollar\endcsname w\par}
+\tracingcommands=0
+\message{[E an equation number closed plainly]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y\eqno z$$w\par}
 \tracingcommands=0
 \message{[done]}
 \end

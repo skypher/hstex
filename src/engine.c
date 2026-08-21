@@ -38972,12 +38972,20 @@ handle_token:
                         }
                         /* The formula's own list is gone by the time the
                            second $ is looked for, so the mode there is the
-                           list the display will join -- internal vertical
-                           inside a \vbox. \tracingcommands names it for an
-                           \expandafter standing between the two $. */
-                        engine->displayed_math = false;
-                        engine->mode = HSTEX_MODE_VERTICAL;
-                        engine->inner_mode = vertical_list_is_inner(engine);
+                           one the list it was part of is built in. For the
+                           display that is the vertical list it will join --
+                           internal vertical inside a \vbox; for an equation
+                           NUMBER it is the display itself, which is still
+                           standing. \tracingcommands names either for an
+                           \expandafter between the two $. */
+                        if (engine->reading_equation_number) {
+                            engine->mode = HSTEX_MODE_MATH;
+                            engine->inner_mode = false;
+                        } else {
+                            engine->displayed_math = false;
+                            engine->mode = HSTEX_MODE_VERTICAL;
+                            engine->inner_mode = vertical_list_is_inner(engine);
+                        }
                         hstex_token second = 0U;
                         struct hstex_source_location where;
                         /* With expansion, as above. */
