@@ -1,0 +1,29 @@
+% \mag changed after a `true' unit has already been measured.
+%
+% Measured against pdftex: the FIRST `true' unit of the run settles the
+% magnification for the whole job. A later one under a different \mag
+% draws
+%
+%   ! Incompatible magnification (1999);
+%    the previous value will be retained (1000).
+%   I can handle only one magnification ratio per job. So I've
+%   reverted to the magnification you used earlier on this run.
+%
+% -- two lines to the message, the second beginning with a space -- and
+% \mag goes BACK to the settled value, so \showthe\mag reports the older
+% one and the dimension is measured against it. `\dimen0=1truept
+% \mag=1999 \dimen1=1truept' leaves \dimen1 at 1.0pt, not at the 0.5pt
+% that 1999 would give.
+%
+% Changing \mag draws nothing by itself, however often: it is measuring a
+% `true' unit that settles it and measuring another that finds the
+% quarrel. So `\mag=1999 \mag=1500' is quiet, and `\mag=1999' before any
+% `true' unit simply takes effect.
+%
+% This engine measured every `true' unit against whatever \mag said at the
+% time and never reported anything. trip line 407 writes \halign to
+% 1truemm after setting \mag=1999 on line 405.
+\tracingonline=1
+\dimen0=1truept \mag=1999 \dimen1=1truept \showthe\dimen1 \showthe\mag
+\mag=1500 \dimen2=1truept \showthe\mag
+\end

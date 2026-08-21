@@ -1930,6 +1930,11 @@ struct hstex_engine {
        reference gives up there, and everything after it goes unread and
        unreported. */
     bool gave_up;
+    /* The magnification the first `true' unit of the run was measured
+       against. A job has only one, so a later `true' unit under a
+       different \mag draws a fault and the first one is used. Zero until
+       one has been measured. */
+    int32_t magnification_used;
     uint32_t output_group_floor;
     size_t output_conditional_floor;
     struct hstex_hbox_builder *active_hbox_builder;

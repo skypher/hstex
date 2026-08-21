@@ -5824,6 +5824,25 @@ static int scan_dimension_component(struct hstex_engine *engine, bool allow_fil,
             return set_error(error, error_capacity,
                              "magnification must be positive");
         }
+        /* One magnification to a job: the first `true' unit settles it, and
+           a later one under a different \mag is refused and measured
+           against the first. Measured: \mag goes back to what it was, so
+           \showthe\mag reports the earlier value. */
+        if (engine->magnification_used == 0) {
+            engine->magnification_used = magnification;
+        } else if (magnification != engine->magnification_used) {
+            static const char *const help[] = {
+                "I can handle only one magnification ratio per job. So I've",
+                "reverted to the magnification you used earlier on this run.",
+                NULL};
+            tex_error(engine, help,
+                      "Incompatible magnification (%d);\n"
+                      " the previous value will be retained (%d)",
+                      magnification, engine->magnification_used);
+            magnification = engine->magnification_used;
+            engine->integer_parameters[HSTEX_INTEGER_MAGNIFICATION] =
+                magnification;
+        }
         if (magnification != 1000) {
             if (factor.whole > (uint64_t)HSTEX_MAX_DIMEN) {
                 return report_dimension_too_large(engine, factor.sign < 0,
