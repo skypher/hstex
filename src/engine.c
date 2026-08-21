@@ -14719,15 +14719,6 @@ static void show_token_frame(struct hstex_engine *engine,
     char after[512];
     size_t before_length = 0U;
     size_t after_length = 0U;
-    /* The reference keeps the output routine's braces in the list it reads,
-       and has already read the opening one by the time it runs, so they
-       stand at the two ends of what it shows. */
-    bool braced = list->source_kind ==
-                      (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER &&
-                  list->frame_name == (uint32_t)HSTEX_TOKEN_OUTPUT;
-    if (braced) {
-        before[before_length++] = '{';
-    }
     /* A macro's frame holds only its body; the reference shows the text it
        matched and the `->' before it. */
     if (list->source_kind == (uint8_t)HSTEX_TOKEN_SOURCE_MACRO) {
@@ -14775,9 +14766,6 @@ static void show_token_frame(struct hstex_engine *engine,
         }
         memcpy(target + *filled, one, length);
         *filled += length;
-    }
-    if (braced && after_length < sizeof(after)) {
-        after[after_length++] = '}';
     }
     char scratch[128];
     show_context_lines(engine,
@@ -21330,6 +21318,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         /* An empty \output means \shipout\box255. */
         return ship_out_box(engine, 255U, error, error_capacity);
     }
+    uint32_t level_before_output = engine->group_level;
     if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
         return -1;
     }
@@ -21370,7 +21359,15 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     hstex_source_name_top(&engine->sources,
                           (uint8_t)HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
                           (uint32_t)HSTEX_TOKEN_OUTPUT);
-    status = 0;
+    /* The routine's opening brace is part of its list, and is READ rather
+       than obeyed: the reference does not trace it, where it does trace the
+       closing one. A list that does not begin with one -- \output taken from
+       a \toks register, which keeps no braces -- draws `Missing { inserted'
+       here, which is what this scan is for. */
+    status = scan_left_brace(engine, error, error_capacity);
+    if (status != 0) {
+        status = -1;
+    }
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location where;
@@ -21401,20 +21398,20 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
        the routine is running, and nothing once it has finished: the next
        page is weighed with it at nought. Measured through \showthe. */
     engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] = 0;
-    /* The routine is closed by a right brace, which the reference obeys and
-       traces like any other -- one {end-group character }} at the end of
-       every output routine, in the mode the routine ran in. */
-    trace_command(engine,
-                  hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
-                                        (uint8_t)'}'));
     engine->mode = previous_output_mode;
     engine->inner_mode = previous_output_inner;
     engine->active_vbox_builder = previous_output_builder;
     engine->active_hbox_builder = previous_output_hbox;
     engine->prev_depth = previous_output_depth;
     nest_pop(engine);
-    if (end_group(engine, error, error_capacity) < 0) {
-        status = -1;
+    /* The routine's own closing brace ends the group, and is traced like any
+       other. A list that ran out before it did leaves the group open, so
+       whatever is still standing is closed here. */
+    while (engine->group_level > level_before_output) {
+        if (end_group(engine, error, error_capacity) < 0) {
+            status = -1;
+            break;
+        }
     }
     if (status == 0 && made.count != 0U) {
         struct hstex_vbox_builder *queue = engine->contribution_builder;
@@ -22035,7 +22032,7 @@ static int scan_muglue_parameter_assignment(struct hstex_engine *engine,
 }
 
 static int scan_token_list_value(struct hstex_engine *engine,
-                                 uint32_t *identifier, char *error,
+                                 uint32_t *identifier, bool wrap, char *error,
                                  size_t error_capacity)
 {
     /* The register is named by the control sequence that was written, so
@@ -22066,9 +22063,45 @@ static int scan_token_list_value(struct hstex_engine *engine,
                          "token-list assignment requires a register or braces");
     }
     struct hstex_token_vector tokens = {0};
-    if (scan_balanced_group(engine, &tokens, true, engine->scanning_text_name, false, error, error_capacity) != 0 ||
-        store_token_list(engine, &tokens, identifier, error, error_capacity) !=
-            0) {
+    if (scan_balanced_group(engine, &tokens, true, engine->scanning_text_name, false, error, error_capacity) != 0) {
+        vector_destroy(&tokens);
+        return -1;
+    }
+    /* \output KEEPS ITS BRACES. The reference stores the routine's text with
+       the `{' and `}' still round it -- `\output={abc}' then
+       `\showthe\output' writes `{abc}', and copying it into a \toks keeps
+       them -- because that is the brace the routine's group is opened by
+       when it runs. An empty text keeps nothing, and a value taken from
+       another register is copied as it stands. Measured all three. */
+    if (wrap && tokens.count != 0U) {
+        struct hstex_token_vector braced = {0};
+        hstex_token opening =
+            hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{');
+        hstex_token closing =
+            hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+        if (vector_push(&braced, opening, error, error_capacity) != 0) {
+            vector_destroy(&braced);
+            vector_destroy(&tokens);
+            return -1;
+        }
+        for (size_t index = 0U; index < tokens.count; ++index) {
+            if (vector_push(&braced, tokens.data[index], error,
+                            error_capacity) != 0) {
+                vector_destroy(&braced);
+                vector_destroy(&tokens);
+                return -1;
+            }
+        }
+        if (vector_push(&braced, closing, error, error_capacity) != 0) {
+            vector_destroy(&braced);
+            vector_destroy(&tokens);
+            return -1;
+        }
+        vector_destroy(&tokens);
+        tokens = braced;
+    }
+    if (store_token_list(engine, &tokens, identifier, error, error_capacity) !=
+        0) {
         vector_destroy(&tokens);
         return -1;
     }
@@ -22082,7 +22115,8 @@ static int scan_token_register_assignment(struct hstex_engine *engine,
     uint32_t identifier = 0U;
     if (index < 0 || (size_t)index >= engine->count_capacity ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_token_list_value(engine, &identifier, error, error_capacity) != 0) {
+        scan_token_list_value(engine, &identifier, false, error,
+                              error_capacity) != 0) {
         return set_error(error, error_capacity,
                          "invalid token-register assignment");
     }
@@ -22115,7 +22149,9 @@ static int scan_token_parameter_assignment(struct hstex_engine *engine,
     uint32_t identifier = 0U;
     if (parameter < 0 || parameter >= (int32_t)HSTEX_TOKEN_PARAMETER_COUNT ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_token_list_value(engine, &identifier, error, error_capacity) != 0) {
+        scan_token_list_value(engine, &identifier,
+                              parameter == (int32_t)HSTEX_TOKEN_OUTPUT, error,
+                              error_capacity) != 0) {
         return set_error(error, error_capacity,
                          "invalid token-parameter assignment");
     }

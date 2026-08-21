@@ -1,0 +1,54 @@
+% \output KEEPS ITS BRACES, AND THEY ARE THE ROUTINE'S GROUP.
+%
+% The token list stored for \output has the `{' and `}' still round it:
+%
+%   \output={abc}          \showthe\output   ->  {abc}
+%   \toks4=\output         \showthe\toks4    ->  {abc}
+%
+% -- so they survive a copy into a plain register, which is what says
+% they are STORED and not added by the display. Two exceptions, both
+% measured: an EMPTY text keeps nothing (\output={} shows nothing at all,
+% and the page ships by the default routine), and a value taken from
+% ANOTHER REGISTER is copied as it stands (\output=\toks3 keeps no
+% braces).
+%
+% THEY ARE THE ROUTINE'S GROUP WHEN IT RUNS. The opening brace is READ
+% rather than obeyed -- \tracingcommands does not draw it -- and the
+% closing one is obeyed and traced like any other, which is the
+% {end-group character }} at the end of every output routine.
+%
+% AN \output WITH NO BRACES DRAWS `Missing { inserted' when it runs,
+% which is the only thing that makes sense of the storage rule: the
+% routine needs a brace to open its group with, and one taken from a
+% \toks register has none.
+%
+% STILL DIFFERING, and only in that last case: a routine whose list runs
+% out before its group is closed leaves the reference's NEST PUSHED, so
+% the command after it is still traced in internal vertical mode --
+% `{\tracingcommands}' with no mode where hstex draws
+% `{vertical mode: \tracingcommands}'. hstex pops the nest whatever
+% happened. An error-recovery corner; trip does not reach it.
+\tracingonline=1
+\message{[A output from a braced text]}
+\output={abc}
+\showthe\output
+\message{[B copied into a plain register]}
+\toks4=\output \showthe\toks4
+\message{[C output from a register]}
+\toks3={abc}
+\output=\toks3
+\showthe\output
+\message{[D an empty output]}
+\output={}
+\showthe\output
+\message{[E does an empty output still ship]}
+\vsize=10pt \topskip=0pt \maxdepth=0pt
+\hbox to 3pt{}\penalty-10000
+\message{[F a routine with no braces]}
+\tracingcommands=2
+\toks3={\message{[ran]}\shipout\box255 }
+\output=\toks3
+\hbox to 3pt{}\penalty-10000
+\tracingcommands=0
+\message{[done]}
+\end
