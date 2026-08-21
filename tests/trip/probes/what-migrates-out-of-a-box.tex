@@ -1,0 +1,61 @@
+% WHAT A \vadjust, A \mark OR AN \insert LEAVES IN AN \hbox DOES NOT STAY
+% THERE.
+%
+% The moment the box goes into a vertical list, that material moves out
+% and onto the list behind the box:
+%
+%   \vbox{\hbox{A\vadjust{\penalty999}B}}
+%
+%   \vbox                      \vbox
+%   .\hbox                     .\hbox
+%   ..A                        ..A
+%   ..\vadjust        becomes  ..B
+%   ...\penalty 999            .\penalty 999
+%   ..B
+%
+% -- and a \mark and an \insert move as themselves, where what a \vadjust
+% moves is the MATERIAL IT HOLDS: the node it was written as does not
+% survive the move.
+%
+% ONLY WHERE THE BOX IS PACKAGED AS IT IS APPENDED. A box made into a
+% register keeps its material -- `\setbox1=\hbox{A\vadjust{}B}' shows the
+% \vadjust still inside -- and putting that box into a vertical list
+% afterwards with \box1 does not move it either. It is \hbox{...} written
+% where it lands that moves.
+%
+% ONLY THE TOP LEVEL. A \vadjust in a box inside the box stays where it
+% is: \vbox{\hbox{\hbox{A\vadjust{\penalty999}}}} keeps it in the inner
+% \hbox. But \unhbox brings it to the top level, and then it moves.
+%
+% This is where trip's insertion 200 differs. Its list is
+% `\hbox{\vadjust{\penalty999}}\hbox to -10pt{}', and with the migration
+% that list reads box, penalty, glue, box -- so the first place it can be
+% split is the \penalty999. Without it the first place is the glue, and
+% the split reports p=0 where the reference reports p=999.
+\tracingonline=1 \showboxdepth=10 \showboxbreadth=10
+\baselineskip=0pt \lineskiplimit=-100pt \lineskip=0pt
+\dimen100=100pt \count100=1000 \skip100=0pt
+\message{[1 hbox made on its own]}
+\setbox1=\hbox{A\vadjust{\penalty999}B}
+\showbox1
+\message{[2 that box appended to a vlist]}
+\setbox2=\vbox{\box1}
+\showbox2
+\message{[3 hbox appended where it is made]}
+\setbox3=\vbox{\hbox{A\vadjust{\penalty999}B}}
+\showbox3
+\message{[4 mark and insert too]}
+\setbox4=\vbox{\hbox{A\mark{m}\insert100{\hbox{}}B}}
+\showbox4
+\message{[5 nested hboxes]}
+\setbox5=\vbox{\hbox{\hbox{A\vadjust{\penalty999}}}}
+\showbox5
+\message{[6 unhboxed]}
+\setbox6=\hbox{A\vadjust{\penalty999}B}
+\setbox7=\vbox{\hbox{\unhbox6}}
+\showbox7
+\message{[7 the glue after it is measured from the box]}
+\baselineskip=400pt
+\setbox8=\vbox{\hbox{\vadjust{\penalty999}}\hbox to -10pt{}}
+\showbox8
+\end

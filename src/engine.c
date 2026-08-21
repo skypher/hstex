@@ -13146,6 +13146,74 @@ static int execute_box_reference(struct hstex_engine *engine,
     return contribute_page(engine, error, error_capacity);
 }
 
+/* What a \vadjust, a \mark or an \insert leaves in an \hbox does not stay
+   there: the moment the box goes into a vertical list, that material moves
+   out and onto the list behind the box. Only the top level of the box moves
+   -- one written inside a box inside the box stays where it is -- and only
+   where the box is packaged as it is appended: `\setbox1=\hbox{...}\box1'
+   keeps it, `\hbox{...}' does not. What a \vadjust moves is the material it
+   holds; the node it was written as does not survive. See
+   tests/trip/probes/what-migrates-out-of-a-box.tex. */
+static int migrate_out_of_hbox(struct hstex_engine *engine,
+                               struct hstex_box *box, uint32_t **migrated_out,
+                               size_t *migrated_count_out, char *error,
+                               size_t error_capacity)
+{
+    *migrated_out = NULL;
+    *migrated_count_out = 0U;
+    if ((size_t)box->node_start + box->node_count > engine->list_item_count) {
+        return 0;
+    }
+    uint32_t *items = engine->list_items + box->node_start;
+    uint32_t *migrated = NULL;
+    size_t migrated_count = 0U;
+    size_t kept = 0U;
+    for (size_t item = 0U; item < box->node_count; ++item) {
+        uint32_t held = items[item];
+        const struct hstex_node *at =
+            held != 0U && (size_t)held <= engine->node_count
+                ? &engine->nodes[held - 1U]
+                : NULL;
+        if (at == NULL ||
+            (at->kind != HSTEX_NODE_MARK && at->kind != HSTEX_NODE_INSERT &&
+             at->kind != HSTEX_NODE_ADJUST)) {
+            items[kept++] = held;
+            continue;
+        }
+        size_t moving = 1U;
+        const uint32_t *contents = &held;
+        if (at->kind == HSTEX_NODE_ADJUST) {
+            if ((size_t)at->value.list.node_start +
+                    at->value.list.node_count >
+                engine->list_item_count) {
+                continue;
+            }
+            moving = at->value.list.node_count;
+            contents = engine->list_items + at->value.list.node_start;
+        }
+        if (moving == 0U) {
+            continue;
+        }
+        uint32_t *grown =
+            realloc(migrated, (migrated_count + moving) * sizeof(*migrated));
+        if (grown == NULL) {
+            free(migrated);
+            return set_error(error, error_capacity,
+                             "box migration allocation failed");
+        }
+        migrated = grown;
+        for (size_t move = 0U; move < moving; ++move) {
+            migrated[migrated_count++] = contents[move];
+        }
+        /* Re-read: the list may have moved under the pointer. */
+        items = engine->list_items + box->node_start;
+    }
+    box->node_count = (uint32_t)kept;
+    *migrated_out = migrated;
+    *migrated_count_out = migrated_count;
+    return 0;
+}
+
 static int execute_box_constructor(struct hstex_engine *engine,
                                    enum hstex_command command, char *error,
                                    size_t error_capacity)
@@ -13182,9 +13250,31 @@ static int execute_box_constructor(struct hstex_engine *engine,
     if (engine->mode == HSTEX_MODE_MATH) {
         return math_append_box(engine, &box, error, error_capacity);
     }
-    if (append_box_node(engine, &box, error, error_capacity) != 0) {
+    uint32_t *migrated = NULL;
+    size_t migrated_count = 0U;
+    if (command == HSTEX_COMMAND_HBOX &&
+        engine->mode == HSTEX_MODE_VERTICAL &&
+        migrate_out_of_hbox(engine, &box, &migrated, &migrated_count, error,
+                            error_capacity) != 0) {
         return -1;
     }
+    if (append_box_node(engine, &box, error, error_capacity) != 0) {
+        free(migrated);
+        return -1;
+    }
+    /* What moves out goes on as it stands, and is not a box the next one is
+       set against: the glue before whatever follows is measured from the
+       depth of the BOX. */
+    int32_t depth_before_migration = engine->prev_depth;
+    for (size_t item = 0U; item < migrated_count; ++item) {
+        if (append_vbox_item(engine, migrated[item], error,
+                             error_capacity) != 0) {
+            free(migrated);
+            return -1;
+        }
+    }
+    engine->prev_depth = depth_before_migration;
+    free(migrated);
     return contribute_page(engine, error, error_capacity);
 }
 
