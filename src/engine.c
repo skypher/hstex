@@ -30848,8 +30848,16 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
                               size_t error_capacity)
 {
     struct hstex_box line = {0};
+    /* A character still held back for the ligature program is part of the
+       paragraph too: `\noindent A$$' has a line, and hstex was calling it
+       empty because its one character had not reached the list yet. That
+       made \predisplaysize -16383.99998pt -- the answer for no line at all
+       -- where the reference gives 27.50005pt, the A's width and two quads.
+       Two characters were enough to hide it, since the first is let go when
+       the second arrives. */
     bool had_line = engine->paragraph_builder != NULL &&
-                    engine->paragraph_builder->count != 0U;
+                    (engine->paragraph_builder->count != 0U ||
+                     engine->has_pending_character);
     /* The line before a display is a widow of a different kind. It is still
        a line of the paragraph, so a box that will not fit is reported
        against the line the paragraph began on. */

@@ -1,0 +1,34 @@
+% A CHARACTER STILL HELD BACK IS PART OF THE LINE BEFORE A DISPLAY.
+%
+% \predisplaysize is how far the line before the display reaches, plus
+% two quads of the current font, and -16383.99998pt when there was no
+% line at all. At \hsize=100pt with cmr10:
+%
+%   \noindent A$$        27.50005pt    the A (7.50002) and two quads
+%   \noindent AA$$       35.00006pt
+%   \noindent AAAA$$     50.00009pt
+%   \noindent\hbox to 40pt{}$$   60.00003pt
+%   \noindent$$          -16383.99998pt   no line
+%
+% hstex gave the no-line answer for the FIRST of those. Its one character
+% had not reached the horizontal list yet -- it was still held back for
+% the ligature program -- so the paragraph looked empty. Two characters
+% were enough to hide it, because the first is let go the moment the
+% second arrives, which is why every case but one already agreed.
+%
+% It matters beyond the number: \predisplaysize is what chooses between
+% \abovedisplayskip and \abovedisplayshortskip, so a display after a very
+% short line was getting the wrong glue above and below it.
+\tracingonline=1 \hsize=100pt \parindent=0pt
+\message{[A one character]}
+\noindent A$$\showthe\predisplaysize \hbox to 50pt{}$$\par
+\message{[B four characters]}
+\noindent AAAA$$\showthe\predisplaysize \hbox to 50pt{}$$\par
+\message{[C nothing at all]}
+\noindent$$\showthe\predisplaysize \hbox to 50pt{}$$\par
+\message{[D two characters]}
+\noindent AA$$\showthe\predisplaysize \hbox to 50pt{}$$\par
+\message{[E a wide box]}
+\noindent\hbox to 40pt{}$$\showthe\predisplaysize \hbox to 50pt{}$$\par
+\message{[done]}
+\end
