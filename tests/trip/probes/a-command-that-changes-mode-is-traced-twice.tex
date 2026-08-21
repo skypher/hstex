@@ -1,0 +1,28 @@
+% A COMMAND THAT MUST CHANGE MODE FIRST IS TRACED TWICE.
+%
+% \valign is a horizontal command. Met in vertical mode it starts a
+% paragraph and is then read again, and \tracingcommands draws it both
+% times:
+%
+%   {\valign}                    where it was met
+%   {horizontal mode: \valign}   again, once the paragraph has started
+%
+% \halign is a vertical command, and in horizontal mode it does the
+% mirror of that: a \par is put in front of it, and it is traced where it
+% was met and again after the \par has run.
+%
+% This is the same rule the character that begins a paragraph already
+% obeyed -- once where it was met and once after \everypar -- and hstex
+% had it for characters and not for commands, so it drew the second line
+% and not the first.
+\tracingonline=1 \showboxdepth=3 \showboxbreadth=5
+\tracingcommands=2
+\message{[A valign in vertical mode]}
+\valign{#\cr\hbox to 3pt{}\cr}
+\message{[B halign in horizontal mode]}
+\noindent Z\halign{#\cr X\cr}
+\message{[C halign in vertical mode, no change needed]}
+\halign{#\cr Y\cr}
+\message{[done]}
+\tracingcommands=0
+\end

@@ -38561,6 +38561,12 @@ handle_token:
         if (engine->mode == HSTEX_MODE_VERTICAL &&
             !engine->pending_global && engine->pending_macro_flags == 0U &&
             command_starts_paragraph(meaning)) {
+            /* Traced where it was met AND again once the paragraph has
+               started, because it is read again there. Measured: `\valign'
+               in vertical mode draws {\valign} and then
+               {horizontal mode: \valign}, the way a character that begins a
+               paragraph draws two lines. */
+            trace_command(engine, *token);
             if (push_one(engine, *token, *location, error, error_capacity) !=
                     0 ||
                 start_paragraph(engine, true, error, error_capacity) != 0) {
@@ -38572,6 +38578,8 @@ handle_token:
             engine->building_paragraph && !engine->pending_global &&
             engine->pending_macro_flags == 0U &&
             command_ends_paragraph(meaning)) {
+            /* Traced here as well as after the \par, for the same reason. */
+            trace_command(engine, *token);
             /* What goes in front of it is the \par token itself, so that
                whatever \par means at this moment is what runs; see
                docs/DECISIONS.md, ending-a-paragraph. */
