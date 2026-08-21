@@ -26908,6 +26908,22 @@ static int try_break_at(struct hstex_engine *engine,
                 size_t end = breakpoint < count ? breakpoint + 1U : count;
                 trace_short_display(engine, &state->trace, items,
                                     state->trace.printed, end);
+                /* What a discretionary replaces was shown with the
+                   discretionary -- as its two texts, not as itself -- so the
+                   next stretch begins past it. Measured: the reference shows
+                   ` ' for the stretch after
+                   `\discretionary{}{\kern2pt-}{B\kern2pt} ', not `B '. */
+                if (end != 0U && end <= count) {
+                    uint32_t last = items[end - 1U];
+                    if (last != 0U && (size_t)last <= engine->node_count &&
+                        engine->nodes[last - 1U].kind ==
+                            HSTEX_NODE_DISCRETIONARY) {
+                        end += engine->nodes[last - 1U].value.disc.replace_count;
+                        if (end > count) {
+                            end = count;
+                        }
+                    }
+                }
                 state->trace.printed = end;
                 trace_newline(engine, &state->trace);
             }
@@ -27150,6 +27166,20 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
         if (index == state->shrink_error_at && !state->shrink_error_reported) {
             state->shrink_error_reported = true;
             report_infinite_shrinkage(engine);
+        }
+        /* WHAT A DISCRETIONARY REPLACES IS NOT LOOKED AT FOR BREAKS. The
+           nodes it stands in front of belong to it, and the search steps
+           straight over them: measured on
+           `\discretionary{}{\kern2pt-}{B\kern2pt} C', where the reference
+           breaks at the space after the C and hstex was breaking at the
+           kern inside the replacement. Their widths are still counted --
+           the totals are taken by position, not by this walk. */
+        if (node->kind == HSTEX_NODE_DISCRETIONARY) {
+            size_t replaced = node->value.disc.replace_count;
+            if (replaced > count - index - 1U) {
+                replaced = count - index - 1U;
+            }
+            index += replaced;
         }
         after_box = precedes_glue_break(node);
     }

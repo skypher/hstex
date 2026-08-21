@@ -1,0 +1,44 @@
+% WHAT A DISCRETIONARY REPLACES IS NOT LOOKED AT FOR BREAKS.
+%
+% The nodes a discretionary stands in front of belong to it, and the
+% line breaker steps straight over them. With
+%
+%   AAAA\discretionary{}{\kern2pt-}{B\kern2pt} CCCC
+%
+% the reference's second breakpoint is the SPACE after the B, and
+% \tracingparagraphs shows it as `@ via'. hstex was breaking at the
+% \kern2pt inside the replacement -- `@\kern via' -- because a kern
+% followed by glue is a legal break anywhere else.
+%
+% Their widths still count. It is only the search that skips them.
+%
+% AND THEY ARE NOT SHOWN EITHER. \tracingparagraphs prints the stretch
+% of text before each breakpoint, and a discretionary is shown there as
+% its two texts -- pre-break then post-break -- with the replaced nodes
+% passed over. So the stretch after the discretionary above begins at
+% the space:
+%
+%   \tenrm AAAA-        <- the A's, then the `-' of the post-break text
+%   @\discretionary via @@0 ...
+%    (a space)          <- NOT `B '
+%   @ via @@0 ...
+%
+% hstex skipped them inside one stretch and not across a breakpoint,
+% which is where they show.
+%
+% THE SYMPTOM THAT LED HERE was a kern of the wrong width in the
+% finished line: breaking at the replacement's kern discarded it, and
+% what came out was `\kern 0.0' where the reference has `\kern 2.0'.
+\tracingonline=1 \hsize=60pt \parindent=0pt \tracingparagraphs=1
+\pretolerance=-1 \tolerance=10000 \showboxdepth=5 \showboxbreadth=20
+\message{[A a discretionary with a replacement]}
+\setbox0=\vbox{\noindent AAAA\discretionary{}{\kern2pt-}{B\kern2pt} CCCC\par}
+\showbox0
+\message{[B kerns in all three lists, unbroken]}
+\setbox1=\hbox{A\discretionary{\kern1pt X}{\kern2pt Y}{\kern3pt Z}B}
+\showbox1
+\message{[C a kern alone in the replacement]}
+\setbox2=\hbox{A\discretionary{}{}{\kern5pt}B}
+\showbox2
+\message{[done]}
+\end
