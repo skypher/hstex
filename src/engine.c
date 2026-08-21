@@ -13101,7 +13101,19 @@ static int execute_shift_box(struct hstex_engine *engine, int32_t subtype,
         };
         return math_append_atom(engine, &noad, error, error_capacity);
     }
-    return append_current_list_node(engine, &node, error, error_capacity);
+    if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* A box displaced into a vertical list sets the page builder going like
+       any other box. Measured against twenty appends in a row -- \hbox,
+       \box, \kern, \vskip, \penalty, \insert, \mark, \write, \unvbox,
+       \vrule -- of which this was the only one hstex did not run it for, so
+       its page lines came out after the next two commands rather than
+       before them. */
+    if (!vertical) {
+        return 0;
+    }
+    return contribute_page(engine, error, error_capacity);
 }
 
 /* \box and \copy used on their own contribute the box to the current list. */

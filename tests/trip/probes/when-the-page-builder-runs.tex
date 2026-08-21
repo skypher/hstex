@@ -1,0 +1,49 @@
+% WHEN THE PAGE BUILDER RUNS, measured by where its lines land.
+%
+% With \tracingpages=1 the builder writes a line at every legal
+% breakpoint, so putting a \message after each thing appended to the main
+% vertical list says exactly when it ran: before the message, or later.
+%
+% Twenty appends in a row -- \hbox written where it lands, \box, \kern,
+% \vskip, \penalty, \insert, \mark, \write, \unvbox, \vrule, and a box
+% displaced by \moveleft -- and the reference runs the builder after
+% EVERY one of them.
+%
+% hstex ran it for nineteen. The one it missed was \moveleft (and
+% \moveright with it), so those page lines came out two commands late.
+% Nothing about the page was wrong -- the same breaks at the same costs
+% -- but every diagnostic between the box and the next penalty was in
+% the wrong order, which is enough to make two logs look unrelated where
+% they only differ in when a line was written.
+%
+% \raise and \lower are the horizontal-mode spelling of the same command
+% and do not run the builder: there is no page being built in horizontal
+% mode.
+\tracingonline=1 \tracingpages=1
+\output={\shipout\box255 }
+\vsize=2000pt \maxdepth=2pt \topskip=0pt
+\dimen100=50pt \count100=1000 \skip100=0pt
+\setbox9=\hbox to 3pt{}
+\message{[1 hbox]}\hbox to 3pt{}
+\message{[2 vskip]}\vskip1pt
+\message{[3 box9]}\copy9
+\message{[4 kern]}\kern1pt
+\message{[5 vskip]}\vskip1pt
+\message{[6 moveleft]}\moveleft1pt\copy9
+\message{[7 vskip]}\vskip1pt
+\message{[8 penalty]}\penalty5
+\message{[9 hbox]}\hbox to 3pt{}
+\message{[10 insert]}\insert100{\hbox to 3pt{}}
+\message{[11 vskip]}\vskip1pt
+\message{[12 mark]}\mark{m}
+\message{[13 vskip]}\vskip1pt
+\message{[14 write]}\write15{w}
+\message{[15 vskip]}\vskip1pt
+\message{[16 unvbox]}\setbox8=\vbox{\hbox to 3pt{}}\unvbox8
+\message{[17 vskip]}\vskip1pt
+\message{[18 vrule]}\vrule height2pt
+\message{[19 vskip]}\vskip1pt
+\message{[20 done]}
+\penalty-10000
+\tracingpages=0
+\end
