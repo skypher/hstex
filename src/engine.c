@@ -161,6 +161,7 @@ static void show_list_at_top(struct hstex_engine *engine,
 static void print_fresh_line(struct hstex_engine *engine);
 static void print_text(struct hstex_engine *engine, const char *text);
 static void show_scaled(struct hstex_engine *engine, int32_t value);
+static int64_t insertion_size(int32_t size, int32_t factor);
 static void print_formatted(struct hstex_engine *engine, const char *format,
                             ...) HSTEX_PRINTF_FORMAT(2, 3);
 /* The brackets the reference puts around the file it is reading. */
@@ -16739,6 +16740,92 @@ static const char *nest_mode_name(const struct hstex_nest_level *level)
     }
 }
 
+/* The totals the page builder holds, written the way a glue is: the height,
+   then whatever it stretches by in each order it stretches in, then whatever
+   it shrinks by. */
+static void print_page_totals(struct hstex_engine *engine)
+{
+    static const char *const orders[4] = {"", "fil", "fill", "filll"};
+    show_scaled(engine, engine->page_dimens[HSTEX_PAGE_TOTAL]);
+    for (size_t order = 0U; order < 4U; ++order) {
+        int32_t amount = engine->page_dimens[HSTEX_PAGE_STRETCH + order];
+        if (amount == 0) {
+            continue;
+        }
+        print_text(engine, " plus ");
+        show_scaled(engine, amount);
+        print_text(engine, orders[order]);
+    }
+    if (engine->page_dimens[HSTEX_PAGE_SHRINK] != 0) {
+        print_text(engine, " minus ");
+        show_scaled(engine, engine->page_dimens[HSTEX_PAGE_SHRINK]);
+    }
+}
+
+/* THE CURRENT PAGE, which \showlists writes under the outermost vertical
+   list and before it. What stands on the page is shown the way a box's
+   contents are; under it stand the totals and the goal, but only once the
+   page has something on it that settled that goal -- a page holding nothing
+   but glue is no page at all and is not written. Each class of insertions
+   that has reached the page adds a line saying how much of the page it took,
+   and where one had to be split, which insertion of its class that was. */
+static void show_current_page(struct hstex_engine *engine, char *prefix,
+                              size_t threshold, size_t breadth)
+{
+    const struct hstex_vbox_builder *page = engine->page_builder;
+    if (page == NULL || page->count == 0U) {
+        return;
+    }
+    print_fresh_line(engine);
+    print_text(engine, "### current page:");
+    if (engine->output_active) {
+        print_text(engine, " (held over for next output)");
+    }
+    show_builder_list(engine, page->node_identifiers, page->count, prefix,
+                      threshold, breadth);
+    if (!engine->page_frozen) {
+        return;
+    }
+    print_fresh_line(engine);
+    print_text(engine, "total height ");
+    print_page_totals(engine);
+    print_fresh_line(engine);
+    print_text(engine, " goal height ");
+    show_scaled(engine, engine->page_dimens[HSTEX_PAGE_GOAL]);
+    for (size_t entry = 0U; entry < engine->page_insert_count; ++entry) {
+        const struct hstex_page_insert *record = &engine->page_inserts[entry];
+        print_line(engine);
+        print_formatted(engine, "\\insert%u adds ", (unsigned)record->number);
+        int32_t factor = 1000;
+        if ((size_t)record->number < engine->count_capacity) {
+            factor = engine->counts[(size_t)record->number];
+        }
+        show_scaled(engine,
+                    (int32_t)insertion_size(record->held, factor));
+        if (!record->split) {
+            continue;
+        }
+        /* Which insertion of this class was the one that had to be split,
+           counted from the front of the page. */
+        int32_t which = 0;
+        for (size_t index = 0U; index < page->count; ++index) {
+            uint32_t identifier = page->node_identifiers[index];
+            if (identifier == 0U || (size_t)identifier > engine->node_count) {
+                continue;
+            }
+            const struct hstex_node *node = &engine->nodes[identifier - 1U];
+            if (node->kind == HSTEX_NODE_INSERT &&
+                node->value.insert.number == record->number) {
+                ++which;
+            }
+            if (identifier == record->broken) {
+                break;
+            }
+        }
+        print_formatted(engine, ", #%d might split", which);
+    }
+}
+
 /* \showlists: every list the engine is building, innermost first, each with
    the mode it is being built in, where that began, and what the mode keeps
    beside the list. See docs/DECISIONS.md, showlists. */
@@ -16790,6 +16877,17 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
                                 level->current_language);
             }
             continue;
+        }
+        /* The outermost level's list is what has been contributed but not
+           yet taken; the page the builder has made of what it took stands
+           in front of it, with a heading of its own for each. */
+        if (index == 1U) {
+            show_current_page(engine, prefix, (size_t)threshold,
+                              (size_t)breadth);
+            if (level->vbox != NULL && level->vbox->count != 0U) {
+                print_fresh_line(engine);
+                print_text(engine, "### recent contributions:");
+            }
         }
         if (level->mode == (uint8_t)HSTEX_MODE_VERTICAL && level->vbox != NULL) {
             show_builder_list(engine, level->vbox->node_identifiers,

@@ -1,0 +1,62 @@
+% WHAT \showlists SAYS OF THE PAGE.
+%
+% Under the OUTERMOST vertical list -- and in front of it -- \showlists
+% writes what the page builder is holding:
+%
+%   ### vertical mode entered at line 0
+%   ### current page:
+%   \glue(\topskip) 10.0
+%   \hbox(0.0+0.0)x0.0
+%   total height 10.0
+%    goal height 100.0
+%   ### recent contributions:
+%   \glue 3.0
+%   prevdepth 0.0
+%
+% The page's own list is written the way a box's contents are, under
+% \showboxdepth and \showboxbreadth and with `etc.' where they cut it. The
+% two totals stand under it, but ONLY once the page holds something that
+% settled its goal: a page carrying nothing but glue is no page yet, its
+% glue is still a recent contribution, and neither heading is written.
+%
+% `### recent contributions:' is written only where something has been
+% contributed and not yet taken.
+%
+% Each class of insertions that has reached the page adds a line saying how
+% much of the page it took -- its natural size through \count<n>, in
+% thousandths -- and, where one of them had to be split, WHICH insertion of
+% its class that was, counted from the front of the page:
+%
+%   \insert100 adds 40.0, #2 might split
+%   \insert200 adds 4.99725
+%
+% While an output routine is running the page is held over, and the heading
+% says so: `### current page: (held over for next output)'.
+%
+% HSTeX wrote neither heading, nor the totals, nor the insertions -- so
+% trip's three \showlists lost between them some four hundred and fifty
+% lines of the reference's log. trip asks at lines 149, 284 and 439.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=8 \showboxdepth=8
+\font\rip=trip \rip
+\vsize=100pt \hsize=100pt \maxdepth=2pt \topskip=10pt
+\output={\global\setbox9=\box255}
+\dimen100=50pt \count100=1000 \skip100=5pt
+\dimen200=30pt \count200=500 \skip200=2pt
+\message{[A an empty page]}\showlists
+\message{[B glue only, which is no page yet]}\vskip3pt \showlists
+\message{[C a box has reached it]}\hbox{}\showlists
+\message{[D and a mark and a penalty]}\mark{m}\penalty55 \showlists
+\message{[E inside a vbox, where there is no page]}
+\setbox0=\vbox{\hbox{}\showlists}
+\message{[F one insertion]}
+\insert100{\hbox{}\kern20pt}\showlists
+\message{[G a second class]}
+\insert200{\hbox{}\kern10pt}\showlists
+\message{[H more than fits, so one splits]}
+\insert100{\hbox{}\kern20pt\penalty0\kern20pt\penalty0\kern20pt}\showlists
+\message{[I what an output routine sees, with the page held over]}
+\output={\showlists\global\setbox9=\box255}
+\vsize=1pt \hbox{}\penalty-10000
+\message{[done]}
+\end
