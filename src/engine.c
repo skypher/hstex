@@ -32387,7 +32387,18 @@ static int execute_insert(struct hstex_engine *engine, char *error,
             .float_cost = settings.float_cost,
         },
     };
-    return append_current_list_node(engine, &node, error, error_capacity);
+    if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* An insertion on the main vertical list sets the page builder going
+       where it stands, so what it freezes, splits and complains about is
+       reported before the next command is read. Measured: an insertion that
+       must split on an empty page draws its `%% goal' and its `% split100'
+       before the \message after it, not after the following box. */
+    if (engine->mode != HSTEX_MODE_VERTICAL) {
+        return 0;
+    }
+    return contribute_page(engine, error, error_capacity);
 }
 
 /* \vadjust: vertical material written inside a paragraph, which leaves the

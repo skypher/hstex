@@ -11,6 +11,15 @@
 %
 % hstex ran it for nineteen. The one it missed was \moveleft (and
 % \moveright with it), so those page lines came out two commands late.
+%
+% AN \insert NEEDS A SHARPER PROBE than a row of appends: an insertion
+% that neither freezes the page nor splits draws no line at all, so the
+% row above cannot tell when the builder ran. Put an insertion that MUST
+% SPLIT on an EMPTY page and it draws both `%% goal height=' and
+% `% split100 to ...' -- and the reference draws them before the
+% \message that follows the insertion, where hstex drew them after the
+% next box. Same numbers, wrong order, and it is trip's second
+% divergence in pass two.
 % Nothing about the page was wrong -- the same breaks at the same costs
 % -- but every diagnostic between the box and the next penalty was in
 % the wrong order, which is enough to make two logs look unrelated where
@@ -44,6 +53,19 @@
 \message{[18 vrule]}\vrule height2pt
 \message{[19 vskip]}\vskip1pt
 \message{[20 done]}
+\penalty-10000
+\message{[21 an insertion that must split, on an empty page]}
+\splittopskip=0pt
+\dimen101=20pt \count101=1000 \skip101=0pt
+\dimen102=20pt \count102=1000 \skip102=0pt
+\insert101{\hbox to 3pt{}\penalty-101 \vskip10pt\hbox to 3pt{}\penalty-7
+  \vskip10pt\hbox to 3pt{}}
+\message{[22 after the insert]}
+\hbox to 3pt{}
+\message{[23 after a box]}
+\insert102{\hbox to 3pt{}\penalty-55 \vskip10pt\hbox to 3pt{}\penalty-7
+  \vskip10pt\hbox to 3pt{}}
+\message{[24 after the second insert]}
 \penalty-10000
 \tracingpages=0
 \end
