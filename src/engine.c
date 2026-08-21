@@ -15705,7 +15705,7 @@ static void trace_glue(struct hstex_engine *engine,
    naming what it is putting back and what it is putting back to. See
    tests/trip/probes/what-tracingrestores-writes.tex. */
 static void trace_restore(struct hstex_engine *engine,
-                          const struct hstex_save_entry *save)
+                          const struct hstex_save_entry *save, bool retaining)
 {
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_RESTORES] <= 0) {
         return;
@@ -15719,7 +15719,7 @@ static void trace_restore(struct hstex_engine *engine,
     /* A restore never carries the mode, however long it is since one was
        named: measured, not one of the oracle's 257 lines has it. */
     print_fresh_line(engine);
-    print_text(engine, "{restoring ");
+    print_text(engine, retaining ? "{retaining " : "{restoring ");
     switch (save->kind) {
     case HSTEX_SAVE_MEANING: {
         char named[192];
@@ -36702,6 +36702,104 @@ static int begin_group(struct hstex_engine *engine, enum hstex_group_kind kind,
     return 0;
 }
 
+/* Whether a global assignment inside the group has taken the value over.
+   When it has, the save is let go rather than put back, and the reference
+   writes `retaining' with the value that stands instead of `restoring' with
+   the one saved: measured, `{\count5=14 \global\count5=15}' writes
+   {retaining \count5=15}. `standing' is filled with the value that took
+   over, so that the same tracing can name it. */
+static bool save_was_taken_over(const struct hstex_engine *engine,
+                                const struct hstex_save_entry *save,
+                                uint32_t leaving_level,
+                                struct hstex_save_entry *standing)
+{
+    *standing = *save;
+    uint32_t level = leaving_level;
+    switch (save->kind) {
+    case HSTEX_SAVE_MEANING:
+        level = engine->meanings[save->index - 1U].level;
+        standing->previous.meaning = engine->meanings[save->index - 1U];
+        break;
+    case HSTEX_SAVE_CAT_CODE:
+        level = engine->catcode_levels[save->index];
+        standing->previous.category = hstex_catcode_get(
+            &engine->lexical_state.catcodes, (uint8_t)save->index);
+        break;
+    case HSTEX_SAVE_COUNT:
+        level = engine->count_levels[save->index];
+        standing->previous.integer = engine->counts[save->index];
+        break;
+    case HSTEX_SAVE_INTEGER_PARAMETER:
+        level = engine->integer_parameter_levels[save->index];
+        standing->previous.integer = engine->integer_parameters[save->index];
+        break;
+    case HSTEX_SAVE_DIMEN:
+        level = engine->dimen_levels[save->index];
+        standing->previous.integer = engine->dimens[save->index];
+        break;
+    case HSTEX_SAVE_DIMEN_PARAMETER:
+        level = engine->dimen_parameter_levels[save->index];
+        standing->previous.integer = engine->dimen_parameters[save->index];
+        break;
+    case HSTEX_SAVE_GLUE:
+        level = engine->glue_levels[save->index];
+        standing->previous.glue = engine->glues[save->index];
+        break;
+    case HSTEX_SAVE_MUGLUE:
+        level = engine->muglue_levels[save->index];
+        standing->previous.glue = engine->muglues[save->index];
+        break;
+    case HSTEX_SAVE_GLUE_PARAMETER:
+        level = engine->glue_parameter_levels[save->index];
+        standing->previous.glue = engine->glue_parameters[save->index];
+        break;
+    case HSTEX_SAVE_MUGLUE_PARAMETER:
+        level = engine->muglue_parameter_levels[save->index];
+        standing->previous.glue = engine->muglue_parameters[save->index];
+        break;
+    case HSTEX_SAVE_CODE: {
+        uint32_t table = save->index / 256U;
+        uint32_t character = save->index % 256U;
+        level = engine->code_levels[table][character];
+        standing->previous.integer = engine->code_tables[table][character];
+        break;
+    }
+    case HSTEX_SAVE_TOKEN_REGISTER:
+        level = engine->token_register_levels[save->index];
+        standing->previous.token_list_identifier =
+            engine->token_registers[save->index];
+        break;
+    case HSTEX_SAVE_TOKEN_PARAMETER:
+        level = engine->token_parameter_levels[save->index];
+        standing->previous.token_list_identifier =
+            engine->token_parameters[save->index];
+        break;
+    case HSTEX_SAVE_BOX:
+        level = engine->box_levels[save->index];
+        standing->previous.box = engine->boxes[save->index];
+        break;
+    case HSTEX_SAVE_MATH_FONT: {
+        size_t size = save->index / 16U;
+        size_t family = save->index % 16U;
+        level = engine->math_font_levels[size][family];
+        standing->previous.integer =
+            (int32_t)engine->math_fonts[size][family];
+        break;
+    }
+    case HSTEX_SAVE_PAR_SHAPE:
+        level = engine->parshape_level;
+        standing->previous.integer = (int32_t)engine->parshape;
+        break;
+    case HSTEX_SAVE_FONT:
+        level = engine->current_font_level;
+        standing->previous.integer = (int32_t)engine->current_font;
+        break;
+    case HSTEX_SAVE_AFTER_GROUP:
+        break;
+    }
+    return level != leaving_level;
+}
+
 /* Returns 1 when there was no group to end, so the brace is simply gone. */
 static int end_group(struct hstex_engine *engine, char *error,
                      size_t error_capacity)
@@ -36730,7 +36828,10 @@ static int end_group(struct hstex_engine *engine, char *error,
            every one of them is further off than tracing none. */
         if (save.kind != HSTEX_SAVE_AFTER_GROUP &&
             save.kind != HSTEX_SAVE_FONT) {
-            trace_restore(engine, &save);
+            struct hstex_save_entry standing;
+            bool taken_over =
+                save_was_taken_over(engine, &save, leaving_level, &standing);
+            trace_restore(engine, taken_over ? &standing : &save, taken_over);
         }
         switch (save.kind) {
         case HSTEX_SAVE_MEANING: {

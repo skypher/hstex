@@ -56,17 +56,12 @@
 % named: not one of the oracle's 257 lines has a `vertical mode: ' on it,
 % where a \tracingcommands line would.
 %
-% NOT YET, and it is about WHEN rather than what. There are shapes where
-% the reference traces nothing and this engine traces a line:
-%
-%   \baselineskip=10pt \tracingrestores=1 {\baselineskip=11pt}
-%
-% draws {restoring \baselineskip=10.0pt} here and nothing there, while
-% the same shape with \count5 draws nothing in either. Over trip the
-% counts are close -- 253 lines here against 257, though only by 45
-% missing cancelling 41 extra -- so the rule for when a save is traced is
-% not yet the reference's. That is the thing to find next; the formats
-% above are settled.
+% A SAVE TAKEN OVER BY A GLOBAL ASSIGNMENT says `retaining' and names the
+% value that stands, not `restoring' with the one saved. Measured in
+% tests/trip/probes/when-a-restore-is-retained-instead.tex, which also
+% withdraws what this probe used to say about WHEN a save is traced: that
+% was an artifact of grepping for `^{', and a {restoring line has no
+% newline before it.
 \tracingonline=1
 \font\ff=cmr10
 \def\a{A}\catcode`\[=12 \count5=7 \dimen6=1pt \skip7=2pt plus 1fil

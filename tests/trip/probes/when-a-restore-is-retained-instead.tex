@@ -1,0 +1,49 @@
+% A GLOBAL ASSIGNMENT INSIDE A GROUP IS RETAINED, NOT RESTORED.
+%
+% \tracingrestores writes one line per save undone when a group ends, but
+% not every save is put back. If something global took the value over
+% while the group was open, the save is let go instead, and the line says
+% `retaining' with the value that STANDS rather than `restoring' with the
+% one that was saved:
+%
+%   {\count5=14 \global\count5=15}    {retaining \count5=15}
+%   {\def\qq{y}\gdef\qq{z}}           {retaining \qq=macro:->z}
+%
+% The value is right in both engines either way -- this is what the trace
+% says about it. Fifteen shapes below; all fifteen agree.
+%
+% WHAT DRAWS NOTHING AT ALL: a group whose only assignment was global
+% (\global\count5, \gdef, \global\setbox), because no save was ever made.
+% And \globaldefs=1 makes the assignments after it global, so a group that
+% sets it traces only \globaldefs itself.
+%
+% CORRECTION TO AN EARLIER MEASUREMENT. This probe was written to find a
+% rule about WHEN a save is traced, on the evidence that
+% `\baselineskip=10pt {\baselineskip=11pt}' drew a line here and nothing
+% there. That evidence was false, and the reason is worth keeping: a
+% {restoring line is written with NO NEWLINE BEFORE IT, so it lands at the
+% end of whatever line was open --
+%
+%   (./ra.tex{restoring \count5=8}
+%
+% -- and `grep ^{' loses it. Extract these lines with `grep -ao', never by
+% anchoring at the start of a line. Compared that way the two engines had
+% agreed on that shape all along, and the only real difference was the
+% retaining rule above.
+\tracingonline=1 \tracingrestores=1
+\count5=7 \dimen5=1pt
+\message{[one]}{\count5=8}
+\message{[two-same]}{\count5=8 \count5=9}
+\message{[nested]}{\count5=8 {\count5=9}}
+\message{[global-in]}{\global\count5=11}
+\message{[global-then-local]}{\global\count5=12 \count5=13}
+\message{[local-then-global]}{\count5=14 \global\count5=15}
+\message{[gdef]}{\gdef\qq{x}}
+\message{[def-then-gdef]}{\def\qq{y}\gdef\qq{z}}
+\message{[aftergroup]}{\aftergroup\relax \count5=20}
+\message{[globaldefs]}{\globaldefs=1 \count5=21}
+\message{[box]}{\setbox3=\hbox{}}
+\message{[globalbox]}{\global\setbox4=\hbox{}}
+\message{[catcode]}{\catcode`\q=12 \catcode`\q=13 }
+\message{[done]}
+\end
