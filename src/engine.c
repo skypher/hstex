@@ -10435,6 +10435,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     (void)current_source_line(engine, &origin_line);
     struct hstex_token_vector parameter_text = {0};
     uint8_t parameter_count = 0U;
+    bool empty_body = false;
     bool has_hash_brace = false;
     hstex_token hash_brace = 0U;
     for (;;) {
@@ -10448,6 +10449,19 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         }
         current = normalize_frozen_control_sequence(current);
         if (token_is_category(current, HSTEX_CAT_BEGIN_GROUP)) {
+            break;
+        }
+        /* A `}' where the body's `{' should have been: the reference says so
+           and takes the body as EMPTY, so what the source wrote in braces
+           behind it becomes an ordinary group. trip line 397 writes
+           `\def\a}{\let\a\xyzzy\csname a\endcsname}'. */
+        if (token_is_category(current, HSTEX_CAT_END_GROUP)) {
+            static const char *const help[] = {
+                "Where was the left brace? You said something like "
+                "`\\def\\a}',",
+                "which I'm going to interpret as `\\def\\a{}'.", NULL};
+            tex_error(engine, help, "Missing { inserted");
+            empty_body = true;
             break;
         }
         if (token_is_category(current, HSTEX_CAT_PARAMETER)) {
@@ -10505,7 +10519,7 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     }
 
     struct hstex_token_vector replacement = {0};
-    size_t depth = 1U;
+    size_t depth = empty_body ? 0U : 1U;
     while (depth != 0U) {
         /* Where the body is being read from a list of tokens standing
            together, it is taken in one go rather than a token at a time: the

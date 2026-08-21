@@ -1,0 +1,17 @@
+% A `}' where a definition's body should have begun: the reference says so
+% and takes the body as EMPTY, so what the source wrote in braces behind it
+% becomes an ordinary group.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingcommands=1
+\message{[A a right brace in a parameter text]}
+\def\a}{X}
+\message{[B what a came to]}
+\tracingcommands=0 \message{[\meaning\a]} \tracingcommands=1
+\message{[C with a parameter in front of it]}
+\def\b#1}{Y}
+\tracingcommands=0 \message{[\meaning\b]} \tracingcommands=1
+\message{[D an edef]}
+\edef\c}{Z}
+\tracingcommands=0 \message{[\meaning\c]}
+\message{[done]}
+\end
