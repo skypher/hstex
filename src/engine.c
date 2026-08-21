@@ -32895,6 +32895,18 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                  "math list refers to a missing node");
             }
             struct hstex_node contributed = engine->nodes[noad->nucleus.node - 1U];
+            /* A \vcenter is hung on the axis of the size it is SET at, which
+               is settled here and not where it was written. */
+            if (noad->vcentered) {
+                int32_t axis = 0;
+                if (math_symbol_parameter(engine, size, 22U, &axis, error,
+                                          error_capacity) != 0) {
+                    return -1;
+                }
+                int64_t total = (int64_t)contributed.height + contributed.depth;
+                contributed.height = axis + half_of(total);
+                contributed.depth = (int32_t)(total - contributed.height);
+            }
             /* Only a large operator whose nucleus is a character of its
                own is centred on the axis; one that is a box -- \log, or a
                sub-formula that came to a box -- stands on the baseline. See
@@ -34939,15 +34951,15 @@ static int execute_vcenter(struct hstex_engine *engine, char *error,
     if (scan_vbox(engine, false, &box, error, error_capacity) != 0) {
         return -1;
     }
-    int32_t axis = 0;
-    if (math_symbol_parameter(engine, size, 22U, &axis, error,
-                              error_capacity) != 0) {
-        return -1;
-    }
-    int64_t total = (int64_t)box.height + box.depth;
-    box.height = axis + half_of(total);
-    box.depth = (int32_t)(total - box.height);
-    /* Marked as \vcenter's, so that braces round it package it; see
+    (void)size;
+    /* THE BOX IS NOT HUNG ON THE AXIS YET. Which axis it hangs on is the one
+       of the size the ATOM is set at, and that is not known here: a \vcenter
+       written in a fraction's numerator is set smaller than one written
+       beside it. The box is kept as it was made and hung when it is set,
+       which is also why a \vcenter in a formula whose symbol fonts are
+       short of parameters draws the reference's `Math formula deleted'
+       rather than stopping here. See docs/DECISIONS.md, vcenter.
+       Marked as \vcenter's, so that braces round it package it; see
        docs/DECISIONS.md, a-vcenter-in-braces. */
     return math_append_box_field_kind(engine, &box, false, 0U, 0U, true, error,
                                       error_capacity);

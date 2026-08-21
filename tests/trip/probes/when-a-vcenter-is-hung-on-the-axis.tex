@@ -1,0 +1,41 @@
+% WHEN A VCENTER IS HUNG ON THE AXIS.
+%
+% A \vcenter's box keeps what it measures and is hung on the axis of the
+% symbol family -- but on the axis of the SIZE THE ATOM IS SET AT, which is
+% not the size in force where the box was written:
+%
+%   \fontdimen22 of the text symbol font   7pt
+%   \fontdimen22 of the script one         3pt
+%
+%   $\vcenter{\hbox{}\kern10pt}$        \vbox(12.0+-2.0)   7 + 5, 10 - 12
+%   $A^{\vcenter{\hbox{}\kern10pt}}$    \vbox(8.0+2.0)     3 + 5, 10 - 8
+%
+% So a \vcenter in a script, or in a fraction's numerator, comes out a
+% different size from one beside it.
+%
+% HSTeX hung the box where it was written, on whatever axis stood there.
+% \showlists shows the difference -- the box a formula holds has the axis
+% already taken off -- and so does the page.
+%
+% Nothing asks for the axis until the formula is set, so a \vcenter in a
+% formula whose symbol fonts are short of parameters draws the reference's
+% `Math formula deleted: Insufficient symbol fonts' rather than a fault of
+% its own.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \fontdimen22\rip=7pt \rip
+\font\srip=trip at 5pt \fontdimen22\srip=3pt
+\textfont0=\rip \scriptfont0=\srip \scriptscriptfont0=\srip
+\textfont1=\rip \scriptfont1=\srip \scriptscriptfont1=\srip
+\textfont2=\rip \scriptfont2=\srip \scriptscriptfont2=\srip
+\textfont3=\rip \scriptfont3=\srip \scriptscriptfont3=\srip
+\message{[A a vcenter in text style]}
+\setbox0=\hbox{$\vcenter{\hbox{}\kern10pt}$}\showbox0
+\message{[B the same in a script, where the axis is another]}
+\setbox0=\hbox{$A^{\vcenter{\hbox{}\kern10pt}}$}\showbox0
+\message{[C in a fraction's numerator]}
+\setbox0=\hbox{$\vcenter{\hbox{}\kern10pt}\over A$}\showbox0
+\message{[D what the formula holds before it is set]}
+\setbox0=\hbox{$\vcenter{\hbox{}\kern10pt}\showlists$}
+\message{[done]}
+\end
