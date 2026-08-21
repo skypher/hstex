@@ -1,0 +1,8 @@
+% A group still open when \end is read is said so, once, on a line of its
+% own: the level is how many are open, and the name is written with
+% whatever \escapechar says.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\escapechar=`|
+\message{[three groups deep, with an escapechar of its own]}
+{{\begingroup\end}}

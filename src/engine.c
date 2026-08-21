@@ -39884,6 +39884,17 @@ int hstex_engine_run(struct hstex_engine *engine,
         print_text(engine, " )");
         --engine->open_parens;
     }
+    /* A group still open when \end is read is said so, once, on a line of
+       its own -- the level is how many are open, and the name is written
+       with whatever \escapechar says. */
+    if (engine->end_requested && engine->group_level != 0U) {
+        print_fresh_line(engine);
+        print_byte(engine, '(');
+        print_escaped_name(engine, "end");
+        print_formatted(engine, " occurred inside a group at level %u)",
+                        (unsigned)engine->group_level);
+        print_line(engine);
+    }
     (void)fflush(diagnostic_stream(engine));
     /* The reference stops where the input stops: a paragraph still being
        filled is not ended, and no page is sent off, because neither \end nor
