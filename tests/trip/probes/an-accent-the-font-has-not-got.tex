@@ -1,25 +1,48 @@
-% An \accent whose accent or base character the current font lacks.
+% AN ACCENT THE FONT HAS NOT GOT IS DROPPED, AND SO IS ITS WAIT.
 %
-% Measured against pdftex: the missing character is dropped, silently, as
-% any other missing character is -- there is no diagnostic.
+% \accent reads a character number and then goes on waiting for the
+% character it will go over, reading blanks, \relax and assignments in
+% the meantime. None of that happens when the font has no such accent:
+% the accent is dropped, nothing waits, the space factor is left where it
+% stood, and whatever follows is read by the main loop and traced there.
 %
-%   \accent200 A     the accent is gone; the A is set alone, WITHOUT the
-%                    kerns an accent rides between.
-%   \accent23 \char200   the base is gone; the accent is set alone.
-%   \accent200       nothing at all.
-%   \nullfont\accent23 A   nothing at all: neither is in \nullfont.
+%   \hbox{f\accent200 i}        the fi ligature does NOT form
+%   \hbox{A\accent200 ...}      \the\spacefactor is 999, not 1000
+%   \hbox{\accent200 A}         {the letter A} is traced
 %
-% The accent still breaks the ligature run and still sets the space factor
-% to a thousand even when it is dropped: `f\accent200 i' is an f and an i,
-% not the fi ligature, and a period after a dropped accent gets ordinary
-% interword glue rather than a period's stretch.
+% The ligature run is broken all the same, but only because \accent is a
+% command and the word ended when it was met.
 %
-% trip line 322 writes \accent\x\space where \x is not in the font.
-\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
-\font\tt=cmr10 \tt
-\setbox0=\hbox{\accent200 A}\showbox0
-\setbox1=\hbox{\accent23 \char200}\showbox1
-\setbox2=\hbox{f\accent200 i}\showbox2
-\setbox3=\hbox{fi}\showbox3                  % the ligature, for contrast
-\setbox4=\hbox{A\accent200 .\ B}\showbox4
+% HSTeX left the accent waiting, so the token after it was swallowed
+% rather than obeyed. trip line 322 writes `\accent\x' with \chardef\x200
+% in a font that has no 200, and the blank that the \space after it
+% expands to went missing.
+\catcode`\{=1 \catcode`\}=2
+\font\ff=cmr10 \ff
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\hsize=100pt \hbadness=10000 \hfuzz=100pt
+\chardef\x200
+\def\sp{ }
+\message{[A a missing accent does not swallow what follows]}
+\tracingcommands=2
+\setbox0=\hbox{\accent\x\sp\accent`A B}
+\tracingcommands=0
+\message{[B an accent the font does have, for contrast]}
+\tracingcommands=2
+\setbox0=\hbox{\accent`A\sp\accent`A B}
+\tracingcommands=0
+\message{[C the character after a missing accent is read plainly]}
+\tracingcommands=2
+\setbox0=\hbox{\accent\x A}
+\tracingcommands=0
+\message{[D a missing accent breaks the fi ligature]}
+\setbox0=\hbox{f\accent200 i}\showbox0
+\message{[E and leaves the space factor alone]}
+\sfcode`A=999
+\setbox0=\hbox{A\accent200 \message{[<\the\spacefactor>]}}
+\message{[F where one the font has sets it to 1000]}
+\setbox0=\hbox{A\accent`B C\message{[<\the\spacefactor>]}}
+\message{[G the fi ligature on its own]}
+\setbox0=\hbox{fi}\showbox0
+\message{[done]}
 \end

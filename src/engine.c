@@ -36066,13 +36066,21 @@ static int execute_accent(struct hstex_engine *engine, char *error,
     const struct hstex_font *font =
         font_by_identifier(engine, engine->current_font);
     /* A character the font does not have is dropped, as any other missing
-       character is. The accent still breaks the ligature run and still
-       sets the space factor, so `f\accent200 i' is an f and an i and not
-       the fi ligature. */
+       character is, and the accent is dropped WITH it: nothing waits for a
+       character, no assignment is read for it, and the space factor is left
+       where it stood. What is read next is read by the main loop, and
+       traced there. The ligature run is broken all the same, because
+       \accent is a command and the word ended when it was met -- so
+       `f\accent200 i' is an f and an i and not the fi ligature. See
+       docs/DECISIONS.md, what-may-stand-between-an-accent-and-its-character. */
     bool have_accent = font != NULL && font->characters != NULL &&
                        font->characters[code].tag >= 0;
     if (font == NULL) {
         font = font_by_identifier(engine, engine->current_font);
+    }
+    if (!have_accent) {
+        char_warning(engine, font, (uint8_t)code);
+        return 0;
     }
     /* The accent itself is set in the font that was in force where \\accent
        was read, whatever an assignment after it changes the font to. */
