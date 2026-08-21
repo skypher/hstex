@@ -1,0 +1,17 @@
+% A keyword is read without regard to case, `by' among them.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\count88=100
+\message{[A divide with a capital By]}
+\divide\count88 By 2 \showthe\count88
+\message{[B multiply with a mixed bY]}
+\multiply\count88 bY 3 \showthe\count88
+\message{[C advance with BY]}
+\advance\count88 BY 1 \showthe\count88
+\message{[D lower case by]}
+\advance\count88 by 1 \showthe\count88
+\message{[E by across a line break]}
+\advance\count88
+By 1 \showthe\count88
+\message{[done]}
+\end

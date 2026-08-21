@@ -23372,31 +23372,10 @@ static bool token_has_character(hstex_token token, uint8_t character)
 static int scan_optional_by(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
-    hstex_token first = 0U;
-    struct hstex_source_location first_location;
-    if (expanded_next_non_space(engine, &first, &first_location, error,
-                                error_capacity) != HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity,
-                         "end of input in arithmetic operation");
-    }
-    if (!token_has_character(first, (uint8_t)'b')) {
-        return push_one(engine, first, first_location, error, error_capacity);
-    }
-    hstex_token second = 0U;
-    struct hstex_source_location second_location;
-    if (hstex_engine_next_expanded(engine, &second, &second_location, error,
-                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
-        return set_error(error, error_capacity,
-                         "end of input after arithmetic keyword prefix");
-    }
-    if (token_has_character(second, (uint8_t)'y')) {
-        return 0;
-    }
-    if (push_one(engine, second, second_location, error, error_capacity) != 0 ||
-        push_one(engine, first, first_location, error, error_capacity) != 0) {
-        return -1;
-    }
-    return 0;
+    /* A keyword is read without regard to case, `by' among them: trip line
+       374 writes `By'. */
+    bool matched = false;
+    return try_keyword(engine, "by", &matched, error, error_capacity);
 }
 
 static bool arithmetic_variable_is_integer(
