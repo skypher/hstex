@@ -21543,6 +21543,15 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     bool previous_output_inner = engine->inner_mode;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
+    /* And it knows nothing of a paragraph that may be standing outside it:
+       the routine can be fired while one is being filled -- a display right
+       before the page breaks leaves one -- and a paragraph the ROUTINE
+       begins is the only one its own end may wind up. */
+    bool previous_output_building = engine->building_paragraph;
+    struct hstex_hbox_builder *previous_output_paragraph =
+        engine->paragraph_builder;
+    engine->building_paragraph = false;
+    engine->paragraph_builder = NULL;
     /* And it builds a VERTICAL LIST OF ITS OWN. What \unvbox255 puts in it
        does not join the contributions where they stand: when the routine
        ends, its list goes back to the FRONT of the contribution list, in
@@ -21612,6 +21621,8 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] = 0;
     engine->mode = previous_output_mode;
     engine->inner_mode = previous_output_inner;
+    engine->building_paragraph = previous_output_building;
+    engine->paragraph_builder = previous_output_paragraph;
     engine->active_vbox_builder = previous_output_builder;
     engine->active_hbox_builder = previous_output_hbox;
     engine->prev_depth = previous_output_depth;
@@ -33854,13 +33865,6 @@ static int end_display_math(struct hstex_engine *engine,
 static int resume_paragraph_after_display(struct hstex_engine *engine,
                                           char *error, size_t error_capacity)
 {
-    /* Everything the display contributes has reached the vertical list, so
-       the page builder runs before the paragraph carries on -- outside the
-       display's group, which has already given its parameters back. See
-       docs/DECISIONS.md, a-page-that-breaks-at-a-display. */
-    if (contribute_page(engine, error, error_capacity) != 0) {
-        return -1;
-    }
     if (engine->paragraph_builder == NULL) {
         engine->paragraph_builder =
             calloc(1U, sizeof(*engine->paragraph_builder));
@@ -33892,7 +33896,30 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
     /* The display counts as three lines of the paragraph it interrupted; see
        docs/DECISIONS.md, lines-carry-on-past-a-display. */
     engine->prev_graf += 3;
-    return skip_optional_space(engine, error, error_capacity);
+    if (skip_optional_space(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* Everything the display contributes has reached the vertical list, so
+       the page builder runs here -- outside the display's group, which has
+       already given its parameters back, and after the blank the display may
+       be followed by, which is looked for first and expands as it looks. An
+       expandable token standing right after the $$ is therefore expanded
+       BEFORE the output routine any of this fires. See docs/DECISIONS.md,
+       a-page-that-breaks-at-a-display. The paragraph is already standing in
+       horizontal mode by now; the reference's page builder does not consult
+       the mode at all, only the list, so the vertical mode it works in is
+       lent to it here and given back after. */
+    if (engine->active_vbox_builder != engine->contribution_builder) {
+        return 0;
+    }
+    int32_t resumed_mode = engine->mode;
+    bool resumed_inner = engine->inner_mode;
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = false;
+    int built = build_page(engine, error, error_capacity);
+    engine->mode = resumed_mode;
+    engine->inner_mode = resumed_inner;
+    return built;
 }
 
 /* The $$ that closes an alignment used as a display reads the penalties and

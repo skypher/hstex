@@ -1,0 +1,43 @@
+% THE PAGE BUILDER RUNS AFTER THE BLANK A DISPLAY MAY BE FOLLOWED BY.
+%
+% When a display ends, everything it contributes has reached the vertical
+% list and the page may break there. But the reference does not run the
+% page builder at once: it resumes the paragraph first, in horizontal
+% mode, looks for the one optional blank that may follow the $$ -- which
+% EXPANDS as it looks -- and only then builds the page.
+%
+% So an expandable token standing right after the $$ is expanded BEFORE
+% the output routine that the display's own penalty fires:
+%
+%   $$x$$\csname relax\endcsname bbb\par
+%
+%   {horizontal mode: \csname}          <- the blank being looked for
+%   {internal vertical mode: \message}  <- the output routine
+%   [SHIP]
+%   {horizontal mode: \relax}           <- what \csname made, obeyed
+%
+% HSTeX built the page first, so the whole paragraph ran before the
+% routine did.
+%
+% The routine also knows nothing of the paragraph standing outside it: it
+% can be fired while one is being filled, as here, and only a paragraph
+% the ROUTINE itself begins may be wound up when the routine ends.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \hsize=100pt \vsize=40pt \maxdepth=2pt \topskip=10pt
+\parindent=0pt \hbadness=10000 \vbadness=10000 \hfuzz=100pt \vfuzz=100pt
+\count0=1
+\output={\message{[SHIP]}\shipout\box255 }
+\message{[A a display that ships a page as it ends]}
+\predisplaypenalty=-10000
+\tracingcommands=2
+\noindent aaa
+$$x$$\csname relax\endcsname bbb\par
+\tracingcommands=0
+\message{[done]}
+\end
