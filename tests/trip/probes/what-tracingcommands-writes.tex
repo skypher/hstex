@@ -1,0 +1,49 @@
+% \tracingcommands, which this engine does not implement at all.
+%
+% It is the single largest gap in trip's log: 1988 of the oracle's 7292
+% lines are these, against none here. Measured against pdftex so that
+% writing it needs no more guessing.
+%
+% WHAT IS TRACED, by level:
+%   1   every command the main loop obeys -- the unexpandable ones
+%   2+  conditionals as well: the \if itself, then {true} or {false}, and
+%       the \else and \fi that follow
+%
+% THE LINE. `{' then, when the mode has changed since the last one traced,
+% the mode and a colon and a space, then the command, then `}':
+%
+%   {vertical mode: \font}
+%   {select font cmr10}
+%   {\setbox}
+%   {restricted horizontal mode: the letter A}
+%   {blank space  }
+%   {math shift character $}
+%   {math mode: the letter x}
+%   {superscript character ^}
+%   {end-group character }}
+%   {internal vertical mode: \shipout}
+%
+% The command is named the way an error names it -- `the letter A', `blank
+% space  ' with its two spaces, `math shift character $', `\relax'. The
+% modes are: vertical mode, internal vertical mode, horizontal mode,
+% restricted horizontal mode, math mode, display math mode. HSTeX already
+% names both: describe_token() for the command and the mode names at
+% src/engine.c around 15140.
+%
+% SELECTING A FONT gets a line of its own, `{select font cmr10}', in place
+% of naming the command.
+%
+% A command that starts a paragraph is traced TWICE, once in the mode it
+% was met in and once in horizontal mode, because it is put back and read
+% again after \everypar. This engine puts it back the same way, so it
+% would fall out.
+%
+% \tracingrestores is the companion and is also missing: 257 lines of
+% {restoring \x=...} in the oracle. Its format is in
+% docs/DECISIONS.md-adjacent probes -- {restoring \a=macro:->A},
+% {restoring \count5=7}, {restoring \catcode91=1}, {restoring
+% \newone=undefined}.
+\tracingonline=1\tracingcommands=1
+\font\tt=cmr10 \tt
+\setbox0=\hbox{A $x^2$ \relax}
+\end
