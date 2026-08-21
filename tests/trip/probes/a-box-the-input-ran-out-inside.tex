@@ -1,0 +1,26 @@
+% An \hbox still open when the input runs out.
+%
+% Measured against pdftex: the reference puts in the } that each group
+% still open wants, saying so for each, and the box closes as it would
+% have --
+%
+%   ! Missing } inserted.
+%   <inserted text>
+%                   }
+%   <to be read again>
+%                      \end
+%
+% -- so `\hbox{x' at the end of a run draws one, `\hbox{{x}' draws one
+% (the inner group having been closed), and `\hbox{{{x}' draws two: one
+% for each group left open INCLUDING the box's own.
+%
+% This engine stopped the run instead.
+%
+% NOT YET: a \vbox in the same state is different again -- the reference
+% says "You can't use `\end' in internal vertical mode" and then
+% "Emergency stop", where this engine says the input ended inside a vbox.
+% Both stop, so the run ends either way; only the words differ.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\font\tt=cmr10 \tt
+\setbox0=\hbox{{x}\showbox0
+\end

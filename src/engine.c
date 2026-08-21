@@ -11702,8 +11702,28 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         status = flush_pending_character(engine, error, error_capacity);
     }
     if (status == 0 && !engine->group_stop_hit) {
-        status = set_error(error, error_capacity,
-                           "input ended inside an hbox");
+        /* The input ran out with the box still open. The reference puts in
+           the } that each group still open wants, saying so for each, and
+           the box closes as it would have: measured, `\hbox{{x}' at the end
+           of a run draws one and `\hbox{{{x}' draws two. */
+        static const char *const help[] = {
+            "I've inserted something that you may have forgotten.",
+            "(See the <inserted text> above.)",
+            "With luck, this will get me unwedged. But if you",
+            "really didn't forget anything, try typing `2' now; then",
+            "my insertion and my current dilemma will both disappear.",
+            NULL};
+        while (engine->group_level > engine->output_group_floor) {
+            tex_error(engine, help, "Missing } inserted");
+            if (end_group(engine, error, error_capacity) < 0) {
+                status = -1;
+                break;
+            }
+        }
+        /* And one for the box's own group, which the caller closes. */
+        if (status == 0) {
+            tex_error(engine, help, "Missing } inserted");
+        }
     }
     nest_pop(engine);
     engine->space_factor = previous_space_factor;
