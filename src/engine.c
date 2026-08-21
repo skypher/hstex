@@ -8931,6 +8931,25 @@ static int scan_delimited_argument(struct hstex_engine *engine,
 
 /* Report the expected and actual token so that a mismatch identifies the
    delimiter that failed rather than only the macro. */
+/* A NUL CANNOT STAND IN A C STRING, and a name is handed on as one -- so
+   what the printer would have made of the byte is written in its place: a
+   line break where it is the \newlinechar, and `^^@' where it is not. */
+static void append_described_nul(struct hstex_engine *engine, char *buffer,
+                                 size_t *written, size_t capacity)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER] == 0) {
+        if (*written + 1U < capacity) {
+            buffer[(*written)++] = '\n';
+        }
+        return;
+    }
+    if (*written + 3U < capacity) {
+        buffer[(*written)++] = '^';
+        buffer[(*written)++] = '^';
+        buffer[(*written)++] = '@';
+    }
+}
+
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity)
 {
@@ -8987,19 +9006,42 @@ static void describe_token(struct hstex_engine *engine, hstex_token token,
                               hstex_token_control_sequence_id(token), &kind,
                               &name, &length) == 0) {
             size_t written = 0U;
-            if (capacity != 0U) {
-                buffer[written++] = '\\';
+            /* THE ESCAPE CHARACTER IS \escapechar, not always a backslash:
+               with it set to `|' the reference writes `You can't use
+               `|prevdepth' after |advance', and with it outside 0..255 it
+               writes the name bare. An ACTIVE CHARACTER has no escape
+               character in front of it at all. */
+            int32_t escape =
+                engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+            if (kind == HSTEX_SYMBOL_REGULAR && escape >= 0 && escape <= 255) {
+                if (escape == 0) {
+                    append_described_nul(engine, buffer, &written, capacity);
+                } else if (capacity != 0U) {
+                    buffer[written++] = (char)escape;
+                }
+            }
+            /* The NULL control sequence has no name, and is written as the
+               two control words that make it. */
+            static const char *const null_parts[2] = {"csname", "endcsname"};
+            for (size_t part = 0U;
+                 kind == HSTEX_SYMBOL_REGULAR && length == 0U && part < 2U;
+                 ++part) {
+                if (part == 1U && escape >= 1 && escape <= 255 &&
+                    written + 1U < capacity) {
+                    buffer[written++] = (char)escape;
+                }
+                for (size_t byte = 0U; null_parts[part][byte] != '\0'; ++byte) {
+                    if (written + 1U >= capacity) {
+                        break;
+                    }
+                    buffer[written++] = null_parts[part][byte];
+                }
             }
             for (size_t index = 0U; index < length; ++index) {
                 /* See the character above: a NUL in a name is spelled out,
                    everything else the printer looks after. */
                 if (name[index] == 0U) {
-                    if (written + 3U >= capacity) {
-                        break;
-                    }
-                    buffer[written++] = '^';
-                    buffer[written++] = '^';
-                    buffer[written++] = '@';
+                    append_described_nul(engine, buffer, &written, capacity);
                     continue;
                 }
                 if (written + 1U >= capacity) {
@@ -24238,11 +24280,25 @@ static int execute_arithmetic(struct hstex_engine *engine,
         char named[128];
         char operation_name[64];
         describe_token(engine, offending, named, sizeof(named));
-        (void)snprintf(operation_name, sizeof(operation_name), "\\%s",
-                       operation == HSTEX_COMMAND_ADVANCE
-                           ? "advance"
-                           : (operation == HSTEX_COMMAND_MULTIPLY ? "multiply"
-                                                                  : "divide"));
+        /* The primitive is named behind the ESCAPE CHARACTER, which is not
+           always a backslash: trip sets \escapechar to `|' before it writes
+           `\advance\prevdepth', and the reference says `after |advance'. */
+        const char *word = operation == HSTEX_COMMAND_ADVANCE
+                               ? "advance"
+                               : (operation == HSTEX_COMMAND_MULTIPLY
+                                      ? "multiply"
+                                      : "divide");
+        int32_t escape =
+            engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+        if (escape >= 1 && escape <= 255) {
+            (void)snprintf(operation_name, sizeof(operation_name), "%c%s",
+                           (char)escape, word);
+        } else if (escape == 0) {
+            (void)snprintf(operation_name, sizeof(operation_name), "^^@%s",
+                           word);
+        } else {
+            (void)snprintf(operation_name, sizeof(operation_name), "%s", word);
+        }
         tex_error(engine, help, "You can't use `%s' after %s", named,
                   operation_name);
         engine->pending_global = false;

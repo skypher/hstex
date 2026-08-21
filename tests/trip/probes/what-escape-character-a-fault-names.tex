@@ -1,0 +1,56 @@
+% WHAT ESCAPE CHARACTER A FAULT NAMES.
+%
+% A name written into a fault stands behind \escapechar, which is not
+% always a backslash and need not be a character at all:
+%
+%   \escapechar=`\\   ! You can't use `\prevdepth' after \advance.
+%   \escapechar=`|    ! You can't use `|prevdepth' after |advance.
+%   \escapechar=-1    ! You can't use `prevdepth' after advance.
+%
+% Both halves of that message obey it: the name the document wrote and the
+% primitive the reference names for itself.
+%
+% An ACTIVE CHARACTER has no escape character in front of it -- `Use of ~
+% doesn't match its definition' -- and the NULL control sequence, which has
+% no name, is written as the two control words that make it, each behind
+% its own escape character.
+%
+% An escape character of nought is a NUL, and a NUL is written the way the
+% printer writes one: a line break where it is the \newlinechar -- which it
+% is by default -- and `^^@' where it is not.
+%
+% HSTeX wrote a backslash whatever \escapechar said, and wrote the null
+% control sequence as that backslash alone. trip sets \escapechar to `|' on
+% line 342 and writes `\advance\prevdepth' on line 410; its `\csname
+% \endcsname' on line 402 is used where a macro wants a parameter text.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\catcode`~=13
+\message{[A with the ordinary escape character]}
+\advance\prevdepth by 1pt
+\message{[B with the escape character changed]}
+\escapechar=`|
+\advance\prevdepth by 1pt
+\message{[C with no escape character at all]}
+\escapechar=-1
+\advance\prevdepth by 1pt
+\message{[D the null control sequence, both ways]}
+\escapechar=`|
+\expandafter\def\csname\endcsname#1.{}
+\expandafter\csname\endcsname x,
+\escapechar=`\\
+\expandafter\csname\endcsname x,
+\message{[E an active character, which has none]}
+\def~#1.{}
+~x,
+\escapechar=`|
+~x,
+\message{[F an escape character of nought, which is a NUL]}
+\escapechar=0
+\def\q#1.{}
+\q x,
+\message{[G and the same where the NUL is not the newline character]}
+\newlinechar=`Y
+\q x,
+\message{[done]}
+\end
