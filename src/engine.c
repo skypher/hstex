@@ -176,9 +176,14 @@ static int scan_left_brace(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
 /* The text of a meaning and the name of a control sequence, both wanted by
    the show diagnostics before either is defined. */
+/* `limit' is how many bytes of a macro's text to show past the `macro:'
+   prefix before giving up and saying `\ETC.'; nought means all of it. The
+   count is taken token by token, so the one that reaches the limit is shown
+   whole. */
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
                          size_t *capacity_out, size_t *after_prefix,
+                         size_t limit, bool *truncated,
                          char *error, size_t error_capacity);
 static int serialize_control_sequence(struct hstex_engine *engine,
                                       hstex_token token, uint8_t **bytes,
@@ -14661,6 +14666,8 @@ static const char *token_parameter_name(uint32_t parameter)
         return "everycr";
     case HSTEX_TOKEN_EVERY_EOF:
         return "everyeof";
+    case HSTEX_TOKEN_ERROR_HELP:
+        return "errhelp";
     default:
         return NULL;
     }
@@ -15889,8 +15896,11 @@ static void trace_restore(struct hstex_engine *engine,
     static const char *const sizes[3] = {"textfont", "scriptfont",
                                          "scriptscriptfont"};
     /* A restore never carries the mode, however long it is since one was
-       named: measured, not one of the oracle's 257 lines has it. */
-    print_fresh_line(engine);
+       named: measured, not one of the oracle's 257 lines has it. AND IT DOES
+       NOT START A LINE: where a \tracingcommands line moves to a fresh line
+       first, a restore is written where the last thing left off --
+       `[C exactly at the boundary]{restoring \toks3=...' and
+       `(./ra.tex{restoring \count5=8}'. */
     print_text(engine, retaining ? "{retaining " : "{restoring ");
     switch (save->kind) {
     case HSTEX_SAVE_MEANING: {
@@ -15908,10 +15918,14 @@ static void trace_restore(struct hstex_engine *engine,
            restoring for real, and may decline to. */
         struct hstex_meaning standing = engine->meanings[save->index - 1U];
         engine->meanings[save->index - 1U] = save->previous.meaning;
+        bool cut = false;
         if (meaning_bytes(engine, hstex_token_control_sequence(save->index),
-                          &bytes, &count, &capacity, NULL, scratch,
+                          &bytes, &count, &capacity, NULL, 32U, &cut, scratch,
                           sizeof(scratch)) == 0) {
             print_bytes(engine, (const char *)bytes, count);
+            if (cut) {
+                print_text(engine, "\\ETC.");
+            }
         }
         engine->meanings[save->index - 1U] = standing;
         free(bytes);
@@ -16003,10 +16017,17 @@ static void trace_restore(struct hstex_engine *engine,
         size_t count = 0U;
         char scratch[256];
         bool cut = false;
+        /* Thirty-two bytes of it and no more, counted token by token so that
+           the one that reaches the limit is shown whole: measured, a \toks of
+           thirty-two characters is shown entire and one of thirty-three is
+           shown to thirty-two and then `\ETC.'. */
         if (stored_token_list_text(engine, save->previous.token_list_identifier,
-                                   &bytes, &count, SIZE_MAX, &cut, scratch,
+                                   &bytes, &count, 32U, &cut, scratch,
                                    sizeof(scratch)) == 0) {
             print_bytes(engine, (const char *)bytes, count);
+            if (cut) {
+                print_text(engine, "\\ETC.");
+            }
         }
         free(bytes);
         break;
@@ -16101,8 +16122,8 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
         size_t count = 0U;
         size_t capacity = 0U;
         char scratch[256];
-        if (meaning_bytes(engine, token, &bytes, &count, &capacity, NULL,
-                          scratch, sizeof(scratch)) != 0) {
+        if (meaning_bytes(engine, token, &bytes, &count, &capacity, NULL, 0U,
+                          NULL, scratch, sizeof(scratch)) != 0) {
             describe_token(engine, token, named, sizeof(named));
         } else {
             if (count > sizeof(named) - 1U) {
@@ -16248,7 +16269,7 @@ static int execute_show(struct hstex_engine *engine, char *error,
     size_t capacity = 0U;
     size_t after_prefix = SIZE_MAX;
     if (meaning_bytes(engine, subject, &bytes, &count, &capacity,
-                      &after_prefix, error, error_capacity) != 0) {
+                      &after_prefix, 0U, NULL, error, error_capacity) != 0) {
         free(bytes);
         return -1;
     }
@@ -23002,11 +23023,15 @@ static int append_character_meaning(struct hstex_engine *engine,
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
                          size_t *capacity_out, size_t *after_prefix,
+                         size_t limit, bool *truncated,
                          char *error, size_t error_capacity)
 {
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
+    if (truncated != NULL) {
+        *truncated = false;
+    }
     if (hstex_token_is_character(subject)) {
         if (append_character_meaning(engine, subject, &bytes, &count, &capacity,
                                      error, error_capacity) != 0) {
@@ -23098,8 +23123,17 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
             if (after_prefix != NULL) {
                 *after_prefix = count;
             }
+            /* What is counted against the limit is the parameter text, the
+               `->' between, and the replacement -- not the `macro:' in front
+               of them, nor the \long and \outer before that. */
+            size_t shown_from = count;
+            bool cut = false;
             for (size_t index = 0U; index < macro->parameter_count_tokens;
                  ++index) {
+                if (limit != 0U && count - shown_from >= limit) {
+                    cut = true;
+                    break;
+                }
                 if (append_token_description(
                         engine, macro->parameter_text[index], &bytes, &count,
                         &capacity, error, error_capacity) != 0) {
@@ -23107,18 +23141,29 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                     return -1;
                 }
             }
-            if (append_text_bytes(&bytes, &count, &capacity, "->", error,
-                                  error_capacity) != 0) {
+            if (!cut && limit != 0U && count - shown_from >= limit) {
+                cut = true;
+            }
+            if (!cut && append_text_bytes(&bytes, &count, &capacity, "->",
+                                          error, error_capacity) != 0) {
                 free(bytes);
                 return -1;
             }
-            for (size_t index = 0U; index < macro->replacement_count; ++index) {
+            for (size_t index = 0U; !cut && index < macro->replacement_count;
+                 ++index) {
+                if (limit != 0U && count - shown_from >= limit) {
+                    cut = true;
+                    break;
+                }
                 if (append_token_description(
                         engine, macro->replacement[index], &bytes, &count,
                         &capacity, error, error_capacity) != 0) {
                     free(bytes);
                     return -1;
                 }
+            }
+            if (cut && truncated != NULL) {
+                *truncated = true;
             }
         } else if (meaning->command == HSTEX_COMMAND_FONT_GIVEN) {
             uint32_t identifier = meaning->value.integer > 0
@@ -23209,8 +23254,8 @@ static int expand_meaning(struct hstex_engine *engine,
     uint8_t *bytes = NULL;
     size_t count = 0U;
     size_t capacity = 0U;
-    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, NULL, error,
-                      error_capacity) != 0) {
+    if (meaning_bytes(engine, subject, &bytes, &count, &capacity, NULL, 0U,
+                      NULL, error, error_capacity) != 0) {
         return -1;
     }
     (void)capacity;

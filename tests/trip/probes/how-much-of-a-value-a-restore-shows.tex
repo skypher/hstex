@@ -1,0 +1,44 @@
+% A RESTORE SHOWS THIRTY-TWO BYTES OF A VALUE AND THEN SAYS \ETC.
+%
+% What is counted is the value alone. For a macro that is the parameter
+% text, the `->' between, and the replacement -- not the `macro:' in
+% front of them, nor the \long and \outer before that:
+%
+%   {restoring \toks2=01234567890123456789012345678901}      32, whole
+%   {restoring \toks3=01234567890123456789012345678901\ETC.} 33, cut
+%   {restoring \ccc=macro:#1->0123456789012345678901234567\ETC.}
+%   {restoring \bbb=macro:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\ETC.}
+%   {restoring \qqq=\long\outer macro:#1->01234567890123456789012345\ETC.}
+%
+% THE COUNT IS TAKEN TOKEN BY TOKEN, so the token that reaches the limit
+% is shown whole and may run past it. That is why trip's
+% `{restoring \output={\tracingcommands 0\showthe \outputpenalty \ETC.}'
+% shows forty-two bytes: \tracingcommands (17) + 0 (18) + \showthe (27)
+% are all under thirty-two, and \outputpenalty is shown whole.
+%
+% WHERE THE PARAMETER TEXT ALONE FILLS THE THIRTY-TWO the `->' is not
+% shown at all -- \bbb above.
+%
+% AND A RESTORE DOES NOT START A LINE. Where a \tracingcommands line
+% moves to a fresh line first, a restore is written where the last thing
+% left off, so a \message and the restore after it share a line.
+\tracingonline=1
+\catcode`\[=1 \catcode`\]=2
+\toks1[0123456789012345678901234567890]
+\toks2[01234567890123456789012345678901]
+\toks3[012345678901234567890123456789012]
+\def\aaa#1#2#3#4#5#6#7#8#9[body]
+\def\bbb ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij#1[body]
+\def\ccc#1[0123456789012345678901234567890]
+\long\outer\def\qqq#1[01234567890123456789012345678901]
+\everypar[abcdefghijklmnopqrstuvwxyz]
+\errhelp[ab]
+\tracingrestores=1
+\message[[A the registers]]
+[\toks1[x]\toks2[x]\toks3[x]]
+\message[[B the macros]]
+[\def\aaa[x]\def\bbb[x]\def\ccc[x]\def\qqq[x]]
+\message[[C the parameters]]
+[\everypar[x]\errhelp[x]]
+\message[[done]]
+\end

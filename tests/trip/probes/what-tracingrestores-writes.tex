@@ -56,6 +56,25 @@
 % named: not one of the oracle's 257 lines has a `vertical mode: ' on it,
 % where a \tracingcommands line would.
 %
+% A RESTORE IS SHOWN TO THIRTY-TWO BYTES AND NO FURTHER, and then says
+% `\ETC.'. What is counted is the value alone -- for a macro, the
+% parameter text, the `->' between and the replacement, not the `macro:'
+% in front of them nor the \long and \outer before that:
+%
+%   \toks2 of 32 characters      shown whole
+%   \toks3 of 33 characters      32 of them and `\ETC.'
+%   macro:#1->0123...            #1(2) + ->(2) + 28 = 32, then `\ETC.'
+%   \long\outer macro:32#1->...  32#1(4) + ->(2) + 26 = 32
+%
+% The count is taken TOKEN BY TOKEN, so the token that reaches the limit
+% is shown whole and may run past it -- `\outputpenalty ' takes the tally
+% from 27 to 42. And where the parameter text alone fills the thirty-two,
+% the `->' is not shown at all.
+%
+% A RESTORE DOES NOT START A LINE. Where a \tracingcommands line moves to
+% a fresh line first, a restore is written where the last thing left off:
+% `[C exactly at the boundary]{restoring \toks3=...' on the one line.
+%
 % A SAVE TAKEN OVER BY A GLOBAL ASSIGNMENT says `retaining' and names the
 % value that stands, not `restoring' with the one saved. Measured in
 % tests/trip/probes/when-a-restore-is-retained-instead.tex, which also
