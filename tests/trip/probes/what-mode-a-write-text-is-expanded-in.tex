@@ -1,0 +1,44 @@
+% A \write's TEXT IS EXPANDED IN NO MODE, and \tracingcommands says so.
+%
+% Every command traced while the text of a \write is being expanded carries
+% the mode `no mode', which is none of the four:
+%
+%   \shipout\hbox{\write16{\number\count5}}   {no mode: \number}
+%   \immediate\write16{\number\count5}        {no mode: \number}
+%
+% Both kinds: the deferred one is expanded when the page is shipped and the
+% immediate one where it stands, and both are in no mode. Because the mode
+% is named only where it has changed, this also makes the NEXT trace line
+% after a \write name its mode again -- which is how the difference shows
+% up in trip far more often than the \write lines themselves do.
+%
+% NO OTHER EXPANDED TEXT DOES THIS. Measured, all in vertical mode and all
+% drawing the mode that stands: \message, \edef, \special, \mark, and a
+% token parameter's text (\errhelp).
+%
+% \immediate HIDES THE COMMAND IT REACHES OVER. It reads that command
+% itself, so the main loop never obeys it and never traces it:
+%
+%   \immediate\write16{x}      {\immediate}
+%   \immediate\openout15=f     {\immediate}
+%   \immediate\closeout15      {\immediate}
+%   \immediate\special{x}      {\immediate} {\special}
+%   \immediate\relax           {\immediate} {\relax}
+%
+% -- the last two because \special and \relax are not among the three
+% \immediate accepts, so they are put back and met again by the main loop.
+\tracingonline=1 \count5=3 \def\q{Q}
+\tracingcommands=2
+\shipout\hbox{\write16{[a\number\count5\q]}}
+\immediate\write16{[b\number\count5]}
+\message{[m\number\count5]}
+\edef\z{[e\number\count5]}
+\special{[s\number\count5]}
+\mark{[k\number\count5]}
+\errhelp{[h\number\count5]}
+\immediate\relax
+\immediate\openout15=rfout
+\immediate\closeout15
+\immediate\special{x}
+\tracingcommands=0
+\end

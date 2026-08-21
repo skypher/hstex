@@ -15582,6 +15582,14 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
    The reference says so, pretends it was not asked for, and carries on. */
 static const char *mode_name(const struct hstex_engine *engine)
 {
+    /* The text of a \write is expanded in none of the four modes, and a
+       trace line made while it is says so. Measured: a \number in a \write
+       text draws `{no mode: \number}' where the same \number in a
+       \message, \edef, \special, \mark or a token parameter draws the
+       mode that stands. */
+    if (engine->in_no_mode) {
+        return "no mode";
+    }
     switch (engine->mode) {
     case HSTEX_MODE_HORIZONTAL:
         return engine->inner_mode ? "restricted horizontal mode"
@@ -34886,8 +34894,12 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
     }
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
-    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
-                                   error_capacity) != 0) {
+    bool outer_no_mode = engine->in_no_mode;
+    engine->in_no_mode = true;
+    int expanded = scan_expanded_general_text(engine, &bytes, &byte_count,
+                                              error, error_capacity);
+    engine->in_no_mode = outer_no_mode;
+    if (expanded != 0) {
         free(bytes);
         return -1;
     }
@@ -35071,8 +35083,13 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
         return open_write_stream(engine, stream, filename, error,
                                  error_capacity);
     }
-    if (expand_stored_token_list(engine, tokens, &bytes, &byte_count, error,
-                                 error_capacity) != 0) {
+    bool outer_no_mode = engine->in_no_mode;
+    engine->in_no_mode = true;
+    int expanded = expand_stored_token_list(engine, tokens, &bytes,
+                                            &byte_count, error,
+                                            error_capacity);
+    engine->in_no_mode = outer_no_mode;
+    if (expanded != 0) {
         return -1;
     }
     int status = write_stream_bytes(engine, stream, bytes, byte_count, error,
@@ -37976,7 +37993,17 @@ handle_token:
             }
             continue;
         }
-        trace_command(engine, *token);
+        /* \immediate reads the command it stands in front of itself, so
+           that command is not one the main loop obeyed and is not traced.
+           Measured: \immediate\write and \immediate\openout draw one line
+           where \immediate\special and \immediate\relax draw two, because
+           those two are put back and met again here. */
+        if (!engine->immediate_pending ||
+            (meaning->command != (int)HSTEX_COMMAND_WRITE &&
+             meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
+             meaning->command != (int)HSTEX_COMMAND_CLOSE_OUT)) {
+            trace_command(engine, *token);
+        }
         record_executing_name(engine, *token);
         /* \immediate reaches exactly as far as the command it stands in
            front of; see docs/DECISIONS.md, whatsits. */

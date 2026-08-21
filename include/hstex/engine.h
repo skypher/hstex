@@ -2041,6 +2041,9 @@ struct hstex_engine {
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
+    /* A \write's text is expanded in a mode of its own, which the reference
+       calls `no mode' and which \tracingcommands names like any other. */
+    bool in_no_mode;
     /* The paragraph being broken is being broken because a display formula
        is starting, so \displaywidowpenalty stands in for \widowpenalty;
        see docs/DECISIONS.md, display-math. */
