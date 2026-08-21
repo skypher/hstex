@@ -15690,9 +15690,6 @@ static void show_node(struct hstex_engine *engine,
             print_text(engine, ", shifted ");
             show_scaled(engine, node->shift);
         }
-        if (node->value.list.display) {
-            print_text(engine, ", display");
-        }
         if (node->value.list.node_count == 0U) {
             return;
         }

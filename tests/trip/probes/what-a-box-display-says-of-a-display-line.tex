@@ -1,0 +1,30 @@
+% A BOX DISPLAY SAYS NOTHING OF A LINE BEING A DISPLAY'S.
+%
+% The line a display was set as is marked inside the engine -- the widow
+% penalty in front of it is \displaywidowpenalty and not \widowpenalty --
+% but \showbox does not say so:
+%
+%   .\hbox(4.30554+1.94444)x5.2616, shifted 47.3692
+%
+% `, display' after the dimensions is one of the pdfTeX extensions. It
+% appears under plain `pdftex' and NOT under `pdftex -ini', which is the
+% engine trip is measured against, so HSTeX does not write it. See
+% docs/DECISIONS.md, display-math and which-tex-hstex-is-measured-against.
+%
+% This probe must be run with `pdftex -ini'. Run it with plain `pdftex'
+% and the reference will print `, display' and the comparison will fail
+% -- which is the whole point of the entry.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\hsize=100pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
+\message{[A a display line]}
+\setbox0=\vbox{\noindent x$$y$$z\par}
+\showbox0
+\message{[done]}
+\end
