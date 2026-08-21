@@ -1,0 +1,39 @@
+% A PREFIX READS WHAT IT PREFIXES ITSELF, AND SO HIDES IT FROM THE TRACE.
+%
+% \tracingcommands draws a line for the prefix and nothing for the
+% command it prefixes:
+%
+%   \global\count5=1          {\global}
+%   \global\advance\count5by1 {\global}
+%   \long\def\aa{}            {\long}
+%   \outer\def\bb{}           {\outer}
+%   \global\let\cc=\relax     {\global}
+%   \global\long\def\dd{}     {\global}      -- not the \long either
+%   \global\relax\count5=2    {\global}      -- nor a \relax between
+%   \global \count5=3         {\global}      -- nor the space
+%   \global\setbox1=\hbox{}   {\global}
+%   \global\futurelet\ee\relax{\global}
+%
+% The same shape as \immediate, which hides \write, \openout and
+% \closeout: a command read by something other than the main loop is not
+% a command the main loop obeyed. See
+% tests/trip/probes/what-mode-a-write-text-is-expanded-in.tex.
+%
+% A PREFIX WITH SOMETHING IT CANNOT PREFIX draws two lines, because the
+% command is put back and met again once the prefix has been given up --
+% the same way \immediate\relax does.
+\tracingonline=1 \tracingcommands=2
+\message{[a]}\global\count5=1
+\message{[b]}\global\advance\count5 by1
+\message{[c]}\long\def\aa{}
+\message{[d]}\outer\def\bb{}
+\message{[e]}\global\let\cc=\relax
+\message{[f]}\global\relax\count5=2
+\message{[g]}\global\long\def\dd{}
+\message{[h]}\global\setbox1=\hbox{}
+\message{[i]}\global\futurelet\ee\relax
+\message{[j]}
+\message{[k]}\global \count5=3
+\message{[l]}
+\tracingcommands=0
+\end

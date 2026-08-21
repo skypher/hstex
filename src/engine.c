@@ -37720,8 +37720,10 @@ handle_token:
             /* Unless this character is standing in for the control sequence
                that meant it -- one \let to a brace, one \chardef'd -- which
                was traced already. The reference draws one line for
-               `\let\bg={ \bg', not two. */
-            if (!engine->command_traced) {
+               `\let\bg={ \bg', not two. Nor is anything traced while a
+               prefix is waiting: what \global prefixes it reads itself. */
+            if (!engine->command_traced && !engine->pending_global &&
+                engine->pending_macro_flags == 0U) {
                 trace_command(engine, *token);
             }
             /* A formula is delimited by math shifts rather than braces, so
@@ -38062,11 +38064,15 @@ handle_token:
            that command is not one the main loop obeyed and is not traced.
            Measured: \immediate\write and \immediate\openout draw one line
            where \immediate\special and \immediate\relax draw two, because
-           those two are put back and met again here. */
-        if (!engine->immediate_pending ||
+           those two are put back and met again here. A prefix reads what it
+           prefixes the same way: `\global\count5=1' draws {\global} and
+           nothing for the \count, and so do \long, \outer, a second
+           prefix, and a \relax standing between. */
+        if ((!engine->pending_global && engine->pending_macro_flags == 0U) &&
+            (!engine->immediate_pending ||
             (meaning->command != (int)HSTEX_COMMAND_WRITE &&
              meaning->command != (int)HSTEX_COMMAND_OPEN_OUT &&
-             meaning->command != (int)HSTEX_COMMAND_CLOSE_OUT)) {
+             meaning->command != (int)HSTEX_COMMAND_CLOSE_OUT))) {
             trace_command(engine, *token);
             engine->command_traced = true;
         }
