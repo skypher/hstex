@@ -12323,8 +12323,12 @@ static void report_packing(struct hstex_engine *engine,
         (void)fflush(diagnostic_stream(engine));
         return;
     }
-    show_short_display_of(engine, items, count);
-    print_line(engine);
+    /* A horizontal list is shown as text first; a vertical one is not, and
+       goes straight to the box. */
+    if (!vertical) {
+        show_short_display_of(engine, items, count);
+        print_line(engine);
+    }
     print_line(engine);
     print_formatted(engine, "%s(", kind);
     show_scaled(engine, box->height);
@@ -12846,6 +12850,10 @@ static int finalize_vbox(struct hstex_engine *engine,
     box->width = builder->width;
     box->height = (int32_t)(uint32_t)(uint64_t)height;
     box->depth = depth;
+    /* A vertical list is reported on the way a horizontal one is; it just
+       reads its own \vbadness and \vfuzz and measures its height. */
+    report_packing(engine, box, natural, &total, true,
+                   builder->node_identifiers, builder->count);
     if (builder->count != 0U) {
         box->node_start = (uint32_t)engine->list_item_count;
         box->node_count = (uint32_t)builder->count;
@@ -21704,9 +21712,16 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
         engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] =
             engine->dimen_parameters[HSTEX_DIMEN_MAX_DEPTH];
+        /* The page is packed to the size the builder chose and is never
+           reported on for it: the reference lifts \vbadness and \vfuzz out
+           of the way while it does this one, so a page that came out short
+           of \vsize says nothing. */
+        bool previous_quiet = engine->packing_quietly;
+        engine->packing_quietly = true;
         status = finalize_vbox(engine, &shipped, true, false,
                                engine->best_page_size, &packed, error,
                                error_capacity);
+        engine->packing_quietly = previous_quiet;
         engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH] = limit;
     }
     free(shipped.node_identifiers);

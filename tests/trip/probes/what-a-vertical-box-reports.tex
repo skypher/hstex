@@ -1,0 +1,38 @@
+% A VERTICAL LIST IS REPORTED ON THE WAY A HORIZONTAL ONE IS.
+%
+% \vbox to 100pt{} that cannot fill its height draws
+%
+%   Underfull \vbox (badness 10000) detected at line N
+%
+%   \vbox(100.0+0.0)x0.0 []
+%
+% -- the report, a blank line, and the box. There is NO short display
+% between them: that is a horizontal list's, and a vertical one goes
+% straight to the box. HSTeX reported nothing at all for a \vbox; it
+% worked out the badness and the glue set and then said nothing.
+%
+% THE PAGE IS THE EXCEPTION. It is packed to whatever size the page
+% builder chose and is never reported on for it: the reference lifts
+% \vbadness and \vfuzz out of the way while it packs that one box, so a
+% page that came out well short of \vsize says nothing. Without that,
+% every \output in a document with a short page draws an underfull \vbox
+% the reference does not.
+%
+% An EMPTY horizontal box is never reported either, however far off its
+% width it is -- the last two cases here draw nothing.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \hsize=100pt \parindent=0pt
+\message{[A an underfull vbox]}
+\setbox0=\vbox to 100pt{\hbox{}}
+\message{[B an overfull vbox]}
+\setbox0=\vbox to 1pt{\hbox{}\vskip20pt}
+\message{[C a vbox that fits]}
+\setbox0=\vbox to 0pt{\hbox{}}
+\message{[D the page, which says nothing]}
+\vsize=100pt \topskip=0pt \maxdepth=0pt
+\output={\message{[FIRE \the\outputpenalty]}\shipout\box255 }
+\hbox{}\penalty-10000
+\message{[E an empty hbox is never reported]}
+\setbox0=\hbox to 100pt{}
+\message{[done]}
+\end
