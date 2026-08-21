@@ -20,7 +20,20 @@
 %
 % A display with no number has one list and one check, and an inline
 % formula the same.
-\tracingonline=1 \tracingcommands=2
+%
+% THE NUMBER HAS A GROUP OF ITS OWN, with its own \fam, and it is given
+% back between the two: with \tracingrestores on the four lines read
+%
+%   ! Display math should end with $$.
+%   {restoring \fam=-1}                              the NUMBER's group
+%   ! Math formula deleted: Insufficient extension fonts.
+%   {restoring \displayindent=0.0pt} ... {restoring \fam=0}
+%
+% -- and that last order says something about the DISPLAY's group too:
+% \fam is set FIRST, before \predisplaysize, \displaywidth and
+% \displayindent, so it is given back LAST. hstex set it after them and
+% gave it back first.
+\tracingonline=1 \tracingcommands=2 \tracingrestores=1
 \textfont3=\nullfont \scriptfont3=\nullfont \scriptscriptfont3=\nullfont
 \message{[A eqno in a display, closed with one dollar]}
 $$\eqno^{}$

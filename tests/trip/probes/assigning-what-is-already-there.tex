@@ -1,0 +1,48 @@
+% ASSIGNING WHAT IS ALREADY THERE IS A NO-OP -- IN eTeX MODE ONLY.
+%
+% This is the trap the method note warns about, caught in the act. Under
+% the PRELOADED pdftex format, which is built with eTeX enabled, a group
+% that assigns a value equal to the one standing gives nothing back:
+%
+%   \count5=7 {\count5=7}      no restore line
+%   \count5=7 {\count5=8}      {restoring \count5=7}
+%
+% Under `pdftex -ini', which is what trip's oracle runs, BOTH draw a
+% restore line. The same probe, the same engine, two answers -- the
+% shortcut is an eTeX extension and is not in TeX.
+%
+%   pdftex -ini si.tex                  pdftex '\input si \end'
+%   [A same value]                      [A same value]
+%   {restoring \count5=7}               [B different value]
+%   {restoring \dimen5=1.0pt}           {restoring \count5=7}
+%   {restoring \catcode113=12}          [done]
+%   [B different value]
+%   {restoring \count5=7}
+%   [done]
+%
+% HSTEX DOES THE TeX THING, because trip is what it is measured against
+% and hstex has no eTeX mode to switch on. It was written the other way
+% first, on a probe run under the preloaded format, and trip caught it:
+% the reference gives back \fam and \displayindent from a display whose
+% values were already what the display wanted, and the eTeX rule says it
+% should not.
+%
+% If an eTeX mode is ever added, this is one of the things it turns on,
+% along with `{reassigning ...}' and `{changing ...}' lines under
+% \tracingassigns. What always saves either way is anything whose value
+% is a freshly made thing and so never the same one twice: a glue, a
+% token list, a \parshape, a box, a macro.
+%
+% RUN THIS ONE BOTH WAYS. As written it needs `pdftex -ini', which gives
+% no catcodes of its own.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingrestores=1
+\count5=7 \dimen5=1pt \catcode`\q=12
+\message{[A same value]}
+{\count5=7}
+{\dimen5=1pt}
+{\catcode`\q=12}
+\message{[B different value]}
+{\count5=8}
+\message{[done]}
+\end

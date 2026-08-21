@@ -30766,6 +30766,13 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     if (begin_group(engine, HSTEX_GROUP_MATH_SHIFT, error, error_capacity) != 0) {
         return -1;
     }
+    /* \fam is set FIRST, before the three parameters, which is why the
+       reference gives them back in the order \displayindent, \displaywidth,
+       \predisplaysize, \fam when the display's group ends. */
+    if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
+                                 false, error, error_capacity) != 0) {
+        return -1;
+    }
     /* The three parameters belong to the display: they are set inside its
        group and go back to what they were when it ends. */
     if (assign_dimen_parameter(engine, (uint32_t)HSTEX_DIMEN_PRE_DISPLAY_SIZE,
@@ -30785,9 +30792,7 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     if (contribute_page(engine, error, error_capacity) != 0) {
         return -1;
     }
-    if (assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
-                                 false, error, error_capacity) != 0 ||
-        push_math_list(engine, (uint8_t)HSTEX_STYLE_DISPLAY, error,
+    if (push_math_list(engine, (uint8_t)HSTEX_STYLE_DISPLAY, error,
                        error_capacity) != 0) {
         return -1;
     }
@@ -32962,6 +32967,15 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
        group opened inside it is still told apart from the formula. */
     engine->reading_equation_number = true;
     engine->equation_number_on_left = left;
+    /* The number has a GROUP of its own, with its own \fam: the reference
+       gives that one back on its own -- `{restoring \fam=-1}' -- between the
+       complaint about a single $ and the measuring of the equation. */
+    if (begin_group(engine, HSTEX_GROUP_MATH_SHIFT, error, error_capacity) !=
+            0 ||
+        assign_integer_parameter(engine, (uint32_t)HSTEX_INTEGER_FAMILY, -1,
+                                 false, error, error_capacity) != 0) {
+        return -1;
+    }
     /* An equation number is set in text style and is internal: \ifinner is
        true inside one, and the reference names the mode "math mode" rather
        than "display math mode" when it refuses a second \eqno there. */
@@ -33158,6 +33172,13 @@ static int end_display_math(struct hstex_engine *engine,
     struct hstex_box equation = packaged;
     struct hstex_box number = packaged;
     if (numbered) {
+        /* The number's group is given back first, and only then is the
+           equation measured: `{restoring \fam=-1}' stands between the
+           complaint about the single $ and the second `Insufficient
+           extension fonts'. */
+        if (end_group(engine, error, error_capacity) < 0) {
+            return -1;
+        }
         /* What was in hand was the NUMBER; the equation is measured now, so
            its own `Insufficient extension fonts' comes after the complaint
            about the single $ rather than before it. */
