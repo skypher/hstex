@@ -39816,9 +39816,13 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             if (factor <= 0 || factor > 32767) {
-                (void)set_error(error, error_capacity,
-                                "spacefactor must lie between 1 and 32767");
-                return HSTEX_ENGINE_ERROR;
+                /* Reported and replaced by the ordinary one, not refused:
+                   trip line 289 writes `\spacefactor=0'. Nothing is put
+                   back, so the context names only the line. */
+                static const char *const help[] = {
+                    "I allow only values in the range 1..32767 here.", NULL};
+                tex_error(engine, help, "Bad space factor (%d)", factor);
+                factor = 1000;
             }
             engine->space_factor = factor;
             engine->pending_global = false;

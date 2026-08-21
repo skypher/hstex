@@ -1,0 +1,24 @@
+% A BAD SPACE FACTOR IS REPORTED AND REPLACED BY 1000.
+%
+% \spacefactor takes a number between 1 and 32767. Anything else draws
+%
+%   ! Bad space factor (0).
+%   I allow only values in the range 1..32767 here.
+%
+% and leaves \spacefactor at 1000 -- not at what it was, and not at the
+% number that was refused. Nothing is put back, so the context names only
+% the line the assignment was on.
+%
+% trip line 289 writes `\spacefactor=0'. HSTeX stopped there.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000
+\message{[A a space factor of zero]}
+\setbox0=\vbox{\noindent x\spacefactor=0 \message{[<\the\spacefactor>]}\par}
+\message{[B a space factor too large]}
+\setbox0=\vbox{\noindent x\spacefactor=40000 \message{[<\the\spacefactor>]}\par}
+\message{[C a negative one]}
+\setbox0=\vbox{\noindent x\spacefactor=-3 \message{[<\the\spacefactor>]}\par}
+\message{[D a good one]}
+\setbox0=\vbox{\noindent x\spacefactor=999 \message{[<\the\spacefactor>]}\par}
+\message{[done]}
+\end
