@@ -20,22 +20,26 @@
 %
 % HSTeX drew the fault and nothing else.
 %
-% Only definitions are shown here. The text and argument kinds are
-% written too and are right, but each has a separate difference after the
-% fault that this probe would trip over: a \message whose text ran away
-% writes one trailing space HSTeX does not, and a runaway ARGUMENT is
-% closed by the reference with an inserted \par where HSTeX inserts a }.
-% Both are in build/trip/ra2.tex.
+% The offending name is put back to be read again, and what the scanner
+% is holding becomes a SPACE, which joins whatever was being gathered --
+% so a \message whose text ran away writes one space after what it had.
+%
+% The argument kind is not in this probe: the reference closes a runaway
+% argument with an inserted \par and HSTeX with a }, which needs the
+% whole macro call abandoned to match. See build/trip/ra2.tex and the
+% comment at the insertion site.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
 \tracingonline=1
 \outer\def\lz{Z}
-\message{[A a runaway definition]}
+\message{[A a runaway text]}
+\message{XY\lz Q}
+\message{[B a runaway definition]}
 \def\zz{ab\lz cd}
-\message{[B one with a parameter text]}
+\message{[C one with a parameter text]}
 \def\ww#1{ab#1\lz cd}
-\message{[C a long one, cut with ETC]}
+\message{[D a long one, cut with ETC]}
 \def\yy{XYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZXYZ\lz Q}
-\message{[D an empty one]}
+\message{[E an empty one]}
 \def\vv{\lz}
 \message{[done]}
 \end

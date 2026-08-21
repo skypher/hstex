@@ -7928,11 +7928,16 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 "to read past where you wanted me to stop.",
                 "I'll try to recover; but if the error is serious,",
                 "you'd better type `E' or `X' now and fix your file.", NULL};
-            /* The reference puts a \par here for a runaway ARGUMENT and a
-               } for a runaway text, and marks the macro long so the \par
-               draws no "Paragraph ended before ..." of its own. HSTeX puts
-               a } in both cases; putting the \par in gets the context line
-               right and then diverges further down, so it waits. */
+            /* The reference closes a runaway ARGUMENT with an inserted \par
+               and a runaway text with a }. HSTeX puts a } in both cases,
+               because the \par is not just a different token: the
+               reference marks the macro outer_call for the rest of the
+               scan, and its own \par then ABANDONS THE WHOLE CALL --
+               silently, where a document's \par would have drawn
+               "Paragraph ended before ... was complete". Inserting the
+               \par without abandoning the call reads the offending name
+               again and loops. Abandoning it is a change to what
+               instantiate_macro promises its caller, so it waits. */
             hstex_token inserted = hstex_token_character(
                 (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
             if (push_one(engine, token, location, error, error_capacity) != 0 ||
@@ -9709,7 +9714,13 @@ static enum hstex_engine_result next_expanded_inner(
                               "scanning definition of %s",
                               engine->expanded_definition_name);
                 }
-                continue;
+                /* The offending name is put back to be read again, and what
+                   the scanner is holding becomes a SPACE -- which joins
+                   whatever was being gathered. That is why a \message whose
+                   text ran away writes one space after what it had. */
+                *token = hstex_token_character((uint8_t)HSTEX_CAT_SPACE,
+                                               (uint8_t)' ');
+                return HSTEX_ENGINE_TOKEN;
             }
             engine->expanding_macro_cs =
                 hstex_token_control_sequence_id(current);
