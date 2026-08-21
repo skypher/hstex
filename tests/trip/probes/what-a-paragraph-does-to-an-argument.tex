@@ -1,0 +1,20 @@
+% A \par in the argument of a macro that is not \long ends the call: the
+% reference shows what had been collected, hands the \par BACK so it is
+% read again, and forgets the whole call.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \tracingcommands=1 \hsize=100pt
+\message{[A a paragraph ends a delimited argument]}
+\def\b#1\par{}
+\b{\par
+\message{[B a paragraph ends an undelimited argument]}
+\def\c#1{}
+\c\par
+\message{[C a paragraph inside a braced argument]}
+\def\d#1{}
+\d{a\par b}
+\message{[D a long macro takes it]}
+\long\def\e#1{}
+\e{a\par b}
+\tracingcommands=0
+\message{[done]}
+\end

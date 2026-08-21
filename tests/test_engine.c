@@ -14080,7 +14080,16 @@ int main(void)
            reference forgets the whole call, reads the \par again, and goes
            on -- so the text after it is still set, and the } that had no
            call left to close draws "Too many }'s". */
-        run_snippet("\\def\\a#1{X}\\a{one\n\n two}after%", "twoafter") != 0 ||
+        run_document("\\def\\a#1{X}\\a{one\n\n two}after%",
+                     "Runaway argument?\n{one \n! Paragraph ended before \\a "
+                     "was complete.\n<to be read again> \n                   "
+                     "\\par \nl.2 \n    \nI suspect you've forgotten a `}', c"
+                     "ausing me to apply this\ncontrol sequence to too much t"
+                     "ext. How can we recover?\nMy plan is to forget the whol"
+                     "e thing and hope for the best.\n\n! Too many }'s.\nl.3 "
+                     " two}\n         after%\nYou've closed more groups than "
+                     "you opened.\nSuch booboos are generally harmless, so ke"
+                     "ep going.\n\n") != 0 ||
         test_a_definition_read_while_it_is_replaced() != 0 ||
         test_a_body_that_asks_for_no_argument() != 0 ||
         test_arguments_put_in_more_than_once() != 0 ||

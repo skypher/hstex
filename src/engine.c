@@ -8022,6 +8022,17 @@ static int scan_balanced_group(struct hstex_engine *engine,
                     engine,
                     hstex_token_control_sequence(engine->expanding_macro_cs),
                     named, sizeof(named));
+                report_runaway_list(engine, "argument", NULL, "{", argument);
+            /* The reference hands the \\par back before it reports, so the
+               context reads `<to be read again> \\par' and the \\par is then
+               obeyed: it ends the paragraph the runaway was in. */
+                if (push_one(engine, token, location, error,
+                             error_capacity) != 0) {
+                    return -1;
+                }
+                hstex_source_name_top(&engine->sources,
+                                      (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP,
+                                      0U);
                 tex_error(engine, help,
                           "Paragraph ended before %s was complete", named);
                 engine->argument_abandoned = true;
@@ -8621,6 +8632,24 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                     engine,
                     hstex_token_control_sequence(engine->expanding_macro_cs),
                     named, sizeof(named));
+                /* What ran away is this argument alone, and not the \\par
+                   that ended it -- which was pushed a moment ago. */
+                struct hstex_token_vector partial = {
+                    .data = argument->data + base,
+                    .count = argument->count - base - 1U,
+                    .capacity = 0U,
+                };
+                report_runaway_list(engine, "argument", NULL, NULL, &partial);
+            /* The reference hands the \\par back before it reports, so the
+               context reads `<to be read again> \\par' and the \\par is then
+               obeyed: it ends the paragraph the runaway was in. */
+                if (push_one(engine, token, location, error,
+                             error_capacity) != 0) {
+                    return -1;
+                }
+                hstex_source_name_top(&engine->sources,
+                                      (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP,
+                                      0U);
                 tex_error(engine, help,
                           "Paragraph ended before %s was complete", named);
                 engine->argument_abandoned = true;
@@ -8984,6 +9013,21 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                         hstex_token_control_sequence(
                             engine->expanding_macro_cs),
                         named, sizeof(named));
+                    /* Nothing had been collected, so the runaway shows a
+                       name and no text at all. */
+                    struct hstex_token_vector partial = {0};
+                    report_runaway_list(engine, "argument", NULL, NULL,
+                                        &partial);
+            /* The reference hands the \\par back before it reports, so the
+               context reads `<to be read again> \\par' and the \\par is then
+               obeyed: it ends the paragraph the runaway was in. */
+                    if (push_one(engine, first, location, error,
+                                 error_capacity) != 0) {
+                        goto cleanup;
+                    }
+                    hstex_source_name_top(
+                        &engine->sources,
+                        (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, 0U);
                     tex_error(engine, help,
                               "Paragraph ended before %s was complete", named);
                     engine->argument_abandoned = true;
