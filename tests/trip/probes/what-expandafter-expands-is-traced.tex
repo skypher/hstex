@@ -1,0 +1,48 @@
+% WHAT \expandafter EXPANDS IS TRACED WHERE THE EXPANDER'S OWN IS.
+%
+% \tracingcommands=2 draws a line for every expandable command the
+% expander expands, macros excepted. The one \expandafter reaches past
+% its held token is expanded by the expander too, and drawn:
+%
+%   \expandafter\relax\csname relax\endcsname     {\expandafter} {\csname}
+%   \expandafter\relax\number\count5              {\expandafter} {\number}
+%   \expandafter\expandafter\expandafter\relax\csname relax\endcsname
+%                                   {\expandafter} {\expandafter} {\csname}
+%
+% HSTeX expanded it by a path of its own that drew nothing.
+%
+% ALSO: a command that has to cross a formula's boundary is traced where
+% it is met AND again after the $ that was put in front of it, because it
+% is read again there. A \par met in math mode draws {\par}, then
+% "Missing $ inserted", then {math shift character $}, and then
+% {horizontal mode: \par}. A script mark met outside a formula and a math
+% command met outside one are the same.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \count5=3 \hsize=200pt \parindent=0pt
+\hbadness=10000 \hfuzz=100pt
+\message{[A expandafter over a relax to a csname]}
+\tracingcommands=2
+\expandafter\relax\csname relax\endcsname
+\message{[B expandafter over a relax to a number]}
+\expandafter\relax\number\count5
+\message{[C expandafter over a character to a csname]}
+\count6=1\expandafter1\csname relax\endcsname
+\message{[D a bare csname]}
+\csname relax\endcsname
+\message{[E expandafter twice]}
+\expandafter\expandafter\expandafter\relax\csname relax\endcsname
+\tracingcommands=0
+\message{[F a vertical command inside a formula]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$z\par}
+\tracingcommands=0
+\message{[G a script mark outside one]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x^2\par}
+\tracingcommands=0
+\message{[H a math command outside one]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x\mathchar"161 \par}
+\tracingcommands=0
+\message{[done]}
+\end

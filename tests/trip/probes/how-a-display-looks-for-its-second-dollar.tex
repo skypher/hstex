@@ -1,0 +1,37 @@
+% THE SECOND $ OF A DISPLAY'S $$ IS FETCHED WITH EXPANSION.
+%
+% When a display's first closing $ has been read, the reference looks for
+% the second one the way it looks for anything else -- expanding as it
+% goes. So a macro standing for it will do, and \expandafter may stand
+% between the two:
+%
+%   \def\dollar{$}   ... $$y$\dollar        closes cleanly, no complaint
+%                    ... $$y$\relax         "Display math should end with $$"
+%                    ... $$y$\expandafter$\csname dollar\endcsname
+%
+% HSTeX read the token raw, so the first of those drew a complaint.
+%
+% The mode there is the list the display will join, not the display's --
+% the formula's own list is gone by then. Inside a \vbox that is internal
+% vertical mode, which is what \tracingcommands names for the
+% \expandafter of the third case.
+%
+% What \expandafter expands is traced like anything the expander expands,
+% so {\csname} is drawn there too.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\#=6
+\tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
+\def\dollar{$}
+\message{[A the second $ comes from a macro]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y$\dollar z\par}
+\tracingcommands=0
+\message{[B the second $ does not come at all]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y$\relax z\par}
+\tracingcommands=0
+\message{[C the second $ comes from \expandafter]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y$\expandafter$\csname dollar\endcsname z\par}
+\tracingcommands=0
+\message{[done]}
+\end

@@ -1,0 +1,29 @@
+% A PARAGRAPH GOES BACK TO THE LIST THAT HELD IT, NOT TO THE PAGE.
+%
+% \par inside a \vbox leaves the engine in INTERNAL vertical mode, being
+% the mode of the list the paragraph's lines just joined. HSTeX went to
+% outer vertical mode whenever the paragraph's own list happened to be
+% empty by the time it was wound up, so \ifinner was false, \showlists
+% said "### vertical mode" and \tracingcommands named the wrong mode for
+% the very next command.
+%
+% A display inside such a paragraph is the same: the display's own list
+% is gone by the time the closing $$ is looked for, so the mode there is
+% the list the display will join.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \hsize=200pt \parindent=0pt \hbadness=10000 \hfuzz=100pt
+\message{[A a plain paragraph in a vbox]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x\par}
+\tracingcommands=0
+\message{[B a paragraph with a display in it]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent x$$y$$z\par}
+\tracingcommands=0
+\message{[C what the mode is, asked for directly]}
+\setbox0=\vbox{\ifinner\message{[in1]}\else\message{[out1]}\fi
+\noindent x\par\ifinner\message{[in2]}\else\message{[out2]}\fi}
+\message{[D and what showlists calls it]}
+\setbox0=\vbox{\noindent x\par\showlists}
+\message{[done]}
+\end

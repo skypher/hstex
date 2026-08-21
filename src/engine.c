@@ -9153,6 +9153,17 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     }
     const struct hstex_meaning *meaning = hstex_engine_meaning(
         engine, hstex_token_control_sequence_id(token));
+    /* Expanded here rather than by the expander's own loop, but expanded
+       all the same, so \tracingcommands draws it here too: measured on
+       `\expandafter\relax\csname relax\endcsname', where the reference
+       draws {\csname}. The rule is the loop's rule, macros excepted. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1 &&
+        command_is_expandable(meaning->command) &&
+        meaning->command != HSTEX_COMMAND_MACRO &&
+        !(meaning->command == HSTEX_COMMAND_THE &&
+          engine->gathering_expanded_text && engine->expander_depth == 1U)) {
+        trace_command(engine, token);
+    }
     if (meaning->command == HSTEX_COMMAND_MACRO) {
         if (meaning->value.macro_identifier == 0U ||
             (size_t)meaning->value.macro_identifier > engine->macro_count) {
@@ -15765,6 +15776,21 @@ static void nest_note(struct hstex_engine *engine)
     level->prev_depth = engine->prev_depth;
     level->space_factor = engine->space_factor;
     level->prev_graf = engine->prev_graf;
+}
+
+/* Whether the vertical list now being built is an internal one, taken from
+   the level of the nest that holds it. A display asks this after its own
+   list is gone but before the paragraph it interrupted resumes, when the
+   engine's own mode no longer says. */
+static bool vertical_list_is_inner(const struct hstex_engine *engine)
+{
+    for (size_t index = engine->nest_count; index > 0U; --index) {
+        const struct hstex_nest_level *level = &engine->nest[index - 1U];
+        if (level->vbox == engine->active_vbox_builder) {
+            return level->inner;
+        }
+    }
+    return false;
 }
 
 static const char *nest_mode_name(const struct hstex_nest_level *level)
@@ -28954,7 +28980,12 @@ static int finish_paragraph_line(struct hstex_engine *engine,
         engine->paragraph_builder->count == 0U) {
         engine->active_hbox_builder = NULL;
         engine->mode = HSTEX_MODE_VERTICAL;
-        engine->inner_mode = false;
+        /* The list the paragraph goes back to is the one that held it, and
+           inside a \vbox that is an internal one -- the same rule as for a
+           paragraph with something in it, below. */
+        engine->inner_mode =
+            engine->nest_count != 0U &&
+            engine->nest[engine->nest_count - 1U].inner;
         engine->building_paragraph = false;
         engine->has_pending_character = false;
         return 0;
@@ -33681,7 +33712,7 @@ static int end_display_math(struct hstex_engine *engine,
        a-display-closes-its-group-last. */
     engine->displayed_math = false;
     engine->mode = HSTEX_MODE_VERTICAL;
-    engine->inner_mode = false;
+    engine->inner_mode = vertical_list_is_inner(engine);
 
     int32_t width = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_WIDTH];
     int32_t indent = engine->dimen_parameters[HSTEX_DIMEN_DISPLAY_INDENT];
@@ -38793,6 +38824,14 @@ handle_token:
                                ? command_wants_a_dollar(across)
                                : command_needs_a_formula(across->command);
             if (crosses) {
+                /* Traced where it was met AND again after the $ has been
+                   read, because it is read again there: measured on `$z\par'
+                   in math mode, which draws {\par}, the fault, {math shift
+                   character $} and then {horizontal mode: \par}. */
+                if (!engine->command_traced && !engine->pending_global &&
+                    engine->pending_macro_flags == 0U) {
+                    trace_command(engine, *token);
+                }
                 if (insert_math_shift(engine, *token, *location, error,
                                       error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
@@ -38811,6 +38850,11 @@ handle_token:
         if (engine->mode != HSTEX_MODE_MATH &&
             (token_is_category(*token, HSTEX_CAT_SUPERSCRIPT) ||
              token_is_category(*token, HSTEX_CAT_SUBSCRIPT))) {
+            /* Traced here and again after the $, as above. */
+            if (!engine->command_traced && !engine->pending_global &&
+                engine->pending_macro_flags == 0U) {
+                trace_command(engine, *token);
+            }
             if (insert_math_shift(engine, *token, *location, error,
                                   error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
@@ -38861,8 +38905,12 @@ handle_token:
                 if (engine->display_alignment) {
                     hstex_token second = 0U;
                     struct hstex_source_location where;
-                    int taken = raw_next(engine, &second, &where, error,
-                                         error_capacity);
+                    /* The second $ is fetched WITH EXPANSION, so a macro
+                       standing for it will do: measured on `$$y$\dollar'
+                       with \def\dollar{$}, which closes the display and
+                       reports nothing. */
+                    int taken = (int)hstex_engine_next_expanded(
+                        engine, &second, &where, error, error_capacity);
                     if (taken != HSTEX_ENGINE_TOKEN ||
                         !token_is_effective_category(
                             engine, second, (uint8_t)HSTEX_CAT_MATH_SHIFT)) {
@@ -38922,10 +38970,19 @@ handle_token:
                                                       error_capacity) != 0) {
                             return HSTEX_ENGINE_ERROR;
                         }
+                        /* The formula's own list is gone by the time the
+                           second $ is looked for, so the mode there is the
+                           list the display will join -- internal vertical
+                           inside a \vbox. \tracingcommands names it for an
+                           \expandafter standing between the two $. */
+                        engine->displayed_math = false;
+                        engine->mode = HSTEX_MODE_VERTICAL;
+                        engine->inner_mode = vertical_list_is_inner(engine);
                         hstex_token second = 0U;
                         struct hstex_source_location where;
-                        int taken = raw_next(engine, &second, &where,
-                                             error, error_capacity);
+                        /* With expansion, as above. */
+                        int taken = (int)hstex_engine_next_expanded(
+                            engine, &second, &where, error, error_capacity);
                         if (taken != HSTEX_ENGINE_TOKEN ||
                             !token_is_effective_category(
                                 engine, second,
