@@ -44,14 +44,29 @@
 %     which is what \the\textfont reports, and not by its metrics file:
 %     {restoring \textfont2=\gg}, not =\cmr10.
 %
-% NOT YET: this engine saves a value again on a second local assignment in
-% the same group, where the reference saves only what was there before the
-% group began. `\font\gg=cmr10' sets the control sequence twice on
-% purpose -- once to \nullfont so that the `at' clause is read with the
-% target already a font rather than a macro -- and so draws two restore
-% lines here and one in the reference. Skipping the save where the value's
-% level is already the current group level is the fix, and it wants doing
-% in each of the assign_ functions.
+% A SECOND LOCAL ASSIGNMENT IN THE SAME GROUP SAVES NOTHING: what is kept
+% is what stood before the group began. `\font\gg=cmr10' sets the control
+% sequence twice on purpose -- once to \nullfont so that the `at' clause
+% is read with the target already a font rather than a macro -- and draws
+% one restore line, not two. Six shapes measured, including two
+% assignments to the same register, a nested group, and a \global one
+% before a local one.
+%
+% A RESTORE NEVER CARRIES THE MODE, however long it is since one was
+% named: not one of the oracle's 257 lines has a `vertical mode: ' on it,
+% where a \tracingcommands line would.
+%
+% NOT YET, and it is about WHEN rather than what. There are shapes where
+% the reference traces nothing and this engine traces a line:
+%
+%   \baselineskip=10pt \tracingrestores=1 {\baselineskip=11pt}
+%
+% draws {restoring \baselineskip=10.0pt} here and nothing there, while
+% the same shape with \count5 draws nothing in either. Over trip the
+% counts are close -- 253 lines here against 257, though only by 45
+% missing cancelling 41 extra -- so the rule for when a save is traced is
+% not yet the reference's. That is the thing to find next; the formats
+% above are settled.
 \tracingonline=1
 \font\ff=cmr10
 \def\a{A}\catcode`\[=12 \count5=7 \dimen6=1pt \skip7=2pt plus 1fil

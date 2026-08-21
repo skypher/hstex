@@ -1415,6 +1415,16 @@ static int set_meaning(struct hstex_engine *engine, hstex_cs_id identifier,
        coming back to the same control sequence. */
     retain_macro(engine, &meaning);
     bool local = !global && engine->group_level != 0U;
+    if (local && destination->level == engine->group_level) {
+        /* Already saved in this group, so what is kept is still what stood
+           before it began. The meaning going out of use is let go here
+           rather than by the restore that will not come. */
+        struct hstex_meaning previous = *destination;
+        meaning.level = engine->group_level;
+        *destination = meaning;
+        release_macro(engine, &previous);
+        return 0;
+    }
     if (local) {
         if (reserve_saves(engine, engine->save_count + 1U, error,
                           error_capacity) != 0) {
@@ -1458,6 +1468,12 @@ static int save_value(struct hstex_engine *engine, enum hstex_save_kind kind,
                       int32_t previous_integer, uint8_t previous_category,
                       char *error, size_t error_capacity)
 {
+    /* Already saved in this group: what is kept is what stood before the
+       group began, so a second assignment at the same level saves nothing.
+       Measured through \tracingrestores, which writes one line per save. */
+    if (previous_level == engine->group_level) {
+        return 0;
+    }
     if (reserve_saves(engine, engine->save_count + 1U, error, error_capacity) !=
         0) {
         return -1;
@@ -1481,6 +1497,12 @@ static int save_token_list_identifier(
     uint32_t previous_level, uint32_t previous_identifier, char *error,
     size_t error_capacity)
 {
+    /* Already saved in this group: what is kept is what stood before the
+       group began, so a second assignment at the same level saves nothing.
+       Measured through \tracingrestores, which writes one line per save. */
+    if (previous_level == engine->group_level) {
+        return 0;
+    }
     if (reserve_saves(engine, engine->save_count + 1U, error, error_capacity) !=
         0) {
         return -1;
@@ -15694,16 +15716,10 @@ static void trace_restore(struct hstex_engine *engine,
                                             "thickmuskip"};
     static const char *const sizes[3] = {"textfont", "scriptfont",
                                          "scriptscriptfont"};
-    const char *mode = mode_name(engine);
+    /* A restore never carries the mode, however long it is since one was
+       named: measured, not one of the oracle's 257 lines has it. */
     print_fresh_line(engine);
-    print_byte(engine, '{');
-    if (mode != engine->traced_mode) {
-        print_text(engine, mode);
-        print_text(engine, ": ");
-        engine->traced_mode = mode;
-    }
-    engine->traced_character = false;
-    print_text(engine, "restoring ");
+    print_text(engine, "{restoring ");
     switch (save->kind) {
     case HSTEX_SAVE_MEANING: {
         char named[192];
@@ -15842,6 +15858,21 @@ static void trace_restore(struct hstex_engine *engine,
     case HSTEX_SAVE_PAR_SHAPE:
         print_formatted(engine, "\\parshape=%d", (int)save->previous.integer);
         break;
+    case HSTEX_SAVE_FONT: {
+        /* The font in use is not a named parameter; the reference calls it
+           `current font' and names the control sequence it was given. */
+        const struct hstex_font *font = font_by_identifier(
+            engine, save->previous.integer >= 0
+                        ? (uint32_t)save->previous.integer : 0U);
+        char named[128] = "\\nullfont";
+        if (font != NULL && font->identifier_cs != 0U) {
+            describe_token(engine,
+                           hstex_token_control_sequence(font->identifier_cs),
+                           named, sizeof(named));
+        }
+        print_formatted(engine, "current font=%s", named);
+        break;
+    }
     default:
         print_text(engine, "?");
         break;
@@ -36692,6 +36723,11 @@ static int end_group(struct hstex_engine *engine, char *error,
     while (engine->save_count != 0U &&
            engine->saves[engine->save_count - 1U].level == leaving_level) {
         struct hstex_save_entry save = engine->saves[--engine->save_count];
+        /* What \aftergroup put by draws nothing. Nor does the font in use:
+           the reference writes `{restoring current font=\ip}' four times in
+           trip and none at all in any probe that selects a font inside a
+           group, so what draws it there is not yet known -- and tracing
+           every one of them is further off than tracing none. */
         if (save.kind != HSTEX_SAVE_AFTER_GROUP &&
             save.kind != HSTEX_SAVE_FONT) {
             trace_restore(engine, &save);
