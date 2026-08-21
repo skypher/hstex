@@ -1802,17 +1802,23 @@ static int assign_glue(struct hstex_engine *engine, uint32_t index,
     }
     bool global = assignment_is_global(engine, requested_global);
     if (!global && engine->group_level != 0U) {
-        if (reserve_saves(engine, engine->save_count + 1U, error,
-                          error_capacity) != 0) {
-            return -1;
+        /* Already saved in this group: what is kept is what stood before
+           the group began, so a second assignment at the same level saves
+           nothing. See save_value. */
+        if (engine->glue_levels[index] != engine->group_level) {
+            if (reserve_saves(engine, engine->save_count + 1U, error,
+                              error_capacity) != 0) {
+                return -1;
+            }
+            struct hstex_save_entry *save =
+                &engine->saves[engine->save_count++];
+            memset(save, 0, sizeof(*save));
+            save->kind = HSTEX_SAVE_GLUE;
+            save->index = index;
+            save->level = engine->group_level;
+            save->previous_level = engine->glue_levels[index];
+            save->previous.glue = engine->glues[index];
         }
-        struct hstex_save_entry *save = &engine->saves[engine->save_count++];
-        memset(save, 0, sizeof(*save));
-        save->kind = HSTEX_SAVE_GLUE;
-        save->index = index;
-        save->level = engine->group_level;
-        save->previous_level = engine->glue_levels[index];
-        save->previous.glue = engine->glues[index];
         engine->glue_levels[index] = engine->group_level;
     } else {
         engine->glue_levels[index] = 0U;
@@ -1831,17 +1837,23 @@ static int assign_muglue(struct hstex_engine *engine, uint32_t index,
     }
     bool global = assignment_is_global(engine, requested_global);
     if (!global && engine->group_level != 0U) {
-        if (reserve_saves(engine, engine->save_count + 1U, error,
-                          error_capacity) != 0) {
-            return -1;
+        /* Already saved in this group: what is kept is what stood before
+           the group began, so a second assignment at the same level saves
+           nothing. See save_value. */
+        if (engine->muglue_levels[index] != engine->group_level) {
+            if (reserve_saves(engine, engine->save_count + 1U, error,
+                              error_capacity) != 0) {
+                return -1;
+            }
+            struct hstex_save_entry *save =
+                &engine->saves[engine->save_count++];
+            memset(save, 0, sizeof(*save));
+            save->kind = HSTEX_SAVE_MUGLUE;
+            save->index = index;
+            save->level = engine->group_level;
+            save->previous_level = engine->muglue_levels[index];
+            save->previous.glue = engine->muglues[index];
         }
-        struct hstex_save_entry *save = &engine->saves[engine->save_count++];
-        memset(save, 0, sizeof(*save));
-        save->kind = HSTEX_SAVE_MUGLUE;
-        save->index = index;
-        save->level = engine->group_level;
-        save->previous_level = engine->muglue_levels[index];
-        save->previous.glue = engine->muglues[index];
         engine->muglue_levels[index] = engine->group_level;
     } else {
         engine->muglue_levels[index] = 0U;
@@ -1879,17 +1891,23 @@ static int assign_box(struct hstex_engine *engine, uint32_t index,
     }
     bool global = assignment_is_global(engine, requested_global);
     if (!global && engine->group_level != 0U) {
-        if (reserve_saves(engine, engine->save_count + 1U, error,
-                          error_capacity) != 0) {
-            return -1;
+        /* Already saved in this group: what is kept is what stood before
+           the group began, so a second assignment at the same level saves
+           nothing. See save_value. */
+        if (engine->box_levels[index] != engine->group_level) {
+            if (reserve_saves(engine, engine->save_count + 1U, error,
+                              error_capacity) != 0) {
+                return -1;
+            }
+            struct hstex_save_entry *save =
+                &engine->saves[engine->save_count++];
+            memset(save, 0, sizeof(*save));
+            save->kind = HSTEX_SAVE_BOX;
+            save->index = index;
+            save->level = engine->group_level;
+            save->previous_level = engine->box_levels[index];
+            save->previous.box = engine->boxes[index];
         }
-        struct hstex_save_entry *save = &engine->saves[engine->save_count++];
-        memset(save, 0, sizeof(*save));
-        save->kind = HSTEX_SAVE_BOX;
-        save->index = index;
-        save->level = engine->group_level;
-        save->previous_level = engine->box_levels[index];
-        save->previous.box = engine->boxes[index];
         engine->box_levels[index] = engine->group_level;
     } else {
         engine->box_levels[index] = 0U;

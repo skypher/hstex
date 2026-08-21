@@ -1,0 +1,24 @@
+% A register is saved ONCE per group: what a group gives back is what stood
+% before it began, so a second assignment at the same level saves nothing.
+% True of every kind of register, and \tracingrestores writes one line per
+% save.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingrestores=1
+\message{[A two muskip assignments in one group]}
+{\muskip3=1mu \muskip3=2mu}
+\message{[B two advances]}
+{\advance\muskip3 by 1mu \advance\muskip3 by 1mu}
+\message{[C a global after two locals]}
+{\muskip3=1mu \muskip3=2mu \global\muskip3=3mu}
+\message{[D the same for a count]}
+{\count3=1 \count3=2}
+\message{[E the same for a skip]}
+{\skip3=1pt \skip3=2pt}
+\message{[F the same for a dimen]}
+{\dimen3=1pt \dimen3=2pt}
+\message{[G the same for a toks]}
+{\toks3={a}\toks3={b}}
+\message{[H the same for a box]}
+{\setbox3=\hbox{}\setbox3=\hbox{}}
+\message{[done]}
+\end
