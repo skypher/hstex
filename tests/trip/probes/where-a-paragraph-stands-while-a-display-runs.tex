@@ -1,0 +1,50 @@
+% WHERE A PARAGRAPH STANDS WHILE A DISPLAY RUNS.
+%
+% A display breaks the paragraph it interrupts, and the paragraph's own
+% level of the nest goes with it: \showlists run inside a display writes the
+% display's list and the VERTICAL one under it, with the paragraph's
+% \prevdepth and \prevgraf on that vertical level.
+%
+%   ### display math mode entered at line 11
+%   \mathord
+%   .\fam1 B
+%   ### vertical mode entered at line 0
+%   ### current page:
+%   ...
+%   prevdepth 1.0, prevgraf 1 line
+%
+% A fresh level is pushed for the paragraph when the display gives it back,
+% which is what makes a report of the lines after a display name the line
+% the display ended on.
+%
+% HSTeX kept the paragraph's level standing, so \showlists wrote an extra
+% vertical level holding the paragraph's \prevdepth and \prevgraf, and the
+% level under it -- the one that really has them -- said `prevdepth
+% ignored'.
+%
+% An \eqno is the same rule the other way round: its list is pushed before
+% its mode is changed, so the display's own level stays a DISPLAY math one.
+% HSTeX changed the mode first, and trip's \eqno on line 280 turned the
+% display it belongs to into `### math mode entered at line 261'.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \fontdimen22\rip=7pt \rip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont1=\rip \scriptfont1=\rip \scriptscriptfont1=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\hsize=100pt \parindent=5pt \predisplaypenalty=0
+\message{[A a display inside a paragraph]}
+A A A $$B\showlists$$ C C
+\par
+\message{[B a display with a group inside it]}
+A $${B\showlists}$$
+\par
+\message{[C inline math in a paragraph, which breaks nothing]}
+A $B\showlists$
+\par
+\message{[D a display with an equation number]}
+A $$B\showlists\eqno C\showlists$$
+\par
+\message{[done]}
+\end

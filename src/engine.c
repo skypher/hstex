@@ -33136,6 +33136,13 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
     if (broken != 0) {
         return -1;
     }
+    /* THE PARAGRAPH'S OWN LEVEL IS DONE WITH. Its lines have reached the
+       vertical list, and the display is a level of its own beside them
+       rather than inside them -- so \showlists run in a display writes the
+       display's list and the VERTICAL one under it, with the paragraph's
+       \prevdepth and \prevgraf on that vertical level. A fresh level is
+       pushed for the paragraph when the display gives it back. */
+    nest_pop(engine);
     int32_t size = pre_display_size(
         engine, &line, line_shift_for(engine, engine->prev_graf),
         had_line);
@@ -35348,11 +35355,17 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
     }
     /* An equation number is set in text style and is internal: \ifinner is
        true inside one, and the reference names the mode "math mode" rather
-       than "display math mode" when it refuses a second \eqno there. */
-    engine->inner_mode = true;
+       than "display math mode" when it refuses a second \eqno there. The
+       mode is changed AFTER the number's list is pushed, so that the
+       display's own level keeps the mode it was in -- pushing a level writes
+       down what the level under it holds. */
     ++engine->math_floor;
-    return push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
-                          error_capacity);
+    if (push_math_list(engine, (uint8_t)HSTEX_STYLE_TEXT, error,
+                       error_capacity) != 0) {
+        return -1;
+    }
+    engine->inner_mode = true;
+    return 0;
 }
 
 /* Build the line the display occupies, with its number beside it when there
@@ -35751,22 +35764,21 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
     engine->paragraph_builder->width = 0;
     engine->paragraph_builder->height = 0;
     engine->paragraph_builder->depth = 0;
+    /* The reference starts a FRESH LEVEL here rather than taking the old one
+       up again -- the paragraph's own went when the display began -- so what
+       is reported of the lines after a display is reported against the line
+       the display ended on. The push comes before the mode changes, so that
+       the vertical level under it keeps the mode it was in. See
+       docs/DECISIONS.md, boxes-that-do-not-fit. */
+    if (nest_push(engine, error, error_capacity) != 0) {
+        return -1;
+    }
     engine->active_hbox_builder = engine->paragraph_builder;
     engine->mode = HSTEX_MODE_HORIZONTAL;
     engine->inner_mode = false;
     engine->building_paragraph = true;
     engine->space_factor = 1000;
     engine->has_pending_character = false;
-    /* The reference starts a fresh level here rather than taking the old one
-       up again, so what is reported of the lines after a display is reported
-       against the line the display ended on. See docs/DECISIONS.md,
-       boxes-that-do-not-fit. */
-    if (engine->nest_count != 0U) {
-        const struct hstex_file_source *file =
-            hstex_source_current_file(&engine->sources);
-        engine->nest[engine->nest_count - 1U].line =
-            file == NULL ? 0U : file->mouth.line_number;
-    }
     /* The display counts as three lines of the paragraph it interrupted; see
        docs/DECISIONS.md, lines-carry-on-past-a-display. */
     engine->prev_graf += 3;
