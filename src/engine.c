@@ -20585,6 +20585,32 @@ static int build_page(struct hstex_engine *engine, char *error,
                     if (record == NULL) {
                         return -1;
                     }
+                    /* The correction glue of a class may not shrink without
+                       limit: the page's own shrink is what a break is judged
+                       by, and an infinite one would make every break look
+                       perfect. The reference says so and goes on with it
+                       taken as finite, leaving the register itself alone --
+                       measured,
+                       measured, \skip100 still reads `minus 1.0fil'
+                       afterwards. */
+                    if (engine->glues[number].shrink_order != 0U &&
+                        engine->glues[number].shrink != 0) {
+                        /* Nothing to shrink is no shrinkage, whatever order
+                           it claims; glue read from a document has that
+                           settled already, but glue reached by arithmetic
+                           need not have. */
+                        static const char *const help[] = {
+                            "The correction glue for page breaking with "
+                            "insertions",
+                            "must have finite shrinkability. But you may "
+                            "proceed,",
+                            "since the offensive shrinkability has been made "
+                            "finite.", NULL};
+                        tex_error(engine, help,
+                                  "Infinite glue shrinkage inserted from "
+                                  "\\skip%u",
+                                  (unsigned int)number);
+                    }
                     /* The glue of the class, and room for whatever the box
                        of the class already holds: the page has to carry that
                        too. */

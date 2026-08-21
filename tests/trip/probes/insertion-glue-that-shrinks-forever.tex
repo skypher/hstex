@@ -1,0 +1,29 @@
+% \skipN, the correction glue of an insertion class, shrinking without
+% limit.
+%
+% Measured against pdftex: reported the first time the class reaches a
+% page, and gone on with --
+%
+%   ! Infinite glue shrinkage inserted from \skip100.
+%   The correction glue for page breaking with insertions
+%   must have finite shrinkability. But you may proceed,
+%   since the offensive shrinkability has been made finite.
+%
+% -- and the register itself is left alone: \showthe\skip100 afterwards
+% still reads `minus 1.0fil'. It is only the page's own shrink, which is
+% what a break is judged by, that is taken as finite; an infinite one
+% there would make every break look perfect.
+%
+% Nothing to shrink is no shrinkage whatever order it claims, so `minus
+% 0fil' draws nothing. Glue read from a document has that settled when it
+% is read (see glue-that-stretches-by-nothing), but glue reached by
+% arithmetic need not have, so the amount is looked at here too.
+%
+% This engine said nothing at all. trip draws it three times, on lines
+% 125 and 150.
+\tracingonline=1
+\dimen100=100pt \count100=1000 \output={\shipout\box255}
+\skip100=1pt minus 1fil
+\insert100{\hbox{}}\hbox{}\vfill\penalty-10000
+\showthe\skip100
+\end
