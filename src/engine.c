@@ -33369,9 +33369,15 @@ static int end_display_math(struct hstex_engine *engine,
     };
 
     /* A number on the left that will not fit beside the equation takes the
-       place of the glue above it. */
+       place of the GLUE above it -- but not of the penalty, which still
+       comes first: measured, `$$\hbox{}\leqno\hbox{}$$' puts
+       \predisplaypenalty above the number's own line and no
+       \abovedisplayskip at all. */
     bool left_alone = dropped && left;
     if (left_alone) {
+        if (append_vbox_node(engine, &penalty, error, error_capacity) != 0) {
+            return -1;
+        }
         struct hstex_node node = {
             .kind = HSTEX_NODE_LIST,
             .width = number.width,

@@ -20,15 +20,21 @@
 % glue, shifted flush against the right edge, and the glue below the
 % display goes away entirely rather than being set to nothing.
 %
-% STILL DIFFERING, and it is the next thing: \predisplaysize. For a
+% A NUMBER ON THE LEFT that will not fit takes the place of the GLUE
+% above the display, but not of the PENALTY: `$$\hbox{}\leqno\hbox{}$$'
+% puts \predisplaypenalty above the number's own line and no
+% \abovedisplayskip at all. hstex dropped both.
+%
+% WAS DIFFERING, now fixed elsewhere: \predisplaysize. For a
 % paragraph whose last line holds a single character the reference gives
 % the line's width plus two quads -- 27.50005pt for `\noindent A$$' at
 % \hsize=100pt -- and hstex gives -16383.99998pt, which is what it says
 % when there was no line at all. Four characters (`\noindent AAAA$$')
 % agree at 63.7501pt, and so does an empty line. It matters because
 % \predisplaysize is what chooses between \abovedisplayskip and
-% \abovedisplayshortskip, so the wrong one is picked whenever the display
-% follows a very short line.
+% \abovedisplayshortskip, so the wrong one was picked whenever the display
+% followed a very short line. See
+% tests/trip/probes/the-size-of-the-line-before-a-display.tex.
 \tracingonline=1 \showboxdepth=1 \showboxbreadth=10
 \baselineskip=10pt \abovedisplayskip=0pt \belowdisplayskip=0pt
 \abovedisplayshortskip=0pt \belowdisplayshortskip=0pt
