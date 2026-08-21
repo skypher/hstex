@@ -1,0 +1,73 @@
+% WHAT A \read MAKES OF A LINE.
+%
+% \read builds a macro out of a line of a file, and the line is tokenized
+% the way a line of a file is -- so all the rules a line has, it has:
+%
+%   an EMPTY line is a \par, the same as an empty line in a file. So is a
+%   line of nothing but spaces, whose trailing spaces are stripped away
+%   before \endlinechar goes on.
+%
+%   an INVALID character (catcode 15) is reported and forgotten, and a line
+%   that has gone wrong is still READ TO ITS END -- so an invalid character
+%   further along the same line is reported too.
+%
+%   an \outer name may no more stand in a definition here than anywhere
+%   else. What has been read so far is shown, the name itself BECOMES A
+%   SPACE, and a `}' is put in behind it:
+%
+%     Runaway definition?
+%     ->a
+%     ! Forbidden control sequence found while scanning definition of \a.
+%
+%   That `}' is read like any other. Where the line has a `{' still open it
+%   closes it and the line is read on; where it has not, the rest of the
+%   line is given up and so is the \read -- `a\lz' gives `a ' and nothing
+%   more.
+%
+%   BRACES ARE COUNTED ACROSS LINES: a line that leaves one open makes the
+%   \read take another, and another, until they balance or the file runs
+%   out. At the end of the file the reference says
+%
+%     ! File ended within \read.
+%     This \read has unbalanced braces.
+%
+%   and then takes the empty line the end of a file stands for, which is one
+%   more \par -- put on AFTER the fault, so what the fault shows has not got
+%   it.
+%
+% HSTeX gave an empty line nothing, gave up a line the moment it went wrong,
+% and ended the \read where the reference put a brace in and read on. trip
+% reads its own tripos.tex back with \uppercase made \outer and `0' made
+% invalid, which is every one of these at once.
+%
+% Found and left open: the reference's context for all of this names the
+% line being read -- `<read 3> gamma 0' -- and the brace it put in --
+% `<inserted text> }'. HSTeX reads the line beside the source stack rather
+% than on it, so neither frame is there to show.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\lccode`\<=`\{ \lowercase{\gdef\lb{<}}
+\lccode`\>=`\} \lowercase{\gdef\rb{>}} \def\space{ }
+\immediate\openout9=zzread.dat
+\immediate\write9{}
+\immediate\write9{alpha \noexpand\zz 0 beta}
+\immediate\write9{gamma \rb\space 0 delta}
+\immediate\write9{plain 0 line}
+\immediate\write9{\lb b\noexpand\zz c\lb d}
+\immediate\write9{e}
+\immediate\write9{   }
+\immediate\closeout9
+\outer\def\zz{}
+\catcode`0=15
+\openin3=zzread.dat
+\message{[A an empty line]}\read3 to \a \show\a
+\message{[B an outer name at balance nought, then an invalid character]}
+\read3 to \a \show\a
+\message{[C a closing brace too many, then an invalid character]}
+\read3 to \a \show\a
+\message{[D an invalid character on its own]}\read3 to \a \show\a
+\message{[E an outer name inside braces, which reads on to the end]}
+\read3 to \a \show\a
+\closein3
+\message{[done]}
+\end

@@ -38674,8 +38674,29 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
                             int32_t *balance, char *error,
                             size_t error_capacity)
 {
+    /* AN EMPTY LINE IS STILL A LINE, and what \endlinechar makes of one in
+       the state a line begins in is a \par -- the same as an empty line in a
+       file. The mouth reads lines out of a buffer and a buffer with nothing
+       in it holds no line at all, so a terminator goes behind the line for it
+       to find. */
+    uint8_t *buffer = malloc(length + 1U);
+    if (buffer == NULL) {
+        return set_error(error, error_capacity, "read line allocation failed");
+    }
+    if (length != 0U) {
+        memcpy(buffer, line, length);
+    }
+    buffer[length] = (uint8_t)'\n';
     struct hstex_mouth mouth;
-    hstex_mouth_init(&mouth, line, length, &engine->lexical_state);
+    hstex_mouth_init(&mouth, buffer, length + 1U, &engine->lexical_state);
+    /* A LINE THAT HAS GONE WRONG IS STILL READ TO ITS END. Where a brace
+       closes what the line never opened, or an \outer name turns up, the
+       reference stops taking tokens for the macro but goes on ASKING for
+       them until the line runs out -- so an invalid character further along
+       the same line is still reported. trip's tripos.tex has both on one
+       line: `\uppercase {0{\outputpenalty }}' with \uppercase made \outer
+       and `0' made invalid. */
+    bool draining = false;
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -38694,7 +38715,11 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
         }
         if (result == HSTEX_MOUTH_ERROR) {
             hstex_mouth_destroy(&mouth);
+            free(buffer);
             return -1;
+        }
+        if (draining) {
+            continue;
         }
         /* A \read builds a definition, and an \outer macro may no more
            stand in one of those than in any other: measured, a line reading
@@ -38710,36 +38735,46 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
             char named[128];
             describe_token(engine, hstex_token_control_sequence(target), named,
                            sizeof(named));
-            tex_error(engine, help,
-                      "Forbidden control sequence found while scanning "
-                      "definition of %s",
-                      named);
-            /* The line's own ending is still put on: measured, a line
-               reading `a\lz' gives `a ' and one reading `\lz more' gives a
-               single space. */
+            /* What has been read so far is shown BEFORE the name becomes
+               anything, so the space is not in it. */
+            report_runaway_list(engine, "definition", NULL, "->", replacement);
+            /* THE NAME ITSELF BECOMES A SPACE, which is why a line reading
+               `a\lz' gives `a ' and one reading `\lz more' gives a single
+               space. */
             hstex_token ending =
                 hstex_token_character((uint8_t)HSTEX_CAT_SPACE, (uint8_t)' ');
             if (vector_push(replacement, ending, error, error_capacity) != 0) {
                 hstex_mouth_destroy(&mouth);
+                free(buffer);
                 return -1;
             }
-            *balance = 0;
-            break;
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning "
+                      "definition of %s",
+                      named);
+            /* AND A `}' IS PUT IN BEHIND IT, which is read like any other:
+               where the line has a `{' still open the brace closes it and the
+               line is read on, and where it has not the line is given up. */
+            token = hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
+                                          (uint8_t)'}');
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++*balance;
         } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
             if (*balance == 0) {
-                break;
+                draining = true;
+                continue;
             }
             --*balance;
         }
         if (vector_push(replacement, token, error, error_capacity) != 0) {
             hstex_mouth_destroy(&mouth);
+            free(buffer);
             return -1;
         }
     }
     hstex_mouth_destroy(&mouth);
+    free(buffer);
     return 0;
 }
 
@@ -38824,22 +38859,20 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
             engine->pending_macro_flags = 0U;
             return status;
         }
-        status = append_read_line(engine, target, &replacement,
-                                  (const uint8_t *)line, (size_t)length,
-                                  &balance, error, error_capacity);
-        free(line);
-        if (status != 0) {
-            break;
-        }
-        if (balance <= 0) {
-            break;
-        }
         if (ended) {
-            /* The file has no more lines to balance it with. The reference
-               says so and takes the empty line the end of the file stands
-               for, which is a \par. */
-            static const char *const help[] = {
-                "This \\read has unbalanced braces.", NULL};
+            /* THE FILE HAS NO MORE LINES. Where braces are still open the
+               reference says so; then, either way, the end of the file
+               stands for an EMPTY LINE, which is a \par -- and that goes on
+               after the fault is reported, so what the fault shows does not
+               have it. */
+            free(line);
+            if (balance > 0) {
+                static const char *const help[] = {
+                    "This \\read has unbalanced braces.", NULL};
+                report_runaway_list(engine, "definition", NULL, "->",
+                                    &replacement);
+                tex_error(engine, help, "File ended within \\read");
+            }
             static const uint8_t name[] = "par";
             hstex_cs_id identifier = 0U;
             if (hstex_symbol_intern(&engine->lexical_state.symbols,
@@ -38850,9 +38883,17 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
                             hstex_token_control_sequence(identifier), error,
                             error_capacity) != 0) {
                 status = -1;
-                break;
             }
-            tex_error(engine, help, "File ended within \\read");
+            break;
+        }
+        status = append_read_line(engine, target, &replacement,
+                                  (const uint8_t *)line, (size_t)length,
+                                  &balance, error, error_capacity);
+        free(line);
+        if (status != 0) {
+            break;
+        }
+        if (balance <= 0) {
             break;
         }
     }
