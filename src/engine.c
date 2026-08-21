@@ -36734,6 +36734,12 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     nest_pop(engine);
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
+    /* An alignment's rows reach the page as any box does, so the page
+       builder runs the moment the last of them is down rather than when the
+       next thing to be read happens to call it. */
+    if (status == 0) {
+        status = contribute_page(engine, error, error_capacity);
+    }
     if (display) {
         engine->active_vbox_builder = engine->display_outer_vbox;
         if (status == 0) {
