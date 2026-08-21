@@ -35747,7 +35747,10 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         engine->pack_begin_line = -engine->alignment_line;
         bool previous_quiet = engine->packing_quietly;
         engine->packing_quietly = false;
-        report_packing(engine, &whole, natural, &preamble, false, NULL,
+        /* A \valign's columns are vertical lists, so the row the preamble
+           makes is a \vbox and the reference names it one: "Underfull
+           \vbox ... in alignment". */
+        report_packing(engine, &whole, natural, &preamble, vertical, NULL,
                        column_count);
         engine->packing_quietly = previous_quiet;
         engine->pack_begin_line = previous_pack;
