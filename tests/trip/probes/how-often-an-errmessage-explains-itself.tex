@@ -1,0 +1,14 @@
+% The four lines an \errmessage with no \errhelp is given are worth writing
+% once: every one after the first is told only that there was another, and
+% an \errhelp standing between does not bring them back.
+\catcode`\{=1 \catcode`\}=2
+\message{[A the first errmessage]}
+\errmessage{one}
+\message{[B the second]}
+\errmessage{two}
+\message{[C with an errhelp of its own]}
+\errhelp{my own help}\errmessage{three}
+\message{[D and back to none]}
+\errhelp{}\errmessage{four}
+\message{[done]}
+\end

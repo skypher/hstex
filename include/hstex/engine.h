@@ -1271,6 +1271,11 @@ enum hstex_node_kind {
     /* \vadjust: vertical material that leaves the line it was written in
        and stands behind it. See docs/DECISIONS.md, vadjust. */
     HSTEX_NODE_ADJUST,
+    /* A column of an alignment before its width is settled. One of these
+       never reaches a list a document can see: the only place it stands is
+       the row the preamble is packed as, which the reference shows when
+       that packing is worth reporting. */
+    HSTEX_NODE_UNSET,
 };
 
 /* What a whatsit does when the page it sits on is shipped out. See
@@ -1840,6 +1845,10 @@ struct hstex_engine {
        something it will pack again -- so that nothing is reported of it. See
        docs/DECISIONS.md, boxes-that-do-not-fit. */
     bool packing_quietly;
+    /* Whether the four lines an \errmessage with no \errhelp is given have
+       been written once already: the ones after that are told only that
+       there was another. Not part of a format -- a run starts over. */
+    bool long_help_seen;
     /* The line the alignment being finished began on. */
     int32_t alignment_line;
     /* The semantic nest, outermost first. */

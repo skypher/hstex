@@ -15853,6 +15853,17 @@ static void show_node(struct hstex_engine *engine,
                       size_t depth, size_t threshold, size_t breadth)
 {
     switch (node->kind) {
+    case HSTEX_NODE_UNSET:
+        /* A column whose width is not settled yet. The reference writes its
+           three dimensions and nothing else: no glue set, no shift, and
+           never what stands inside it. */
+        print_text(engine, "\\unsetbox(");
+        show_scaled(engine, packed_dimen(node->height));
+        print_byte(engine, '+');
+        show_scaled(engine, packed_dimen(node->depth));
+        print_text(engine, ")x");
+        show_scaled(engine, packed_dimen(node->width));
+        return;
     case HSTEX_NODE_LIST: {
         print_text(engine, node->value.list.box_kind == HSTEX_BOX_VLIST ? "\\vbox(" : "\\hbox(");
         show_scaled(engine, packed_dimen(node->height));
@@ -17803,6 +17814,7 @@ static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_UNSET:
         case HSTEX_NODE_ADJUST:
             break;
         }
@@ -17989,6 +18001,7 @@ static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_UNSET:
         case HSTEX_NODE_ADJUST:
             break;
         }
@@ -19887,6 +19900,7 @@ static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_UNSET:
         case HSTEX_NODE_ADJUST:
             break;
         }
@@ -20040,6 +20054,7 @@ static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         case HSTEX_NODE_DISCRETIONARY:
         case HSTEX_NODE_MARK:
         case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_UNSET:
         case HSTEX_NODE_ADJUST:
             break;
         }
@@ -25389,6 +25404,7 @@ static int32_t last_node_type(const struct hstex_node *node)
         return 12;
     case HSTEX_NODE_LIGATURE:
         return 7;
+    case HSTEX_NODE_UNSET:
     case HSTEX_NODE_ADJUST:
         return 5;
     case HSTEX_NODE_PENALTY:
@@ -27226,6 +27242,7 @@ static bool protrusion_passes_over(const struct hstex_node *node)
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
     case HSTEX_NODE_INSERT:
+    case HSTEX_NODE_UNSET:
     case HSTEX_NODE_ADJUST:
         return true;
     case HSTEX_NODE_DISCRETIONARY:
@@ -27361,6 +27378,7 @@ static bool precedes_glue_break(const struct hstex_node *node)
     case HSTEX_NODE_WHATSIT:
     case HSTEX_NODE_MARK:
     case HSTEX_NODE_INSERT:
+    case HSTEX_NODE_UNSET:
     case HSTEX_NODE_ADJUST:
         return true;
     }
@@ -27601,6 +27619,7 @@ static void trace_short_display(struct hstex_engine *engine,
             break;
         }
         case HSTEX_NODE_LIST:
+        case HSTEX_NODE_UNSET:
         case HSTEX_NODE_WHATSIT:
             print_text(engine, "[]");
             trace->column = true;
@@ -35870,6 +35889,12 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
             reached = used;
         }
     }
+    /* The preamble keeps every column it declared, however few a row
+       reached: the ones past the last one used stand in the row the
+       preamble is packed as, with no width and NO TABSKIP AFTER THEM. Only
+       the display needs them, so the count the rows are built from is still
+       the one that was reached. */
+    size_t preamble_columns = column_count;
     if (reached < column_count) {
         column_count = reached;
     }
@@ -35954,8 +35979,64 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         } else {
             whole.width = (int32_t)final_width;
         }
+        whole.glue =
+            packing_glue_set(natural, (int32_t)final_width, &preamble);
         engine->badness =
             packing_badness(natural, (int32_t)final_width, &preamble);
+        /* The row is a \tabskip and a column, over and over, and one last
+           \tabskip: the columns stand in it as UNSET BOXES, since what they
+           are set to is settled a row at a time and not here. That list is
+           what the reference shows when it reports this packing, so it has
+           to exist even though nothing else ever looks at it. */
+        uint32_t *row =
+            preamble_columns == 0U
+                ? NULL
+                : calloc(2U * preamble_columns + 1U, sizeof(*row));
+        size_t row_length = 0U;
+        if (row != NULL) {
+            for (size_t index = 0U; index <= preamble_columns; ++index) {
+                struct hstex_glue skip = {0};
+                if (index == 0U) {
+                    skip = leading;
+                } else if (index <= column_count) {
+                    skip = columns[index - 1U].tabskip;
+                }
+                struct hstex_node glue_node = {
+                    .kind = HSTEX_NODE_GLUE,
+                    .width = skip.width,
+                    .value.glue = {
+                        .stretch = skip.stretch,
+                        .shrink = skip.shrink,
+                        .stretch_order = skip.stretch_order,
+                        .shrink_order = skip.shrink_order,
+                        .parameter = (uint8_t)(HSTEX_GLUE_TAB_SKIP + 1),
+                    },
+                };
+                if (store_node(engine, &glue_node, &row[row_length], error,
+                               error_capacity) != 0) {
+                    free(row);
+                    return -1;
+                }
+                ++row_length;
+                if (index == preamble_columns) {
+                    break;
+                }
+                int32_t extent =
+                    index < column_count ? columns[index].width : 0;
+                struct hstex_node column_node = {.kind = HSTEX_NODE_UNSET};
+                if (vertical) {
+                    column_node.height = extent;
+                } else {
+                    column_node.width = extent;
+                }
+                if (store_node(engine, &column_node, &row[row_length], error,
+                               error_capacity) != 0) {
+                    free(row);
+                    return -1;
+                }
+                ++row_length;
+            }
+        }
         int32_t previous_pack = engine->pack_begin_line;
         engine->pack_begin_line = -engine->alignment_line;
         bool previous_quiet = engine->packing_quietly;
@@ -35963,10 +36044,11 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         /* A \valign's columns are vertical lists, so the row the preamble
            makes is a \vbox and the reference names it one: "Underfull
            \vbox ... in alignment". */
-        report_packing(engine, &whole, natural, &preamble, vertical, NULL,
-                       column_count);
+        report_packing(engine, &whole, natural, &preamble, vertical, row,
+                       row_length);
         engine->packing_quietly = previous_quiet;
         engine->pack_begin_line = previous_pack;
+        free(row);
     }
 
     for (size_t index = 0U; index < row_count; ++index) {
@@ -37219,10 +37301,16 @@ static int execute_error_message(struct hstex_engine *engine, char *error,
         "command, so I can't give any explicit help.",
         "Pretend that you're Hercule Poirot: Examine all clues,",
         "and deduce the truth by order and method.", NULL};
+    /* Those four lines are worth writing once. Every \errmessage after the
+       first that falls back to them is told only that there was another,
+       and an \errhelp standing between does not bring them back. */
+    static const char *const again[] = {"(That was another \\errmessage.)",
+                                        NULL};
     uint8_t *given = NULL;
     size_t given_count = 0U;
     const char *offered[2] = {NULL, NULL};
-    const char *const *help = fallback;
+    const char *const *help = engine->long_help_seen ? again : fallback;
+    bool fell_back = true;
     uint32_t errhelp = engine->token_parameters[HSTEX_TOKEN_ERROR_HELP];
     if (errhelp != 0U &&
         stored_token_list_text(engine, errhelp, &given, &given_count, 0U, NULL,
@@ -37237,7 +37325,11 @@ static int execute_error_message(struct hstex_engine *engine, char *error,
             given[given_count] = (uint8_t)'\0';
             offered[0] = (const char *)given;
             help = offered;
+            fell_back = false;
         }
+    }
+    if (fell_back) {
+        engine->long_help_seen = true;
     }
     tex_error(engine, help, "%.*s", precision,
               bytes == NULL ? "" : (const char *)bytes);

@@ -1,0 +1,28 @@
+% The row an alignment's preamble is packed as -- the one packing of an
+% alignment the reference reports -- is a \tabskip and a column over and
+% over, and one last \tabskip. The columns stand in it as UNSET BOXES,
+% since what they are set to is settled a row at a time and not here.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\font\tenrm=cmr10 \tenrm \tracingonline=1 \showboxbreadth=20 \showboxdepth=5
+\tabskip=2pt
+\message{[A two columns of an halign]}
+\setbox0=\vbox{\halign to 3pt{#&#\cr AB&CD\cr EEE&F\cr}}
+\message{[B two columns of a valign]}
+\setbox0=\hbox{\valign to 3pt{#&#\cr\hbox{A}&\hbox{BB}\cr}}
+\message{[C with a span in the body]}
+\setbox0=\vbox{\halign to 3pt{#&#\cr AB\span CD\cr EEE&F\cr}}
+\message{[D with an omit]}
+\setbox0=\vbox{\halign to 3pt{X#&#\cr\omit AB&CD\cr}}
+\message{[E three columns in the preamble, one used]}
+\setbox0=\vbox{\halign to 50pt{#&#&#\cr A\cr}}
+\message{[F three columns, two used]}
+\setbox0=\vbox{\halign to 50pt{#&#&#\cr A&B\cr}}
+\message{[G three columns, all used]}
+\setbox0=\vbox{\halign to 50pt{#&#&#\cr A&B&C\cr}}
+\message{[H three columns, an empty row]}
+\setbox0=\vbox{\halign to 50pt{#&#&#\cr\cr}}
+\message{[I a tabskip of nothing shows no space]}
+\tabskip=0pt
+\setbox0=\vbox{\halign to 50pt{#&#\cr A&B\cr}}
+\message{[done]}
+\end
