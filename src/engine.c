@@ -35781,10 +35781,22 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     }
     bool previous_building = engine->building_alignment;
     engine->building_alignment = true;
+    /* The rows are read in the alignment's own mode, which the peek below
+       puts back before each of them; what stood before the rows stands
+       again once they are done. */
+    int32_t mode_before_rows = engine->mode;
+    bool inner_before_rows = engine->inner_mode;
 
     while (status == 0) {
         hstex_token token = 0U;
         struct hstex_source_location peek;
+        /* Between rows the engine stands in the alignment's own list, and
+           the peek that looks for the next row expands where it stands: an
+           \iftrue at the head of an entry is traced in internal vertical
+           mode for \halign and in restricted horizontal for \valign, not in
+           the mode the entry before it ran in. */
+        engine->mode = vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL;
+        engine->inner_mode = true;
         enum hstex_engine_result peeked =
             align_peek_token(engine, &token, &peek, error, error_capacity);
         if (peeked == HSTEX_ENGINE_ERROR) {
@@ -36010,6 +36022,8 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
         nest_pop(engine);
         status = insert_every_cr(engine, error, error_capacity);
     }
+    engine->mode = mode_before_rows;
+    engine->inner_mode = inner_before_rows;
     engine->building_alignment = previous_building;
     if (status == 0) {
         status = finish_alignment(engine, vertical, columns, column_count,

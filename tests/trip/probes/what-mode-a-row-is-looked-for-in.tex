@@ -1,0 +1,41 @@
+% THE NEXT ROW IS LOOKED FOR IN THE ALIGNMENT'S OWN MODE.
+%
+% An alignment reads its rows one at a time, and before each it looks for
+% what comes next -- expanding as it looks. That looking happens in the
+% alignment's own list, not in the mode the row before it ran in: internal
+% vertical for \halign, restricted horizontal for \valign. So an \iftrue
+% standing at the head of an entry is traced there, and the entry's own
+% mode only begins with the first thing the entry really puts down.
+%
+%   \halign{#&#\cr\iftrue A\fi&B\cr}
+%
+%   {internal vertical mode: \iftrue}       the peek, in the alignment's list
+%   {true}
+%   {restricted horizontal mode: the letter A}   the entry proper
+%
+% HSTeX stayed in whatever mode the last entry had left, so the peek drew
+% no mode at all.
+%
+% What stood before the rows stands again once they are done, which is
+% what the last case here reads.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \hsize=100pt \parindent=0pt \tabskip=0pt
+\hbadness=10000 \vbadness=10000 \hfuzz=1000pt \vfuzz=1000pt
+\message{[A an expandable at the head of a halign entry]}
+\tracingcommands=2
+\halign{#&#\cr\iftrue A\fi&B\cr}
+\tracingcommands=0
+\message{[B and at the head of the second row]}
+\tracingcommands=2
+\halign{#&#\cr A&B\cr\iftrue C\fi&D\cr}
+\tracingcommands=0
+\message{[C the same for valign]}
+\tracingcommands=2
+\noindent A\valign{#\cr\iftrue B\fi\cr}C\par
+\tracingcommands=0
+\message{[D what stands after the rows are done]}
+\tracingcommands=2
+\halign{#&#\cr A&B\cr} \relax
+\tracingcommands=0
+\message{[done]}
+\end
