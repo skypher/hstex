@@ -1,0 +1,34 @@
+% HOW A BOX'S GLUE SET IS WRITTEN.
+%
+% The ratio is rounded HALF AWAY FROM ZERO, which for a negative one --
+% a box stretched by glue whose stretch is negative -- is not what
+% adding half the divisor and truncating gives:
+%
+%   \hbox spread2pt{\hskip0pt plus-1bp}   glue set -1.99255, not -1.99254
+%
+% Past twenty thousand the figure is not written at all. Which side of
+% it the ratio fell goes by the SIGN OF THE RATIO and not by whether the
+% box stretched or shrank, and the two are written differently:
+%
+%   positive   glue set >20000.0        no space after the >
+%   negative   glue set < -20000.0      a space, and the minus written out
+%
+% trip line 188 writes `\hbox spread2pt{\hskip0pt plus-1bp}' and the box
+% it makes is shown three times over.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\hsize=100pt \parindent=0pt \hbadness=10000 \hfuzz=1000pt
+\message{[A stretched by negative glue]}
+\setbox0=\hbox spread2pt{\hskip0pt plus-1bp}\showbox0
+\message{[B shrunk by negative glue]}
+\setbox0=\hbox spread-2pt{\hskip0pt minus-1bp}\showbox0
+\message{[C ordinary stretch]}
+\setbox0=\hbox spread2pt{\hskip0pt plus1bp}\showbox0
+\message{[D ordinary shrink]}
+\setbox0=\hbox spread-2pt{\hskip0pt minus1bp}\showbox0
+\message{[E stretch past twenty thousand]}
+\setbox0=\hbox spread100pt{\hskip0pt plus1sp}\showbox0
+\message{[F negative stretch past twenty thousand]}
+\setbox0=\hbox spread100pt{\hskip0pt plus-1sp}\showbox0
+\message{[done]}
+\end

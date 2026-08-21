@@ -15732,13 +15732,32 @@ static void show_glue_set(struct hstex_engine *engine,
         print_text(engine, "- ");
     }
     /* The ratio is kept as the two numbers it came from, so the figure the
-       reference prints is exactly this rounding. */
-    int64_t scaled =
-        ((int64_t)set.needed * 65536 + (int64_t)set.total / 2) / set.total;
+       reference prints is exactly this rounding: half away from zero, which
+       for a negative ratio -- glue that stretches by a NEGATIVE amount --
+       is not what adding half the divisor and truncating gives. */
+    int64_t numerator = (int64_t)set.needed * 65536;
+    int64_t denominator = set.total;
+    bool negative = (numerator < 0) != (denominator < 0);
+    if (numerator < 0) {
+        numerator = -numerator;
+    }
+    if (denominator < 0) {
+        denominator = -denominator;
+    }
+    int64_t scaled = (numerator + denominator / 2) / denominator;
+    if (negative) {
+        scaled = -scaled;
+    }
+    /* Past twenty thousand the figure itself is not written: the reference
+       writes which side of it the ratio fell, and that goes by the SIGN OF
+       THE RATIO and not by whether the box stretched or shrank. A positive
+       one is `>20000.0' with nothing between; a negative one is
+       `< -20000.0'. */
     if (scaled > INT64_C(20000) * 65536) {
-        print_byte(engine,
-                   set.sign == (uint8_t)HSTEX_GLUE_SIGN_SHRINKING ? '<' : '>');
-        print_byte(engine, ' ');
+        print_byte(engine, '>');
+        show_glue_amount(engine, 20000 * 65536, set.order);
+    } else if (scaled < INT64_C(-20000) * 65536) {
+        print_text(engine, "< -");
         show_glue_amount(engine, 20000 * 65536, set.order);
     } else {
         show_glue_amount(engine, (int32_t)scaled, set.order);
