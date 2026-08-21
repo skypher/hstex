@@ -1,0 +1,48 @@
+% A TOKEN PARAMETER IS DRAWN WHEN ITS LIST IS BEGUN, AT \tracingmacros>1.
+%
+% \everypar, \everyvbox, \everyhbox, \everymath, \everydisplay,
+% \everycr, \output, \everyjob and \everyeof all draw a line when the
+% list they hold is begun:
+%
+%   \everypar->\relax
+%
+% It is the shape a macro's line has, without the arguments, and with two
+% differences: there is no blank line in front of it, and the name takes
+% NO space after it -- `\everypar->' where a macro is `\A ->'.
+%
+% They are drawn at \tracingmacros ABOVE ONE only; a macro is drawn at one
+% as well. An empty parameter is never begun and so is never drawn.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4 \catcode`\$=3
+\tracingonline=1 \hsize=100pt \vsize=40pt \parindent=0pt \maxdepth=2pt
+\hbadness=10000 \vbadness=10000 \hfuzz=100pt \vfuzz=100pt
+\message{[A everypar at tracingmacros=2]}
+\everypar{\relax}
+\tracingmacros=2
+\noindent A\par
+\tracingmacros=0
+\message{[B everypar at tracingmacros=1]}
+\tracingmacros=1
+\noindent A\par
+\tracingmacros=0
+\message{[C everyvbox and everyhbox]}
+\everyvbox{\relax}\everyhbox{\relax}
+\tracingmacros=2
+\setbox0=\vbox{\hsize=50pt }\setbox0=\hbox{ }
+\tracingmacros=0
+\message{[D everymath and everydisplay]}
+\everymath{\relax}\everydisplay{\relax}
+\tracingmacros=2
+\setbox0=\vbox{\noindent $x$ $$y$$\par}
+\tracingmacros=0
+\message{[E everycr]}
+\everycr{\noalign{}}
+\tracingmacros=2
+\halign{#\cr A\cr}
+\tracingmacros=0
+\message{[F an empty one draws nothing]}
+\everypar{}
+\tracingmacros=2
+\noindent A\par
+\tracingmacros=0
+\message{[done]}
+\end
