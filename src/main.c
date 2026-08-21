@@ -389,7 +389,11 @@ static int run_latex(const char *format_path, const char *document_path)
 {
     char error[512] = {0};
     struct hstex_engine engine;
-    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+    /* A LaTeX run is a run under an eTeX-enabled format, which is where the
+       larger register pool comes from: latex.ltx reaches \count256 as soon
+       as it finds \marks. See docs/DECISIONS.md,
+       which-tex-hstex-is-measured-against. */
+    if (hstex_engine_init_extended(&engine, true, error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }

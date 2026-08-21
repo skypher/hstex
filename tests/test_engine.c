@@ -13270,12 +13270,12 @@ static int test_unevaluated_conditionals(void)
 static int test_defined_register_meanings(void)
 {
     return run_snippet(
-        "\\countdef\\ca=298 \\dimendef\\da=140 \\skipdef\\sa=48 "
+        "\\countdef\\ca=198 \\dimendef\\da=140 \\skipdef\\sa=48 "
         "\\muskipdef\\ma=7 \\toksdef\\ta=30 "
         "\\chardef\\ha=65 \\mathchardef\\mb=\"2201 "
         "[\\meaning\\ca][\\meaning\\da][\\meaning\\sa][\\meaning\\ma]"
         "[\\meaning\\ta][\\meaning\\ha][\\meaning\\mb][\\meaning\\count]%",
-        "[\\count298][\\dimen140][\\skip48][\\muskip7][\\toks30]"
+        "[\\count198][\\dimen140][\\skip48][\\muskip7][\\toks30]"
         "[\\char\"41][\\mathchar\"2201][\\count]");
 }
 

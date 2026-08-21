@@ -44,7 +44,9 @@ enum {
     HSTEX_MAX_FONT_DIMENS = 1048576,
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
     HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
-    HSTEX_COUNT_REGISTER_CAPACITY = 32768,
+    /* TeX has 256 of each register; an eTeX-enabled format has 32768. */
+    HSTEX_COUNT_REGISTER_CAPACITY = 256,
+    HSTEX_EXTENDED_REGISTER_CAPACITY = 32768,
     HSTEX_MAX_PARAMETERS = HSTEX_PARAMETER_LIMIT,
 };
 
@@ -2087,6 +2089,13 @@ static int register_primitive(struct hstex_engine *engine, const char *name,
 int hstex_engine_init(struct hstex_engine *engine, char *error,
                       size_t error_capacity)
 {
+    return hstex_engine_init_extended(engine, false, error, error_capacity);
+}
+
+int hstex_engine_init_extended(struct hstex_engine *engine,
+                               bool extended_registers, char *error,
+                               size_t error_capacity)
+{
     if (engine == NULL) {
         return set_error(error, error_capacity, "hstex_engine_init: null engine");
     }
@@ -2167,7 +2176,9 @@ int hstex_engine_init(struct hstex_engine *engine, char *error,
             engine->checkpoint_stride = every ? (int32_t)page : 0;
         }
     }
-    engine->count_capacity = (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
+    engine->count_capacity =
+        extended_registers ? (size_t)HSTEX_EXTENDED_REGISTER_CAPACITY
+                           : (size_t)HSTEX_COUNT_REGISTER_CAPACITY;
     engine->counts = calloc(engine->count_capacity, sizeof(*engine->counts));
     engine->count_levels =
         calloc(engine->count_capacity, sizeof(*engine->count_levels));
@@ -14055,7 +14066,8 @@ static int scan_register_definition(struct hstex_engine *engine,
         predefine_target(engine, identifier, global, error, error_capacity) !=
             0 ||
         scan_optional_equals(engine, error, error_capacity) != 0 ||
-        scan_register_num(engine, &index, 32767, error, error_capacity) != 0) {
+        scan_register_num(engine, &index, (int32_t)engine->count_capacity - 1,
+                          error, error_capacity) != 0) {
         return set_error(error, error_capacity, "invalid register definition");
     }
     struct hstex_meaning meaning = {

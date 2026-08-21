@@ -2254,6 +2254,12 @@ struct hstex_engine {
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,
                       size_t error_capacity);
+/* The same, with the register pool an eTeX-enabled format has rather than
+   the 256 TeX has. See docs/DECISIONS.md,
+   which-tex-hstex-is-measured-against. */
+int hstex_engine_init_extended(struct hstex_engine *engine,
+                               bool extended_registers, char *error,
+                               size_t error_capacity);
 void hstex_engine_destroy(struct hstex_engine *engine);
 
 /* The engine's state once the format source has been read, put by so that

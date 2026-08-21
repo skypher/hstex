@@ -1,0 +1,30 @@
+% A register number outside 0..255 is reported and becomes zero -- under
+% pdftex -ini, which is trip's oracle. Under an eTeX-enabled format the
+% pool runs to 32767 and none of these is a fault; see docs/DECISIONS.md,
+% which-tex-hstex-is-measured-against.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A toksdef past the end]}
+\toksdef\tk=256
+\message{[B countdef past the end]}
+\countdef\cn=256
+\message{[C count register past the end]}
+\count256=1
+\message{[D a negative register]}
+\count-1=1
+\message{[E dimen past the end]}
+\dimen300=1pt
+\message{[F skip past the end]}
+\skip256=1pt
+\message{[G muskip past the end]}
+\muskip256=1mu
+\message{[H toks past the end]}
+\toks256={x}
+\message{[I box past the end]}
+\setbox256=\hbox{}
+\message{[J the last good one]}
+\count255=7 \showthe\count255
+\message{[K what the bad ones became]}
+\showthe\count0 \showthe\tk
+\message{[done]}
+\end
