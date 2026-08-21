@@ -4793,7 +4793,11 @@ static int integer_from_control_sequence(
     case HSTEX_COMMAND_SKIP_REGISTER:
     case HSTEX_COMMAND_GLUE_PARAMETER:
     case HSTEX_COMMAND_SKIP:
-    case HSTEX_COMMAND_GLUE_EXPR: {
+    case HSTEX_COMMAND_GLUE_EXPR:
+    case HSTEX_COMMAND_MUSKIP_REGISTER:
+    case HSTEX_COMMAND_MUGLUE_PARAMETER:
+    case HSTEX_COMMAND_MUSKIP:
+    case HSTEX_COMMAND_MU_EXPR: {
         int result = dimen_from_meaning(engine, meaning, value, error,
                                         error_capacity);
         if (result < 0) {
@@ -5332,6 +5336,10 @@ static int glue_from_meaning(struct hstex_engine *engine,
                              const struct hstex_meaning *meaning,
                              struct hstex_glue *value, char *error,
                              size_t error_capacity);
+static int math_glue_from_meaning(struct hstex_engine *engine,
+                                  const struct hstex_meaning *meaning,
+                                  struct hstex_glue *value, char *error,
+                                  size_t error_capacity);
 
 static bool page_is_empty(const struct hstex_engine *engine);
 
@@ -5570,6 +5578,22 @@ static int dimen_from_meaning(struct hstex_engine *engine,
         return -1;
     }
     if (glue_result > 0) {
+        *value = glue.width;
+        return 1;
+    }
+    /* A mu quantity where a dimension belongs is still a quantity: the
+       reference reports the mixture and takes the width as it stands, so
+       `\dimen0=\muskip1' with \muskip1 at 5mu comes to 5.0pt. An integer
+       asked for one of these arrives here too, by way of the dimension. */
+    int math_result =
+        math_glue_from_meaning(engine, meaning, &glue, error, error_capacity);
+    if (math_result < 0) {
+        return -1;
+    }
+    if (math_result > 0) {
+        static const char *const help[] = {
+            "I'm going to assume that 1mu=1pt when they're mixed.", NULL};
+        tex_error(engine, help, "Incompatible glue units");
         *value = glue.width;
         return 1;
     }

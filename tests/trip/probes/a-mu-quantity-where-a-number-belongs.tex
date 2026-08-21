@@ -1,0 +1,34 @@
+% A MU QUANTITY WHERE A NUMBER BELONGS.
+%
+% \muskip and \thinmuskip and their kin are internal quantities like any
+% other, so a scan that wants a dimension or an integer takes one --
+% reports the mixture and uses the numbers as they stand:
+%
+%   \muskip1=5mu plus 2mu minus 1fil
+%   \dimen0=\muskip1     ! Incompatible glue units.     5.0pt
+%   \count0=\muskip1     ! Incompatible glue units.     327680
+%   \skip0=\muskip1      ! Incompatible glue units.     5.0pt plus 2.0pt
+%                                                              minus 1.0fil
+%   \dimen0=2\muskip1    ! Incompatible glue units.     10.0pt
+%
+% The help is always "I'm going to assume that 1mu=1pt when they're
+% mixed."
+%
+% HSTeX had the glue reading of this and not the dimension one, so a
+% muskip where a dimension belonged was not a quantity at all: the scan
+% said `Missing number' and then `Illegal unit of measure', and the run
+% went on with the muskip's own name left to read again.
+%
+% trip line 276 reaches this through \lastskip, which an \mskip makes a
+% mu quantity.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\muskip1=5mu plus 2mu minus 1fil \thinmuskip=7mu
+\message{[A a muskip register as a dimension]}\dimen0=\muskip1 \showthe\dimen0
+\message{[B a muskip register as an integer]}\count0=\muskip1 \showthe\count0
+\message{[C a muglue parameter as a dimension]}\dimen0=\thinmuskip \showthe\dimen0
+\message{[D a muskip register as ordinary glue]}\skip0=\muskip1 \showthe\skip0
+\message{[E a muskip register as the unit of a dimension]}\dimen0=2\muskip1 \showthe\dimen0
+\message{[F a muglue parameter as an integer]}\count0=\thinmuskip \showthe\count0
+\message{[done]}
+\end
