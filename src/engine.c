@@ -8802,6 +8802,19 @@ static int match_parameter_prefix(struct hstex_engine *engine,
         struct hstex_source_location location;
         enum hstex_engine_result result = raw_next(
             engine, &actual, &location, error, error_capacity);
+        /* An \outer name may not stand where the parameter text is being
+           matched either. It is reported and handed back, and then the
+           match fails on it -- so the reference draws BOTH faults, one
+           behind the other, over the same context. */
+        if (result == HSTEX_ENGINE_TOKEN &&
+            hstex_token_is_control_sequence(actual) &&
+            token_is_outer_macro(engine, actual)) {
+            struct hstex_token_vector nothing = {0};
+            (void)report_forbidden_in_argument(engine, actual, location,
+                                               &nothing, NULL, error,
+                                               error_capacity);
+            result = HSTEX_ENGINE_EOF;
+        }
         if (result != HSTEX_ENGINE_TOKEN ||
             normalize_one_shot_token(actual) !=
                 normalize_one_shot_token(tokens[index])) {

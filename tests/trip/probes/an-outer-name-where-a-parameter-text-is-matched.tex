@@ -1,0 +1,17 @@
+% An \outer name may not stand where a macro's parameter text is being
+% matched either. It is reported and handed back, and then the match fails
+% on it, so the reference draws BOTH faults over the same context.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \errorcontextlines=5
+\outer\def\z{Z}
+\message{[A an outer cs where the parameter text is matched]}
+\def\T12#1{[#1]}
+\T\z
+\message{[B and one after the first literal matched]}
+\def\U12#1{[#1]}
+\U1\z
+\message{[C a plain mismatch, for comparison]}
+\def\V12#1{[#1]}
+\V1x2
+\message{[done]}
+\end
