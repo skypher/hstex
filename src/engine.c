@@ -16479,8 +16479,20 @@ static void show_node(struct hstex_engine *engine,
         print_formatted(engine, "\\insert%u, natural size ",
                       (unsigned int)node->value.insert.number);
         show_scaled(engine, packed_dimen(node->height));
+        /* The \splittopskip an insertion kept is written as a whole glue,
+           stretch and shrink and all. */
         print_text(engine, "; split(");
         show_scaled(engine, node->value.insert.split_top_skip.width);
+        if (node->value.insert.split_top_skip.stretch != 0) {
+            print_text(engine, " plus ");
+            show_glue_amount(engine, node->value.insert.split_top_skip.stretch,
+                             node->value.insert.split_top_skip.stretch_order);
+        }
+        if (node->value.insert.split_top_skip.shrink != 0) {
+            print_text(engine, " minus ");
+            show_glue_amount(engine, node->value.insert.split_top_skip.shrink,
+                             node->value.insert.split_top_skip.shrink_order);
+        }
         print_byte(engine, ',');
         show_scaled(engine, node->value.insert.split_max_depth);
         print_formatted(engine, "); float cost %d", node->value.insert.float_cost);

@@ -1,0 +1,24 @@
+% WHAT AN INSERTION SHOWS OF ITS SPLIT GLUE.
+%
+% An insertion remembers the \splittopskip that stood when it was written,
+% and a box display writes that as a WHOLE GLUE:
+%
+%   \splittopskip=1pt plus 43pt minus 2pt \splitmaxdepth=-2pt
+%   \insert5, natural size 0.0; split(1.0 plus 43.0 minus 2.0,-2.0);
+%                                                       float cost 7
+%
+% HSTeX wrote the width alone. trip's \showlists at line 284 shows an
+% insertion whose \splittopskip stretches.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=9 \showboxdepth=9
+\splittopskip=1pt plus 43pt minus 2pt \splitmaxdepth=-2pt \floatingpenalty=7
+\count5=1000 \dimen5=50pt \skip5=3pt
+\message{[A an insertion inside a vbox]}
+\setbox0=\vbox{\hbox{}\insert5{\hbox{}}\hbox{}}
+\showbox0
+\message{[B one whose split glue is nothing but a width]}
+\splittopskip=2pt
+\setbox0=\vbox{\hbox{}\insert5{\hbox{}}}
+\showbox0
+\message{[done]}
+\end
