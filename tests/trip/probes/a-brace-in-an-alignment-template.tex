@@ -52,22 +52,29 @@
 %     inner preamble is read. That is what stopped gentle at its line
 %     1074 and testmath at 114.
 %
-% Counting each brace once, at its first reading -- skipping the reading
-% when the frame it came from is a pushback -- fixes the \hbox case and
-% NOT the nested one. Suspending the outer entry for the whole of a nested
-% alignment fixes the nested one. Both together still leave the count
-% wrong, and by a long way:
+% WHERE THE THIRTY-ODD MISSING BRACES WENT. sample2e's one cell ended with
+% the count at 35, and counting the braces by where they came from showed
+% 36 opening braces and NOT ONE closing brace. Twenty-nine came from macro
+% expansions.
 %
-%   sample2e, a plain LaTeX document with no alignment of its own beyond
-%   the one-cell tabular that \maketitle builds for the author, ends that
-%   single cell with the count at 35. Skipping re-readings takes it to 33.
-%   So thirty-odd `{' are being counted in that cell with no `}' against
-%   them, and the re-reading of an \hbox's brace accounts for two of them.
+% The reason: the scanner that absorbs a macro's argument takes a whole run
+% of tokens from a list in one go rather than a token at a time -- that is
+% where a macro call spends most of what it spends -- and it counts braces
+% into its own depth as it goes. The entry never saw them. The opening
+% brace of each argument WAS seen, because it is read singly before the run
+% begins; its closing brace was swallowed with the rest. So every macro
+% call with a braced argument left the entry one brace deeper.
 %
-% Whatever else is losing them is not the two things above, and the count
-% cannot be reported from until it is found. A cell whose braces balance
-% must end at nought; that is the test to write first, and sample2e is
-% the case to write it against.
+% Telling the entry what that run consumed takes sample2e's cell from 35 to
+% 2; skipping a re-reading takes it to 0. Suspending the outer entry for
+% the whole of a nested alignment is the third piece.
+%
+% NOT YET, and it is now the whole of what is left: testmath's amsmath
+% alignments still end a cell holding one brace it never opened -- 197 of
+% its cells end at one and eight at twelve -- and with the report turned on
+% that stops it at line 317. The corpus goes from two documents agreeing to
+% four. The braces that go missing there come from macro frames and from
+% inserted ones; the file's own are balanced.
 %
 % Measured while looking: the reference does NOT suspend the count inside
 % a box in a cell. `\halign{#\cr \hbox{A&B}\cr}' draws "Missing }

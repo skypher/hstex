@@ -3401,8 +3401,8 @@ static void note_files_closed(struct hstex_engine *engine)
 /* A file that runs out inserts \everyeof, once, before whatever follows it;
    see docs/DECISIONS.md, everyeof. */
 static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
-                                bool from_template, char *error,
-                                size_t error_capacity);
+                                bool from_template, bool from_pushback,
+                                char *error, size_t error_capacity);
 
 static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
@@ -3411,12 +3411,14 @@ static enum hstex_engine_result raw_next(
     if (hstex_source_take(&engine->sources, token, location)) {
         /* The frame it came from is still on top, so whether it is one of
            an alignment template can be asked here and nowhere else. */
-        bool from_template =
-            engine->sources.top != NULL &&
-            engine->sources.top->source_kind ==
-                (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE;
-        int noted = note_alignment_token(engine, *token, from_template, error,
-                                         error_capacity);
+        uint8_t came_from = engine->sources.top != NULL
+                                ? engine->sources.top->source_kind
+                                : (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+        int noted = note_alignment_token(
+            engine, *token,
+            came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+            came_from == (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, error,
+            error_capacity);
         if (noted < 0) {
             return HSTEX_ENGINE_ERROR;
         }
@@ -3446,8 +3448,8 @@ static enum hstex_engine_result raw_next(
             if (result == HSTEX_MOUTH_EOF) {
                 return HSTEX_ENGINE_EOF;
             }
-            int noted = note_alignment_token(engine, *token, false, error,
-                                             error_capacity);
+            int noted = note_alignment_token(engine, *token, false, false,
+                                             error, error_capacity);
             if (noted < 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -7630,6 +7632,12 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 size_t available = source->count - source->cursor;
                 size_t taken = 0U;
                 bool closed = false;
+                /* An alignment entry counts the braces it reads, and these
+                   are read here rather than one at a time, so what is taken
+                   in bulk has to be told to it too. Without this a macro
+                   call in a cell leaves the entry thinking it has a brace
+                   open for every argument it absorbed. */
+                int32_t braces = 0;
                 /* This is where a macro call spends most of what it spends,
                    so an ordinary character -- which is nearly every token of
                    an argument -- is passed over in one comparison against
@@ -7650,14 +7658,23 @@ static int scan_balanced_group(struct hstex_engine *engine,
                         }
                     } else if (shape == opens) {
                         ++depth;
+                        ++braces;
                     } else if (shape == closes) {
                         --depth;
+                        --braces;
                         if (depth == 0U) {
                             closed = true;
                             break;
                         }
                     }
                     ++taken;
+                }
+                struct hstex_align_entry *cell = engine->alignment_entry;
+                if (cell != NULL && !cell->after_pushed && braces != 0) {
+                    cell->nesting += braces;
+                    if (cell->nesting < 0) {
+                        cell->nesting = 0;
+                    }
                 }
                 if (taken != 0U) {
                     if (vector_reserve(argument, argument->count + taken, error,
@@ -32719,6 +32736,23 @@ static int scan_align_preamble(struct hstex_engine *engine,
     return status == 0 ? -1 : status;
 }
 
+/* An alignment met inside an alignment entry is its own affair. The entry
+   outside it is suspended for the whole of it, so that the inner
+   preamble's and rows' braces are not counted as the outer entry's. */
+static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
+                                   char *error, size_t error_capacity);
+
+static int execute_alignment(struct hstex_engine *engine, bool vertical,
+                             char *error, size_t error_capacity)
+{
+    struct hstex_align_entry *outer = engine->alignment_entry;
+    engine->alignment_entry = NULL;
+    int status = execute_alignment_inner(engine, vertical, error,
+                                         error_capacity);
+    engine->alignment_entry = outer;
+    return status;
+}
+
 /* Repeat the preamble from its && point until the wanted column exists. */
 static int extend_align_columns(struct hstex_align_column **columns,
                                 size_t *count, size_t *capacity,
@@ -32831,8 +32865,8 @@ static int end_alignment_entry(struct hstex_engine *engine,
    asked for it sees it. Returns 1 when the token ended the entry, so that
    the template's text after it is what the caller gets. */
 static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
-                                bool from_template, char *error,
-                                size_t error_capacity)
+                                bool from_template, bool from_pushback,
+                                char *error, size_t error_capacity)
 {
     struct hstex_align_entry *entry = engine->alignment_entry;
     if (entry == NULL || entry->after_pushed) {
@@ -32844,17 +32878,19 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
     if (from_template) {
         return 0;
     }
-    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
-        ++entry->nesting;
-        return 0;
-    }
-    if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
-        if (entry->nesting != 0) {
-            --entry->nesting;
+    if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP) ||
+        token_is_category(token, HSTEX_CAT_END_GROUP)) {
+        /* Counted once, at its first reading. A brace that several scanners
+           look at in turn is put back between them and read again -- \hbox
+           reads its `{' three times over, once for each thing the token
+           might have been -- and only the first of those is the entry's. */
+        if (!from_pushback) {
+            if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+                ++entry->nesting;
+            } else if (entry->nesting != 0) {
+                --entry->nesting;
+            }
         }
-        return 0;
-    }
-    if (entry->nesting != 0) {
         return 0;
     }
     enum hstex_align_end ending;
@@ -32871,6 +32907,15 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
             return 0;
         }
     } else {
+        return 0;
+    }
+    if (entry->nesting != 0) {
+        /* NOT YET: the reference puts in the } the column wants and reads
+           the tab again -- "Missing } inserted". The count is close enough
+           now to be worth reporting from for four of the five corpus
+           documents and not for testmath, whose amsmath alignments still
+           end a cell holding one brace it never opened. See
+           tests/trip/probes/a-brace-in-an-alignment-template.tex. */
         return 0;
     }
     if (end_alignment_entry(engine, ending, error, error_capacity) != 0) {
@@ -33498,8 +33543,8 @@ static int reserve_align_rows(struct hstex_align_row **rows, size_t *capacity,
    align and gather. The rows are then gathered aside so that the display's
    penalties and skips can be read at the closing $$; see
    docs/DECISIONS.md, display-alignments. */
-static int execute_alignment(struct hstex_engine *engine, bool vertical,
-                             char *error, size_t error_capacity)
+static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
+                                   char *error, size_t error_capacity)
 {
     if (engine->pending_global || engine->pending_macro_flags != 0U) {
         return set_error(error, error_capacity,
