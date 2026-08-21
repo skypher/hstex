@@ -1,0 +1,35 @@
+% Which characters the log writes in ^^ notation, and how that depends on
+% the format the run started from.
+%
+% Measured against pdftex, walking the whole range under `pdftex -ini' and
+% again under the ordinary format:
+%
+%              INITEX          preloaded format
+%   0-8        ^^@ .. ^^H      the same
+%   9,10,11    ^^I ^^J ^^K     as themselves
+%   12-31      ^^L .. ^^_      the same
+%   32-126     as themselves   the same
+%   127        ^^?             the same
+%   128-255    ^^80 .. ^^ff    as themselves
+%
+% The hex digits are LOWERCASE and always two. What decides it is eight-bit
+% printing, which a format carries and INITEX has off -- so it applies to
+% everything printed rather than to any one message, and trip's log, which
+% is an INITEX log, has fourteen lines of it.
+%
+% A trap when measuring: INITEX gives `^' catcode 12, so a probe written
+% for it must set \catcode`\^=7 or `^^c8' in the source is four ordinary
+% characters and the run says so.
+%
+% This engine now writes the upper half the INITEX way. It does not do the
+% same for 9, 10 and 11 -- the engine's own newline goes through the same
+% printer as a document's characters, so escaping code 10 would escape
+% every line ending in the log. trip needs none of those three.
+\tracingonline=1
+\catcode200=12 \catcode128=12 \catcode255=12 \catcode127=12
+\def\a{^^c8}\show\a
+\def\b{^^80}\show\b
+\def\c{^^ff}\show\c
+\def\d{^^7f}\show\d
+\def\e{~A}\show\e
+\end

@@ -14255,6 +14255,26 @@ static void print_bytes(struct hstex_engine *engine, const char *text,
         if (newline >= 0 && newline <= 255 &&
             (unsigned char)byte == (unsigned char)newline) {
             byte = '\n';
+        } else if (!engine->eight_bit_printing &&
+                   (unsigned char)byte > 127U) {
+            /* INITEX writes the whole upper half in ^^ notation, with two
+               lowercase hex digits. A format built with eight-bit printing
+               on writes the byte itself. */
+            static const char digits[] = "0123456789abcdef";
+            char hex[4];
+            hex[0] = '^';
+            hex[1] = '^';
+            hex[2] = digits[((unsigned char)byte >> 4) & 0xFU];
+            hex[3] = digits[(unsigned char)byte & 0xFU];
+            for (size_t at = 0U; at < 4U; ++at) {
+                (void)fputc(hex[at], out);
+                ++engine->message_column;
+                if (engine->message_column == HSTEX_PRINT_LINE) {
+                    (void)fputc('\n', out);
+                    engine->message_column = 0;
+                }
+            }
+            continue;
         } else if (character_needs_caret((uint8_t)byte)) {
             /* What cannot be written as itself is written ^^ here, at the
                one place everything printed goes through, since the

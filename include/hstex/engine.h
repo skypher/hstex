@@ -1974,6 +1974,11 @@ struct hstex_engine {
        when a character of that family is wanted is an undefined family,
        which the reference reports by name. */
     uint32_t null_font;
+    /* Whether the log may write a byte above 127 as itself. A format built
+       with eight-bit printing on says yes; INITEX says no and writes ^^ and
+       two lowercase hex digits, which is what trip's log is full of. See
+       docs/DECISIONS.md, a-character-the-log-writes-as-itself. */
+    bool eight_bit_printing;
     uint32_t math_font_levels[HSTEX_MATH_SIZE_COUNT][16];
     /* True while an alignment is reading its body, so that \cr and its
        relatives are recognised instead of being errors. */
