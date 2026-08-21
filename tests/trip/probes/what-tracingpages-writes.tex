@@ -1,0 +1,64 @@
+% \tracingpages WRITES TWO KINDS OF LINE.
+%
+% As a page starts -- at the first box, or at the first insertion if one
+% comes before any box -- it announces what the page is being fitted to:
+%
+%   %% goal height=50.0, max depth=2.0
+%
+% and then, at every place the page COULD break, one line saying what
+% stands on the page, how badly it would fit, and what the break costs:
+%
+%   % t=42.0 plus 2.0 plus 1.0fil minus 1.0 g=50.0 b=0 p=100 c=100#
+%
+%   t   what the page holds, as a glue: the total, then `plus' for each
+%       order that has any stretch (the finite one with NO UNIT, the
+%       others named fil, fill, filll), then `minus' the shrink. A
+%       negative amount is written as it is: `plus -1.0fil'.
+%   g   the goal.
+%   b   the badness of stretching or shrinking what stands to the goal.
+%       10000 where that is infinitely bad, `*' where the page cannot be
+%       shrunk enough to fit at all.
+%   p   the penalty at the break.
+%   c   the cost: p alone where p is -10000 or less; b+p+\insertpenalties
+%       where b is under 10000; 100000 where b is 10000; `*' where b is
+%       `*' or where \insertpenalties has reached 10000.
+%   #   only where this is the best break found so far, which is to say
+%       where the cost is no greater than the least seen.
+%
+% ONLY LEGAL BREAKPOINTS DRAW A LINE: glue after something that cannot be
+% discarded, a kern before glue, and a penalty under 10000. Nothing is
+% drawn where the page builder merely moves material across.
+%
+% Two probes here, run together: the first walks a page through finite,
+% fil and filll stretch to an overfull one and an eject; the second adds
+% an insertion (so \insertpenalties enters the cost), a \pagegoal set by
+% hand in the middle of a page, and a negative fil.
+\tracingonline=1 \tracingpages=1
+\vsize=50pt \maxdepth=2pt \topskip=10pt
+\output={\shipout\box255 }
+\hbox{}\penalty0
+\vskip5pt plus2pt minus1pt
+\hbox{}\penalty-50
+\vskip3pt plus1fil
+\hbox{}\penalty100
+\vskip1pt plus2filll minus1pt
+\hbox{}\penalty50
+\vskip40pt
+\hbox{}\penalty-10000
+\vsize=60pt \maxdepth=3pt
+\dimen200=10pt \count200=500 \skip200=5pt
+\hbox{}\penalty1
+\insert200{\hbox{}\vskip4pt}
+\penalty2
+\vskip6pt plus-1fil
+\hbox{}\penalty3
+\pagegoal=40pt
+\vskip2pt
+\hbox{}\penalty4
+\vskip3pt plus1fill
+\hbox{}\penalty5
+\vskip500pt
+\hbox{}\penalty-20000
+\message{[done]}
+\tracingpages=0
+\end

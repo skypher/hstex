@@ -20518,8 +20518,85 @@ static int eject_last_pages(struct hstex_engine *engine, char *error,
 
 /* How much it would cost to break the page here. See docs/DECISIONS.md,
    the-output-routine. */
+/* A scaled value the way the page trace writes one: no unit on a finite
+   amount, the order's name on an infinite one. */
+static void print_page_amount(struct hstex_engine *engine, int32_t value,
+                              const char *order)
+{
+    char digits[64];
+    if (format_scaled_value(value, order, digits, sizeof(digits)) > 0) {
+        print_text(engine, digits);
+    }
+}
+
+/* \tracingpages announces each page's goal as the page starts. */
+static void trace_page_goal(struct hstex_engine *engine)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PAGES] <= 0) {
+        return;
+    }
+    print_fresh_line(engine);
+    print_text(engine, "%% goal height=");
+    print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_GOAL], "");
+    print_text(engine, ", max depth=");
+    print_page_amount(engine, engine->dimen_parameters[HSTEX_DIMEN_MAX_DEPTH],
+                      "");
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
+/* \tracingpages writes a line for every place the page could break: what
+   stands on it, what it is being fitted to, how badly it would fit, what the
+   break costs, and a # where that is the best break so far. See
+   tests/trip/probes/what-tracingpages-writes.tex. */
+static void trace_page_cost(struct hstex_engine *engine, int32_t penalty,
+                            int32_t badness, int64_t cost, bool best)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PAGES] <= 0) {
+        return;
+    }
+    static const char *const orders[4] = {"", "fil", "fill", "filll"};
+    print_fresh_line(engine);
+    print_text(engine, "% t=");
+    print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_TOTAL], "");
+    for (size_t order = 0U; order < 4U; ++order) {
+        int32_t amount = engine->page_dimens[HSTEX_PAGE_STRETCH + order];
+        if (amount == 0) {
+            continue;
+        }
+        print_text(engine, " plus ");
+        print_page_amount(engine, amount, orders[order]);
+    }
+    if (engine->page_dimens[HSTEX_PAGE_SHRINK] != 0) {
+        print_text(engine, " minus ");
+        print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_SHRINK], "");
+    }
+    print_text(engine, " g=");
+    print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_GOAL], "");
+    print_text(engine, " b=");
+    if ((int64_t)badness >= HSTEX_AWFUL_BADNESS) {
+        print_byte(engine, '*');
+    } else {
+        print_formatted(engine, "%d", (int)badness);
+    }
+    print_formatted(engine, " p=%d", (int)penalty);
+    print_text(engine, " c=");
+    if (cost >= HSTEX_AWFUL_BADNESS) {
+        print_byte(engine, '*');
+    } else {
+        print_formatted(engine, "%d", (int)cost);
+    }
+    if (best) {
+        print_byte(engine, '#');
+    }
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
+/* `badness_out' is what the page trace names as b: how badly what stands on
+   the page would have to be stretched or shrunk to reach the goal. */
 static int64_t page_break_cost(const struct hstex_engine *engine,
-                               int32_t penalty)
+                               int32_t penalty, int32_t *badness_out)
 {
     int32_t goal = engine->page_dimens[HSTEX_PAGE_GOAL];
     int32_t total = engine->page_dimens[HSTEX_PAGE_TOTAL];
@@ -20533,10 +20610,16 @@ static int64_t page_break_cost(const struct hstex_engine *engine,
                                      engine->page_dimens[HSTEX_PAGE_STRETCH]);
     } else if ((int64_t)total - goal >
                engine->page_dimens[HSTEX_PAGE_SHRINK]) {
+        if (badness_out != NULL) {
+            *badness_out = (int32_t)HSTEX_AWFUL_BADNESS;
+        }
         return HSTEX_AWFUL_BADNESS;
     } else {
         badness = glue_badness(total - goal,
                                engine->page_dimens[HSTEX_PAGE_SHRINK]);
+    }
+    if (badness_out != NULL) {
+        *badness_out = badness;
     }
     int32_t insert = engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES];
     int64_t cost;
@@ -21133,6 +21216,7 @@ static int build_page(struct hstex_engine *engine, char *error,
                     engine->page_dimens[HSTEX_PAGE_GOAL] =
                         engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
                     engine->page_frozen = true;
+                    trace_page_goal(engine);
                 }
                 uint16_t number = node.value.insert.number;
                 int32_t factor = engine->counts[number];
@@ -21245,6 +21329,7 @@ static int build_page(struct hstex_engine *engine, char *error,
                     engine->page_dimens[HSTEX_PAGE_GOAL] =
                         engine->dimen_parameters[HSTEX_DIMEN_VSIZE];
                     engine->page_frozen = true;
+                    trace_page_goal(engine);
                 }
                 engine->page_has_box = true;
                 struct hstex_glue top =
@@ -21305,7 +21390,11 @@ static int build_page(struct hstex_engine *engine, char *error,
                     legal = penalty < HSTEX_INFINITE_PENALTY;
                 }
                 if (legal) {
-                    int64_t cost = page_break_cost(engine, penalty);
+                    int32_t badness = 0;
+                    int64_t cost =
+                        page_break_cost(engine, penalty, &badness);
+                    trace_page_cost(engine, penalty, badness, cost,
+                                    cost <= engine->least_page_cost);
                     if (cost <= engine->least_page_cost) {
                         engine->best_page_break = page->count;
                         engine->best_page_penalty =
