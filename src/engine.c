@@ -7863,8 +7863,8 @@ static unsigned int tokens_read_plainly_after(
 static int report_forbidden_in_argument(
     struct hstex_engine *engine, hstex_token token,
     struct hstex_source_location location,
-    const struct hstex_token_vector *partial, const char *prefix, char *error,
-    size_t error_capacity)
+    const struct hstex_token_vector *partial, const char *prefix,
+    bool scanning_an_argument, char *error, size_t error_capacity)
 {
     static const char *const help[] = {
         "I suspect you have forgotten a `}', causing me",
@@ -7891,6 +7891,17 @@ static int report_forbidden_in_argument(
     tex_error(engine, help,
               "Forbidden control sequence found while scanning use of %s",
               named);
+    /* The scan that was under way READS the \par it was just given, and
+       that is what gives the call up -- silently, since the fault has
+       already been drawn. So the \par is spent here and never reaches the
+       main loop: `\def\T#1{}\T\z' draws no {\par}. Where the parameter
+       TEXT was being matched there is no argument scan left to read it, and
+       the \par does reach the main loop and is traced. */
+    if (scanning_an_argument) {
+        hstex_token spent = 0U;
+        struct hstex_source_location where;
+        (void)raw_next(engine, &spent, &where, error, error_capacity);
+    }
     engine->argument_abandoned = true;
     return 0;
 }
@@ -8011,7 +8022,7 @@ static int scan_balanced_group(struct hstex_engine *engine,
                report_forbidden_in_argument. */
             if (scanning == NULL) {
                 (void)report_forbidden_in_argument(engine, token, location,
-                                                   argument, "{", error,
+                                                   argument, "{", true, error,
                                                    error_capacity);
                 return -1;
             }
@@ -8552,6 +8563,10 @@ static int report_extra_brace_in_argument(struct hstex_engine *engine,
                  error_capacity) != 0) {
         return -1;
     }
+    /* What is put in is inserted, and the context says so; the `}' handed
+       back below it is not. */
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
     char named[128];
     describe_token(engine,
                    hstex_token_control_sequence(engine->expanding_macro_cs),
@@ -8652,7 +8667,7 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                 .capacity = 0U,
             };
             (void)report_forbidden_in_argument(engine, token, location,
-                                               &partial, NULL, error,
+                                               &partial, NULL, true, error,
                                                error_capacity);
             return -1;
         }
@@ -8841,7 +8856,7 @@ static int match_parameter_prefix(struct hstex_engine *engine,
             token_is_outer_macro(engine, actual)) {
             struct hstex_token_vector nothing = {0};
             (void)report_forbidden_in_argument(engine, actual, location,
-                                               &nothing, NULL, error,
+                                               &nothing, NULL, false, error,
                                                error_capacity);
             result = HSTEX_ENGINE_EOF;
         }
@@ -9044,7 +9059,9 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         size_t start;
         size_t count;
     } bounds[HSTEX_MAX_PARAMETERS];
-    const bool long_macro = (macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U;
+    /* Not const: a `}' where an argument should have begun makes the call
+       give up on the next \par whether or not the macro was \long. */
+    bool long_macro = (macro->flags & (uint8_t)HSTEX_MACRO_LONG) != 0U;
     size_t cursor = 0U;
     uint8_t next_parameter = 1U;
     int status = -1;
@@ -9078,6 +9095,11 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         }
         size_t start = arena->count;
         if (delimiter_count == 0U) {
+          /* A `}' where the argument should have begun is put back and a
+             \par put in front of it, and then THE SAME parameter is read
+             again -- neither the parameter number nor the place in the
+             parameter text moves. */
+          for (;;) {
             hstex_token first = 0U;
             struct hstex_source_location location;
             enum hstex_engine_result result = raw_next_non_space(
@@ -9098,7 +9120,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                    and no text at all. */
                 struct hstex_token_vector nothing = {0};
                 (void)report_forbidden_in_argument(engine, first, location,
-                                                   &nothing, NULL, error,
+                                                   &nothing, NULL, true, error,
                                                    error_capacity);
                 goto cleanup;
             }
@@ -9145,7 +9167,7 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                                                    error_capacity) != 0) {
                     goto cleanup;
                 }
-                --next_parameter;
+                long_macro = false;
                 continue;
             }
             if (token_is_category(first, HSTEX_CAT_BEGIN_GROUP)) {
@@ -9156,6 +9178,8 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             } else if (vector_push(arena, first, error, error_capacity) != 0) {
                 goto cleanup;
             }
+            break;
+          }
         } else if (scan_delimited_argument(
                        engine, arena, macro->parameter_text + delimiter_start,
                        delimiter_count, long_macro, error, error_capacity) != 0) {

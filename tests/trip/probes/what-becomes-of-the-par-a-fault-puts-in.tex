@@ -1,0 +1,25 @@
+% The \par a runaway fault puts in is READ by the scan that was under way,
+% and that is what gives the call up -- so it never reaches the main loop.
+% Where the parameter TEXT was being matched there is no scan left to read
+% it, and it does reach the main loop and is traced.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \errorcontextlines=5 \tracingcommands=1 \tracingmacros=1
+\outer\def\z{Z}
+\message{[A an outer cs in an undelimited argument]}
+\def\T#1{[#1]}
+\T\z
+\message{[B an outer cs in a braced argument]}
+\def\V#1{[#1]}
+\V{ab\z cd}
+\message{[C an outer cs in a delimited argument]}
+\def\U#1\stop{[#1]}
+\U ab\z cd\stop
+\message{[D an outer cs where the parameter text is matched]}
+\def\W12#1{[#1]}
+\W\z
+\message{[E a long macro after the abandoned one]}
+\long\def\P#1{[#1]}
+\def\Q#1{[#1]}
+\Q{a\z\P}
+\message{[done]}
+\end
