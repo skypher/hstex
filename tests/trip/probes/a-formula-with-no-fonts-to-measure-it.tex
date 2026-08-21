@@ -1,0 +1,39 @@
+% A formula whose math families have not got the fontdimens it needs.
+%
+% Measured against pdftex: the formula is DELETED. What is left in the
+% horizontal list is the \mathon and \mathoff with nothing between them,
+% and the reference says which family is wanting:
+%
+%   ! Math formula deleted: Insufficient symbol fonts.
+%   Sorry, but I can't typeset math unless \textfont 2
+%   and \scriptfont 2 and \scriptscriptfont 2 have all
+%   the \fontdimen values needed in math symbol fonts.
+%
+%   ! Math formula deleted: Insufficient extension fonts.
+%   Sorry, but I can't typeset math unless \textfont 3
+%   and \scriptfont 3 and \scriptscriptfont 3 have all
+%   the \fontdimen values needed in math extension fonts.
+%
+% What each family wants, measured either side of the boundary: family 2
+% wants twenty-two parameters in each of the three sizes (twenty-one is
+% not enough), family 3 wants thirteen (twelve is not enough). Any one of
+% the three sizes being short is enough to delete the formula, and family
+% 2 is asked about first when both are wanting.
+%
+% cmr10, with its seven, is short for either. \nullfont is short for both.
+%
+% A display goes the same way, and what is packaged is then an empty box
+% where the formula would have been.
+%
+% This engine typeset the formula regardless and said nothing, so this is
+% a difference in what is SET and not only in what is reported. trip draws
+% it three times.
+\tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
+\setbox0=\hbox{$x$}\showbox0
+{\textfont2=\nullfont \setbox1=\hbox{$x$}\showbox1}
+{\textfont3=\nullfont \setbox2=\hbox{$x$}\showbox2}
+{\scriptfont3=\nullfont \setbox3=\hbox{$x$}\showbox3}
+{\textfont3=\tenrm \scriptfont3=\tenrm \scriptscriptfont3=\tenrm
+ \setbox4=\hbox{$x$}\showbox4}
+{\textfont3=\nullfont \setbox5=\vbox{a$$x$$}\showbox5}
+\end

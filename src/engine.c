@@ -28549,6 +28549,8 @@ static int translate_math_list_with(struct hstex_engine *engine,
                                     bool penalties, char *error,
                                     size_t error_capacity);
 
+static bool math_fonts_are_missing(struct hstex_engine *engine);
+
 /* A sub-formula gets no penalties of its own; only the outer list of a
    formula in a paragraph does. */
 static int translate_math_list(struct hstex_engine *engine,
@@ -29757,7 +29759,12 @@ static int package_displayed_formula(struct hstex_engine *engine,
     struct hstex_hbox_builder builder = {0};
     struct hstex_hbox_builder *previous = engine->active_hbox_builder;
     engine->active_hbox_builder = &builder;
-    int status = translate_math_list(engine, list, error, error_capacity);
+    /* A display is deleted for want of the fonts to measure it against
+       just as an inline formula is: what is packaged is then an empty box
+       where the formula would have been. */
+    int status = math_fonts_are_missing(engine)
+                     ? 0
+                     : translate_math_list(engine, list, error, error_capacity);
     engine->active_hbox_builder = previous;
     if (status == 0) {
         status = finalize_hbox(engine, &builder, false, false, 0, box, error,
@@ -32500,6 +32507,48 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
 
 /* Leaving a formula puts \mathsurround on both sides of the translation and
    splices it into the horizontal list that was interrupted. */
+/* A formula needs the fonts it will measure itself against: family 2 in
+   all three sizes with the twenty-two parameters a symbol font has, and
+   family 3 with the thirteen an extension font has. Measured against the
+   reference: twelve in family 3 is not enough and thirteen is, twenty-one
+   in family 2 is not enough and twenty-two is, and family 2 is asked about
+   first. A formula that cannot be measured is DELETED -- what is left is
+   the \mathon and \mathoff around nothing. */
+static bool math_family_is_short(struct hstex_engine *engine, uint8_t family,
+                                 size_t wanted)
+{
+    for (uint8_t size = 0U; size < (uint8_t)HSTEX_MATH_SIZE_COUNT; ++size) {
+        const struct hstex_font *font = math_family_font(engine, size, family);
+        if (font == NULL || font->dimen_count < wanted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool math_fonts_are_missing(struct hstex_engine *engine)
+{
+    if (math_family_is_short(engine, 2U, 22U)) {
+        static const char *const help[] = {
+            "Sorry, but I can't typeset math unless \\textfont 2",
+            "and \\scriptfont 2 and \\scriptscriptfont 2 have all",
+            "the \\fontdimen values needed in math symbol fonts.", NULL};
+        tex_error(engine, help,
+                  "Math formula deleted: Insufficient symbol fonts");
+        return true;
+    }
+    if (math_family_is_short(engine, 3U, 13U)) {
+        static const char *const help[] = {
+            "Sorry, but I can't typeset math unless \\textfont 3",
+            "and \\scriptfont 3 and \\scriptscriptfont 3 have all",
+            "the \\fontdimen values needed in math extension fonts.", NULL};
+        tex_error(engine, help,
+                  "Math formula deleted: Insufficient extension fonts");
+        return true;
+    }
+    return false;
+}
+
 static int end_math(struct hstex_engine *engine, char *error,
                     size_t error_capacity)
 {
@@ -32529,8 +32578,9 @@ static int end_math(struct hstex_engine *engine, char *error,
         .width = surround,
         .value.math = {.after = true},
     };
+    bool deleted = math_fonts_are_missing(engine);
     int status = append_hbox_node(engine, &opening, error, error_capacity);
-    if (status == 0) {
+    if (status == 0 && !deleted) {
         /* Only a formula set in a paragraph gets the penalties. */
         status = translate_math_list_with(engine, list, !engine->inner_mode,
                                           error, error_capacity);
