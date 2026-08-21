@@ -1979,6 +1979,14 @@ struct hstex_engine {
        two lowercase hex digits, which is what trip's log is full of. See
        docs/DECISIONS.md, a-character-the-log-writes-as-itself. */
     bool eight_bit_printing;
+    /* The mode named in the last \tracingcommands line. The mode is written
+       only when it has changed since then, so the trace reads as a list of
+       commands with the mode called out where it turns. */
+    const char *traced_mode;
+    /* Whether the last command traced was a character being set. A run of
+       them is traced once, at its first: the reference's main loop stays
+       inside itself for the rest and never comes back to the tracing. */
+    bool traced_character;
     uint32_t math_font_levels[HSTEX_MATH_SIZE_COUNT][16];
     /* True while an alignment is reading its body, so that \cr and its
        relatives are recognised instead of being errors. */

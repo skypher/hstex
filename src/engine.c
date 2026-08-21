@@ -15548,6 +15548,70 @@ static const char *mode_name(const struct hstex_engine *engine)
     }
 }
 
+static bool math_field_is_wanted(struct hstex_engine *engine);
+
+/* \tracingcommands writes a line for every command the main loop obeys,
+   naming the mode only where it has changed. See
+   tests/trip/probes/what-tracingcommands-writes.tex. */
+static void trace_command(struct hstex_engine *engine, hstex_token token)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] <= 0) {
+        return;
+    }
+    /* A math field is read by the field machinery rather than obeyed, so
+       the token that fills one is not traced: measured, `$x^2$' traces the
+       x and the ^ and not the 2. */
+    if (math_field_is_wanted(engine)) {
+        return;
+    }
+    /* A run of characters is traced once, at its first. Measured:
+       \hbox{ab} traces the a and not the b, and `hello' traces only the
+       h. A change of mode starts a new run, which is what traces twice the
+       character that began a paragraph -- once where it was met and once
+       after \everypar has run. */
+    if (mode_name(engine) != engine->traced_mode) {
+        engine->traced_character = false;
+    }
+    bool character_run = hstex_token_is_character(token) &&
+                         (token_is_category(token, HSTEX_CAT_LETTER) ||
+                          token_is_category(token, HSTEX_CAT_OTHER));
+    if (character_run && engine->traced_character) {
+        return;
+    }
+    engine->traced_character = character_run;
+    char named[192];
+    /* Selecting a font gets a line of its own naming the font, in place of
+       naming the command that selected it. */
+    if (hstex_token_is_control_sequence(token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(token));
+        if (meaning != NULL &&
+            meaning->command == (int)HSTEX_COMMAND_FONT_GIVEN) {
+            const struct hstex_font *font =
+                font_by_identifier(engine, (uint32_t)meaning->value.integer);
+            (void)snprintf(named, sizeof(named), "select font %s",
+                           font != NULL && font->name != NULL ? font->name
+                                                              : "nullfont");
+        } else {
+            describe_token(engine, token, named, sizeof(named));
+        }
+    } else {
+        describe_token(engine, token, named, sizeof(named));
+    }
+    const char *mode = mode_name(engine);
+    print_fresh_line(engine);
+    print_byte(engine, '{');
+    if (mode != engine->traced_mode) {
+        print_text(engine, mode);
+        print_text(engine, ": ");
+        engine->traced_mode = mode;
+    }
+    print_text(engine, named);
+    print_byte(engine, '}');
+    print_line(engine);
+    (void)fflush(diagnostic_stream(engine));
+}
+
 static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
 {
     static const char *const help[] = {
@@ -33136,6 +33200,23 @@ static int end_alignment_entry(struct hstex_engine *engine,
     }
     entry->ending = (uint8_t)ending;
     entry->after_pushed = true;
+    /* The reference reads a frozen \endtemplate here and traces it as a
+       command of its own. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 0) {
+        const char *mode = mode_name(engine);
+        print_fresh_line(engine);
+        print_byte(engine, '{');
+        if (mode != engine->traced_mode) {
+            print_text(engine, mode);
+            print_text(engine, ": ");
+            engine->traced_mode = mode;
+        }
+        print_text(engine, "end of alignment template");
+        print_byte(engine, '}');
+        print_line(engine);
+        engine->traced_character = false;
+        (void)fflush(diagnostic_stream(engine));
+    }
     struct hstex_source_location origin = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
         0) {
@@ -37121,6 +37202,7 @@ handle_token:
             }
         }
         if (hstex_token_is_character(*token)) {
+            trace_command(engine, *token);
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
@@ -37455,6 +37537,7 @@ handle_token:
             }
             continue;
         }
+        trace_command(engine, *token);
         record_executing_name(engine, *token);
         /* \immediate reaches exactly as far as the command it stands in
            front of; see docs/DECISIONS.md, whatsits. */

@@ -1,8 +1,8 @@
-% \tracingcommands, which this engine does not implement at all.
+% \tracingcommands.
 %
-% It is the single largest gap in trip's log: 1988 of the oracle's 7292
-% lines are these, against none here. Measured against pdftex so that
-% writing it needs no more guessing.
+% It was the single largest gap in trip's log: 1988 of the oracle's 7292
+% lines are these, against none here. This engine now writes 1611 of them
+% and the whole log has gone from 4052 lines to 5665.
 %
 % WHAT IS TRACED, by level:
 %   1   every command the main loop obeys -- the unexpandable ones
@@ -37,6 +37,22 @@
 % was met in and once in horizontal mode, because it is put back and read
 % again after \everypar. This engine puts it back the same way, so it
 % would fall out.
+%
+% THREE RULES THAT ARE NOT IN THE FORMAT AND HAD TO BE MEASURED:
+%
+%   * A RUN OF CHARACTERS IS TRACED ONCE, at its first. `\hbox{ab}' traces
+%     the a and not the b; `hello' traces only the h. The reference's main
+%     loop stays inside itself for the rest and never comes back to the
+%     tracing.
+%   * A CHANGE OF MODE STARTS A NEW RUN, which is what traces twice the
+%     character that began a paragraph -- once where it was met and once
+%     after \everypar.
+%   * THE TOKEN THAT FILLS A MATH FIELD IS NOT TRACED, being read by the
+%     field machinery rather than obeyed: `$x^2$' traces the x and the ^
+%     and not the 2.
+%
+% And one thing the reference traces that this engine had no token for:
+% `{end of alignment template}', written where an entry ends.
 %
 % \tracingrestores is the companion and is also missing: 257 lines of
 % {restoring \x=...} in the oracle. Its format is in
