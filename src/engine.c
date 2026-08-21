@@ -36711,6 +36711,17 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     engine->mode = mode_before_rows;
     engine->inner_mode = inner_before_rows;
     engine->building_alignment = previous_building;
+    /* The alignment's own groups end BEFORE its preamble is packed and its
+       rows are set: what the preamble assigned is restored first, so the
+       report of that packing stands behind the restores rather than in
+       front of them, and the rows are put down under the parameters that
+       surround the alignment rather than the ones inside it. */
+    while (engine->group_level > base_group_level) {
+        if (end_group(engine, error, error_capacity) < 0) {
+            status = -1;
+            break;
+        }
+    }
     if (status == 0) {
         status = finish_alignment(engine, vertical, columns, column_count,
                                   leading, rows, row_count, matched_to,
@@ -36723,12 +36734,6 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
     nest_pop(engine);
     destroy_align_columns(columns, column_count);
     destroy_align_rows(rows, row_count);
-    while (engine->group_level > base_group_level) {
-        if (end_group(engine, error, error_capacity) < 0) {
-            status = -1;
-            break;
-        }
-    }
     if (display) {
         engine->active_vbox_builder = engine->display_outer_vbox;
         if (status == 0) {
