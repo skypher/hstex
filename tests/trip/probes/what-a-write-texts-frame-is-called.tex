@@ -1,0 +1,33 @@
+% WHAT A \write TEXT'S FRAME IS CALLED.
+%
+% A \write's text is gathered and then expanded on its own, and a fault
+% inside it names the frame it is being expanded from:
+%
+%   ! Undefined control sequence.
+%   <write> a \undefinedone
+%                           b
+%   l.5 \immediate\write9{a \undefinedone b}
+%
+% both for an \immediate one and for one the page carries to the shipper.
+% HSTeX called it `<inserted text>', which is what every other gathered
+% text is called: a \message and a \special are expanded WHERE THEY STAND
+% and have no frame of their own at all.
+%
+% Found and left open: the reference's context carries a `...' under the
+% `<write>' line for the frame holding the `}' and the \endwrite it puts
+% behind the text. HSTeX ends the text with a boundary rather than with
+% tokens, so there is no frame there to leave out.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\immediate\openout9=zzwr.dat
+\message{[A a fault inside an immediate write]}
+\immediate\write9{a \undefinedone b}
+\message{[B a fault inside a deferred write]}
+\shipout\hbox{\write9{c \undefinedtwo d}}
+\message{[C a fault inside a message, which is expanded where it stands]}
+\message{e \undefinedthree f}
+\message{[D and inside a special]}
+\shipout\hbox{\special{g \undefinedfour h}}
+\immediate\closeout9
+\message{[done]}
+\end

@@ -124,7 +124,10 @@ enum hstex_token_source_kind {
     HSTEX_TOKEN_SOURCE_MACRO,
     HSTEX_TOKEN_SOURCE_TEMPLATE,
     HSTEX_TOKEN_SOURCE_ARGUMENT,
-    HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER
+    HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER,
+    /* The text of a \write, which is expanded on its own and which the
+       reference names for what it is. */
+    HSTEX_TOKEN_SOURCE_WRITE
 };
 
 /* Say what the frame just pushed is, so that an error can name it. */

@@ -15718,6 +15718,8 @@ static const char *token_frame_tag(struct hstex_engine *engine,
                                           : "<recently read> ";
     case HSTEX_TOKEN_SOURCE_TEMPLATE:
         return "<template> ";
+    case HSTEX_TOKEN_SOURCE_WRITE:
+        return "<write> ";
     case HSTEX_TOKEN_SOURCE_ARGUMENT:
         return "<argument> ";
     case HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER: {
@@ -25476,6 +25478,16 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
         vector_destroy(&text);
         return -1;
     }
+    /* A \write's text is named for what it is; every other text that is
+       gathered and then expanded is not, and stands as inserted. */
+    if (hstex_token_is_control_sequence(engine->executing_token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(engine->executing_token));
+        if (meaning->command == HSTEX_COMMAND_WRITE) {
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
+        }
+    }
     return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
 
@@ -25603,6 +25615,10 @@ static int expand_stored_token_list(struct hstex_engine *engine,
         vector_destroy(&text);
         return -1;
     }
+    /* This is a \write's text and nothing else, and the reference names it
+       for what it is when a fault inside it is reported. */
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
     return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
 
