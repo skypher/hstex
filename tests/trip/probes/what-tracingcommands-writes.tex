@@ -54,6 +54,30 @@
 % And one thing the reference traces that this engine had no token for:
 % `{end of alignment template}', written where an entry ends.
 %
+% LEVEL TWO IS NOT DONE, and here is what it wants and where it snagged.
+% At two and above every EXPANDABLE command is traced as well, and a
+% conditional is followed by {true} or {false}:
+%
+%   \message{\number5 \romannumeral7 }
+%   \count1=5 \ifnum1<2 \relax\else\relax\fi
+%
+%   level 1: {\message} {blank space  } {\count} {\relax} {\end}
+%   level 2: {\message} {\number} {\romannumeral} {blank space  }
+%            {\count} {\ifnum} {true} {\relax} {\else} {\end}
+%
+% A \write's text is expanded in a mode of its own, written `no mode':
+%   {\immediate} {no mode: \number} {vertical mode: blank space  }
+%
+% TRIED: tracing at the top of the expander's dispatch in
+% hstex_engine_next_expanded. It traces the expandable ones correctly and
+% ALSO traces every unexpandable one a second time, since they pass
+% through the expander on their way to the main loop and are traced again
+% there. What is wanted is a test for `this command is one the expander
+% will expand', which hstex has nowhere -- the expander is a chain of ifs
+% ending in a fallthrough that returns the token. Either enumerate the
+% expandable commands in a switch beside the chain, or trace inside each
+% branch. Backed out rather than half-written.
+%
 % \tracingrestores is the companion and is also missing: 257 lines of
 % {restoring \x=...} in the oracle. Its format is in
 % docs/DECISIONS.md-adjacent probes -- {restoring \a=macro:->A},
