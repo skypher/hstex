@@ -26241,6 +26241,13 @@ struct hstex_break_state {
     size_t *active;
     size_t active_count;
     size_t active_capacity;
+    /* The active list is rebuilt into this one and the two are swapped, so a
+       new node can go in AT THE WALK'S POSITION rather than at the end. That
+       is what keeps the list in class order, and what lets a class be
+       finished the moment the walk moves past it. */
+    size_t *rebuilt;
+    size_t rebuilt_count;
+    size_t rebuilt_capacity;
 };
 
 /* Glue that shrinks without limit would let a paragraph of any length fit
@@ -26519,6 +26526,26 @@ static int reserve_break_records(struct hstex_break_state *state, char *error,
     }
     state->records = allocation;
     state->record_capacity = next;
+    return 0;
+}
+
+static int reserve_rebuilt_breaks(struct hstex_break_state *state, char *error,
+                                  size_t error_capacity)
+{
+    if (state->rebuilt_count < state->rebuilt_capacity) {
+        return 0;
+    }
+    size_t next =
+        state->rebuilt_capacity == 0U ? 16U : state->rebuilt_capacity * 2U;
+    if (next > SIZE_MAX / sizeof(*state->rebuilt)) {
+        return set_error(error, error_capacity, "active break overflow");
+    }
+    void *allocation = realloc(state->rebuilt, next * sizeof(*state->rebuilt));
+    if (allocation == NULL) {
+        return set_error(error, error_capacity, "active break allocation failed");
+    }
+    state->rebuilt = allocation;
+    state->rebuilt_capacity = next;
     return 0;
 }
 
@@ -26805,6 +26832,94 @@ static const char *trace_break_name(const struct hstex_engine *engine,
    make it differ from line to line. */
 static int32_t line_width_for(const struct hstex_engine *engine, int32_t line);
 
+/* WHICH BREAKS ARE ALIKE. A break that would start line four and one that
+   would start line five are the same break, or different ones, according to
+   this number; the reference keeps one active node per fitness for each. It
+   is NOT the line's width that decides -- measured, under \hangafter=2 lines
+   two and three are alike although their widths differ, and under
+   \hangafter=1 lines one and two are alike although theirs do too. What
+   fits every measurement is min(line, E), where E is the last line whose
+   width is its own: \parshape's pair count, or |\hangafter| where
+   \hangindent is set, or nought -- and unbounded where there is any
+   \looseness. See
+   tests/trip/probes/every-break-is-weighed-against-its-own-line.tex. */
+static int32_t break_line_class(const struct hstex_engine *engine,
+                                int32_t line)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_LOOSENESS] != 0) {
+        return line;
+    }
+    int32_t last = 0;
+    if (engine->parshape != 0U) {
+        /* \parshape's last pair stands for every line after it, so the last
+           line whose width differs from the next one's is the one BEFORE the
+           last pair: three pairs make lines three and four alike. */
+        const int32_t *shape = engine->parshapes + (engine->parshape - 1U);
+        last = shape[0] > 1 ? shape[0] - 1 : 0;
+    } else if (engine->dimen_parameters[HSTEX_DIMEN_HANG_INDENT] != 0) {
+        /* \hangafter names where the width changes, either way about, so
+           that line and the next really are different. */
+        int32_t after = engine->integer_parameters[HSTEX_INTEGER_HANG_AFTER];
+        last = after < 0 ? -after : after;
+    }
+    return line < last ? line : last;
+}
+
+/* The best feasible break of each fitness among the candidates just weighed,
+   made into active nodes on the rebuilt list. Called once for every class the
+   candidates covered, at the moment the walk leaves that class, so the `@@n:'
+   lines fall between the `@ via' lines the way the reference writes them. */
+static int create_break_records(struct hstex_engine *engine,
+                                struct hstex_break_state *state,
+                                const uint32_t *items, size_t count,
+                                size_t breakpoint, size_t start,
+                                const struct hstex_break_site *site,
+                                bool protruding, const int64_t *minimal,
+                                const size_t *best, const int32_t *best_line,
+                                int64_t minimum, int32_t adjacent,
+                                char *error, size_t error_capacity)
+{
+    if (minimum == HSTEX_AWFUL_BADNESS) {
+        return 0;
+    }
+    int64_t ceiling = minimum + (adjacent < 0 ? -(int64_t)adjacent : adjacent);
+    for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
+        if (minimal[fit] > ceiling) {
+            continue;
+        }
+        if (reserve_break_records(state, error, error_capacity) != 0 ||
+            reserve_rebuilt_breaks(state, error, error_capacity) != 0) {
+            return -1;
+        }
+        struct hstex_break_record *record = &state->records[state->record_count];
+        memset(record, 0, sizeof(*record));
+        record->breakpoint = breakpoint;
+        record->start = start;
+        record->line = best_line[fit] + 1;
+        record->fitness = (uint8_t)fit;
+        record->demerits = minimal[fit];
+        record->previous = best[fit];
+        record->entry_width = site->entry_width;
+        record->entry_start = site->entry_start;
+        record->entry_count = site->entry_count;
+        record->hyphenated = site->hyphenated;
+        record->left_kern =
+            protruding ? line_left_kern(engine, items, count, start, site) : 0;
+        if (state->trace.active) {
+            trace_newline(engine, &state->trace);
+            print_formatted(engine, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
+                          state->record_count, record->line, fit,
+                          site->hyphenated ? "-" : "",
+                          (long long)record->demerits,
+                          best[fit] == SIZE_MAX ? (size_t)0U : best[fit]);
+            state->trace.column = false;
+        }
+        state->rebuilt[state->rebuilt_count++] = state->record_count;
+        ++state->record_count;
+    }
+    return 0;
+}
+
 static int try_break_at(struct hstex_engine *engine,
                         struct hstex_break_state *state,
                         const uint32_t *items, size_t count,
@@ -26823,6 +26938,14 @@ static int try_break_at(struct hstex_engine *engine,
         best_line[fit] = 0;
     }
     int64_t minimum = HSTEX_AWFUL_BADNESS;
+    /* ONE ACTIVE NODE PER CLASS, not one for the whole breakpoint. The list
+       is walked in class order, so a class is finished the moment the walk
+       moves past it, and its nodes go in at that point. */
+    int32_t open_class = 0;
+    bool class_open = false;
+    size_t start = site->start == SIZE_MAX
+                       ? line_start_after(engine, items, count, breakpoint)
+                       : site->start;
     int32_t line_penalty = engine->integer_parameters[HSTEX_INTEGER_LINE_PENALTY];
     int32_t adjacent = engine->integer_parameters[HSTEX_INTEGER_ADJ_DEMERITS];
     /* Only \pdfprotrudechars=2 lets a character sticking out past the margin
@@ -26838,9 +26961,30 @@ static int try_break_at(struct hstex_engine *engine,
             ? line_right_kern(engine, items, count, breakpoint)
             : 0;
 
+    state->rebuilt_count = 0U;
     size_t kept = 0U;
     for (size_t slot = 0U; slot < state->active_count; ++slot) {
         size_t index = state->active[slot];
+        int32_t line_class =
+            break_line_class(engine, state->records[index].line + 1);
+        if (class_open && line_class != open_class) {
+            /* Making records may move the record arena, so nothing may be
+               held across this. */
+            if (create_break_records(engine, state, items, count, breakpoint,
+                                     start, site, protruding, minimal, best,
+                                     best_line, minimum, adjacent, error,
+                                     error_capacity) != 0) {
+                return -1;
+            }
+            for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
+                minimal[fit] = HSTEX_AWFUL_BADNESS;
+                best[fit] = SIZE_MAX;
+                best_line[fit] = 0;
+            }
+            minimum = HSTEX_AWFUL_BADNESS;
+        }
+        open_class = line_class;
+        class_open = true;
         const struct hstex_break_record *record = &state->records[index];
         struct hstex_break_totals totals = *background;
         totals.width += (int64_t)record->entry_width + site->pre_width +
@@ -26867,8 +27011,13 @@ static int try_break_at(struct hstex_engine *engine,
         bool artificial = false;
         bool stays_active = true;
         if (badness > HSTEX_INFINITE_BADNESS || penalty == HSTEX_EJECT_PENALTY) {
+            /* The last resort is taken only when NOTHING has been put on
+               the rebuilt list -- neither a node that stays active nor a
+               record made for an earlier class. `minimum' alone will not do,
+               since it is given back at every class boundary. */
             if (final_pass && minimum == HSTEX_AWFUL_BADNESS &&
-                slot + 1U == state->active_count && kept == 0U) {
+                slot + 1U == state->active_count &&
+                state->rebuilt_count == 0U) {
                 artificial = true;
             } else if (badness > threshold) {
                 continue; /* this break can never start a line again */
@@ -26876,7 +27025,11 @@ static int try_break_at(struct hstex_engine *engine,
             stays_active = false;
         } else {
             if (badness > threshold) {
-                state->active[kept++] = index;
+                if (reserve_rebuilt_breaks(state, error, error_capacity) != 0) {
+                    return -1;
+                }
+                state->rebuilt[state->rebuilt_count++] = index;
+                ++kept;
                 continue;
             }
         }
@@ -26965,52 +27118,28 @@ static int try_break_at(struct hstex_engine *engine,
             }
         }
         if (stays_active) {
-            state->active[kept++] = index;
+            if (reserve_rebuilt_breaks(state, error, error_capacity) != 0) {
+                return -1;
+            }
+            state->rebuilt[state->rebuilt_count++] = index;
+            ++kept;
         }
     }
-    state->active_count = kept;
-
-    if (minimum == HSTEX_AWFUL_BADNESS) {
-        return 0;
+    if (create_break_records(engine, state, items, count, breakpoint, start,
+                             site, protruding, minimal, best, best_line,
+                             minimum, adjacent, error, error_capacity) != 0) {
+        return -1;
     }
-    int64_t ceiling = minimum + (adjacent < 0 ? -(int64_t)adjacent : adjacent);
-    size_t start = site->start == SIZE_MAX
-                       ? line_start_after(engine, items, count, breakpoint)
-                       : site->start;
-    for (size_t fit = 0U; fit < (size_t)HSTEX_FIT_COUNT; ++fit) {
-        if (minimal[fit] > ceiling) {
-            continue;
-        }
-        if (reserve_break_records(state, error, error_capacity) != 0 ||
-            reserve_active_breaks(state, error, error_capacity) != 0) {
-            return -1;
-        }
-        struct hstex_break_record *record = &state->records[state->record_count];
-        memset(record, 0, sizeof(*record));
-        record->breakpoint = breakpoint;
-        record->start = start;
-        record->line = best_line[fit] + 1;
-        record->fitness = (uint8_t)fit;
-        record->demerits = minimal[fit];
-        record->previous = best[fit];
-        record->entry_width = site->entry_width;
-        record->entry_start = site->entry_start;
-        record->entry_count = site->entry_count;
-        record->hyphenated = site->hyphenated;
-        record->left_kern =
-            protruding ? line_left_kern(engine, items, count, start, site) : 0;
-        if (state->trace.active) {
-            trace_newline(engine, &state->trace);
-            print_formatted(engine, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
-                          state->record_count, record->line, fit,
-                          site->hyphenated ? "-" : "",
-                          (long long)record->demerits,
-                          best[fit] == SIZE_MAX ? (size_t)0U : best[fit]);
-            state->trace.column = false;
-        }
-        state->active[state->active_count++] = state->record_count;
-        ++state->record_count;
-    }
+    /* The rebuilt list becomes the active one, and the old buffer is kept to
+       be rebuilt into next time. */
+    size_t *swapped = state->active;
+    size_t swapped_capacity = state->active_capacity;
+    state->active = state->rebuilt;
+    state->active_count = state->rebuilt_count;
+    state->active_capacity = state->rebuilt_capacity;
+    state->rebuilt = swapped;
+    state->rebuilt_capacity = swapped_capacity;
+    state->rebuilt_count = 0U;
     return 0;
 }
 
@@ -28582,6 +28711,7 @@ static int break_paragraph(struct hstex_engine *engine,
     free(state.totals);
     free(state.records);
     free(state.active);
+    free(state.rebuilt);
     return status;
 }
 

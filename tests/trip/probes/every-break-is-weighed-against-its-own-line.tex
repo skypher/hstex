@@ -51,39 +51,50 @@
 % Doing this properly means inserting an active node at the walk's
 % position rather than at the end.
 %
-% WRITTEN A SECOND TIME AND BACKED OUT AGAIN. The insertion is easy --
-% rebuild the list into a second buffer and swap -- but the CLASS RULE is
-% not what it looks like, and getting it wrong breaks cases that were
-% right. Eight measurements, all `does one breakpoint make one record or
-% two when the candidates are line 1 and line 2':
-%
-%   \hangafter=0                    ONE
-%   \hangafter=1                    ONE
-%   \hangafter=2                    TWO
-%   \hangafter=3                    TWO
-%   \hangafter=-3                   TWO
-%   \parshape=1                     ONE
-%   \parshape=3                     TWO
-%   \looseness=1, nothing else      TWO
-%
-% Write E for the last line whose width is its own -- \parshape's pair
-% count, or |\hangafter|, or nought -- except that any \looseness at all
-% makes E unbounded. Then the only rule that fits all eight is
+% THE CLASS RULE, MEASURED AND NOW IMPLEMENTED. A break that would start
+% line four and one that would start line five are the same break, or
+% different ones, according to
 %
 %   class(line) = min(line, E)
 %
-% and NOT `line up to E, one shared class after it', which is what the
-% widths would suggest and what was tried. The difference shows exactly
-% at E <= 1, where min() puts lines 1 and 2 together and the widths do
-% not. Check it once more before building on it: find a breakpoint whose
-% candidates are lines 2 and 3 under \hangafter=2, where min() says one
-% class and the widths say two.
+% where E is THE LAST LINE WHOSE WIDTH DIFFERS FROM THE NEXT LINE'S:
 %
-% Also worth knowing: when two classes DO get records, the reference
-% writes them interleaved -- `@ via @@0', the class's `@@n:', `@ via
-% @@1', its `@@n:' -- and when they do not, both `@ via' lines come
-% first and one `@@n:' follows. That is a quick way to read which
-% happened.
+%   \parshape with n pairs   E = n-1   the last pair stands for every
+%                                      line after it, so lines n and n+1
+%                                      are alike
+%   \hangindent, \hangafter k   E = |k|   the width changes at line k,
+%                                      either way about
+%   neither                  E = 0     every line alike
+%   any \looseness           E unbounded, every line its own class
+%
+% Ten measurements, each asking whether ONE breakpoint makes one record
+% or two:
+%
+%   candidates lines 1 and 2:
+%     \hangafter=0  ONE   \hangafter=2   TWO   \parshape=1  ONE
+%     \hangafter=1  ONE   \hangafter=3   TWO   \parshape=3  TWO
+%                         \hangafter=-3  TWO   \looseness=1 TWO
+%   candidates lines 2 and 3:
+%     \hangafter=2  ONE                        \parshape=3  ONE
+%
+% The two at the end are what settled it. Reasoning from the widths gets
+% both of them wrong, and so did two attempts at writing this: under
+% \hangafter=2 lines two and three have different widths and are alike,
+% and under \parshape=3 lines two and three have different widths and are
+% alike too. min() is what fits.
+%
+% HOW TO READ WHICH HAPPENED: when two classes get records the reference
+% INTERLEAVES them with the `@ via' lines -- `@ via @@0', `@@2:', `@ via
+% @@1', `@@3:' -- and when they do not, both `@ via' lines come first and
+% one `@@n:' follows.
+%
+% WHAT IT NEEDED. Making the records for a class at the moment the walk
+% leaves it means putting them IN AT THAT POINT, not at the end, so the
+% list stays in class order. hstex rebuilds the active list into a second
+% buffer and swaps the two. And the last-resort break -- the one
+% \tracingparagraphs marks `d=*' -- must ask whether anything at all has
+% reached that buffer, since the running minimum is given back at every
+% class boundary.
 \tracingonline=1 \hsize=100pt \parindent=0pt \tracingparagraphs=1
 \pretolerance=-1 \tolerance=10000 \hbadness=10000
 \message{[A hangindent, so lines differ in width]}
@@ -93,7 +104,14 @@
 \parshape=3 0pt 40pt 10pt 60pt 0pt 100pt
 \noindent aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp\par
 \message{[C no hanging, the control]}
-\hangindent=0pt
+\hangindent=0pt \parshape=0
 \noindent aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp\par
+\message{[D hangafter=2: are lines two and three alike]}
+\hangindent=30pt \hangafter=2
+\noindent aa bb cc dd ee ff gg hh ii jj\par
+\message{[E looseness, with nothing else]}
+\hangindent=0pt \looseness=1
+\noindent aa bb cc dd ee ff gg hh\par
+\looseness=0
 \message{[done]}
 \end
