@@ -9164,15 +9164,6 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
           engine->gathering_expanded_text && engine->expander_depth == 1U)) {
         trace_command(engine, token);
     }
-    /* Undefined expands to nothing, as it does in the expander's own loop. */
-    if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
-        if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] > 1) {
-            trace_command(engine, token);
-        }
-        record_executing_name(engine, token);
-        report_undefined_control_sequence(engine);
-        return 0;
-    }
     if (meaning->command == HSTEX_COMMAND_MACRO) {
         if (meaning->value.macro_identifier == 0U ||
             (size_t)meaning->value.macro_identifier > engine->macro_count) {
@@ -9456,21 +9447,6 @@ static enum hstex_engine_result next_expanded_inner(
               engine->gathering_expanded_text &&
               engine->expander_depth == 1U)) {
             trace_command(engine, current);
-        }
-        /* An undefined control sequence is expandable, and expands to
-           nothing: the reference reports it where it is EXPANDED, so a text
-           gathered with expansion has nothing there, and an \expandafter
-           reaching past one reports before the token it held is obeyed. The
-           trace is the expander's, drawn at two and above like any other
-           expansion. */
-        if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
-            if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] >
-                1) {
-                trace_command(engine, current);
-            }
-            record_executing_name(engine, current);
-            report_undefined_control_sequence(engine);
-            continue;
         }
         /* Which \if this is, for a message the skipped text may draw. */
         if (command_starts_conditional(meaning->command)) {
