@@ -1,0 +1,31 @@
+% What has gone to the page cannot be taken back, and the reference says so
+% rather than quietly doing nothing. Only the outermost vertical list is
+% like that -- inside a box, or in a paragraph, the same commands are
+% silent -- and \unskip is silent even there.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\font\tenrm=cmr10 \tenrm \tracingonline=1 \hsize=100pt \parindent=0pt
+\message{[A outer vertical, nothing on the page]}
+\unskip
+\message{[B outer vertical, unpenalty]}
+\unpenalty
+\message{[C outer vertical, unkern]}
+\unkern
+\message{[D outer vertical, after a box and glue have gone to the page]}
+\hbox{A}\vskip3pt
+\unskip
+\message{[E and unpenalty after that]}
+\unpenalty
+\message{[F outer horizontal with an empty list]}
+\noindent\unskip\unkern\unpenalty\par
+\message{[G internal vertical with an empty list]}
+\setbox0=\vbox{\unskip\unkern\unpenalty}
+\message{[H restricted horizontal with an empty list]}
+\setbox0=\hbox{\unskip\unkern\unpenalty}
+\message{[I math mode with an empty list]}
+\setbox0=\hbox{$\unskip\unkern\unpenalty$}
+\message{[J a lastbox in each]}
+\setbox0=\lastbox
+\setbox0=\vbox{\setbox1=\lastbox}
+\setbox0=\hbox{\setbox1=\lastbox}
+\message{[done]}
+\end

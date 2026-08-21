@@ -11320,8 +11320,9 @@ static int append_hbox_item(struct hstex_engine *engine, uint32_t identifier,
                             char *error, size_t error_capacity);
 static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
                        char *error, size_t error_capacity);
-static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
-                         char *error, size_t error_capacity);
+static int scan_last_box(struct hstex_engine *engine, hstex_token token,
+                         struct hstex_box *box, char *error,
+                         size_t error_capacity);
 static int drop_last_list_node(struct hstex_engine *engine, char *error,
                                size_t error_capacity);
 static int append_character_node(struct hstex_engine *engine, uint8_t code,
@@ -13086,6 +13087,19 @@ static bool last_node_is_replaced_by_a_discretionary(
     return false;
 }
 
+static void report_wrong_mode(struct hstex_engine *engine, hstex_token token,
+                              const char *const *help);
+
+/* Whether the list being built is the one the page is made from, with
+   nothing on it: everything contributed has gone to the page already, and
+   the page is not a list a document may reach into. */
+static bool nothing_left_but_the_page(const struct hstex_engine *engine)
+{
+    return engine->mode == HSTEX_MODE_VERTICAL &&
+           engine->active_vbox_builder == engine->contribution_builder &&
+           current_list_last_node(engine) == NULL;
+}
+
 /* \unskip, \unkern and \unpenalty each remove the last node if it is of
    their own kind, and do nothing otherwise. */
 static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
@@ -13095,6 +13109,23 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
         return -1;
     }
     const struct hstex_node *node = current_list_last_node(engine);
+    /* What has gone to the page cannot be taken back, and the reference
+       says so rather than quietly doing nothing. \unskip alone is silent
+       about it: measured on an empty page, on one holding a box, and on one
+       whose output routine had just run, it never draws the fault. */
+    if (node == NULL && kind != (int32_t)HSTEX_NODE_GLUE &&
+        nothing_left_but_the_page(engine)) {
+        static const char *const kern_help[] = {
+            "Sorry...I usually can't take things from the current page.",
+            "Try `I\\kern-\\lastkern' instead.", NULL};
+        static const char *const other_help[] = {
+            "Sorry...I usually can't take things from the current page.",
+            "Perhaps you can make the output routine do it.", NULL};
+        report_wrong_mode(engine, engine->executing_token,
+                          kind == (int32_t)HSTEX_NODE_KERN ? kern_help
+                                                           : other_help);
+        return 0;
+    }
     if (node == NULL || node->kind != (enum hstex_node_kind)kind) {
         return 0;
     }
@@ -13462,12 +13493,22 @@ static int scan_vsplit(struct hstex_engine *engine, struct hstex_box *box,
 
 /* \lastbox takes the last box off the list being built. The builder's totals
    are recomputed from what is left, since they were accumulated forwards. */
-static int scan_last_box(struct hstex_engine *engine, struct hstex_box *box,
-                         char *error, size_t error_capacity)
+static int scan_last_box(struct hstex_engine *engine, hstex_token token,
+                         struct hstex_box *box, char *error,
+                         size_t error_capacity)
 {
     memset(box, 0, sizeof(*box));
     box->kind = HSTEX_BOX_VOID;
     const struct hstex_node *node = current_list_last_node(engine);
+    /* What has gone to the page cannot be taken back; the reference says so
+       and hands back a void box. */
+    if (node == NULL && nothing_left_but_the_page(engine)) {
+        static const char *const help[] = {
+            "Sorry...I usually can't take things from the current page.",
+            "This \\lastbox will therefore be void.", NULL};
+        report_wrong_mode(engine, token, help);
+        return 0;
+    }
     if (node == NULL || node->kind != HSTEX_NODE_LIST) {
         return 0;
     }
@@ -13519,7 +13560,7 @@ static int scan_box_operand(struct hstex_engine *engine, struct hstex_box *box,
         return scan_vsplit(engine, box, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_LAST_BOX) {
-        return scan_last_box(engine, box, error, error_capacity);
+        return scan_last_box(engine, token, box, error, error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_BOX ||
         meaning->command == HSTEX_COMMAND_COPY) {
@@ -13750,7 +13791,8 @@ static int execute_box_constructor(struct hstex_engine *engine,
         status = scan_vsplit(engine, &box, error, error_capacity);
         break;
     case HSTEX_COMMAND_LAST_BOX:
-        status = scan_last_box(engine, &box, error, error_capacity);
+        status = scan_last_box(engine, engine->executing_token, &box, error,
+                               error_capacity);
         break;
     default:
         status = scan_vbox(engine, false, &box, error, error_capacity);
@@ -16789,13 +16831,9 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
     (void)fflush(diagnostic_stream(engine));
 }
 
-static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
+static void report_wrong_mode(struct hstex_engine *engine, hstex_token token,
+                              const char *const *help)
 {
-    static const char *const help[] = {
-        "Sorry, but I'm not programmed to handle this case;",
-        "I'll just pretend that you didn't ask for it.",
-        "If you're in the wrong mode, you might be able to",
-        "return to the right one by typing `I}' or `I$' or `I\\par'.", NULL};
     char scratch[256] = {0};
     uint8_t *bytes = NULL;
     size_t count = 0U;
@@ -16817,6 +16855,16 @@ static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
     free(bytes);
     tex_error(engine, help, "You can't use `%s' in %s", scratch,
               mode_name(engine));
+}
+
+static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
+{
+    static const char *const help[] = {
+        "Sorry, but I'm not programmed to handle this case;",
+        "I'll just pretend that you didn't ask for it.",
+        "If you're in the wrong mode, you might be able to",
+        "return to the right one by typing `I}' or `I$' or `I\\par'.", NULL};
+    report_wrong_mode(engine, token, help);
 }
 
 /* What the reference says when it dumps a format. The counts it gives of its
