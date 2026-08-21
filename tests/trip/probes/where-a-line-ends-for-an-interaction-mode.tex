@@ -1,0 +1,30 @@
+% A LINE ENDS WHERE THE INTERACTION MODE CHANGES.
+%
+% \batchmode, \nonstopmode, \scrollmode and \errorstopmode each end the
+% line the log is writing, whatever stands on it -- and even where
+% nothing does, so two in a row leave a blank line:
+%
+%   \message{one}\nonstopmode\nonstopmode\message{three}
+%
+%   one
+%
+%   three
+%
+% HSTeX changed the mode and wrote on, so everything after trip's first
+% \nonstopmode stood one line higher than the reference had it.
+%
+% trip changes the mode three times -- \nonstopmode on line 26,
+% \batchmode on line 107, \scrollmode on line 440 -- and everything after
+% the first of them stood one line higher than the reference had it. Line
+% 384's \show\batchmode is not a change: naming a mode is not entering one.
+\catcode`\{=1 \catcode`\}=2
+\message{one}\message{two}
+\nonstopmode
+\message{three}
+\nonstopmode
+\message{four}
+\batchmode
+\message{five}
+\scrollmode
+\message{six}
+\end

@@ -40895,6 +40895,11 @@ handle_token:
                 return (enum hstex_engine_result)set_error(
                     error, error_capacity, "invalid interaction-mode command");
             }
+            /* A line ends where the mode changes, whatever stands on it and
+               even where nothing does: `\message{one}\nonstopmode
+               \nonstopmode\message{three}' writes `one', a blank line, and
+               `three'. trip changes the mode four times. */
+            print_line(engine);
             engine->interaction_mode =
                 (enum hstex_interaction_mode)meaning->value.integer;
             continue;
