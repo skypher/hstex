@@ -1,0 +1,34 @@
+% \read of a line whose braces do not balance.
+%
+% Measured against pdftex: a \read takes a whole braced text, not a line.
+%
+%   * A line that leaves a brace open is joined by the next one. A file
+%     reading `first {' and then `second }' gives ONE \read, whose body is
+%     `first { second } ', and the line after it is the next \read's.
+%   * A `}' that closes nothing ends the \read where it stands: a line
+%     reading `close } here' yields `close ' and the rest is gone.
+%   * Where the file runs out with a brace still open:
+%
+%       ! File ended within \read.
+%       <read 0>
+%       This \read has unbalanced braces.
+%
+%     and the empty line the end of the file stands for is taken, so the
+%     body ends with a \par.
+%
+% \readline is not affected: under its catcodes a brace is not a brace, so
+% it always takes exactly one line.
+%
+% This engine read one line whatever it held. trip line 414 reads from
+% stream 0 in a loop, and tripos.tex -- which trip writes itself -- has
+% the unbalanced `[\uppercase {mmmmmmmmmm}[' in it.
+%
+% NOT YET: \readline keeps the end-of-line character, and this engine
+% prints it as itself where the reference prints it ^^M.
+\tracingonline=1
+\immediate\openout0 hread.tex
+\immediate\write0{first \string{}
+\immediate\write0{second \string}}
+\immediate\closeout0
+\openin0 hread.tex \read0to\a \show\a \closein0
+\end

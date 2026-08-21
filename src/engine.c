@@ -34512,13 +34512,19 @@ static int define_read_tokens(struct hstex_engine *engine, hstex_cs_id target,
                        error, error_capacity);
 }
 
-static int define_read_line(struct hstex_engine *engine, hstex_cs_id target,
-                            const uint8_t *line, size_t length, char *error,
+/* One line of a \read, added to what has been read so far. A \read takes
+   whole braced texts, so a line that leaves a brace open wants another
+   line after it, and a `}' that closes nothing ends the \read where it
+   stands -- measured, a line reading `close } here' yields `close ' and
+   the rest of it is gone. */
+static int append_read_line(struct hstex_engine *engine,
+                            struct hstex_token_vector *replacement,
+                            const uint8_t *line, size_t length,
+                            int32_t *balance, char *error,
                             size_t error_capacity)
 {
     struct hstex_mouth mouth;
     hstex_mouth_init(&mouth, line, length, &engine->lexical_state);
-    struct hstex_token_vector replacement = {0};
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -34535,16 +34541,25 @@ static int define_read_line(struct hstex_engine *engine, hstex_cs_id target,
                       "Text line contains an invalid character");
             continue;
         }
-        if (result == HSTEX_MOUTH_ERROR ||
-            vector_push(&replacement, token, error, error_capacity) != 0) {
+        if (result == HSTEX_MOUTH_ERROR) {
             hstex_mouth_destroy(&mouth);
-            vector_destroy(&replacement);
+            return -1;
+        }
+        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            ++*balance;
+        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            if (*balance == 0) {
+                break;
+            }
+            --*balance;
+        }
+        if (vector_push(replacement, token, error, error_capacity) != 0) {
+            hstex_mouth_destroy(&mouth);
             return -1;
         }
     }
     hstex_mouth_destroy(&mouth);
-    return define_read_tokens(engine, target, &replacement, error,
-                              error_capacity);
+    return 0;
 }
 
 static int define_other_read_line(struct hstex_engine *engine,
@@ -34597,28 +34612,75 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
     if (scan_definition_target(engine, &target, error, error_capacity) != 0) {
         return -1;
     }
-    char *line = NULL;
-    size_t capacity = 0U;
-    ssize_t length = -1;
-    if (stream >= 0 && stream < 16 &&
-        engine->read_streams[(size_t)stream] != NULL) {
-        length = getline(&line, &capacity,
-                         engine->read_streams[(size_t)stream]);
+    int status = 0;
+    struct hstex_token_vector replacement = {0};
+    int32_t balance = 0;
+    for (;;) {
+        char *line = NULL;
+        size_t capacity = 0U;
+        ssize_t length = -1;
+        if (stream >= 0 && stream < 16 &&
+            engine->read_streams[(size_t)stream] != NULL) {
+            length = getline(&line, &capacity,
+                             engine->read_streams[(size_t)stream]);
+        }
+        bool ended = length < 0;
+        if (length < 0) {
+            length = 0;
+        }
+        while (length > 0 &&
+               (line[length - 1] == '\n' || line[length - 1] == '\r')) {
+            --length;
+        }
+        if (other_catcodes) {
+            status = define_other_read_line(engine, target,
+                                            (const uint8_t *)line,
+                                            (size_t)length, error,
+                                            error_capacity);
+            free(line);
+            vector_destroy(&replacement);
+            engine->pending_global = false;
+            engine->pending_macro_flags = 0U;
+            return status;
+        }
+        status = append_read_line(engine, &replacement,
+                                  (const uint8_t *)line, (size_t)length,
+                                  &balance, error, error_capacity);
+        free(line);
+        if (status != 0) {
+            break;
+        }
+        if (balance <= 0) {
+            break;
+        }
+        if (ended) {
+            /* The file has no more lines to balance it with. The reference
+               says so and takes the empty line the end of the file stands
+               for, which is a \par. */
+            static const char *const help[] = {
+                "This \\read has unbalanced braces.", NULL};
+            static const uint8_t name[] = "par";
+            hstex_cs_id identifier = 0U;
+            if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                    HSTEX_SYMBOL_REGULAR, name,
+                                    sizeof(name) - 1U, &identifier, error,
+                                    error_capacity) != 0 ||
+                vector_push(&replacement,
+                            hstex_token_control_sequence(identifier), error,
+                            error_capacity) != 0) {
+                status = -1;
+                break;
+            }
+            tex_error(engine, help, "File ended within \\read");
+            break;
+        }
     }
-    if (length < 0) {
-        length = 0;
+    if (status == 0) {
+        status = define_read_tokens(engine, target, &replacement, error,
+                                    error_capacity);
+    } else {
+        vector_destroy(&replacement);
     }
-    while (length > 0 &&
-           (line[length - 1] == '\n' || line[length - 1] == '\r')) {
-        --length;
-    }
-    int status =
-        other_catcodes
-            ? define_other_read_line(engine, target, (const uint8_t *)line,
-                                     (size_t)length, error, error_capacity)
-            : define_read_line(engine, target, (const uint8_t *)line,
-                               (size_t)length, error, error_capacity);
-    free(line);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     return status;
