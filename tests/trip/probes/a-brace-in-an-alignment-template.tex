@@ -52,9 +52,28 @@
 %     inner preamble is read. That is what stopped gentle at its line
 %     1074 and testmath at 114.
 %
-% Counting each brace once, at its first reading, fixes the first and not
-% the second. The counter has to be right before anything can be reported
-% from it.
+% Counting each brace once, at its first reading -- skipping the reading
+% when the frame it came from is a pushback -- fixes the \hbox case and
+% NOT the nested one. Suspending the outer entry for the whole of a nested
+% alignment fixes the nested one. Both together still leave the count
+% wrong, and by a long way:
+%
+%   sample2e, a plain LaTeX document with no alignment of its own beyond
+%   the one-cell tabular that \maketitle builds for the author, ends that
+%   single cell with the count at 35. Skipping re-readings takes it to 33.
+%   So thirty-odd `{' are being counted in that cell with no `}' against
+%   them, and the re-reading of an \hbox's brace accounts for two of them.
+%
+% Whatever else is losing them is not the two things above, and the count
+% cannot be reported from until it is found. A cell whose braces balance
+% must end at nought; that is the test to write first, and sample2e is
+% the case to write it against.
+%
+% Measured while looking: the reference does NOT suspend the count inside
+% a box in a cell. `\halign{#\cr \hbox{A&B}\cr}' draws "Missing }
+% inserted", then "Extra alignment tab has been changed to \cr", then
+% "Missing \cr inserted" -- so the & inside the \hbox does end the entry,
+% after the box is closed for it. This engine stops there instead.
 \tracingonline=1\showboxbreadth=9999 \showboxdepth=9999
 \font\tt=cmr10 \tt \def\l#1{[#1]}
 \setbox0=\vbox{\halign{\l{#}\cr A\cr}}\showbox0
