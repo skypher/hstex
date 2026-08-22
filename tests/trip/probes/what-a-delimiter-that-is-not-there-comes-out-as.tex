@@ -1,0 +1,65 @@
+% WHAT A DELIMITER THAT IS NOT THERE COMES OUT AS.
+%
+% A delimiter the fonts cannot supply -- one written `.', or one whose every
+% variant has no size at all -- comes out as an empty box of
+% \nulldelimiterspace, shifted so that its middle sits on the axis. With an
+% empty box that shift is the axis height negated, which is why trip's second
+% pass is full of `\hbox(0.0+0.0)x0.1, shifted -7.0': 0.1pt is the
+% \nulldelimiterspace trip sets on its line 81, and 7pt the axis its
+% \fontdimen22 sets on line 23.
+%
+% The cases below are the constructs that ask for one, and this engine draws
+% all of them exactly as the reference does. They are here as the record of
+% what has been checked rather than of anything that is wrong.
+%
+% WHAT IS STILL WRONG, AND WHAT IT IS NOT. trip's second pass draws, deep
+% inside the box shipped out for line 285, one box this engine does not:
+%
+%   .............\hbox(0.0+0.0)x0.0, shifted -7.0
+%   .............\glue(\nonscript)
+%
+% Counted over the whole of that pass, the reference draws NINETEEN boxes of
+% width 0.1 shifted -7.0 and this engine draws all nineteen; the reference
+% draws exactly ONE of width 0.0 and this engine draws none. So the missing
+% box is not one of these at all -- a null delimiter would be 0.1 wide, since
+% that is what \nulldelimiterspace is throughout -- and looking for it among
+% the constructs below is looking in the wrong place. It is an empty box of
+% NO WIDTH whose middle is put on the axis, and what puts it there is still
+% to be found.
+%
+% Ruled out, each by writing it here and finding it exact: \left and \right
+% with `.', a fraction's own two delimiters, \overwithdelims and
+% \atopwithdelims with `.', \above, \radical, \underline, \overline,
+% \vcenter, and the three of them nested as trip line 282 nests them --
+% `\above9pt{v\overwithdelims..\displaystyle{pq\atopwithdelims((x}}'.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\tenrm=cmr10 \font\teni=cmmi10 \font\tensy=cmsy10 \font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\tenrm \scriptscriptfont0=\tenrm
+\textfont1=\teni \scriptfont1=\teni \scriptscriptfont1=\teni
+\textfont2=\tensy \scriptfont2=\tensy \scriptscriptfont2=\tensy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\tenrm \nulldelimiterspace=0.1pt
+\message{[A \left and \right, both written `.']}
+\setbox0=\hbox{$\left.x\right.$}\showbox0
+\message{[B a fraction, whose two delimiters are null]}
+\setbox0=\hbox{$1\over2$}\showbox0
+\message{[C \radical with a delimiter the font has not got]}
+\setbox0=\hbox{$\radical"000000 x$}\showbox0
+\message{[D \underline and \overline]}
+\setbox0=\hbox{$\underline{x}\overline{x}$}\showbox0
+\message{[E \vcenter]}
+\setbox0=\hbox{$\vcenter{\hbox{x}}$}\showbox0
+\message{[F \overwithdelims and \atopwithdelims, nested as trip nests them]}
+\setbox0=\hbox{$\above9pt{v\overwithdelims..\displaystyle{pq\atopwithdelims((x}}$}
+\showbox0
+\message{[G each of those two on its own]}
+\setbox0=\hbox{$a\overwithdelims..b$}\showbox0
+\setbox0=\hbox{$a\above9pt b$}\showbox0
+\message{[H and with no \nulldelimiterspace at all, which is the width the
+  missing box has]}
+\nulldelimiterspace=0pt
+\setbox0=\hbox{$\left.x\right.$}\showbox0
+\setbox0=\hbox{$1\over2$}\showbox0
+\message{[done]}
+\end
