@@ -3528,6 +3528,11 @@ static void note_files_closed(struct hstex_engine *engine)
 static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
                                 bool from_template, bool from_pushback,
                                 char *error, size_t error_capacity);
+static int insert_missing_brace_for_align(struct hstex_engine *engine,
+                                          hstex_token offending,
+                                          struct hstex_source_location location,
+                                          bool opening, char *error,
+                                          size_t error_capacity);
 
 static enum hstex_engine_result raw_next(
     struct hstex_engine *engine, hstex_token *token,
@@ -4971,6 +4976,20 @@ static int scan_integer_impl(struct hstex_engine *engine, int32_t *value,
         struct hstex_source_location character_location;
         int taken = raw_next(engine, &character_token, &character_location,
                              error, error_capacity);
+        /* A BRACE READ AS A CHARACTER CODE IS NOT A BRACE. `\char`}' names
+           the character `}' and opens nor closes anything, so the count an
+           alignment entry keeps of its braces is put back where it was.
+           trip line 337 writes `\char`}' in an entry of a \valign. */
+        if (taken == HSTEX_ENGINE_TOKEN &&
+            engine->alignment_entry != NULL &&
+            !engine->alignment_entry->after_pushed) {
+            if (token_is_category(character_token, HSTEX_CAT_BEGIN_GROUP)) {
+                --engine->alignment_entry->nesting;
+            } else if (token_is_category(character_token,
+                                         HSTEX_CAT_END_GROUP)) {
+                ++engine->alignment_entry->nesting;
+            }
+        }
         if (taken != HSTEX_ENGINE_TOKEN ||
             token_character_constant(engine, character_token, &magnitude) != 0) {
             /* Only a single character, or a control sequence naming one,
@@ -36995,6 +37014,17 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
            tests/trip/probes/a-brace-in-an-alignment-template.tex. */
         return 0;
     }
+    if (entry->nesting < 0) {
+        /* The entry has closed a brace it never opened, so it is not whole
+           and this tab does not end it: the reference puts the opening brace
+           in and reads the tab again. */
+        struct hstex_source_location where = {0};
+        if (insert_missing_brace_for_align(engine, token, where, true, error,
+                                           error_capacity) != 0) {
+            return -1;
+        }
+        return 1;
+    }
     if (end_alignment_entry(engine, ending, error, error_capacity) != 0) {
         return -1;
     }
@@ -37037,7 +37067,9 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
     int32_t previous_depth = engine->prev_depth;
     int32_t previous_graf = engine->prev_graf;
 
-    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
+    /* THE ENTRY'S OWN GROUP. A `}' that would close this one closes nothing
+       a document opened, so the reference guesses a \cr instead. */
+    if (begin_group(engine, HSTEX_GROUP_ALIGN, error, error_capacity) != 0) {
         return -1;
     }
     engine->output_group_floor = engine->group_level;
@@ -40275,6 +40307,61 @@ static int insert_right_delimiter(struct hstex_engine *engine,
     return 0;
 }
 
+/* A `}' that would close an alignment ENTRY'S own group closes nothing a
+   document opened. The reference hands the brace back, guesses that a \cr
+   was meant, and puts one in front of it. */
+static int insert_missing_cr(struct hstex_engine *engine, hstex_token offending,
+                             struct hstex_source_location location,
+                             char *error, size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I'm guessing that you meant to end an alignment here.", NULL};
+    static const uint8_t name[] = "cr";
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &identifier, error, error_capacity) != 0 ||
+        push_one(engine, offending, location, error, error_capacity) != 0 ||
+        push_one(engine, hstex_token_control_sequence(identifier), location,
+                 error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    tex_error(engine, help, "Missing \\cr inserted");
+    return 0;
+}
+
+/* A tab or a \cr that turns up where the braces of the entry it is in do
+   not come out even. The reference puts in the brace that would even them,
+   hands the tab back, and reads it again -- so the same tab ends the entry
+   once the column is whole. */
+static int insert_missing_brace_for_align(struct hstex_engine *engine,
+                                          hstex_token offending,
+                                          struct hstex_source_location location,
+                                          bool opening, char *error,
+                                          size_t error_capacity)
+{
+    static const char *const help[] = {
+        "I've put in what seems to be necessary to fix",
+        "the current column of the current alignment.",
+        "Try to go on, since this might almost work.", NULL};
+    hstex_token brace = hstex_token_character(
+        opening ? (uint8_t)HSTEX_CAT_BEGIN_GROUP : (uint8_t)HSTEX_CAT_END_GROUP,
+        opening ? (uint8_t)'{' : (uint8_t)'}');
+    /* The brace is PUT IN rather than put back: it is not one the entry's
+       count has already seen, so it does not undo a reading. */
+    if (push_one(engine, offending, location, error, error_capacity) != 0 ||
+        hstex_source_push_one(&engine->sources, brace, location, error,
+                              error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    tex_error(engine, help, "Missing %c inserted", opening ? '{' : '}');
+    return 0;
+}
+
 static int off_save(struct hstex_engine *engine, hstex_token offending,
                     struct hstex_source_location location, char *error,
                     size_t error_capacity)
@@ -40313,9 +40400,13 @@ static int off_save(struct hstex_engine *engine, hstex_token offending,
         closer = hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
                                        (uint8_t)'}');
     }
-    /* The command is read again after the closer, so it goes back first. */
+    /* The command is read again after the closer, so it goes back first.
+       The closer is PUT IN rather than put back: it is not a token any
+       count has already seen, so it does not undo a reading -- which
+       matters inside an alignment entry, where the braces are counted. */
     if (push_one(engine, offending, location, error, error_capacity) != 0 ||
-        push_one(engine, closer, location, error, error_capacity) != 0) {
+        hstex_source_push_one(&engine->sources, closer, location, error,
+                              error_capacity) != 0) {
         return -1;
     }
     /* What is put in is inserted, and the context says so. */
@@ -41537,6 +41628,16 @@ handle_token:
                 continue;
             }
             if (token_is_category(*token, HSTEX_CAT_END_GROUP)) {
+                /* A brace that would close an alignment entry's own group
+                   closes nothing a document opened: the reference guesses a
+                   \cr instead. */
+                if (current_group_kind(engine) == HSTEX_GROUP_ALIGN) {
+                    if (insert_missing_cr(engine, *token, *location, error,
+                                          error_capacity) != 0) {
+                        return HSTEX_ENGINE_ERROR;
+                    }
+                    continue;
+                }
                 /* A brace where \endgroup belongs is deleted, in the same
                    words the reference uses for one inside a formula. */
                 if (current_group_kind(engine) == HSTEX_GROUP_SEMI_SIMPLE) {
@@ -42958,6 +43059,19 @@ handle_token:
             }
             continue;
         case HSTEX_COMMAND_PAR:
+            /* A \par met while the entry it stands in has closed a brace it
+               never opened is not a paragraph's end but an alignment's: the
+               reference closes what is open and reads the \par again. trip
+               line 409 is a blank line in exactly that state. */
+            if (engine->alignment_entry != NULL &&
+                !engine->alignment_entry->after_pushed &&
+                engine->alignment_entry->nesting < 0) {
+                if (off_save(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
             if (engine->building_paragraph) {
                 if (finish_paragraph(engine, error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;

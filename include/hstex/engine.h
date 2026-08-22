@@ -737,7 +737,10 @@ struct hstex_meaning {
 enum hstex_group_kind {
     HSTEX_GROUP_BRACE = 0,   /* { ... } , and every box and alignment */
     HSTEX_GROUP_SEMI_SIMPLE, /* \begingroup ... \endgroup */
-    HSTEX_GROUP_MATH_SHIFT   /* $ ... $ */
+    HSTEX_GROUP_MATH_SHIFT,  /* $ ... $ */
+    /* One entry of an alignment. A `}' that closes this one closes nothing
+       a document opened, so the reference guesses a \cr instead. */
+    HSTEX_GROUP_ALIGN
 };
 
 enum hstex_save_kind {

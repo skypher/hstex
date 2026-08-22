@@ -1,0 +1,61 @@
+% WHAT A BRACE DOES TO AN ALIGNMENT ENTRY.
+%
+% An entry counts the braces it reads, from nought at its start; a tab or a
+% \cr ends the entry only where that count is nought again. Braces of the
+% TEMPLATE'S own are not the entry's -- a `u' part may leave one open
+% across the whole entry, which is what `\l{#}' does -- so an entry whose
+% template opened a brace CLOSES ONE IT NEVER OPENED, and the count goes
+% below nought. The reference has three recoveries for what follows, and
+% they run into one another:
+%
+%   a `}' that would close the ENTRY'S OWN group closes nothing a document
+%   opened, so the reference guesses a \cr:
+%
+%     \halign{#\cr A}        ! Missing \cr inserted.
+%                            I'm guessing that you meant to end an
+%                            alignment here.
+%
+%   a \par met while the count is below nought is not a paragraph's end but
+%   an alignment's, so what is open is closed first:
+%
+%     ! Missing } inserted.
+%     I've inserted something that you may have forgotten.
+%
+%   and a tab or a \cr met while the count is below nought does not end the
+%   entry: the brace that would even it goes in and the tab is read again:
+%
+%     ! Missing { inserted.
+%     I've put in what seems to be necessary to fix
+%     the current column of the current alignment.
+%
+% So a blank line after a row whose last entry ate the closing brace draws
+% all three, in that order, and the alignment then ends cleanly. trip line
+% 409 is exactly that.
+%
+% A tab or a \cr where NO alignment is running is a different fault, with a
+% help of its own -- and `&' has one the others do not, since `I\&' is a
+% remedy only for an ampersand.
+%
+% What the count must not see is a brace that is not one: `\char`}' names
+% the character `}' and opens nor closes anything, so the count is put back
+% where it was. trip line 337 writes that inside a \valign entry.
+\catcode`\{=1 \catcode`\}=2 \catcode`&=4 \catcode`\#=6
+\tracingonline=1 \showboxbreadth=5 \showboxdepth=5
+\hsize=100pt
+\font\rip=trip \rip
+\def\l#1{[#1]}
+\message{[A a row that is not ended by a cr]}
+\setbox0=\vbox{\halign{#\cr A}}
+\message{[B a row whose last entry eats the closing brace]}
+\noindent{\halign{#&\l{#}\cr A&B}
+
+\message{[C a cr where no alignment is running]}
+\cr
+\message{[D a tab where no alignment is running]}
+&
+\message{[E a span where no alignment is running]}
+\span
+\message{[F a brace read as a character code, which is no brace]}
+\setbox0=\vbox{\halign{#&#\cr A\char`}&B\cr}}
+\message{[done]}
+\end
