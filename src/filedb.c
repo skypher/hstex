@@ -492,20 +492,24 @@ const struct hstex_file_db *hstex_file_db_shared(void)
     int state = atomic_load_explicit(&shared_state, memory_order_acquire);
     if (state != 2) {
         int expected = 0;
-        if (state == 0 && atomic_compare_exchange_strong_explicit(
+        if (state != 0 || !atomic_compare_exchange_strong_explicit(
                               &shared_state, &expected, 1,
                               memory_order_acq_rel, memory_order_acquire)) {
-            char *trees = ask_variable("TEXMFDBS");
-            if (trees != NULL) {
-                load_all(&shared_database, trees);
-                free(trees);
-            }
-            shared_usable = shared_database.entry_count != 0U;
-            atomic_store_explicit(&shared_state, 2, memory_order_release);
-        } else {
-            while (atomic_load_explicit(&shared_state, memory_order_acquire) != 2) {
-            }
+            /* Somebody else is reading the lists. Waiting for them would be
+               spinning through a parse of a few hundred kilobytes, and there
+               is no need to wait at all: the tool answers these names the
+               same way -- that is the whole basis of asking the lists
+               instead -- so this question goes to it and the next one will
+               find the lists ready. */
+            return NULL;
         }
+        char *trees = ask_variable("TEXMFDBS");
+        if (trees != NULL) {
+            load_all(&shared_database, trees);
+            free(trees);
+        }
+        shared_usable = shared_database.entry_count != 0U;
+        atomic_store_explicit(&shared_state, 2, memory_order_release);
     }
     return shared_usable ? &shared_database : NULL;
 }
