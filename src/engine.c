@@ -9280,6 +9280,29 @@ static void count_macro_body(struct hstex_macro *macro)
     macro->body_parameter_total = (uint16_t)total;
 }
 
+/* Temporary counters, for measurement only. */
+static unsigned long long hstex_body_params[12];
+static unsigned long long hstex_body_tokens[12];
+static unsigned long long hstex_body_total;
+
+static void hstex_report_counts(void)
+{
+    fprintf(stderr, "body parameter occurrences per call:");
+    for (int index = 0; index < 12; ++index) {
+        fprintf(stderr, " %d:%llu", index, hstex_body_params[index]);
+    }
+    fprintf(stderr, "\nbody length per call:");
+    for (int index = 0; index < 12; ++index) {
+        fprintf(stderr, " %d:%llu", index, hstex_body_tokens[index]);
+    }
+    fprintf(stderr, "\ncalls %llu\n", hstex_body_total);
+}
+
+__attribute__((constructor)) static void hstex_install_counts(void)
+{
+    atexit(hstex_report_counts);
+}
+
 /* \tracingmacros draws the macro about to be expanded: a blank line, the
    name, and then its parameter text, `->' and its body -- the same text
    \show gives after the `macro:' it puts in front. What follows starts on a
@@ -9401,6 +9424,17 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
                              struct hstex_source_location call_location,
                              char *error, size_t error_capacity)
 {
+    size_t seen = 0U;
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        if (hstex_token_is_parameter(macro->replacement[index])) {
+            ++seen;
+        }
+    }
+    ++hstex_body_total;
+    ++hstex_body_params[seen < 11U ? seen : 11U];
+    ++hstex_body_tokens[macro->replacement_count < 11U
+                            ? macro->replacement_count
+                            : 11U];
     /* The arguments are gathered one after another in the room the engine
        keeps for them, and each is remembered by where it starts and how long
        it is rather than by a vector of its own: a call then takes no storage
