@@ -1,0 +1,10 @@
+% A tab or a \cr met while the entry it stands in has closed a brace it never
+% opened does not end the entry: the reference lets it through to be obeyed,
+% so \tracingcommands draws it, and then puts the opening brace in and reads
+% it again.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \errorcontextlines=5
+\message{[A a cr where a brace is wanting]}
+\setbox0=\vbox{\halign{#\cr \tracingcommands=1 }\cr\tracingcommands=0 }}
+\message{[done]}
+\end

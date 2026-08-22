@@ -38207,7 +38207,10 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
     if (entry->nesting < 0) {
         /* The entry has closed a brace it never opened, so it is not whole
            and this tab does not end it: the reference puts the opening brace
-           in and reads the tab again. */
+           in and reads the tab again. THE TAB IS A COMMAND HERE, not a token
+           the entry swallows -- the reference lets it through to be obeyed,
+           so \tracingcommands draws it before the fault. */
+        trace_command(engine, token);
         struct hstex_source_location where = {0};
         if (insert_missing_brace_for_align(engine, token, where, true, error,
                                            error_capacity) != 0) {
