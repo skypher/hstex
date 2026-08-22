@@ -31267,6 +31267,19 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         }
         size_t letter = 0U;
         size_t word_start = word.count != 0U ? word.positions[0] : index;
+        /* A WORD SET AGAIN WITHOUT A LEFT BOUNDARY BEGINS WITH ITS FIRST TWO
+           LETTERS IN ONE RUN, so a break between them is not one that can be
+           taken -- unless those two are the whole word, where the run reaches
+           the word's end and the break stands after all. Measured against the
+           reference with trip's font, whose `1' joins to whatever follows:
+           `\noboundary111' takes only the later break where `111' takes both,
+           and `\noboundary11' takes its one break. See docs/DECISIONS.md,
+           where-a-rebuilt-run-begins. */
+        const struct hstex_font *word_metrics =
+            font_by_identifier(engine, word.font);
+        bool meets_left =
+            word_metrics == NULL || word_metrics->boundary_label < 0 ||
+            word_meets_left_boundary(engine, items, count, word_start);
         /* Where the run the last discretionary made reaches to. A break
            inside it is not one that can be taken: the reference develops
            both branches of a break until they fall back into step, and
@@ -31283,6 +31296,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             bool blocked = index < settled_to;
             bool wanted =
                 !blocked && here != 0U && letter >= 1U && breaks[letter] != 0U;
+            if (wanted && letter == 1U && word.count > 2U && !meets_left) {
+                wanted = false;
+            }
             size_t previous = wanted ? word.positions[letter - 1U] : 0U;
             bool adjacent = wanted && previous + 1U == index;
             /* A kern the font put between the two letters is not there when
