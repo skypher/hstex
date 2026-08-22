@@ -12,5 +12,10 @@
 \setbox0=\vbox{\halign{#&#&#\cr
   \hbox to 5pt{}\span\span\cr \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
 \showbox0
+\message{[C tabskips that differ from column to column]}
+\tabskip=1pt
+\setbox0=\vbox{\halign{\hbox to 10pt{}#\tabskip=2pt&\hbox to 20pt{}#\tabskip=3pt&\hbox to 30pt{}#\tabskip=4pt\cr
+  a\span b&c\cr \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
+\showbox0
 \message{[done]}
 \end
