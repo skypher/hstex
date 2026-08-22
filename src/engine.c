@@ -34064,7 +34064,11 @@ static int variant_delimiter(struct hstex_engine *engine, int32_t code,
     const struct hstex_font *best_font = NULL;
     uint32_t best_identifier = 0U;
     uint8_t best_character = 0U;
-    int64_t best_reach = -1;
+    /* A VARIANT OF NO SIZE AT ALL IS NO VARIANT: the reference keeps the
+       tallest it has seen and starts that at nought, so a character whose
+       height and depth are both nought never becomes the choice and the
+       delimiter comes out as an empty box of \nulldelimiterspace. */
+    int64_t best_reach = 0;
     bool extensible = false;
 
     for (size_t attempt = 0U; attempt < 2U && !extensible; ++attempt) {
@@ -34108,11 +34112,11 @@ static int variant_delimiter(struct hstex_engine *engine, int32_t code,
                 }
                 character = (uint8_t)metric->remainder;
             }
-            if (extensible || best_reach >= wanted) {
+            if (extensible || (best_font != NULL && best_reach >= wanted)) {
                 break;
             }
         }
-        if (extensible || best_reach >= wanted) {
+        if (extensible || (best_font != NULL && best_reach >= wanted)) {
             break;
         }
     }

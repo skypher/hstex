@@ -1,0 +1,33 @@
+% WHAT A VARIANT OF NO SIZE IS WORTH.
+%
+% Looking for a delimiter, the reference keeps the TALLEST variant it has
+% seen and starts that at NOUGHT. A character whose height and depth are
+% both nought therefore never becomes the choice, and where the chain holds
+% nothing else the delimiter comes out as an EMPTY BOX of
+% \nulldelimiterspace:
+%
+%   \nulldelimiterspace=0.1pt
+%   \left\delimiter"1820000 ... \right.
+%     -> \hbox(0.0+0.0)x0.1
+%
+% Character "82 of trip.tfm has no height and no depth. This engine took it
+% for a variant and drew a box holding it, 2pt wide.
+%
+% trip line 283 asks for a delimiter in a family whose chain runs into one
+% of those.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \showboxdepth=9 \showboxbreadth=99
+\font\t=trip \font\s=cmsy10 \font\x=cmex10 \t
+\textfont0=\t \scriptfont0=\t \scriptscriptfont0=\t
+\textfont1=\t \scriptfont1=\t \scriptscriptfont1=\t
+\textfont2=\s \scriptfont2=\s \scriptscriptfont2=\s
+\textfont3=\t \scriptfont3=\t \scriptscriptfont3=\t
+\nulldelimiterspace=0.1pt
+\message{[A a delimiter whose only variant has no size]}
+\setbox0=\hbox{$\left\delimiter"1820000 A\right.$}
+\showbox0
+\message{[B one that has a size]}
+\setbox0=\hbox{$\left\delimiter"1610000 A\right.$}
+\showbox0
+\message{[done]}
+\end
