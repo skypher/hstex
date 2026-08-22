@@ -1,0 +1,71 @@
+% WHAT A WORD HYPHENATES TO WHEN THE HYPHEN CHARACTER IS NOT THERE.
+%
+% Eight lines that draw a real divergence, found by cutting trip's first pass
+% down until it was the only thing left. In trip's own font, with \hyphenchar
+% set to a character the font has not got, hyphenating `111':
+%
+%   ref:    Missing character: There is no ^^A in font trip!
+%           Missing character: There is no ^^A in font trip!
+%           ..\discretionary replacing 70
+%           ..\discretionary replacing 2
+%
+%   hstex:  ..\discretionary replacing 5
+%           ..\discretionary replacing 67
+%
+% TWO FAULTS, AND THEY ARE SEPARATE. [B] separates them: it asks for the
+% same word with `\hyphenchar' set to `-', which the font DOES have.
+%
+%   - The missing hyphen goes unnamed. In [A] the reference draws
+%     `Missing character' twice and this engine not at all. In [B], where
+%     there is no missing character, neither draws one.
+%   - The discretionary's REPLACE COUNT differs, in [A] and [B] alike: 70
+%     against 5, and 2 against 67. The ligature nodes on either side of it
+%     agree exactly -- both engines draw `\trip 5 (ligature |1)' and
+%     `\trip 7 (ligature |)' -- so the two agree about what the word is made
+%     of and disagree about how much of it the discretionary puts back.
+%
+% So the second fault is not about the hyphen at all. It is about what a
+% discretionary made while a LIGATURE is being reconstituted replaces.
+%
+% WHY IT IS THE TRIP FONT AND NOT THE HYPHENCHAR. With cmr10 the two agree
+% exactly at every \hyphenchar tried: 200, which cmr10 has not got, draws
+% four warnings from both; 1 and 5, which it has, draw none from either.
+% trip.tfm says character 1 has width index nought, which is a TFM's way of
+% saying the character is not there, and this engine's own reader honours
+% that -- it leaves the metric's tag at -1 and make_hyphen_node warns on a
+% tag below nought. So the warning is not missing because the character is
+% thought to be present; it is missing because make_hyphen_node is never
+% reached for this word.
+%
+% WHAT IS DIFFERENT ABOUT THIS WORD is that trip.tfm gives character 49 --
+% the `1' -- a ligature program (tag 1, remainder 9), and the word is three
+% of them. `replacing 70' says the reference puts seventy nodes back where
+% this engine puts back five, which is the size of what trip's ligature
+% program builds out of them.
+%
+% WHERE THIS CAME FROM. trip's first pass has one divergence left, a single
+% badness -- see what-a-break-is-weighed-as-in-trips-first-pass.tex -- and
+% bisecting it says it needs `\righthyphenmin0', a language change part way
+% through the paragraph, and \lccode`1 set so that `1' is a letter at all.
+% This file is what is left when those are cut away too. It is NOT known to
+% be the same fault: trip's own pass draws the same material either way and
+% differs only in the trace, while this draws different discretionaries. It
+% is recorded because it is small, certain, and in the same machinery.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracinglostchars=2 \showboxbreadth=99 \showboxdepth=99
+\font\trip=trip \trip
+\hsize=1pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\lccode`1=`1 \patterns{111}
+\message{[A trip, with a hyphenchar the font has not got]}
+\hyphenchar\trip=1
+\setbox0=\vbox{\noindent 1 111\par}\showbox0
+\message{[B the same word with a hyphenchar the font does have]}
+\hyphenchar\trip=`-
+\setbox0=\vbox{\noindent 1 111\par}\showbox0
+\message{[C and cmr10, which agrees at every hyphenchar]}
+\font\tenrm=cmr10 \tenrm \lccode`a=`a \patterns{a1a}
+\hyphenchar\tenrm=200 \setbox0=\vbox{\noindent x aaaaa\par}
+\hyphenchar\tenrm=1 \setbox0=\vbox{\noindent x aaaaa\par}
+\hyphenchar\tenrm=5 \setbox0=\vbox{\noindent x aaaaa\par}
+\message{[done]}
+\end
