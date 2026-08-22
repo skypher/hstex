@@ -46,8 +46,55 @@ enum {
    from where the list puts it rather than from the path it ends up with:
    a tree may itself be called anything. */
 enum {
+    HSTEX_FILE_UNDER_NOWHERE = 0U,
     HSTEX_FILE_UNDER_TEX = 1U,
     HSTEX_FILE_UNDER_TFM = 2U,
+    HSTEX_FILE_UNDER_VF = 3U,
+    HSTEX_FILE_UNDER_TYPE1 = 4U,
+    HSTEX_FILE_UNDER_AFM = 5U,
+    HSTEX_FILE_UNDER_ENC = 6U,
+    HSTEX_FILE_UNDER_MAP = 7U,
+};
+
+/* A place is a directory under a tree's root, and each holds one kind of
+   thing. What is here is what the search was measured to look through; see
+   docs/DECISIONS.md, finding-a-file. */
+static const struct {
+    const char *directory;
+    uint32_t where;
+} hstex_file_places[] = {
+    {"tex/", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {"fonts/tfm/", (uint32_t)HSTEX_FILE_UNDER_TFM},
+    {"fonts/vf/", (uint32_t)HSTEX_FILE_UNDER_VF},
+    {"fonts/type1/", (uint32_t)HSTEX_FILE_UNDER_TYPE1},
+    {"fonts/afm/", (uint32_t)HSTEX_FILE_UNDER_AFM},
+    {"fonts/enc/", (uint32_t)HSTEX_FILE_UNDER_ENC},
+    {"fonts/map/", (uint32_t)HSTEX_FILE_UNDER_MAP},
+    {NULL, (uint32_t)HSTEX_FILE_UNDER_NOWHERE},
+};
+
+/* And what a name of each kind is looked for in. A kind not named here is
+   left to the tool, whose guess about it this does not try to reproduce. */
+static const struct {
+    const char *suffix;
+    uint32_t where;
+} hstex_file_kinds[] = {
+    {".tfm", (uint32_t)HSTEX_FILE_UNDER_TFM},
+    {".vf", (uint32_t)HSTEX_FILE_UNDER_VF},
+    {".pfb", (uint32_t)HSTEX_FILE_UNDER_TYPE1},
+    {".afm", (uint32_t)HSTEX_FILE_UNDER_AFM},
+    {".enc", (uint32_t)HSTEX_FILE_UNDER_ENC},
+    {".map", (uint32_t)HSTEX_FILE_UNDER_MAP},
+    {".tex", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".sty", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".cls", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".clo", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".def", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".cfg", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".fd", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".ltx", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {".dfu", (uint32_t)HSTEX_FILE_UNDER_TEX},
+    {NULL, (uint32_t)HSTEX_FILE_UNDER_NOWHERE},
 };
 
 struct hstex_file_entry {
@@ -178,13 +225,17 @@ static int reserve_slots(struct hstex_file_db *database)
 /* One file, under the directory the list is in the middle of. */
 static uint32_t place_of(const char *directory)
 {
-    if (strncmp(directory, "tex/", 4U) == 0 || strcmp(directory, "tex") == 0) {
-        return (uint32_t)HSTEX_FILE_UNDER_TEX;
+    for (size_t index = 0U; hstex_file_places[index].directory != NULL;
+         ++index) {
+        const char *under = hstex_file_places[index].directory;
+        size_t length = strlen(under);
+        if (strncmp(directory, under, length) == 0 ||
+            (strncmp(directory, under, length - 1U) == 0 &&
+             directory[length - 1U] == '\0')) {
+            return hstex_file_places[index].where;
+        }
     }
-    if (strncmp(directory, "fonts/tfm/", 10U) == 0) {
-        return (uint32_t)HSTEX_FILE_UNDER_TFM;
-    }
-    return 0U;
+    return (uint32_t)HSTEX_FILE_UNDER_NOWHERE;
 }
 
 static int add_entry(struct hstex_file_db *database, const char *tree,
@@ -470,31 +521,16 @@ const struct hstex_file_db *hstex_file_db_shared(void)
    only has to be right about what it claims, not complete. */
 static bool kind_is_searched(const char *name, uint32_t where)
 {
-    /* What a document asks for by name, and nothing else. The tool guesses
-       a file's kind from what it is called and searches where files of that
-       kind live; the kinds below were each measured to agree with it, and a
-       name of any other kind is left to it rather than guessed at here. Of
-       2,000 names checked against the tool under this rule, none disagreed;
-       `.pgf' did, before it was left out. */
-    static const char *const kinds[] = {
-        ".tex", ".sty", ".cls", ".clo", ".def",
-        ".cfg", ".fd",  ".ltx", ".dfu", NULL,
-    };
-    size_t length = strlen(name);
-    if (length >= 4U && strcmp(name + length - 4U, ".tfm") == 0) {
-        return where == (uint32_t)HSTEX_FILE_UNDER_TFM;
-    }
     const char *dot = strrchr(name, '.');
-    if (dot != NULL) {
-        bool known = false;
-        for (size_t index = 0U; kinds[index] != NULL && !known; ++index) {
-            known = strcmp(dot, kinds[index]) == 0;
-        }
-        if (!known) {
-            return false;
+    if (dot == NULL) {
+        return where == (uint32_t)HSTEX_FILE_UNDER_TEX;
+    }
+    for (size_t index = 0U; hstex_file_kinds[index].suffix != NULL; ++index) {
+        if (strcmp(dot, hstex_file_kinds[index].suffix) == 0) {
+            return where == hstex_file_kinds[index].where;
         }
     }
-    return where == (uint32_t)HSTEX_FILE_UNDER_TEX;
+    return false;
 }
 
 const char *hstex_file_db_lookup(const struct hstex_file_db *database,
