@@ -78,7 +78,11 @@ cd "$work/hstex"
 set +e
 "$engine" --run-ini trip.tex >pass1.log 2>pass1.err
 status1=$?
-"$engine" --make-format trip.tex trip.hfmt >format.log 2>format.err
+# Built by a TeX82 engine, as the reference builds it: trip line 29 says
+# `\toksdef\tokens=256', which the reference has not got and an
+# eTeX-enabled engine has. Building the format the other way made the
+# second pass disagree with the first over what \tokens means.
+"$engine" --make-ini-format trip.tex trip.hfmt >format.log 2>format.err
 timeout 300 "$engine" --format trip.hfmt trip.tex >pass2.log 2>pass2.err
 status2=$?
 set -e

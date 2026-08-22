@@ -31,9 +31,10 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --run-ini FILE\n"
                   "       %s --run-latex LATEX_LTX DOCUMENT\n"
                   "       %s --make-format LATEX_LTX FORMAT\n"
+                  "       %s --make-ini-format SOURCE FORMAT\n"
                   "       %s --format FORMAT DOCUMENT\n",
                   program, program, program, program, program, program, program,
-                  program, program);
+                  program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -306,17 +307,25 @@ static int drain_engine(struct hstex_engine *engine, const char *fallback_path,
     return 0;
 }
 
-/* The format source, read and put by so that a run can start from it. */
-static int make_format(const char *format_path, const char *format_file)
+/* The format source, read and put by so that a run can start from it.
+
+   WHICH ENGINE THE FORMAT IS FOR IS THE CALLER'S TO SAY. A LaTeX format is
+   built by an eTeX-enabled engine, because latex.ltx reaches \count256 as
+   soon as it finds \marks and that is a register only such an engine has;
+   the capacity is written into the format, so a run reading it back gets the
+   same pool whatever it started with. A format built from a TeX82 source
+   must NOT be, or the source is read by an engine the reference would not
+   have used: `\toksdef\tokens=256' is a register the reference has not got,
+   and it says so and uses zero, while an eTeX engine takes it. trip does
+   exactly that on its line 29, and the format its second pass reads then
+   disagrees with the first pass over what \tokens means. */
+static int make_format(const char *format_path, const char *format_file,
+                       bool extended)
 {
     char error[512] = {0};
     struct hstex_engine engine;
-    /* Built the way it will be run: the format source is latex.ltx, which
-       reaches \count256 as soon as it finds \marks, and that is a register
-       only an eTeX-enabled engine has. The capacity is written into the
-       format, so a run reading it back gets the same pool whatever it
-       started with. See run_latex below. */
-    if (hstex_engine_init_extended(&engine, true, error, sizeof(error)) != 0) {
+    if (hstex_engine_init_extended(&engine, extended, error, sizeof(error)) !=
+        0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
@@ -498,7 +507,11 @@ int main(int argument_count, char **arguments)
         return run_latex(arguments[2], arguments[3]);
     }
     if (argument_count == 4 && strcmp(arguments[1], "--make-format") == 0) {
-        return make_format(arguments[2], arguments[3]);
+        return make_format(arguments[2], arguments[3], true);
+    }
+    if (argument_count == 4 &&
+        strcmp(arguments[1], "--make-ini-format") == 0) {
+        return make_format(arguments[2], arguments[3], false);
     }
     if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
         return run_document_from_format(arguments[2], arguments[3]);

@@ -138,7 +138,7 @@ if grep -q "	plain	" "$work/manifest.clean"; then
     # plain.tex does not dump itself -- iniTeX is told to, and so is this.
     printf '\\input plain \\dump\n' >"$work/mkplain.tex"
     plain_start=$(date +%s)
-    "$engine" --make-format "$work/mkplain.tex" "$plainfmt" \
+    "$engine" --make-ini-format "$work/mkplain.tex" "$plainfmt" \
         >"$work/plain-format.log" 2>&1 ||
         { echo "could not build the plain format; see $work/plain-format.log" >&2
           exit 1; }
