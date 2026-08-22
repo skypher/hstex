@@ -13169,12 +13169,12 @@ static int scan_discretionary_list(struct hstex_engine *engine,
             if (identifier == 0U || (size_t)identifier > engine->node_count) {
                 continue;
             }
-            uint8_t kind = engine->nodes[identifier - 1U].kind;
-            if (kind == (uint8_t)HSTEX_NODE_CHARACTER ||
-                kind == (uint8_t)HSTEX_NODE_LIGATURE ||
-                kind == (uint8_t)HSTEX_NODE_KERN ||
-                kind == (uint8_t)HSTEX_NODE_LIST ||
-                kind == (uint8_t)HSTEX_NODE_RULE) {
+            enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
+            if (kind == HSTEX_NODE_CHARACTER ||
+                kind == HSTEX_NODE_LIGATURE ||
+                kind == HSTEX_NODE_KERN ||
+                kind == HSTEX_NODE_LIST ||
+                kind == HSTEX_NODE_RULE) {
                 continue;
             }
             static const char *const help[] = {
@@ -29501,7 +29501,6 @@ static int try_break_at(struct hstex_engine *engine,
             : 0;
 
     state->rebuilt_count = 0U;
-    size_t kept = 0U;
     for (size_t slot = 0U; slot < state->active_count; ++slot) {
         size_t index = state->active[slot];
         int32_t line_class =
@@ -29568,7 +29567,6 @@ static int try_break_at(struct hstex_engine *engine,
                     return -1;
                 }
                 state->rebuilt[state->rebuilt_count++] = index;
-                ++kept;
                 continue;
             }
         }
@@ -29662,7 +29660,6 @@ static int try_break_at(struct hstex_engine *engine,
                 return -1;
             }
             state->rebuilt[state->rebuilt_count++] = index;
-            ++kept;
         }
     }
     if (create_break_records(engine, state, items, count, breakpoint, start,
@@ -36478,7 +36475,7 @@ static int resume_paragraph_after_display(struct hstex_engine *engine,
     if (engine->active_vbox_builder != engine->contribution_builder) {
         return 0;
     }
-    int32_t resumed_mode = engine->mode;
+    enum hstex_mode resumed_mode = engine->mode;
     bool resumed_inner = engine->inner_mode;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = false;
@@ -38379,7 +38376,7 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
        \valign.  That is visible in \tracingcommands, which names the mode
        for `to\the\hsize'.  See docs/DECISIONS.md,
        the-mode-an-alignment-spec-is-read-in. */
-    int32_t outer_mode = engine->mode;
+    enum hstex_mode outer_mode = engine->mode;
     bool outer_inner = engine->inner_mode;
     engine->mode = vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
@@ -38450,7 +38447,7 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
        templates themselves are kept unexpanded and run later, in the
        entry's mode, which is why an \iftrue written plainly in a preamble
        is traced in restricted horizontal mode instead. */
-    int32_t mode_before_rows = engine->mode;
+    enum hstex_mode mode_before_rows = engine->mode;
     bool inner_before_rows = engine->inner_mode;
     engine->mode = vertical ? HSTEX_MODE_HORIZONTAL : HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
