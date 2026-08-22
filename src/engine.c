@@ -8767,6 +8767,10 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                                    size_t delimiter_count, bool long_macro,
                                    char *error, size_t error_capacity)
 {
+    /* A `}' the argument did not open takes the macro's LONGNESS AWAY, so
+       that the \par put in behind it ends the call even where the macro is
+       \long and would otherwise have taken the \par in its stride. Without
+       that the same brace is met again and again. */
     const size_t base = argument->count;
     size_t depth = 0U;
     /* What the argument runs up to can only be reached at the delimiter's
@@ -8916,6 +8920,7 @@ static int scan_delimited_argument(struct hstex_engine *engine,
                    the \par is what ends the call, with a message of its
                    own. */
                 argument->count = base;
+                long_macro = false;
                 if (push_one(engine, token, location, error,
                              error_capacity) != 0 ||
                     report_extra_brace_in_argument(engine, error,
@@ -25425,9 +25430,16 @@ static int tokens_to_bytes(struct hstex_engine *engine,
    l.293. An \outer macro is forbidden here as it is in a definition, and
    the expander reports it before expanding, which is why the name is lent
    to the engine for the length of the read. */
+/* `ending` is the token the text is bounded by where there is one behind the
+   material pushed for it -- a \write puts a `}' there, and something the
+   text opened may swallow it. Where that happens the reference meets its own
+   terminator, which is an OUTER name, and says so; the name becomes a space,
+   another `}' goes in, and the scan carries on until the braces come out
+   even. Null for a text that is simply read to its end. */
 static int scan_expanded_text_from_input(struct hstex_engine *engine,
                                          struct hstex_token_vector *text,
-                                         const char *scanning, char *error,
+                                         const char *scanning,
+                                         bool bounded, char *error,
                                          size_t error_capacity)
 {
     size_t depth = 1U;
@@ -25448,6 +25460,41 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
             engine, &token, &location, error, error_capacity);
         engine->inhibit_protected_expansion = previous_inhibition;
         engine->gathering_expanded_text = previous_gathering;
+        if (result == HSTEX_ENGINE_EOF && bounded) {
+            /* The terminator has been swallowed by something the text
+               opened. */
+            static const char *const help[] = {
+                "I suspect you have forgotten a `}', causing me",
+                "to read past where you wanted me to stop.",
+                "I'll try to recover; but if the error is serious,",
+                "you'd better type `E' or `X' now and fix your file.", NULL};
+            /* What has been read is shown BEFORE the terminator becomes
+               anything, so the space is not in it. */
+            report_runaway_list(engine, "text", NULL, NULL, text);
+            hstex_token space =
+                hstex_token_character((uint8_t)HSTEX_CAT_SPACE, (uint8_t)' ');
+            if (vector_push(text, space, error, error_capacity) != 0) {
+                engine->expanded_text_name = previous_text_name;
+                runaway_partial = previous_partial;
+                runaway_partial_prefix = previous_prefix;
+                return -1;
+            }
+            hstex_token closer = hstex_token_character(
+                (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+            struct hstex_source_location where = {0};
+            if (push_one(engine, closer, where, error, error_capacity) != 0) {
+                engine->expanded_text_name = previous_text_name;
+                runaway_partial = previous_partial;
+                runaway_partial_prefix = previous_prefix;
+                return -1;
+            }
+            hstex_source_name_top(&engine->sources,
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+            tex_error(engine, help,
+                      "Forbidden control sequence found while scanning %s",
+                      scanning);
+            continue;
+        }
         if (result != HSTEX_ENGINE_TOKEN) {
             engine->expanded_text_name = previous_text_name;
             runaway_partial = previous_partial;
@@ -25484,6 +25531,73 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
    kind. Measured: \message{\meaning\lz} is quiet and
    \immediate\write16{\meaning\lz} is not, though both end up writing the
    same bytes. */
+/* THE TEXT OF A \write GOES BACK INTO THE INPUT WITH A `}' BEHIND IT, and is
+   then read the way an \edef body is. That brace is what a macro called
+   inside the text meets when it runs off the end -- the reference's
+   `Argument of \l has an extra }' comes from exactly that -- and a text that
+   closes the group early leaves the brace standing, which is `Unbalanced
+   write command'. HSTeX had bounded the text with nothing but the end of the
+   input, so neither fault could be drawn. */
+static int expand_write_text(struct hstex_engine *engine,
+                             struct hstex_token_vector *text,
+                             struct hstex_source_location location,
+                             uint8_t **bytes, size_t *byte_count, char *error,
+                             size_t error_capacity)
+{
+    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
+        0) {
+        vector_destroy(text);
+        return -1;
+    }
+    hstex_token closer =
+        hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+    if (push_one(engine, closer, location, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        return -1;
+    }
+    /* The brace is put in rather than read again, and the context says so. */
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    if (push_owned_vector(engine, text, location, error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
+    struct hstex_token_vector expanded = {0};
+    int status = scan_expanded_text_from_input(
+        engine, &expanded, engine->scanning_text_name, true, error,
+        error_capacity);
+    if (status == 0) {
+        /* What stands behind the text's own closing brace should be nothing
+           at all. Anything else is the brace this put in, still waiting
+           because the text closed the group before it. */
+        hstex_token after = 0U;
+        struct hstex_source_location where;
+        if (raw_next(engine, &after, &where, error, error_capacity) ==
+            HSTEX_ENGINE_TOKEN) {
+            static const char *const help[] = {
+                "On this page there's a \\write with fewer real {'s than }'s.",
+                "I can't handle that very well; good luck.", NULL};
+            tex_error(engine, help, "Unbalanced write command");
+            while (raw_next(engine, &after, &where, error, error_capacity) ==
+                   HSTEX_ENGINE_TOKEN) {
+            }
+        }
+    }
+    (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+    if (status != 0) {
+        vector_destroy(&expanded);
+        return -1;
+    }
+    status = tokens_to_bytes(engine, &expanded, bytes, byte_count, error,
+                             error_capacity);
+    vector_destroy(&expanded);
+    return status;
+}
+
 static int scan_general_text_bytes(struct hstex_engine *engine,
                                    uint8_t **bytes, size_t *byte_count,
                                    bool expanding, char *error,
@@ -25510,8 +25624,8 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
         /* Expanded where it stands, so nothing is pushed and a fault inside
            the text names the line it is on. */
         if (scan_expanded_text_from_input(engine, &text,
-                                          engine->scanning_text_name, error,
-                                          error_capacity) != 0) {
+                                          engine->scanning_text_name, false,
+                                          error, error_capacity) != 0) {
             vector_destroy(&text);
             return -1;
         }
@@ -25525,6 +25639,19 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
         vector_destroy(&text);
         return -1;
     }
+    /* A \write's text is put back between braces and read as an \edef body
+       is; every other text that is gathered and then expanded is read to the
+       end of what was gathered and no further. */
+    bool is_write = false;
+    if (hstex_token_is_control_sequence(engine->executing_token)) {
+        const struct hstex_meaning *meaning = hstex_engine_meaning(
+            engine, hstex_token_control_sequence_id(engine->executing_token));
+        is_write = meaning->command == HSTEX_COMMAND_WRITE;
+    }
+    if (is_write) {
+        return expand_write_text(engine, &text, location, bytes, byte_count,
+                                 error, error_capacity);
+    }
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) != 0) {
         vector_destroy(&text);
         return -1;
@@ -25533,16 +25660,6 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
         (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
         vector_destroy(&text);
         return -1;
-    }
-    /* A \write's text is named for what it is; every other text that is
-       gathered and then expanded is not, and stands as inserted. */
-    if (hstex_token_is_control_sequence(engine->executing_token)) {
-        const struct hstex_meaning *meaning = hstex_engine_meaning(
-            engine, hstex_token_control_sequence_id(engine->executing_token));
-        if (meaning->command == HSTEX_COMMAND_WRITE) {
-            hstex_source_name_top(&engine->sources,
-                                  (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
-        }
     }
     return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
 }
@@ -25660,22 +25777,12 @@ static int expand_stored_token_list(struct hstex_engine *engine,
         }
     }
     struct hstex_source_location location = {0};
-    if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
-        0) {
-        vector_destroy(&text);
-        return -1;
-    }
-    if (push_owned_vector(engine, &text, location, error, error_capacity) !=
-        0) {
-        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
-        vector_destroy(&text);
-        return -1;
-    }
-    /* This is a \write's text and nothing else, and the reference names it
-       for what it is when a fault inside it is reported. */
-    hstex_source_name_top(&engine->sources,
-                          (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
-    return expand_to_bytes(engine, bytes, byte_count, error, error_capacity);
+    /* This is a \write's text and nothing else, so it goes back between
+       braces the way an \immediate one does. */
+    (void)snprintf(engine->scanning_text_name,
+                   sizeof(engine->scanning_text_name), "text of \\write");
+    return expand_write_text(engine, &text, location, bytes, byte_count, error,
+                             error_capacity);
 }
 
 static int hex_digit_value(uint8_t byte)
@@ -35178,7 +35285,8 @@ static int execute_mark(struct hstex_engine *engine, bool classed, char *error,
     /* Expanded where it stands, so a fault inside the text names the line
        the \mark is on. */
     struct hstex_token_vector text = {0};
-    if (scan_expanded_text_from_input(engine, &text, "text of \\mark", error,
+    if (scan_expanded_text_from_input(engine, &text, "text of \\mark", false,
+                                      error,
                                       error_capacity) != 0) {
         vector_destroy(&text);
         return -1;

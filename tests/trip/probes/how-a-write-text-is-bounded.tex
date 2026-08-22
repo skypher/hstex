@@ -1,0 +1,63 @@
+% HOW A \write TEXT IS BOUNDED.
+%
+% A \write's text is gathered unexpanded and put back into the input
+% BETWEEN BRACES, with the write's own terminator behind them, and is then
+% read the way an \edef body is. The braces are not decoration:
+%
+%   a macro called inside the text that runs off the end meets the closing
+%   one, so
+%
+%     \long\def\l#1\l{#1}
+%     \immediate\write9{\string\caution \l}
+%
+%   draws `! Argument of \l has an extra }.' and then, from the \par that
+%   fault puts in, `! Paragraph ended before \l was complete.' -- even
+%   though \l is \long, because a brace the argument did not open TAKES THE
+%   MACRO'S LONGNESS AWAY.
+%
+%   a text whose EXPANSION closes the group early leaves that brace
+%   standing, which is
+%
+%     \immediate\write9{a\iffalse{\fi} b}
+%     ! Unbalanced write command.
+%     On this page there's a \write with fewer real {'s than }'s.
+%
+%   and a text whose expansion opens a group it never closes swallows the
+%   terminator. The reference's terminator is an \outer name, so it says
+%   `! Forbidden control sequence found while scanning text of \write.',
+%   turns the name into a space, puts another `}' in, and reads on until
+%   the braces come out even -- writing `e{f} '.
+%
+% All of it holds for a \write the page carries to the shipper as much as
+% for an \immediate one.
+%
+% HSTeX had bounded the text with nothing but the end of what it pushed, so
+% none of these faults could be drawn: the first ran the argument scan off
+% the end, the second passed in silence, and the third stopped the run.
+%
+% Found and left open: the reference's terminator is a TOKEN -- a name
+% frozen where no document can reach it -- and its context writes it:
+% `<inserted text> }\endwrite'. HSTeX's terminator is the end of what was
+% pushed, so it writes the brace alone. And HSTeX gives a frame back as
+% soon as it has been read to its end, where the reference keeps one until
+% the next token is asked for, so a frame the reference elides with `...'
+% is sometimes already gone here.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\immediate\openout9=zzwrite.dat
+\message{[A an ordinary immediate write]}
+\immediate\write9{plain text}
+\message{[B a macro whose argument runs off the end of the text]}
+\long\def\l#1\l{#1}
+\immediate\write9{\string\caution \l}
+\message{[C a text whose expansion closes the group early]}
+\immediate\write9{a\iffalse{\fi} b}
+\message{[D the same, deferred]}
+\shipout\hbox{\write9{c\iffalse{\fi} d}}
+\message{[E a text whose expansion opens a group it never closes]}
+\immediate\write9{e\iftrue{\else}\fi f}
+\message{[F an ordinary deferred one]}
+\shipout\hbox{\write9{g h}}
+\immediate\closeout9
+\message{[done]}
+\end
