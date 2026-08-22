@@ -1,0 +1,53 @@
+% WHAT AN ALIGNMENT LEAVES BEHIND.
+%
+% An alignment builds a list of its own, and when it is done that list's
+% AUXILIARY -- \prevdepth for a \halign, \spacefactor for a \valign -- is
+% what the list it joins carries on with.
+%
+% Measured against pdftex on a \valign standing where the space factor is
+% 999:
+%
+%   \valign{#\cr\noalign{...\spacefactor=7}}      after: 7
+%   \valign{#\cr\noalign{\spacefactor=7}\cr}      after: 1000
+%   \valign{#\cr\hbox{}\cr\noalign{\spacefactor=7}}  after: 7
+%   \valign{#\cr\hbox{}\cr}                       after: 1000
+%
+% which is three rules at once:
+%
+%   * the alignment's own list BEGINS at the space factor of the list it
+%     joins -- a \noalign asked first thing reads 999, not 1000;
+%
+%   * a \noalign reads and writes that space factor itself, so a second
+%     \noalign sees what the first left;
+%
+%   * a ROW leaves it at 1000, whatever it was before.
+%
+% This engine put back the space factor that stood before the alignment.
+% trip line 186 ends a \valign with \noalign{ \spacefactor=1} and then
+% writes \the\spacefactor.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \hsize=100pt
+\font\rip=trip \rip
+\message{[A a noalign last, and what each noalign sees]}
+\setbox0=\hbox{A\spacefactor=999
+  \valign{#\cr\noalign{\message{<first sees \the\spacefactor>}\spacefactor=7}%
+          \noalign{\message{<second sees \the\spacefactor>}}}%
+  \message{<after \the\spacefactor>}}
+\message{[B a row after the noalign]}
+\setbox0=\hbox{A\spacefactor=999
+  \valign{#\cr\noalign{\spacefactor=7}\cr}%
+  \message{<after \the\spacefactor>}}
+\message{[C a row, then a noalign last]}
+\setbox0=\hbox{A\spacefactor=999
+  \valign{#\cr\hbox{}\cr\noalign{\spacefactor=7}}%
+  \message{<after \the\spacefactor>}}
+\message{[D no noalign at all]}
+\setbox0=\hbox{A\spacefactor=999
+  \valign{#\cr\hbox{}\cr}%
+  \message{<after \the\spacefactor>}}
+\message{[E and a halign leaves its own prevdepth]}
+\setbox0=\vbox{\hrule height 3pt
+  \halign{#\cr\noalign{\prevdepth=13pt}\cr}%
+  \message{<after \the\prevdepth>}}
+\message{[done]}
+\end

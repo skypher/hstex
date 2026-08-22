@@ -12668,9 +12668,15 @@ static int execute_penalty(struct hstex_engine *engine, char *error,
 /* The body runs on the live input, the way the reference executes it, so a
    box may be opened by one macro and closed by an \egroup another produces.
    See docs/DECISIONS.md, streaming-box-bodies. */
+/* `starting_space_factor' is what the list begins at -- a box begins at
+   1000, but what stands between an alignment's columns carries on from the
+   alignment's own -- and `ending_space_factor', where it is asked for, is
+   what the list left it at. */
 static int evaluate_hbox_contents(struct hstex_engine *engine,
                                   struct hstex_hbox_builder *builder,
-                                  char *error, size_t error_capacity)
+                                  int32_t starting_space_factor,
+                                  int32_t *ending_space_factor, char *error,
+                                  size_t error_capacity)
 {
     uint32_t base_group_level = engine->group_level;
     uint32_t previous_group_floor = engine->output_group_floor;
@@ -12712,7 +12718,7 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
 
     int32_t previous_space_factor = engine->space_factor;
     bool previous_has_pending = engine->has_pending_character;
-    engine->space_factor = 1000;
+    engine->space_factor = starting_space_factor;
     engine->has_pending_character = false;
     int status = insert_every_box(engine, (size_t)HSTEX_TOKEN_EVERY_HBOX,
                                   error, error_capacity);
@@ -12785,6 +12791,9 @@ static int evaluate_hbox_contents(struct hstex_engine *engine,
         }
     }
     nest_pop(engine);
+    if (ending_space_factor != NULL) {
+        *ending_space_factor = engine->space_factor;
+    }
     engine->space_factor = previous_space_factor;
     engine->has_pending_character = previous_has_pending;
 
@@ -13044,7 +13053,7 @@ static int scan_hbox(struct hstex_engine *engine, struct hstex_box *box,
         return -1;
     }
     struct hstex_hbox_builder builder = {0};
-    int status = evaluate_hbox_contents(engine, &builder, error,
+    int status = evaluate_hbox_contents(engine, &builder, 1000, NULL, error,
                                         error_capacity);
     if (status == 0) {
         status = finalize_hbox(engine, &builder, matched_to, matched_spread,
@@ -13102,7 +13111,7 @@ static int scan_discretionary_list(struct hstex_engine *engine,
                          found, origin, (unsigned int)line);
     }
     struct hstex_hbox_builder builder = {0};
-    int status = evaluate_hbox_contents(engine, &builder, error,
+    int status = evaluate_hbox_contents(engine, &builder, 1000, NULL, error,
                                         error_capacity);
     /* Only what a broken line can carry belongs here: characters and the
        ligatures they make, kerns, boxes and rules. Measured against
@@ -38149,6 +38158,11 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
        alignment joins stood at. See docs/DECISIONS.md,
        prevdepth-inside-noalign. */
     int32_t row_depth = engine->prev_depth;
+    /* And the alignment's OWN space factor, which a \valign leaves behind
+       it. It begins at the enclosing list's, a \noalign reads and writes
+       it, and a row leaves it at 1000. See docs/DECISIONS.md,
+       what-an-alignment-leaves-behind. */
+    int32_t row_space_factor = engine->space_factor;
     /* The preamble is read in the alignment's own mode too. Nothing in it
        is expanded unless \span asks for it, and what \span expands is
        traced there: trip line 331 writes `\span\iftrue' in a \halign
@@ -38229,8 +38243,9 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
                        restricted horizontal mode there. Measured:
                        \ifhmode is true inside a \valign's \noalign and
                        false inside a \halign's. */
-                    status = evaluate_hbox_contents(engine, &between_across,
-                                                    error, error_capacity);
+                    status = evaluate_hbox_contents(
+                        engine, &between_across, row_space_factor,
+                        &row_space_factor, error, error_capacity);
                     items = between_across.node_identifiers;
                     item_count = between_across.count;
                 } else {
@@ -38409,6 +38424,8 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
                 row_depth = depth;
             }
         }
+        /* And a row leaves the alignment's own space factor at 1000. */
+        row_space_factor = 1000;
         nest_pop(engine);
         status = insert_every_cr(engine, error, error_capacity);
     }
@@ -38434,6 +38451,11 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
         /* What the rows left \prevdepth at, which is what follows the
            display; see docs/DECISIONS.md, prevdepth-inside-noalign. */
         engine->display_prev_depth = engine->prev_depth;
+    }
+    /* A \valign's own list is a horizontal one, so what it leaves behind in
+       the list it joins is the space factor rather than \prevdepth. */
+    if (vertical) {
+        engine->space_factor = row_space_factor;
     }
     nest_pop(engine);
     destroy_align_columns(columns, column_count);
