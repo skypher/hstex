@@ -31096,6 +31096,43 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
     return status;
 }
 
+/* A NODE THE BOUNDARY TOOK PART IN IS NOT ONE THE TWO BRANCHES CAN SHARE:
+   the reference develops the two branches of a break character by character,
+   and a node the boundary helped make stands for no character at all, so the
+   branches never fall back into step on it. See docs/DECISIONS.md,
+   what-follows-a-break-in-a-word. */
+static bool boundary_took_part(const struct hstex_engine *engine,
+                               uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return false;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    return node->kind == HSTEX_NODE_LIGATURE &&
+           node->value.character.boundary != 0U;
+}
+
+/* WHETHER A WORD SET AGAIN MEETS THE BOUNDARY BEYOND ITS RIGHT END. The
+   reference looks at what the word was made of the first time: only where a
+   node the boundary took part in stands at the word's end does the boundary
+   take part again. A word whose boundary was cancelled -- `11\noboundary'
+   -- ends in a plain character and stays without one. See
+   docs/DECISIONS.md, what-follows-a-break-in-a-word. */
+static bool word_meets_right_boundary(const struct hstex_engine *engine,
+                                      const uint32_t *items, size_t end)
+{
+    if (end == 0U) {
+        return false;
+    }
+    uint32_t last = items[end - 1U];
+    if (last == 0U || (size_t)last > engine->node_count) {
+        return false;
+    }
+    const struct hstex_node *node = &engine->nodes[last - 1U];
+    return node->kind == HSTEX_NODE_LIGATURE &&
+           node->value.character.boundary != 0U;
+}
+
 /* Two nodes stand for the same thing when they would be set the same way. */
 static bool set_the_same_way(const struct hstex_engine *engine, uint32_t left,
                              uint32_t right)
@@ -31314,7 +31351,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                                         error, error_capacity) != 0 ||
                     reconstitute_characters(engine, word.font,
                                             word.letters + letter,
-                                            word.count - letter, true, true,
+                                            word.count - letter, true,
+                                            word_meets_right_boundary(
+                                                engine, items, word.end),
                                             ahead, room, &made_after, error,
                                             error_capacity) != 0) {
                     free(ahead);
@@ -31327,6 +31366,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 size_t start = previous - base - (seeded ? 1U : 0U);
                 size_t tail = 0U;
                 while (tail < made_after && tail + start < whole &&
+                       !boundary_took_part(engine,
+                                           unbroken[whole - 1U - tail]) &&
                        set_the_same_way(engine,
                                         ahead[made_after - 1U - tail],
                                         unbroken[whole - 1U - tail])) {
@@ -31507,8 +31548,11 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     size_t made_after = 0U;
                     if (reconstitute_characters(
                             engine, word.font, word.letters + letter,
-                            word.count - letter, true, true, ahead, 48U,
-                            &made_after, error, error_capacity) != 0) {
+                            word.count - letter, true,
+                            word_meets_right_boundary(engine, items,
+                                                      word.end),
+                            ahead, 48U, &made_after, error,
+                            error_capacity) != 0) {
                         status = -1;
                     } else {
                         size_t following = word.end - index;
