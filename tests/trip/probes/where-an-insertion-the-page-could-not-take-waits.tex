@@ -1,0 +1,15 @@
+% An insertion the page has no room for is held over -- and where it waits is
+% ON THE PAGE, not among the contributions: \showlists inside the \output
+% routine writes it under `### current page: (held over for next output)'.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=5 \showboxdepth=3
+\vsize=20pt \maxdepth=2pt \dimen3=5pt \count3=1000 \skip3=0pt
+\output={\showlists\shipout\box255 \message{[penalties \the\insertpenalties]}}
+\message{[A a page whose insertions do not all fit]}
+\hrule height 4pt
+\insert3{\hrule height 8pt}
+\insert3{\hrule height 8pt}
+\vskip 30pt
+\hrule height 4pt
+\message{[done]}
+\end

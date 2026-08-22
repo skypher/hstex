@@ -22909,7 +22909,11 @@ static int eject_last_pages(struct hstex_engine *engine, char *error,
         .value.penalty = -INT32_C(1073741824),
     };
     /* The reference appends these three directly, so the box gets no
-       interline glue in front of it. */
+       interline glue in front of it -- AND \prevdepth is not touched by the
+       box either, the way it would be had the box been contributed. What
+       \showlists says of the outermost list inside the \output routine
+       these pages fire is therefore what stood before \end was read. */
+    int32_t standing_depth = engine->prev_depth;
     struct hstex_node *nodes[3] = {&line, &fill, &penalty};
     for (size_t index = 0U; index < 3U; ++index) {
         uint32_t identifier = 0U;
@@ -22919,6 +22923,7 @@ static int eject_last_pages(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    engine->prev_depth = standing_depth;
     return contribute_page(engine, error, error_capacity);
 }
 
@@ -23431,29 +23436,13 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         free(unplaced);
         return -1;
     }
-    /* What the page could not take of its insertions goes back to the front
-       of the contribution list, and is counted for the output routine. */
+    /* WHAT THE PAGE COULD NOT TAKE OF ITS INSERTIONS IS HELD OVER ON THE
+       PAGE ITSELF, not among the contributions: \showlists writes it under
+       `### current page: (held over for next output)' while the routine
+       runs. It is counted for the routine as \insertpenalties. See
+       docs/DECISIONS.md, insertions-held-over. */
     engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] =
         (int32_t)unplaced_count;
-    if (unplaced_count != 0U) {
-        uint32_t *joined =
-            calloc(unplaced_count + returned_count, sizeof(*joined));
-        if (joined == NULL) {
-            free(returned);
-            free(unplaced);
-            return set_error(error, error_capacity,
-                             "page break allocation failed");
-        }
-        memcpy(joined, unplaced, unplaced_count * sizeof(*joined));
-        if (returned_count != 0U) {
-            memcpy(joined + unplaced_count, returned,
-                   returned_count * sizeof(*joined));
-        }
-        free(returned);
-        returned = joined;
-        returned_count += unplaced_count;
-    }
-    free(unplaced);
 
     /* The marks of the page just shipped: what it ended with becomes
        \topmark for the next one, and the first and last marks in it are
@@ -23512,6 +23501,17 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         contributions->count = returned_count;
     }
     free(returned);
+    if (unplaced_count != 0U) {
+        if (reserve_vbox_items(page, unplaced_count, error,
+                               error_capacity) != 0) {
+            free(unplaced);
+            return -1;
+        }
+        memcpy(page->node_identifiers, unplaced,
+               unplaced_count * sizeof(*unplaced));
+        page->count = unplaced_count;
+    }
+    free(unplaced);
     engine->held_over_inserts = unplaced_count;
 
     /* \box255 is the page builder's own; a document that left something in
@@ -23692,27 +23692,39 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
             break;
         }
     }
-    if (status == 0 && made.count != 0U) {
+    if (status == 0) {
+        /* The routine's own list goes on the page BEHIND the insertions the
+           page could not take, and then the whole page in front of what was
+           waiting among the contributions. */
+        struct hstex_vbox_builder *held = engine->page_builder;
         struct hstex_vbox_builder *queue = engine->contribution_builder;
-        /* Behind the insertions the page could not take, and in front of
-           everything else: the reference puts the routine's list on the page
-           after those, and only then the whole page in front of what was
-           waiting. */
-        size_t behind = engine->held_over_inserts;
-        if (behind > queue->count) {
-            behind = queue->count;
+        if (made.count != 0U) {
+            if (reserve_vbox_items(held, held->count + made.count, error,
+                                   error_capacity) != 0) {
+                status = -1;
+            } else {
+                memcpy(held->node_identifiers + held->count,
+                       made.node_identifiers,
+                       made.count * sizeof(*made.node_identifiers));
+                held->count += made.count;
+            }
         }
-        if (reserve_vbox_items(queue, queue->count + made.count, error,
-                               error_capacity) != 0) {
-            status = -1;
-        } else {
-            memmove(queue->node_identifiers + behind + made.count,
-                    queue->node_identifiers + behind,
-                    (queue->count - behind) *
-                        sizeof(*queue->node_identifiers));
-            memcpy(queue->node_identifiers + behind, made.node_identifiers,
-                   made.count * sizeof(*made.node_identifiers));
-            queue->count += made.count;
+        if (status == 0 && held->count != 0U) {
+            if (reserve_vbox_items(queue, queue->count + held->count, error,
+                                   error_capacity) != 0) {
+                status = -1;
+            } else {
+                memmove(queue->node_identifiers + held->count,
+                        queue->node_identifiers,
+                        queue->count * sizeof(*queue->node_identifiers));
+                memcpy(queue->node_identifiers, held->node_identifiers,
+                       held->count * sizeof(*held->node_identifiers));
+                queue->count += held->count;
+                held->count = 0U;
+                held->extent = 0;
+                held->trailing_depth = 0;
+                held->width = 0;
+            }
         }
     }
     engine->held_over_inserts = 0U;
