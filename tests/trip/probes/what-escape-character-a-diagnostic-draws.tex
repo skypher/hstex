@@ -39,12 +39,15 @@
 \message{[B a formula]}
 \setbox0=\hbox{$A\over B\mathchoice{A}{B}{C}{D}\radical"270370 A\underline{A}\left(A\right)$}
 \showbox0
-\message{[C a paragraph trace and the page]}
+\message{[C the whatsits]}
+\setbox2=\hbox{\write3{a\relax b}\openout4=zzesc \closeout4 \special{s}}
+\showbox2
+\message{[D a paragraph trace and the page]}
 \tracingparagraphs=1 \hsize=10pt \parindent=0pt \hbadness=10000
 \vsize=20pt \tolerance=10000
 AAA A\par
 \showlists
-\message{[D and one with the escape character back]}
+\message{[E and one with the escape character back]}
 \escapechar=`\\
 \showbox1
 \message{[done]}
