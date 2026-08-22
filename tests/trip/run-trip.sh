@@ -43,7 +43,10 @@ fetch() {
     if [ -f "$name" ] && printf '%s  %s\n' "$want" "$name" | sha256sum -c - >/dev/null 2>&1; then
         return 0
     fi
-    curl -sSLf -o "$name" "$base/$name"
+    # Retried: the host is sometimes briefly unreachable, and what the
+    # file is remains settled by the digest checked below.
+    curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
+        --connect-timeout 20 -o "$name" "$base/$name"
     printf '%s  %s\n' "$want" "$name" | sha256sum -c - >/dev/null
 }
 

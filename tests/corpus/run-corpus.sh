@@ -67,7 +67,11 @@ fetch() {
            sha256sum -c - >/dev/null 2>&1; then
         return 0
     fi
-    curl -sSLf -o "$src/$fetch_file" "$base/$fetch_path"
+    # Fetched from a public host, which is sometimes briefly unreachable:
+    # a single refusal or a hung connect is not a corpus that has changed.
+    # What the file is remains settled by the digest checked below.
+    curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
+        --connect-timeout 20 -o "$src/$fetch_file" "$base/$fetch_path"
     printf '%s  %s\n' "$fetch_want" "$src/$fetch_file" | sha256sum -c - >/dev/null
 }
 
