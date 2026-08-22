@@ -43887,7 +43887,21 @@ handle_token:
                     "I allow only nonnegative values here.", NULL};
                 tex_error(engine, help, "Bad \\prevgraf (%d)", lines);
             } else {
+                /* \prevgraf BELONGS TO THE NEAREST VERTICAL LIST, not to the
+                   one the assignment stands in: the reference walks out of
+                   boxes, formulas and horizontal lists until it meets a list
+                   being built in vertical mode, and counts the lines there.
+                   See docs/DECISIONS.md, where-a-line-count-is-kept. */
+                nest_note(engine);
+                size_t at = engine->nest_count;
+                while (at != 0U && engine->nest[at - 1U].mode !=
+                                       (uint8_t)HSTEX_MODE_VERTICAL) {
+                    --at;
+                }
                 engine->prev_graf = lines;
+                if (at != 0U) {
+                    engine->nest[at - 1U].prev_graf = lines;
+                }
             }
             /* The prefix this assignment may have carried is spent. */
             engine->pending_global = false;

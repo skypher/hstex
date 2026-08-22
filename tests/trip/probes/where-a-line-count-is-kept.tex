@@ -1,0 +1,20 @@
+% Which list \prevgraf belongs to: not the one the assignment stands in, but
+% the nearest one being built in VERTICAL mode. The reference walks out of
+% boxes, formulas and horizontal lists to find it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \showboxbreadth=1 \showboxdepth=-1
+\font\sy=cmsy10 \font\ex=cmex10 \font\rm=cmr10
+\textfont0=\rm \scriptfont0=\rm \scriptscriptfont0=\rm
+\textfont1=\rm \scriptfont1=\rm \scriptscriptfont1=\rm
+\textfont2=\sy \scriptfont2=\sy \scriptscriptfont2=\sy
+\textfont3=\ex \scriptfont3=\ex \scriptscriptfont3=\ex
+\rm \hsize=100pt \parindent=0pt
+\message{[A set inside a display]}
+\noindent A\par
+\noindent B$$\prevgraf=8 \showlists A$$
+\message{[B set inside an hbox]}
+\setbox0=\hbox{\prevgraf=5 }\showlists
+\message{[C set inside a vbox, which is vertical itself]}
+\setbox0=\vbox{\prevgraf=3 \showlists}\showlists
+\message{[done]}
+\end
