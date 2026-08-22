@@ -3323,6 +3323,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->nodes);
     free(engine->list_items);
     free(engine->insert_details);
+    free(engine->lost_characters);
     free(engine->token_lists);
     free(engine->fonts);
     free(engine->hyphen_roots);
@@ -28673,6 +28674,26 @@ static void char_warning(struct hstex_engine *engine,
     (void)fflush(diagnostic_stream(engine));
 }
 
+/* Let out the missing characters a hyphenation kept back, as far as the
+   place the trace has reached. Called with SIZE_MAX where the paragraph is
+   done and whatever is left must come out wherever it is. */
+static void release_lost_characters(struct hstex_engine *engine, size_t reached)
+{
+    size_t kept = 0U;
+    for (size_t index = 0U; index < engine->lost_character_count; ++index) {
+        struct hstex_lost_character *lost = &engine->lost_characters[index];
+        if (lost->at >= reached) {
+            engine->lost_characters[kept++] = *lost;
+            continue;
+        }
+        const struct hstex_font *font = font_by_identifier(engine, lost->font);
+        if (font != NULL) {
+            char_warning(engine, font, lost->code);
+        }
+    }
+    engine->lost_character_count = kept;
+}
+
 /* One character on its way into a horizontal list, with what it was made of
    if the ligature program made it. */
 struct hstex_lig_item {
@@ -30168,6 +30189,10 @@ static int try_break_at(struct hstex_engine *engine,
                glue a line breaks at shows as the space it is. */
             if (state->trace.printed <= breakpoint) {
                 size_t end = breakpoint < count ? breakpoint + 1U : count;
+                /* A word is hyphenated where the pass REACHES it, which is
+                   the start of the stretch about to be drawn rather than its
+                   end: the warning belongs in front of that stretch. */
+                release_lost_characters(engine, state->trace.printed + 1U);
                 trace_short_display(engine, &state->trace, items,
                                     state->trace.printed, end);
                 /* What a discretionary replaces was shown with the
@@ -31081,7 +31106,40 @@ static int make_hyphen_node(struct hstex_engine *engine, uint32_t font,
     if (metrics->characters[metrics->hyphen_character].tag < 0) {
         /* A HYPHEN THE FONT HAS NOT GOT is named where \tracinglostchars
            asks, as any other missing character is, and the word is broken
-           without one. See docs/DECISIONS.md, missing-characters. */
+           without one. See docs/DECISIONS.md, missing-characters.
+
+           WHERE it is named is the reference's pass walking the paragraph
+           and hyphenating each word as it reaches it, so the line falls
+           between two of \tracingparagraphs' own. This engine hyphenates
+           the paragraph before the pass walks it, which would put every such
+           line in front of the whole trace, so while a trace is being drawn
+           the warning is kept until the walk reaches the word. */
+        if (engine->hyphenating_defers &&
+            engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0 &&
+            engine->integer_parameters[HSTEX_INTEGER_TRACING_LOST_CHARS] > 0) {
+            if (engine->lost_character_count ==
+                engine->lost_character_capacity) {
+                size_t capacity = engine->lost_character_capacity == 0U
+                                      ? 8U
+                                      : engine->lost_character_capacity * 2U;
+                void *room =
+                    realloc(engine->lost_characters,
+                            capacity * sizeof(*engine->lost_characters));
+                if (room == NULL) {
+                    return set_error(error, error_capacity,
+                                     "lost-character list allocation failed");
+                }
+                engine->lost_characters = room;
+                engine->lost_character_capacity = capacity;
+            }
+            struct hstex_lost_character kept = {
+                .at = engine->hyphenating_at,
+                .font = font,
+                .code = (uint8_t)metrics->hyphen_character,
+            };
+            engine->lost_characters[engine->lost_character_count++] = kept;
+            return 0;
+        }
         char_warning(engine, metrics,
                      (uint8_t)metrics->hyphen_character);
         return 0;
@@ -31549,6 +31607,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
     size_t written = 0U;
     size_t index = 0U;
     int status = 0;
+    engine->hyphenating_defers = true;
+    engine->hyphenating_at = 0U;
     /* The list the walk reads, which is the one handed in until a word has
        to be set again. */
     uint32_t *owned = NULL;
@@ -31656,6 +31716,10 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
            both branches of a break until they fall back into step, and
            whatever hyphen points it passed on the way are gone. */
         size_t settled_to = 0U;
+        /* Where this word's own output begins, which is where the trace has
+           to have reached before what hyphenating it noticed may be let out;
+           see release_lost_characters. */
+        engine->hyphenating_at = written;
         while (status == 0 && index < word.end) {
             /* How many of the word's letters this one node stands for; a
                break inside a ligature is not one HSTeX can take. */
@@ -32186,6 +32250,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         }
     }
     free(owned);
+    engine->hyphenating_defers = false;
     if (status != 0) {
         free(result);
         return -1;
@@ -32299,6 +32364,8 @@ static int break_paragraph(struct hstex_engine *engine,
             engine->integer_parameters[HSTEX_INTEGER_TOLERANCE],
             emergency <= 0, &best, error, error_capacity);
     }
+    /* Anything the walk never reached comes out here rather than being lost,
+       and a paragraph that was not traced at all lets everything out. */
     if (found == 0 && emergency > 0) {
         /* One more pass, with that much more stretch behind every line. */
         if (state.trace.active) {
@@ -32318,6 +32385,9 @@ static int break_paragraph(struct hstex_engine *engine,
         status = set_error(error, error_capacity,
                            "no way to break this paragraph into lines");
     }
+    /* Whatever the trace never reached comes out now rather than being lost,
+       and so does everything where there was no trace to interleave with. */
+    release_lost_characters(engine, SIZE_MAX);
     if (state.trace.active) {
         trace_newline(engine, &state.trace);
         print_line(engine);

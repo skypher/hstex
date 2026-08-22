@@ -1084,6 +1084,18 @@ struct hstex_nest_level {
     int32_t prev_graf;
 };
 
+/* A character the font had not got, noticed while a paragraph was being
+   hyphenated. The reference hyphenates a word when its pass reaches it, so
+   the warning falls between two lines of \tracingparagraphs' own output;
+   this engine hyphenates the whole paragraph before the pass walks it, so
+   the warning is kept here and let out where the walk reaches the word. See
+   make_hyphen_node and docs/DECISIONS.md, missing-characters. */
+struct hstex_lost_character {
+    size_t at;
+    uint32_t font;
+    uint8_t code;
+};
+
 struct hstex_align_column {
     hstex_token *before;
     size_t before_count;
@@ -2367,6 +2379,14 @@ struct hstex_engine {
     struct hstex_insert_detail *insert_details;
     size_t insert_detail_count;
     size_t insert_detail_capacity;
+    /* The missing characters a hyphenation has noticed and the trace has not
+       yet reached, and how far the hyphenating walk has written; see
+       struct hstex_lost_character. */
+    struct hstex_lost_character *lost_characters;
+    size_t lost_character_count;
+    size_t lost_character_capacity;
+    size_t hyphenating_at;
+    bool hyphenating_defers;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

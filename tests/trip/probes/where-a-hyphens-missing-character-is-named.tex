@@ -1,0 +1,52 @@
+% WHERE A MISSING HYPHEN IS NAMED WHILE A PARAGRAPH IS BEING BROKEN.
+%
+% A word hyphenated in a font whose \hyphenchar it has not got draws
+% `Missing character' as any other missing character does. WHERE that line
+% falls is the question, and it is a question because the two engines
+% hyphenate at different times.
+%
+% The reference walks the paragraph once and hyphenates each word as its
+% pass REACHES it, so the line falls between two of \tracingparagraphs' own:
+%
+%   @@1: line 1.0 t=100000000 -> @@0
+%   Missing character: There is no ^^c8 in font cmr10!
+%   Missing character: There is no ^^c8 in font cmr10!
+%   Missing character: There is no ^^c8 in font cmr10!
+%   aa
+%   @\discretionary via @@1 b=10000 p=0 d=100000000
+%
+% HSTeX hyphenates the WHOLE paragraph before the pass walks it -- which is
+% its own arrangement and none of the reference's business, except that it
+% put all three lines in front of the entire trace. So a warning noticed
+% while hyphenating is kept until the walk reaches the word it came from.
+%
+% Two things had to be right about `reaches':
+%
+%   - it is the START of the stretch about to be drawn, not its end. Keyed to
+%     the end, the warnings came out one stretch early -- in front of
+%     `\tenrm aababab ' rather than in front of `aa'.
+%   - and it is the start of THE WORD, not of whatever the hyphenating walk
+%     happened to be looking at. Keyed to the walk's own place, trip's line
+%     came out in front of the space before its word rather than in front of
+%     the word: `\glue' where the reference had `|ip BBBBBB'. This file's
+%     word begins a stretch, so it cannot tell those two apart; trip's does
+%     not, and did.
+%
+% Only while a trace is being drawn is anything kept back. Without
+% \tracingparagraphs there is nothing to interleave with, both engines name
+% the character somewhere inside the break, and the warning goes out where it
+% is noticed.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingparagraphs=1 \tracinglostchars=1
+\font\tenrm=cmr10 \tenrm
+\hsize=40pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\hyphenchar\tenrm=200
+\patterns{a1b}
+\lccode`a=`a \lccode`b=`b
+\message{[A a word whose hyphen the font has not got]}
+\noindent aababab aababab\par
+\message{[B the same with no trace to interleave with]}
+\tracingparagraphs=0
+\noindent aababab aababab\par
+\message{[done]}
+\end
