@@ -16138,17 +16138,55 @@ static int token_display_text(struct hstex_engine *engine, hstex_token token,
 /* One of the two lines an entry shows: what stands before the reading, and
    what stands after it, broken by the two widths. `tag` is what names the
    entry and stands at the head of the first line. */
+/* HOW WIDE A BYTE COMES OUT. What is written in ^^ notation takes three
+   columns, or four for the upper half an INITEX writes as two hex digits;
+   everything else takes one. A line an error draws is trimmed to fit by what
+   it will PRINT as, not by how many bytes it holds, and the two part company
+   as soon as a line holds anything that is not written as itself -- which,
+   since collapsing ^^ notation rewrites the line, is exactly the lines that
+   collapsed something. See struct hstex_mouth. */
+static size_t printed_width_of(const struct hstex_engine *engine, char byte)
+{
+    int32_t newline =
+        engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER];
+    if (newline >= 0 && newline <= 255 &&
+        (unsigned char)byte == (unsigned char)newline) {
+        return 1U;
+    }
+    if (!engine->eight_bit_printing && (unsigned char)byte > 127U) {
+        return 4U;
+    }
+    return character_needs_caret((uint8_t)byte) ? 3U : 1U;
+}
+
+static size_t printed_width(const struct hstex_engine *engine,
+                            const char *text, size_t length)
+{
+    size_t width = 0U;
+    for (size_t index = 0U; index < length; ++index) {
+        width += printed_width_of(engine, text[index]);
+    }
+    return width;
+}
+
 static void show_context_lines(struct hstex_engine *engine, const char *tag,
                                const char *before, size_t before_length,
                                const char *after, size_t after_length)
 {
     size_t tag_length = strlen(tag);
+    size_t kept = printed_width(engine, before, before_length);
     size_t trimmed = 0U;
-    size_t indent = tag_length + before_length;
+    size_t indent = tag_length + kept;
     if (indent > (size_t)HSTEX_HALF_ERROR_LINE) {
-        trimmed = indent - (size_t)HSTEX_HALF_ERROR_LINE + 3U;
+        /* Whole bytes go from the front until what is left, with the `...'
+           that replaces them, fits the half line. */
+        size_t room = (size_t)HSTEX_HALF_ERROR_LINE - tag_length - 3U;
+        while (trimmed < before_length && kept > room) {
+            kept -= printed_width_of(engine, before[trimmed]);
+            ++trimmed;
+        }
         before_length -= trimmed;
-        indent = (size_t)HSTEX_HALF_ERROR_LINE;
+        indent = tag_length + 3U + kept;
     }
     print_fresh_line(engine);
     print_bytes(engine, tag, tag_length);
@@ -16160,9 +16198,21 @@ static void show_context_lines(struct hstex_engine *engine, const char *tag,
     for (size_t index = 0U; index < indent; ++index) {
         print_byte(engine, ' ');
     }
-    bool clipped = after_length + indent > (size_t)HSTEX_ERROR_LINE;
+    size_t after_width = printed_width(engine, after, after_length);
+    bool clipped = after_width + indent > (size_t)HSTEX_ERROR_LINE;
     if (clipped) {
-        after_length = (size_t)HSTEX_ERROR_LINE - indent - 3U;
+        size_t room = (size_t)HSTEX_ERROR_LINE - indent - 3U;
+        size_t width = 0U;
+        size_t bytes = 0U;
+        while (bytes < after_length) {
+            size_t next = printed_width_of(engine, after[bytes]);
+            if (width + next > room) {
+                break;
+            }
+            width += next;
+            ++bytes;
+        }
+        after_length = bytes;
     }
     print_bytes(engine, after, after_length);
     if (clipped) {

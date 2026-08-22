@@ -1,0 +1,47 @@
+% AN ERROR LINE IS TRIMMED BY WHAT IT PRINTS AS, NOT BY WHAT IT HOLDS.
+%
+% A line too long to fit is shown with its front cut off and `...' in front
+% of what is left. How much is cut is settled by the number of COLUMNS the
+% line will take, and a byte that cannot be written as itself takes more than
+% one: three for `^^A', and four for the upper half, which an INITEX writes
+% as `^^' and two lowercase hex digits. HSTeX counted bytes, so a line
+% holding any such byte was cut in the wrong place -- it kept too much, by
+% three columns for every high byte still in view.
+%
+% The line below is padded so that it must be cut, and carries six bytes of
+% the upper half where the cut will leave them standing:
+%
+%   ref:    l.2 ...xxxxxx}^^e9^^e9^^e9^^e9^^e9^^e9\undefinedcs
+%   before: l.2 ...xxxxxxxxxxxxxxxxxxxxxxxx}^^e9^^e9^^e9^^e9^^e9^^e9\undefinedcs
+%   after:  l.2 ...xxxxxx}^^e9^^e9^^e9^^e9^^e9^^e9\undefinedcs
+%
+% -- eighteen columns too many before, which is the six characters times the
+% three extra columns each of them takes.
+%
+% WHY IT DID NOT SHOW IN TRIP. Nothing trip draws reaches the trimming with
+% a byte in it that is not written as itself, so the corpus and trip agree
+% either way. It shows here because this file is written to put one there.
+%
+% THE OTHER HALF OF THIS, ATTEMPTED AND BACKED OUT. The reference also
+% REWRITES its line buffer as it collapses ^^ notation, so a line that said
+% `^^M' when it was written says the character itself afterwards, and an
+% error drawn later shows it in ^^ notation again -- which is how trip's
+% l.429 comes to be drawn raw in one place and collapsed in another. That
+% was implemented too: the mouth reads the file image and must not write to
+% it, so a writable copy of the line is made for the lines that actually
+% collapse something and for no others. It fixed trip's l.429 and l.322 and
+% broke two other lines, taking the second pass from 30 differing hunks to
+% 32, so it is not here. What it still wants:
+%
+%   - the reference's trimming can cut a `^^Y' IN THE MIDDLE, leaving `^^'
+%     at the end of the line. Cutting by whole characters, as this file's
+%     fix does, is right for the front of the line and wrong for the back.
+%   - trip's l.374 is drawn `By ^^p' by the reference and `By 0' by an HSTeX
+%     that rewrites, so the reference had NOT collapsed that one where HSTeX
+%     had. Which suggests the collapse must follow the scanner exactly, and
+%     that a catcode change between the two readings decides it.
+\catcode`\{=1 \catcode`\}=2
+\message{[the line below is cut, and what it carries is four columns a byte]}
+\def\a{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}יייייי\undefinedcs
+\message{[done]}
+\end
