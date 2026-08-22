@@ -1,0 +1,31 @@
+% WHERE A LINE COUNT STARTS AGAIN.
+%
+% \prevgraf counts the lines the VERTICAL LIST NOW BEING BUILT has had from
+% paragraphs. A list of its own starts at nought, whatever the list around
+% it stands at, and the one around it keeps its own count while the inner
+% one runs. Measured against pdftex on a \vbox and on an \output routine:
+%
+%   A\par                       outer \prevgraf 1
+%   \setbox0=\vbox{...}         inner \prevgraf 0
+%   \output={...}               \prevgraf 0 inside the routine
+%
+% and \showlists says the same, writing `prevdepth ignored' for the
+% routine's own level rather than `prevdepth ignored, prevgraf 1 line'.
+%
+% This engine carried one count for every list at once, so a \vbox and an
+% \output routine both began with whatever the page had had. trip runs
+% \showlists inside its \output routine three times.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxdepth=0 \showboxbreadth=0
+\hsize=100pt \vsize=20pt \parindent=0pt
+\font\rip=trip \rip
+\output={\message{<in the routine \the\prevgraf>}\shipout\box255}
+\message{[A a paragraph outside, a box inside]}
+A\par
+\message{<outer \the\prevgraf>}
+\setbox0=\vbox{\message{<inner \the\prevgraf>}A\par\message{<inner now \the\prevgraf>}}
+\message{<outer again \the\prevgraf>}
+\message{[B and inside an output routine]}
+A\par A\par A\par A\par
+\message{[done]}
+\end

@@ -13321,8 +13321,9 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     bool previous_inner_mode = engine->inner_mode;
     int32_t previous_depth = engine->prev_depth;
     /* The lines of a paragraph broken in here are that list's own count,
-       not the enclosing one's. See docs/DECISIONS.md,
-       lines-carry-on-past-a-display. */
+       not the enclosing one's, and it starts at nought however many the
+       enclosing one has had. See docs/DECISIONS.md,
+       lines-carry-on-past-a-display and where-a-line-count-starts-again. */
     int32_t previous_graf = engine->prev_graf;
     uint32_t previous_stop_level = engine->group_stop_level;
     bool previous_stop_armed = engine->group_stop_armed;
@@ -13360,6 +13361,9 @@ static int evaluate_vbox_contents(struct hstex_engine *engine,
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = true;
     engine->prev_depth = starting_depth;
+    /* Zeroed only once the level is on the nest, so that the level under it
+       keeps the count it had. */
+    engine->prev_graf = 0;
 
     int status = normal_paragraph(engine, error, error_capacity);
     if (status == 0 && every_vbox) {
@@ -23267,6 +23271,10 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     struct hstex_hbox_builder *previous_output_hbox =
         engine->active_hbox_builder;
     int32_t previous_output_depth = engine->prev_depth;
+    /* And its list has had no paragraphs: a level of the nest starts
+       counting lines from nought, whatever the level under it stands at.
+       See docs/DECISIONS.md, where-a-line-count-starts-again. */
+    int32_t previous_output_graf = engine->prev_graf;
     /* The level is pushed BEFORE the mode changes, so that the level under
        it keeps the mode the page builder was in: \showlists run inside the
        routine calls the outer list `vertical mode' and not an internal one. */
@@ -23279,6 +23287,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     engine->active_vbox_builder = &made;
     engine->active_hbox_builder = NULL;
     engine->prev_depth = HSTEX_IGNORE_DEPTH;
+    engine->prev_graf = 0;
     engine->output_active = true;
     struct hstex_source_location location = {0};
     if (hstex_source_push_boundary(&engine->sources, error, error_capacity) !=
@@ -23351,6 +23360,7 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
     engine->active_vbox_builder = previous_output_builder;
     engine->active_hbox_builder = previous_output_hbox;
     engine->prev_depth = previous_output_depth;
+    engine->prev_graf = previous_output_graf;
     nest_pop(engine);
     /* The routine's own closing brace ends the group, and is traced like any
        other. A list that ran out before it did leaves the group open, so
