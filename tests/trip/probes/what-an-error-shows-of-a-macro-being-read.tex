@@ -69,10 +69,50 @@
 %     stands at and how far into which argument. Reading stays as it is; a
 %     call holds its arguments until its frame is done.
 %
-% The counters `body parameter occurrences per call' and `body length per
-% call' that src/engine.c reports on exit were added to measure this. Over
-% trip's second pass, 85 calls of 111 substitute nothing at all and are
-% already right; 9 put one occurrence in and 17 put two.
+% WHAT EACH WOULD COST, MEASURED. The counters `body parameter occurrences
+% per call' and `body length per call' were added to settle this. They have
+% now been read and taken out again; what they said, over the corpus rather
+% than over trip, is this. testmath -- 41 pages of amsmath, the heaviest
+% document in tests/corpus -- makes 21,204,416 macro calls, of which
+% 9,708,986 substitute nothing. So 11,495,430 calls, 54%, are the ones the
+% choice is about, and between them they ask for AT LEAST 31.7 million
+% parameter occurrences (counting the `11 or more' bucket as eleven).
+%
+% Where the time goes, from a SIGPROF sampler over that same run, 17,652
+% samples in the engine, -O2 with symbols. instantiate_macro is 25.0% of the
+% whole run -- the largest single cost in the engine -- and divides:
+%
+%   5.67%  the counters themselves (temporary, now gone)
+%   3.60%  matching the arguments        both options pay this
+%   8.29%  the no-substitution fast path both options keep this
+%   1.10%  working out the length        only the substituting one pays
+%   5.61%  BUILDING THE SUBSTITUTION     only the substituting one pays
+%   0.72%  teardown
+%
+% So reading the body where it stands can save at most about 6.7% -- the
+% length and the copy -- and pays for it with 31.7 million frame pushes and
+% pops in place of 11.5 million expansions built. The frame machinery is
+% already about 5.7% of the run at its present volume
+% (hstex_source_push_one, pop_frame, pop_exhausted_token_frames), so tripling
+% the traffic through it plausibly costs more than the 6.7% it buys. That is
+% an argument against the reference's own arrangement here, and it rests on
+% this engine copying tokens cheaply and pushing frames dearly.
+%
+% Keeping the arguments alive and rebuilding the two frames only when a
+% context is drawn costs nothing on the path that reads tokens, which is
+% where the 25% is. It costs holding each call's arguments until its frame
+% pops rather than until the call returns -- and frames pop in the order
+% they were pushed, so the arena stays a stack and the extra it holds is
+% bounded by how deep macros nest.
+%
+% On that evidence the second way is the one to take, and the first should
+% not be attempted without measuring the frame traffic it would add.
+%
+% WHAT THE COUNTERS COST. They scanned every body on every call, which is
+% why they are gone: interleaved A/B, minimum of user+sys over seven rounds
+% on testmath, 17.07s with them and 16.41s without, so 3.87% of the run. The
+% sampler put them at 5.67%; both agree they cost more than several of the
+% things they were measuring.
 %
 % WHAT IS DRAWN HERE. [A] is the trip case cut down to its own file: the
 % same definition, the same glue lookahead, the same error. [B] is the same
