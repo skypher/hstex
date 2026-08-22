@@ -1,0 +1,35 @@
+% WHAT MAY STAND BEHIND A WORD.
+%
+% A word is hyphenated only when what follows it is something a line may
+% end after. Glue, a penalty and a whatsit all qualify -- and so do the
+% three nodes that MIGRATE OUT of a line once it is packed: an insertion,
+% a \vadjust and a \mark. A box or a discretionary does not, and the word
+% is left whole.
+%
+% Measured against pdftex: `BBBB\vadjust{...}\par', `BBBB\mark{m}\par' and
+% `BBBB\insert100{...}\par' are all hyphenated, `BBBB\hbox{}\par' and
+% `BBBB\discretionary{}{}{}\par' are not.
+%
+% This engine took an insertion, a \vadjust and a \mark for things a word
+% may not be hyphenated in front of, and left every such word whole. trip's
+% line 195 puts four \vadjust's straight behind the word it means to have
+% hyphenated, and its \everypar leaves an \insert and a \mark in every
+% paragraph.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingparagraphs=1
+\output={\shipout\box255}\font\rip=trip \rip \hyphenchar\rip=`-
+\lccode`A=1 \lccode`B=2 \lccode`C=3 \uchyph=1
+\patterns{A1B B1B B1C C1A A1A}
+\vsize=20000pt \hsize=1pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\message{[A a word followed by a vadjust]}
+A BBBB\vadjust{\kern1pt}\par
+\message{[B by a mark]}
+A BBBB\mark{m}\par
+\message{[C by an insert]}
+A BBBB\insert100{\kern1pt}\par
+\message{[D by a box]}
+A BBBB\hbox{}\par
+\message{[E by a discretionary]}
+A BBBB\discretionary{}{}{}\par
+\message{[done]}
+\end

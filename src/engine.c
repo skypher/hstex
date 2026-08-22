@@ -30419,9 +30419,16 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
             }
             continue;
         }
+        /* WHAT MAY STAND BEHIND A WORD: glue, a penalty, a whatsit, and
+           the three that migrate out of a line once it is packed -- an
+           insertion, a \vadjust and a \mark. Each of them ends the word
+           and lets it be hyphenated. */
         if (node->kind == HSTEX_NODE_GLUE ||
             node->kind == HSTEX_NODE_PENALTY ||
-            node->kind == HSTEX_NODE_WHATSIT) {
+            node->kind == HSTEX_NODE_WHATSIT ||
+            node->kind == HSTEX_NODE_INSERT ||
+            node->kind == HSTEX_NODE_ADJUST ||
+            node->kind == HSTEX_NODE_MARK) {
             break;
         }
         /* A discretionary after the word -- the one an explicit hyphen
