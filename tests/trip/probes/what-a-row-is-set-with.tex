@@ -1,0 +1,17 @@
+% A row of an alignment is SET, not packed: what the reference packs is the
+% preamble, and every row takes the glue setting that packing came to --
+% even a row that stopped early and holds far less than the others.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\tabskip=1pt plus 2pt
+\message{[A a row that stops early]}
+\setbox0=\vbox{\halign to 100pt{#&#\cr
+  \hbox to 10pt{}&\hbox to 20pt{}\cr \hbox to 5pt{}\cr}}
+\showbox0
+\message{[B and one where the alignment must shrink]}
+\tabskip=1pt minus 2pt
+\setbox0=\vbox{\halign to 10pt{#&#\cr
+  \hbox to 10pt{}&\hbox to 20pt{}\cr \hbox to 5pt{}\cr}}
+\showbox0
+\message{[done]}
+\end

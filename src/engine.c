@@ -38579,26 +38579,32 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         return set_error(error, error_capacity,
                          "alignment width exceeds TeX's dimension range");
     }
+    /* THE ROWS ARE SET, NOT PACKED: what the reference packs is the
+       preamble, and every row takes the glue setting that packing came to
+       rather than one worked out from what the row itself holds. See
+       docs/DECISIONS.md, what-a-row-is-set-with. */
+    struct hstex_glue preamble = leading;
+    for (size_t index = 0U; index < column_count; ++index) {
+        struct hstex_glue skip = columns[index].tabskip;
+        preamble.stretch += skip.stretch;
+        preamble.shrink += skip.shrink;
+        if (skip.stretch_order > preamble.stretch_order) {
+            preamble.stretch_order = skip.stretch_order;
+            preamble.stretch = skip.stretch;
+        }
+        if (skip.shrink_order > preamble.shrink_order) {
+            preamble.shrink_order = skip.shrink_order;
+            preamble.shrink = skip.shrink;
+        }
+    }
+    struct hstex_glue_set prototype =
+        packing_glue_set(natural, (int32_t)final_width, &preamble);
     /* The reference packs the preamble once, to settle the tabskip glue,
        and that is the one packing of an alignment it reports -- against the
        line the alignment began on. Its rows and entries it sets rather than
        packs, and says nothing of them. See docs/DECISIONS.md,
        boxes-that-do-not-fit. */
     if (matched_to || matched_spread) {
-        struct hstex_glue preamble = leading;
-        for (size_t index = 0U; index < column_count; ++index) {
-            struct hstex_glue skip = columns[index].tabskip;
-            preamble.stretch += skip.stretch;
-            preamble.shrink += skip.shrink;
-            if (skip.stretch_order > preamble.stretch_order) {
-                preamble.stretch_order = skip.stretch_order;
-                preamble.stretch = skip.stretch;
-            }
-            if (skip.shrink_order > preamble.shrink_order) {
-                preamble.shrink_order = skip.shrink_order;
-                preamble.shrink = skip.shrink;
-            }
-        }
         struct hstex_box whole = {0};
         /* The row of a \valign runs downwards, so what the alignment was set
            to is its HEIGHT: measuring it as a width would report every row
@@ -38608,8 +38614,7 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         } else {
             whole.width = (int32_t)final_width;
         }
-        whole.glue =
-            packing_glue_set(natural, (int32_t)final_width, &preamble);
+        whole.glue = prototype;
         engine->badness =
             packing_badness(natural, (int32_t)final_width, &preamble);
         /* The row is a \tabskip and a column, over and over, and one last
@@ -38864,6 +38869,9 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
         if (status != 0) {
             return -1;
         }
+        /* And the row is SET rather than packed: it takes the glue setting
+           the preamble's packing came to. */
+        packed.glue = prototype;
         /* Every entry of a row is as tall and as deep as the row itself; see
            docs/DECISIONS.md, the-entries-of-a-row. */
         for (size_t item = 0U;
