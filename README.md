@@ -281,6 +281,23 @@ One thing there is not: an over-large dimension. `\hsize=100000pt` draws
 `! Dimension too large.` from both engines, in the same words, and both carry
 on with 16383.99998pt.
 
+Nor is it the other hot records. Padding each of `struct hstex_box`,
+`struct hstex_source_frame`, `struct hstex_token_source` and
+`struct hstex_char_metric` by 32 bytes and running the same document eleven
+times each moved the median by +3.45%, +2.30%, +0.77% and +0.38%. The
+minimum ranked them differently and by much more, which under a load average
+of 66 means the reading is not to be trusted as a ranking -- but the
+conclusion survives either way, because a realistic shrink of any of them is
+eight or sixteen bytes rather than thirty-two, and even the largest of those
+numbers then comes to about 0.9%. The node was worth shrinking because a
+document makes ten million of them; nothing else here is made ten million
+times, `hstex_char_metric` least of all -- there are 256 per font and they
+sit in cache.
+
+Nor are the two things done for every character that look like they might be
+doing work every time. `fix_language` returns at once unless the language
+actually changed, and `font_by_identifier` is a bounds check and an index.
+
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
 asking `kpsewhich` where a file is once for each name rather than once for

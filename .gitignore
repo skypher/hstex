@@ -14,3 +14,5 @@
 /gmon.out
 /missfont.log
 /*.log
+# A LaTeX format built at the root writes this beside itself.
+/texsys.aux
