@@ -1,0 +1,40 @@
+% WHAT A REPEATER OF CODE NOUGHT DOES.
+%
+% trip.tfm gives character `M' the extensible recipe [top 0, middle `A',
+% bottom `B', repeated 0]. A NOUGHT stands for `there is no such piece' in
+% the three FIXED slots only: the REPEATER is asked for its size and its
+% width whatever its code, so this recipe stacks CHARACTER 0 between its
+% two fixed pieces. Measured against pdftex:
+%
+%   ..\vbox(-1.00002+76.99913)x7.0, shifted -41.49957
+%   ...\hbox(-1.00002+2.0)x7.0
+%   ....\t ^^@                      (and so on)
+%
+% Two rules at once, since character 0 of trip.tfm has a NEGATIVE height:
+%
+%   * a box made for ONE CHARACTER takes that character's own three
+%     dimensions, not the ones packing them would settle -- a character of
+%     negative height gives a box of negative height, where packing would
+%     have stopped at nought;
+%
+%   * and the repeater's height plus depth is the step the stack is built
+%     in, so getting that wrong changes how many pieces there are.
+%
+% This engine took a repeater of code 0 for no repeater, and built the
+% middle piece alone. trip line 285 asks for a delimiter that has to be
+% built out of these pieces.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \showboxdepth=9 \showboxbreadth=99
+\font\t=trip \font\s=cmsy10 \font\x=cmex10 \t
+\textfont0=\t \scriptfont0=\t \scriptscriptfont0=\t
+\textfont1=\t \scriptfont1=\t \scriptscriptfont1=\t
+\textfont2=\s \scriptfont2=\s \scriptscriptfont2=\s
+\textfont3=\t \scriptfont3=\t \scriptscriptfont3=\t
+\message{[A a delimiter whose repeater is character 0]}
+\setbox0=\hbox{$\left\delimiter"14D000\vbox to 40pt{}\right.$}
+\showbox0
+\message{[B a taller one]}
+\setbox0=\hbox{$\left\delimiter"14D000\vbox to 90pt{}\right.$}
+\showbox0
+\message{[done]}
+\end

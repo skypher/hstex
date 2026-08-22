@@ -33715,7 +33715,14 @@ static int character_box(struct hstex_engine *engine, uint32_t font_identifier,
     }
     free(builder.node_identifiers);
     if (status == 0) {
+        /* A box made for ONE CHARACTER takes the character's own three
+           dimensions, not the ones packing them would settle: a character
+           of negative height gives a box of negative height, where packing
+           would have stopped at nought. See docs/DECISIONS.md,
+           extensible-delimiters. */
         box->width = metric->width + metric->italic;
+        box->height = metric->height;
+        box->depth = metric->depth;
     }
     return status;
 }
@@ -33730,9 +33737,14 @@ static int extensible_box(struct hstex_engine *engine,
 {
     /* A recipe whose repeater is missing reaches only as far as its fixed
        pieces do. The reference builds what it can and says nothing; trip's
-       own font leaves one such recipe behind. */
-    bool has_repeater = recipe->repeated != 0U &&
-                        font->characters[recipe->repeated].tag >= 0;
+       own font leaves one such recipe behind.
+
+       A repeater of CODE NOUGHT is a character like any other. It is only
+       the three FIXED pieces that a nought stands for `none' in -- the
+       repeater is asked for its size and its width whatever its code, and a
+       recipe whose repeater is character 0 stacks character 0. See
+       docs/DECISIONS.md, extensible-delimiters. */
+    bool has_repeater = font->characters[recipe->repeated].tag >= 0;
     int64_t step = 0;
     if (has_repeater) {
         const struct hstex_char_metric *piece =
@@ -33784,15 +33796,16 @@ static int extensible_box(struct hstex_engine *engine,
     for (size_t stage = 0U; status == 0 && stage < 5U; ++stage) {
         size_t times = 1U;
         uint8_t code = 0U;
+        bool repeated = stage == 1U || stage == 3U;
         switch (stage) {
         case 0: code = recipe->top; break;
-        case 1: code = recipe->middle != 0U ? recipe->repeated : 0U;
-                times = repeats; break;
+        case 1: code = recipe->repeated;
+                times = recipe->middle != 0U ? repeats : 0U; break;
         case 2: code = recipe->middle; break;
         case 3: code = recipe->repeated; times = repeats; break;
         default: code = recipe->bottom; break;
         }
-        if (code == 0U || font->characters[code].tag < 0) {
+        if ((!repeated && code == 0U) || font->characters[code].tag < 0) {
             continue;
         }
         for (size_t index = 0U; status == 0 && index < times; ++index) {
@@ -33844,18 +33857,20 @@ static int extensible_box(struct hstex_engine *engine,
     packed.depth = (int32_t)(total - top_height);
     /* The width is the repeater's, or -- when there is none -- that of
        whichever fixed piece the recipe does have. */
-    uint8_t widest = has_repeater ? recipe->repeated : 0U;
-    if (widest == 0U) {
+    uint8_t widest = recipe->repeated;
+    bool found_widest = has_repeater;
+    if (!found_widest) {
         uint8_t order[3] = {recipe->bottom, recipe->middle, recipe->top};
         for (size_t index = 0U; index < 3U; ++index) {
             if (order[index] != 0U &&
                 font->characters[order[index]].tag >= 0) {
                 widest = order[index];
+                found_widest = true;
                 break;
             }
         }
     }
-    if (widest != 0U) {
+    if (found_widest) {
         const struct hstex_char_metric *shape = &font->characters[widest];
         packed.width = shape->width + shape->italic;
     }
