@@ -226,18 +226,32 @@ bytes to 20. And what an insertion remembers besides its list, a whole
 behind an index: that variant was 36 bytes and the widest of the ten, so
 every node a document made carried the room an insertion needs, and a
 document makes very few insertions. The union is 28 now, set by the list
-variant, and the record 48. Measured over a document of nothing but words,
-interleaved, the least of seven runs each: 2.43 processor seconds against
-2.56, so **5.1% faster**.
+variant, and the record 48. The list variant then went the same way -- its
+`box_kind` an `enum hstex_box_kind : 8` and its two flags a bit each -- which
+takes the union to 24 and **the record to 44 bytes**, from 60.
 
-That measurement wanted a document ten times the size of the one the profile
+WHAT IT IS WORTH IS NOT SETTLED. Over a document of nothing but words,
+twenty-one interleaved rounds of each, `user+sys`: the least of the 60-byte
+runs is 2.37 seconds against the 44-byte's 2.27, which is 4.2%; the median is
+2.60 against 2.56, which is 1.5%. Those do not agree, and the spread within
+one binary -- 2.37 to 2.60, a tenth -- is larger than the difference being
+looked for. The machine was carrying a load average of 66 on 64 processors
+at the time, so the memory bandwidth this change is about was itself being
+contended for. `docs/BENCHMARK_CONTRACT.md` asks for the median, which says
+1.5%.
+
+An earlier run of the same A/B over the first of the two steps read 5.1%,
+which this does not support; it is recorded here as a measurement that did
+not survive being repeated rather than as a result. What can be said is that
+the record is smaller, that the corpus and trip agree exactly as before, and
+that the direction is right -- the padding experiment, which moved the size
+far enough to be read through the noise, is the only measurement here that a
+loaded machine cannot argue with.
+
+The measurement wanted a document ten times the size of the one the profile
 was taken over. At 0.31 seconds a run, `/usr/bin/time` resolves 10ms, which
 is 3% a tick, and the same A/B read 0.0% -- not a result of no change, just a
 number too coarse to hold a result. A 2.5-second run resolves it.
-
-The last four bytes are in the list variant, whose `box_kind` is an enum and
-whose two flags are whole bytes; 44 would be worth about another 1.4%, which
-is under what an A/B here can see on its own.
 
 WHERE THE REST OF THE PLAIN-DOCUMENT GAP IS NOT. Setting `\hsize` wide enough
 that every paragraph is one line, with `\tolerance` high enough that nothing

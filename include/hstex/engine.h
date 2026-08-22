@@ -1506,16 +1506,20 @@ struct hstex_node {
         struct {
             uint32_t node_start;
             uint32_t node_count;
-            enum hstex_box_kind box_kind;
-            struct hstex_glue_set glue;
+            /* A byte and two bits rather than an int and two bytes: this
+               variant sets the width of the union now that the insert one
+               has moved out, so what it costs, every node pays. The kind
+               stays its own enum so a switch over it is still checked. */
+            enum hstex_box_kind box_kind : 8;
             /* This box is the line a display formula was set as, which
                \showbox says so of; see docs/DECISIONS.md, display-math. */
-            bool display;
+            bool display : 1;
             /* This box stands for a column an entry beside it spans, and is
                not an entry of the row: it keeps the size it was made with
                rather than the row's. See docs/DECISIONS.md,
                what-an-entry-that-spans-is-set-to. */
-            bool spanned_over;
+            bool spanned_over : 1;
+            struct hstex_glue_set glue;
         } list;
         struct {
             /* What is set instead of the following `replace_count` nodes

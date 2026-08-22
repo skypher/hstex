@@ -45349,9 +45349,11 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
             digest_node(digest, engine, node->value.glue.leader);
         }
         break;
-    case HSTEX_NODE_LIST:
-        digest_bytes(digest, &node->value.list.box_kind,
-                     sizeof(node->value.list.box_kind));
+    case HSTEX_NODE_LIST: {
+        /* Bit-fields have no address of their own: copied out to be hashed,
+           each by the width of its value rather than of its storage. */
+        uint8_t digest_box_kind = (uint8_t)node->value.list.box_kind;
+        digest_bytes(digest, &digest_box_kind, sizeof(digest_box_kind));
         /* Field by field: the record is padded, and padding is whatever the
            process left there. */
         digest_bytes(digest, &node->value.list.glue.needed,
@@ -45362,11 +45364,12 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
                      sizeof(node->value.list.glue.sign));
         digest_bytes(digest, &node->value.list.glue.order,
                      sizeof(node->value.list.glue.order));
-        digest_bytes(digest, &node->value.list.display,
-                     sizeof(node->value.list.display));
+        uint8_t digest_display = node->value.list.display ? 1U : 0U;
+        digest_bytes(digest, &digest_display, sizeof(digest_display));
         digest_node_run(digest, engine, node->value.list.node_start,
                         node->value.list.node_count);
         break;
+    }
     case HSTEX_NODE_DISCRETIONARY:
         digest_bytes(digest, &node->value.disc.replace_count,
                      sizeof(node->value.disc.replace_count));
