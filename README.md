@@ -11,13 +11,6 @@ median wall-clock speedup over pdfTeX.
 
 ## Current status
 
-The results below were measured against a legacy benchmark document that
-served as the milestone-one corpus. That document has been removed from the
-repository, so "the corpus" in this section means it, and these figures can no
-longer be reproduced from a clone. They are kept because they record what was
-actually measured. The corpus that ships now is the public one in
-`tests/corpus`; `docs/BENCHMARK_CONTRACT.md` records what changed with it.
-
 The repository contains the clean-room contract, the public document corpus and
 its comparison runner, plus the first engine substrate: regular-file loading,
 packed tokens, mutable catcodes, stable control-sequence interning, a

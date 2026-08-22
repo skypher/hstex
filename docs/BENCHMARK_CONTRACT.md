@@ -62,15 +62,3 @@ source, auxiliary inputs, environment, and CPU allocation.
 The threshold is at least a 5× reduction in median end-to-end wall time, and
 10× thereafter. Results from persistent mode are reported separately from
 ordinary process-per-pass results.
-
-### A note on scale
-
-This contract previously measured a single legacy benchmark document, which
-has been removed from the repository. The largest public subjects now available
-are `gentle` at 97 pages and the synthetic `benchmarks/training/train.tex` at
-73 pages. That is a real reduction in scale: effects that only appear in a long
-document -- deep auxiliary files, large label and destination tables, memory
-growth over thousands of pages -- are no longer covered by a standing subject.
-Restoring that coverage needs either a large redistributable document or a
-generated one of comparable size, and until it exists the performance figures
-should be read as applying to documents of the size actually measured.
