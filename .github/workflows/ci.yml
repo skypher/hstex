@@ -6,27 +6,118 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # Every Linux and macOS image the public runners offer, on both of the
+    # architectures GitHub hosts each of them on. Every job compiles hstex.
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
+        runner:
+          # Ubuntu 22.04, 24.04 (what `ubuntu-latest' points at) and 26.04,
+          # x86-64 and arm64 each. 26.04 is in public preview; 20.04 was
+          # retired, and `ubuntu-slim' is a stripped 24.04 rather than a
+          # version of its own.
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - ubuntu-26.04
+          - ubuntu-26.04-arm
+          # macOS 14, 15 and 26 (what `macos-latest' points at) on Apple
+          # silicon, and the free Intel images, which exist for 15 and 26
+          # alone: 13 was retired, and Intel 14 is a paid larger runner.
+          # 14 is deprecated but still allocatable.
+          - macos-14
+          - macos-15
+          - macos-15-intel
+          - macos-26
+          - macos-26-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Install build and test tools
-        run: >-
-          sudo apt-get update &&
-          sudo apt-get install -y meson ninja-build texlive-latex-base
-          texlive-fonts-recommended
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build python3-venv \
+            texlive-latex-base texlive-fonts-recommended
+          # Ubuntu 22.04 packages meson 0.61, well under the 1.3.0 this
+          # project asks for, so meson comes from PyPI on every image.
+          python3 -m venv "$HOME/meson"
+          "$HOME/meson/bin/pip" install --quiet --upgrade meson
+          echo "$HOME/meson/bin" >> "$GITHUB_PATH"
+
+      - name: Install build tools
+        if: runner.os == 'macOS'
+        run: brew install meson ninja
+
       - name: Configure
-        env:
-          CC: ${{ matrix.compiler }}
         run: meson setup build
+
       - name: Build
         run: meson compile -C build
+
+      - name: Report what the build made
+        run: |
+          ./build/hstex --version
+          ./build/hstex --cpu-features
+
+      - name: Test
+        if: runner.os == 'Linux'
+        run: meson test -C build --no-rebuild --print-errorlogs
+
+      # The engine test reads real font metrics, which it finds through
+      # kpsewhich: it needs a TeX installation, and the macOS images carry
+      # none. The rest of the suite is self-contained and runs everywhere.
+      # A new test that needs no TeX belongs in this list too.
+      - name: Test what a TeX-less machine can
+        if: runner.os == 'macOS'
+        run: >-
+          meson test -C build --no-rebuild --print-errorlogs
+          scan input catcode symbol mouth source
+
+      # The corpus is pinned by digest and fetched from CTAN, and the
+      # benchmark input is vendored: both are checked once, not once per
+      # image.
+      - name: Verify vendored benchmark input
+        if: matrix.runner == 'ubuntu-24.04'
+        run: benchmarks/check_manifests.sh
+
+      - name: Verify document corpus digests
+        if: matrix.runner == 'ubuntu-24.04'
+        run: tests/corpus/run-corpus.sh --fetch-only
+
+  clang:
+    # The other compiler the engine is expected to build clean under.
+    name: ubuntu-24.04 (clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang ninja-build python3-venv \
+            texlive-latex-base texlive-fonts-recommended
+          python3 -m venv "$HOME/meson"
+          "$HOME/meson/bin/pip" install --quiet --upgrade meson
+          echo "$HOME/meson/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        env:
+          CC: clang
+        run: meson setup build
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Report what the build made
+        run: |
+          ./build/hstex --version
+          ./build/hstex --cpu-features
+
       - name: Test
         run: meson test -C build --no-rebuild --print-errorlogs
-      - name: Verify vendored benchmark input
-        run: benchmarks/check_manifests.sh
-      - name: Verify document corpus digests
-        run: tests/corpus/run-corpus.sh --fetch-only
