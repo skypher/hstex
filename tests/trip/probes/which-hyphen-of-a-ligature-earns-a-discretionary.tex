@@ -1,0 +1,36 @@
+% WHICH HYPHEN OF A LIGATURE EARNS A DISCRETIONARY.
+%
+% A hyphen read in a paragraph is followed by an empty discretionary, so
+% the line may break after it. Where the hyphen went into a LIGATURE, it is
+% the LAST character taken into that ligature that decides -- the reference
+% asks what the last character it put down was, not whether any of them was
+% a hyphen. trip.tfm ligatures `-' with character 0 into `-', and
+%
+%   -\char0 -    ..\kern-1.00002
+%                ..\rip - (ligature -^^@)
+%                ..\rip -
+%                ..\discretionary
+%
+% -- nothing after the ligature, whose last character was character 0; one
+% after the plain `-'. `--' in cmr10 draws one because the SECOND of its
+% two hyphens is a hyphen, which is the same rule.
+%
+% This engine gave the discretionary to a ligature any of whose characters
+% was a hyphen. trip line 248 writes \--\--\char-0-A\-.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingparagraphs=1 \showboxdepth=99 \showboxbreadth=99
+\font\rip=trip \rip \hyphenchar\rip=`-
+\hyphenpenalty 88 \exhyphenpenalty 89
+\hsize=1000pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\vsize=20000pt \output={\shipout\box255}
+\message{[A a dash, char 0, a dash]}
+\setbox1=\vbox{\noindent -\char0 -\par}
+\showbox1
+\message{[B a discretionary hyphen then a dash]}
+\setbox1=\vbox{\noindent \--\par}
+\showbox1
+\message{[C two dashes]}
+\setbox1=\vbox{\noindent --\par}
+\showbox1
+\message{[done]}
+\end

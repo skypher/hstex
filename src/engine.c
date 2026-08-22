@@ -28318,17 +28318,19 @@ static int lig_advance(struct hstex_engine *engine,
         if (work[1].is_boundary) {
             engine->lig_right_hit = true;
         }
-        if (!step.keep_left) {
-            if (!work[0].is_boundary) {
-                lig_item_append_originals(&made, &work[0]);
-            }
-            made.is_hyphen = made.is_hyphen || work[0].is_hyphen;
+        /* WHICH HYPHEN EARNS THE DISCRETIONARY is the LAST character taken
+           into the run, not any of them: the reference asks what the last
+           character it put down was. `--' in cmr10 makes a ligature that
+           draws one, because the second of the two is a hyphen; trip's
+           `-^^@' makes one that draws none. See docs/DECISIONS.md,
+           the-discretionary-after-an-explicit-hyphen. */
+        made.is_hyphen =
+            step.keep_right ? work[0].is_hyphen : work[1].is_hyphen;
+        if (!step.keep_left && !work[0].is_boundary) {
+            lig_item_append_originals(&made, &work[0]);
         }
-        if (!step.keep_right) {
-            if (!work[1].is_boundary) {
-                lig_item_append_originals(&made, &work[1]);
-            }
-            made.is_hyphen = made.is_hyphen || work[1].is_hyphen;
+        if (!step.keep_right && !work[1].is_boundary) {
+            lig_item_append_originals(&made, &work[1]);
         }
         struct hstex_lig_item built[3];
         size_t built_count = 0U;
