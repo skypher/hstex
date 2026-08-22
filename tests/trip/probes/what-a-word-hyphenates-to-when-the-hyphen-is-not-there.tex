@@ -25,7 +25,24 @@
 %     engines now draw `\trip 5 (ligature |1)' and `\trip 7 (ligature |)'
 %     there, where this one used to draw only the first.
 %   - The discretionary's REPLACE COUNT still differs, in [A] and [B]
-%     alike: 70 against 5, and 2 against 67. STILL OPEN. The ligature nodes on either side of it
+%     alike: 70 against 5, and 2 against 67. STILL OPEN, and now measured.
+%     The count is `stop - start' where `stop' is `whole - tail' capped at
+%     the next break. Instrumented, this engine computes, for the two
+%     discretionaries of this word:
+%
+%       whole=72 start=0 tail=7 stop=5   -> 5
+%       whole=72 start=5 tail=0 stop=72  -> 67
+%
+%     The reference's 70 and 2 want, for the same 72 nodes, a first run of
+%     70 from a start of nought -- which is tail=2, not 7 -- and a second
+%     starting at 70 rather than at 5. So TWO things differ: how many nodes
+%     at the end of the word this engine thinks BOTH branches can share
+%     (`tail', the "fall back into step" rule), and where the second break's
+%     run begins.
+%
+%     Ruled out: the cap at the next break (`A run stops where the next
+%     break begins'). Taking it out gives 72 and 67, which overlap, so it is
+%     not the cap that is wrong -- something before it is. The ligature nodes on either side of it
 %     agree exactly -- both engines draw `\trip 5 (ligature |1)' and
 %     `\trip 7 (ligature |)' -- so the two agree about what the word is made
 %     of and disagree about how much of it the discretionary puts back.
