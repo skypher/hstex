@@ -1,0 +1,16 @@
+% An entry that \span's several columns is set to the FIRST of them, and the
+% columns it covers stand behind it as EMPTY boxes of their own widths, each
+% behind the \tabskip that would have come before it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\tabskip=3pt
+\message{[A a row that spans two of three columns]}
+\setbox0=\vbox{\halign{\hbox to 10pt{}#&\hbox to 20pt{}#&\hbox to 30pt{}#\cr
+  a\span b&c\cr \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
+\showbox0
+\message{[B one that spans all three]}
+\setbox0=\vbox{\halign{#&#&#\cr
+  \hbox to 5pt{}\span\span\cr \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
+\showbox0
+\message{[done]}
+\end

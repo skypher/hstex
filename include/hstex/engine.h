@@ -1481,6 +1481,11 @@ struct hstex_node {
             /* This box is the line a display formula was set as, which
                \showbox says so of; see docs/DECISIONS.md, display-math. */
             bool display;
+            /* This box stands for a column an entry beside it spans, and is
+               not an entry of the row: it keeps the size it was made with
+               rather than the row's. See docs/DECISIONS.md,
+               what-an-entry-that-spans-is-set-to. */
+            bool spanned_over;
         } list;
         struct {
             /* What is set instead of the following `replace_count` nodes

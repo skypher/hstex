@@ -38763,14 +38763,11 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                 break;
             }
             struct hstex_node set = engine->nodes[entry->box - 1U];
-            int64_t width = 0;
-            for (size_t step = 0U;
-                 step < entry->span && column + step < column_count; ++step) {
-                width += columns[column + step].width;
-                if (step + 1U < entry->span) {
-                    width += columns[column + step].tabskip.width;
-                }
-            }
+            /* AN ENTRY THAT SPANS SEVERAL COLUMNS IS SET TO THE FIRST OF
+               THEM, and the columns behind it are filled in with their own
+               \tabskip and an EMPTY box of each one's width. See
+               docs/DECISIONS.md, what-an-entry-that-spans-is-set-to. */
+            int64_t width = column < column_count ? columns[column].width : 0;
             /* The entry is set to the column's width, so its glue takes up
                whatever the column is wider by; see docs/DECISIONS.md,
                the-entries-of-a-row. */
@@ -38794,6 +38791,38 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
             } else {
                 set.width = (int32_t)width;
                 status = append_hbox_node(engine, &set, error, error_capacity);
+            }
+            for (size_t step = 1U; status == 0 && step < entry->span; ++step) {
+                size_t at = column + step;
+                struct hstex_glue between =
+                    at - 1U < column_count ? columns[at - 1U].tabskip : leading;
+                int32_t extent = at < column_count ? columns[at].width : 0;
+                struct hstex_node pad = {
+                    .kind = HSTEX_NODE_LIST,
+                    .value.list = {.box_kind = vertical ? HSTEX_BOX_VLIST
+                                                        : HSTEX_BOX_HLIST,
+                                   .spanned_over = true},
+                };
+                if (vertical) {
+                    pad.height = extent;
+                    status = emit_parameter_glue_vertically(
+                        engine, between, HSTEX_GLUE_TAB_SKIP, error,
+                        error_capacity);
+                    if (status == 0) {
+                        engine->prev_depth = HSTEX_IGNORE_DEPTH;
+                        status = append_vbox_node(engine, &pad, error,
+                                                  error_capacity);
+                    }
+                } else {
+                    pad.width = extent;
+                    status = emit_parameter_glue(engine, between,
+                                                 HSTEX_GLUE_TAB_SKIP, error,
+                                                 error_capacity);
+                    if (status == 0) {
+                        status = append_hbox_node(engine, &pad, error,
+                                                  error_capacity);
+                    }
+                }
             }
             size_t last = column + entry->span - 1U;
             skip = last < column_count ? columns[last].tabskip : leading;
@@ -38847,7 +38876,8 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                 continue;
             }
             struct hstex_node *entry = &engine->nodes[identifier - 1U];
-            if (entry->kind != HSTEX_NODE_LIST) {
+            if (entry->kind != HSTEX_NODE_LIST ||
+                entry->value.list.spanned_over) {
                 continue;
             }
             if (vertical) {
