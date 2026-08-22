@@ -15,11 +15,17 @@
 % TWO FAULTS, AND THEY ARE SEPARATE. [B] separates them: it asks for the
 % same word with `\hyphenchar' set to `-', which the font DOES have.
 %
-%   - The missing hyphen goes unnamed. In [A] the reference draws
-%     `Missing character' twice and this engine not at all. In [B], where
-%     there is no missing character, neither draws one.
-%   - The discretionary's REPLACE COUNT differs, in [A] and [B] alike: 70
-%     against 5, and 2 against 67. The ligature nodes on either side of it
+%   - The missing hyphen went unnamed. In [A] the reference draws `Missing
+%     character' twice and this engine drew it not at all. FIXED: the path
+%     that breaks a word with a whole run of the font's own characters
+%     between its letters puts the hyphen in as a CHARACTER CODE and sets
+%     the run again from it, rather than asking make_hyphen_node for a node
+%     -- so the check that one makes was not being made. With the check the
+%     warnings agree, and so does what goes in front of the break: both
+%     engines now draw `\trip 5 (ligature |1)' and `\trip 7 (ligature |)'
+%     there, where this one used to draw only the first.
+%   - The discretionary's REPLACE COUNT still differs, in [A] and [B]
+%     alike: 70 against 5, and 2 against 67. STILL OPEN. The ligature nodes on either side of it
 %     agree exactly -- both engines draw `\trip 5 (ligature |1)' and
 %     `\trip 7 (ligature |)' -- so the two agree about what the word is made
 %     of and disagree about how much of it the discretionary puts back.

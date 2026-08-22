@@ -31961,7 +31961,23 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 for (size_t item = first; item < letter; ++item) {
                     taken[count_before++] = word.letters[item];
                 }
-                taken[count_before++] = (uint8_t)metrics->hyphen_character;
+                /* A HYPHEN THE FONT HAS NOT GOT IS NAMED HERE TOO. This
+                   path puts the hyphen in as a character code and sets the
+                   run again from it, rather than asking make_hyphen_node for
+                   a node -- so the check that one makes was not being made,
+                   and a font without the character broke the word in
+                   silence. The reference names it once for every break it
+                   tries. See
+                   tests/trip/probes/what-a-word-hyphenates-to-when-the-hyphen-is-not-there.tex. */
+                if (metrics->characters != NULL &&
+                    metrics->hyphen_character <= 255 &&
+                    metrics->characters[metrics->hyphen_character].tag < 0) {
+                    char_warning(engine, metrics,
+                                 (uint8_t)metrics->hyphen_character);
+                } else {
+                    taken[count_before++] =
+                        (uint8_t)metrics->hyphen_character;
+                }
                 size_t made_before = 0U;
                 size_t made_after = 0U;
                 bool from_boundary =
