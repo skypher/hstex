@@ -1,0 +1,25 @@
+% WHAT A FORGOTTEN \fi IS INSERTED AS.
+%
+% An \outer macro met in text a conditional is skipping is taken as a sign
+% the \fi was forgotten. The reference inserts one and reads the macro
+% again, and the context under the fault reads
+%
+%   <inserted text>
+%                   \fi
+%   <to be read again>
+%                      \lo
+%
+% The \fi is PUT IN, so it stands in an inserted text of its own; the macro
+% that gave it away is put BACK and is read again. This engine put both
+% back and drew two `<to be read again>' frames.
+%
+% It is the same rule as in what-a-missing-right-is-inserted-as: what goes
+% IN is an inserted text, what goes BACK is read again. trip line 363
+% writes \ifcase3 \lo with \lo an \outer macro.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\message{[A an outer macro in skipped text]}
+\outer\def\lo{L}
+\iffalse \lo \fi
+\message{[done]}
+\end
