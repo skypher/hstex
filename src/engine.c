@@ -959,9 +959,34 @@ static char *tfm_filename(const char *name, char *error,
 /* A TFM dimension is a fixed-point multiple of the font's size, with twenty
    fractional bits. Truncating the product is what the reference does; see
    docs/DECISIONS.md, font-character-metrics. */
+/* A METRIC FILE'S FIX WORD, SCALED THE WAY THE REFERENCE SCALES IT. It is
+   not the product divided by 2^20: the reference takes the four bytes one at
+   a time, dividing between them, and each of those divisions throws away
+   what it cannot keep. The two ways agree wherever the size is a power of
+   two and part company everywhere else -- `at 32769sp' of a design size is
+   enough. See docs/DECISIONS.md, how-a-metric-is-scaled. */
 static int32_t scale_fix_word(int32_t fixed, int32_t size)
 {
-    int64_t scaled = ((int64_t)fixed * (int64_t)size) >> 20;
+    int64_t z = size;
+    int64_t alpha = 16;
+    while (z >= INT64_C(0x800000)) {
+        z /= 2;
+        alpha += alpha;
+    }
+    int64_t beta = 256 / alpha;
+    if (beta == 0) {
+        beta = 1;
+    }
+    alpha *= z;
+    uint32_t word = (uint32_t)fixed;
+    int64_t a = (int64_t)((word >> 24) & 0xFFU);
+    int64_t b = (int64_t)((word >> 16) & 0xFFU);
+    int64_t c = (int64_t)((word >> 8) & 0xFFU);
+    int64_t d = (int64_t)(word & 0xFFU);
+    int64_t scaled = (((((d * z) / 256) + (c * z)) / 256) + (b * z)) / beta;
+    if (a != 0) {
+        scaled -= alpha;
+    }
     if (scaled < -INT64_C(1073741823)) {
         return -INT32_C(1073741823);
     }
@@ -1227,9 +1252,12 @@ static int load_tfm_parameters(struct hstex_engine *engine,
     for (size_t index = 0U; index < parameter_count; ++index) {
         int32_t fix_word =
             read_big_endian_i32(input.data + (parameter_word + index) * 4U);
-        int32_t scale = index == 0U ? INT32_C(65536) : size;
-        int64_t scaled = (int64_t)fix_word * (int64_t)scale /
-                         INT64_C(1048576);
+        /* THE SLANT IS A PURE NUMBER and is not scaled by the size at all:
+           the reference reads it as the fix word divided by sixteen, which
+           for a negative one is a division that rounds DOWNWARD. Every
+           other parameter is a length and is scaled like a metric. */
+        int64_t scaled = index == 0U ? (int64_t)(fix_word >> 4)
+                                     : scale_fix_word(fix_word, size);
         if (scaled < -INT64_C(1073741823) ||
             scaled > INT64_C(1073741823)) {
             hstex_input_close(&input);

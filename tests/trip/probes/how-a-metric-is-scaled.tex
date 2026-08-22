@@ -1,0 +1,52 @@
+% HOW A METRIC IS SCALED.
+%
+% A metric file holds each length as a FIX WORD -- four bytes, twenty of
+% them fractional -- and the reference scales it by the size the font is
+% used at BYTE BY BYTE, dividing between them, each division throwing away
+% what it cannot keep:
+%
+%   sw = ((((d*z)/256 + c*z)/256) + b*z)/beta,  less alpha where a is 255
+%
+% That is not the product divided by 2^20. The two agree wherever the size
+% is a power of two and part company everywhere else -- `scaled 3000' is
+% enough to tell them apart, and trip's own
+% `at 2047.999992370605468749999pt' tells them apart by a good deal more.
+%
+% The SLANT, parameter one, is a pure number and is not scaled by the size
+% at all: the reference reads it as the fix word divided by sixteen, and
+% for a negative one that division rounds DOWNWARD.
+%
+% This engine multiplied and shifted. trip loads trip.tfm at five sizes,
+% one of them 2047.999992370605468749999pt; every box built in that font
+% was out by a hundredth of a point or so, and everything the page was
+% measured against with it.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\font\a=trip
+\font\b=trip scaled 32769
+\font\c=trip at 7.5pt
+\font\d=trip scaled 3000
+\font\e=trip at 2047.999992370605468749999 pt
+\font\g=trip at -10pt
+\message{[A the design size]}
+\a \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\message{[B scaled 32769]}
+\b \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\message{[C at 7.5pt]}
+\c \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\message{[D scaled 3000]}
+\d \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\message{[E the two sizes trip itself asks for]}
+\e \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\g \setbox0=\hbox{A}\message{<\the\wd0|\the\ht0|\the\dp0>}
+\message{<\the\fontdimen1\e|\the\fontdimen2\e|\the\fontdimen8\e>}
+\message{<\the\fontdimen1\g|\the\fontdimen2\g|\the\fontdimen8\g>}
+\message{[F the parameters of each]}
+\message{<\the\fontdimen1\a|\the\fontdimen2\a|\the\fontdimen3\a>}
+\message{<\the\fontdimen1\b|\the\fontdimen2\b|\the\fontdimen3\b>}
+\message{<\the\fontdimen1\c|\the\fontdimen2\c|\the\fontdimen3\c>}
+\message{<\the\fontdimen1\d|\the\fontdimen2\d|\the\fontdimen3\d>}
+\message{[G and a kern the program gives]}
+\b \setbox0=\hbox{AB}\message{<\the\wd0>}
+\message{[done]}
+\end
