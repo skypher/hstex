@@ -1,0 +1,38 @@
+% WHAT A \showthe LEAVES STANDING.
+%
+% A frame read to its end is NOT cleared away when a value is inserted over
+% it: the reference clears spent frames where it puts a token BACK and
+% where it calls a macro -- to save room -- and nowhere else. So the frame
+% a scan's terminator was put back in still stands under the answer, and
+% the context names it:
+%
+%   \showthe\fontdimen1\r      > -2.0pt.
+%                              <recently read> \r
+%
+% The number scan reads one token past `1', finds \r, and hands it back;
+% the font scan then reads it out of that frame, which is spent but still
+% there when the answer is shown.
+%
+% \the\font does the same of its own accord: the reference hands the name
+% back and asks its font-identifier scan for it, so `\showthe\font' draws
+% `<recently read> \font'.
+%
+% This engine cleared spent frames away wherever anything was pushed, and
+% read \font where it stood. trip line 217 writes \showthe\font and line
+% 388 \showthe\fontdimen1\enorm.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \errorcontextlines=5
+\font\r=cmr10 \r
+\message{[A the current font shown]}
+\showthe\font
+\message{[B a font identifier shown]}
+\showthe\r
+\message{[C a math family font]}
+\textfont0=\r
+\showthe\textfont0
+\message{[D a font dimension, whose number scan looks one token too far]}
+\showthe\fontdimen1\r
+\message{[E and one taken into a message]}
+\message{<\the\font>}
+\message{[done]}
+\end

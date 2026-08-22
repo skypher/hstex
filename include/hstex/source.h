@@ -94,6 +94,10 @@ struct hstex_source_stack {
     /* Counts files that have run out, so that the engine can insert
        \everyeof once for each; see docs/DECISIONS.md, everyeof. */
     size_t file_end_count;
+    /* How many frames have been pushed since the stack was made, so that a
+       caller can tell whether something it ran pushed one -- which counting
+       frames cannot, since reading may pop as many as it pushes. */
+    uint64_t pushes;
     /* Where the innermost file frame stands, one more than its index, or
        zero. Whoever asks where the reading is wants that frame, and finding
        it again is a walk down a stack that a deep expansion makes deep. */

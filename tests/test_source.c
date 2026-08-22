@@ -133,6 +133,10 @@ int main(void)
         }
         owned[0] = hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
                                          (uint8_t)'T');
+        /* A macro call clears away what is spent before it pushes -- a push
+           on its own leaves it standing, so that a fault under an inserted
+           value can still name the frame it came out of. */
+        hstex_source_settle(&stack);
         if (hstex_source_push_owned_tokens(&stack, owned, 1U,
                                            inserted_location, error,
                                            sizeof(error)) != 0 ||

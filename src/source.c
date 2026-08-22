@@ -188,6 +188,7 @@ int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
     file->path = path_copy;
     hstex_mouth_init(&file->mouth, input.data, input.length,
                      stack->lexical_state);
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
@@ -236,10 +237,16 @@ int hstex_source_push_pseudo_file(struct hstex_source_stack *stack,
     file->input.storage = HSTEX_INPUT_STORAGE_OWNED;
     file->path = name_copy;
     hstex_mouth_init(&file->mouth, bytes, length, stack->lexical_state);
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
 
+/* A LIST BEGUN HERE DOES NOT CLEAR AWAY WHAT IS SPENT UNDER IT. The
+   reference clears spent frames where it puts a token BACK and where it
+   calls a macro -- to save room -- and nowhere else, so a frame read to its
+   end still stands under the value \the inserts and a fault under it says
+   `<recently read>'. See docs/DECISIONS.md, error-context. */
 int hstex_source_push_tokens(struct hstex_source_stack *stack,
                              const hstex_token *tokens, size_t count,
                              struct hstex_source_location location, char *error,
@@ -249,7 +256,6 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
         count > UINT32_MAX) {
         return set_error(error, error_capacity, "invalid token-source request");
     }
-    pop_exhausted_token_frames(stack);
     if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
         return -1;
     }
@@ -266,10 +272,14 @@ int hstex_source_push_tokens(struct hstex_source_stack *stack,
     source->flags = 0U;
     source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
     source->frame_name = 0U;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
 
+/* Like `hstex_source_push_tokens', this clears nothing away: a caller that
+   wants the room back -- a macro call -- asks for it with
+   `hstex_source_settle' first. */
 int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
                                    hstex_token *tokens, size_t count,
                                    struct hstex_source_location location,
@@ -281,7 +291,6 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
         return set_error(error, error_capacity,
                          "invalid owned token-source request");
     }
-    pop_exhausted_token_frames(stack);
     if (count == 0U) {
         free(tokens);
         return 0;
@@ -303,6 +312,7 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_OWNS;
     source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
     source->frame_name = 0U;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
@@ -331,6 +341,7 @@ int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
     source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
     source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP;
     source->frame_name = 0U;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
@@ -399,6 +410,7 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
     source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
     source->frame_name = 0U;
     stack->store_count += count;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
@@ -443,6 +455,7 @@ int hstex_source_push_definition(struct hstex_source_stack *stack,
     source->flags = 0U;
     source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
     source->frame_name = 0U;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }
@@ -474,6 +487,7 @@ int hstex_source_push_boundary(struct hstex_source_stack *stack, char *error,
     struct hstex_source_frame *frame = &stack->frames[stack->count++];
     memset(frame, 0, sizeof(*frame));
     frame->kind = HSTEX_SOURCE_BOUNDARY;
+    ++stack->pushes;
     note_top_frame(stack);
     return 0;
 }

@@ -7729,6 +7729,19 @@ static int expand_the_primitive(struct hstex_engine *engine,
         if (meaning->command == HSTEX_COMMAND_FONT ||
             meaning->command == HSTEX_COMMAND_FONT_GIVEN ||
             meaning->command == HSTEX_COMMAND_MATH_FONT) {
+            /* A FONT IS PUT BACK AND READ AGAIN: the reference hands the
+               name back and asks its font-identifier scan for it, so a
+               `\showthe\font' draws `<recently read> \font' under the
+               answer. */
+            hstex_token again = 0U;
+            struct hstex_source_location where;
+            if (push_one(engine, subject, subject_location, error,
+                         error_capacity) != 0 ||
+                raw_next_non_space(engine, &again, &where, error,
+                                   error_capacity) != HSTEX_ENGINE_TOKEN) {
+                return set_error(error, error_capacity,
+                                 "end of input while scanning a font");
+            }
             uint32_t font_identifier = 0U;
             if (meaning->command == HSTEX_COMMAND_MATH_FONT) {
                 int32_t size = meaning->value.integer;
@@ -9629,6 +9642,9 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     }
     if (!reserved) {
         expansion.count = total;
+        /* A macro call clears away what is spent under it, as the reference
+           does, so that a recursion does not pile the stack up. */
+        hstex_source_settle(&engine->sources);
         if (push_owned_vector(engine, &expansion, call_location, error,
                               error_capacity) != 0) {
             vector_destroy(&expansion);
@@ -18287,11 +18303,10 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
     struct hstex_source_location location = {0};
-    /* What \the pushes is found by where the stack stood before it -- so
-       the frames already read to the end have to go first, or the push
-       drops the value in below the mark and nothing is shown. */
-    hstex_source_settle(&engine->sources);
-    size_t base = engine->sources.count;
+    /* What \the pushes is found by where the stack stood before it. Nothing
+       is cleared away first: a frame read to its end still stands under the
+       value, and the context under the answer names it. */
+    uint64_t base = engine->sources.pushes;
     if (expand_the_primitive(engine, location, error, error_capacity) != 0) {
         return -1;
     }
@@ -18306,7 +18321,7 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
        A value is an inserted frame and a token read again is not, which is
        what tells the two apart when the value is empty and no frame was
        pushed for it at all. */
-    if (engine->sources.count > base) {
+    if (engine->sources.pushes > base && engine->sources.count != 0U) {
         struct hstex_source_frame *frame =
             &engine->sources.frames[engine->sources.count - 1U];
         if (frame->kind == HSTEX_SOURCE_TOKEN_LIST &&
