@@ -11,7 +11,8 @@
 # reference's own storage statistics are not comparable and are not compared;
 # see docs/DECISIONS.md, what-a-clean-room-engine-cannot-reproduce.
 #
-# Usage: tests/corpus/run-corpus.sh [--strict] [--fetch-only] [path-to-hstex]
+# Usage: tests/corpus/run-corpus.sh [--strict] [--fetch-only] [--time]
+#                                   [path-to-hstex]
 #        CORPUS_WORK=dir  tests/corpus/run-corpus.sh   (default build/corpus)
 #
 # --strict exits nonzero if any document disagrees.  Without it the script
@@ -20,15 +21,24 @@
 # --fetch-only fetches every document and checks it against its pinned digest,
 # without running either engine.  This is the corpus identity check, and needs
 # no TeX installation.
+#
+# --time additionally reports what each engine takes over each document: the
+# median of seven warm runs, each in an output directory of its own, as
+# docs/BENCHMARK_CONTRACT.md asks.  What it reports is THE DOCUMENT PASS, with
+# both engines starting from a format that is already built; the cost of
+# building HSTeX's is reported on its own line, because the reference's was
+# built once by its distribution and is not part of typesetting a document.
 
 set -e
 
 strict=0
 fetch_only=0
+time_runs=0
 while :; do
     case ${1:-} in
     --strict) strict=1; shift ;;
     --fetch-only) fetch_only=1; shift ;;
+    --time) time_runs=1; shift ;;
     *) break ;;
     esac
 done
@@ -104,6 +114,37 @@ if [ "$fetch_only" -eq 1 ]; then
     exit 0
 fi
 
+# HSTEX'S LATEX FORMAT, BUILT ONCE. The reference starts each document from
+# a format its distribution built once, so an HSTeX that read latex.ltx afresh
+# for every document would not be doing the reference's work: reading it is
+# about thirty times what setting a document costs, and it swamps everything
+# else. A profile taken through a run that rebuilt it puts the macro
+# expander at 25% of the run and its substitution step at 5.6%; over the
+# document pass those are 13% and 3.3%, so the two disagree about what the
+# engine spends its time on. Build it once here, and report what it cost on
+# a line of its own.
+hfmt=$work/latex.hfmt
+plainfmt=$work/plain.hfmt
+format_seconds=-
+plain_format_seconds=-
+if grep -q "	latex	" "$work/manifest.clean"; then
+    format_start=$(date +%s)
+    "$engine" --make-format "$latex_ltx" "$hfmt" >"$work/format.log" 2>&1 ||
+        { echo "could not build the LaTeX format; see $work/format.log" >&2
+          exit 1; }
+    format_seconds=$(($(date +%s) - format_start))
+fi
+if grep -q "	plain	" "$work/manifest.clean"; then
+    # plain.tex does not dump itself -- iniTeX is told to, and so is this.
+    printf '\\input plain \\dump\n' >"$work/mkplain.tex"
+    plain_start=$(date +%s)
+    "$engine" --make-format "$work/mkplain.tex" "$plainfmt" \
+        >"$work/plain-format.log" 2>&1 ||
+        { echo "could not build the plain format; see $work/plain-format.log" >&2
+          exit 1; }
+    plain_format_seconds=$(($(date +%s) - plain_start))
+fi
+
 printf '%-10s %-9s %-11s %-8s %s\n' document pages boxes output verdict
 printf '%-10s %-9s %-11s %-8s %s\n' ---------- --------- ----------- -------- -------
 disagreed=0
@@ -136,11 +177,11 @@ while IFS='	' read -r name format path want note; do
     hs_status=0
     ( cd "$dir/hstex"
       if [ "$format" = plain ]; then
-          printf '\\input plain %s \\input %s \\end\n' "$clock" "$name" \
+          printf '\\pdfoutput=0 %s \\input %s \\end\n' "$clock" "$name" \
               >"run-$name.tex"
-          "$engine" --run-ini "run-$name.tex" >hstex.log 2>&1
+          "$engine" --format "$plainfmt" "run-$name.tex" >hstex.log 2>&1
       else
-          "$engine" --run-latex "$latex_ltx" "$name.tex" >hstex.log 2>&1
+          "$engine" --format "$hfmt" "$name.tex" >hstex.log 2>&1
       fi ) || hs_status=$?
 
     # What each engine actually produced. Only a plain document can be
@@ -148,7 +189,7 @@ while IFS='	' read -r name format path want note; do
     output=-
     if [ "$format" = plain ]; then
         ref_dvi=$dir/ref/$name.dvi
-        hs_dvi=$dir/hstex/build/ini-output/run-$name.dvi
+        hs_dvi=$dir/hstex/build/document-output/run-$name.dvi
         if [ ! -f "$ref_dvi" ] || [ ! -f "$hs_dvi" ]; then
             output=missing
         elif cmp -s "$ref_dvi" "$hs_dvi"; then
@@ -199,6 +240,74 @@ fi
 echo
 total=$(wc -l <"$work/manifest.clean")
 echo "$((total - disagreed))/$total documents agree with the reference"
+
+# Seven warm runs of one engine over one document, each in an output directory
+# of its own, and the median of what they took. A single run on a machine with
+# other tenants varies by about a fifth, so the median of seven is what
+# docs/BENCHMARK_CONTRACT.md asks for. This shell has no local variables, so
+# these names are deliberately distinct from every other loop's.
+time_median() {
+    tm_side=$1
+    tm_name=$2
+    tm_format=$3
+    : >"$work/times"
+    tm_i=0
+    while [ "$tm_i" -lt 7 ]; do
+        tm_dir=$work/$tm_name/t-$tm_side
+        rm -rf "$tm_dir"
+        mkdir -p "$tm_dir/build"
+        cp "$src/$tm_name.tex" "$tm_dir/"
+        if [ "$tm_format" = plain ]; then
+            printf '\\pdfoutput=0 %s \\input %s \\end\n' "$clock" "$tm_name" \
+                >"$tm_dir/run-$tm_name.tex"
+        fi
+        ( cd "$tm_dir"
+          if [ "$tm_side" = ref ] && [ "$tm_format" = plain ]; then
+              /usr/bin/time -f %e -o t.txt pdftex -output-format=dvi \
+                  -interaction=nonstopmode "$clock \\input $tm_name \\end" \
+                  >/dev/null 2>&1 || :
+          elif [ "$tm_side" = ref ]; then
+              /usr/bin/time -f %e -o t.txt pdflatex -interaction=nonstopmode \
+                  "$tm_name.tex" >/dev/null 2>&1 || :
+          elif [ "$tm_format" = plain ]; then
+              /usr/bin/time -f %e -o t.txt "$engine" --format "$plainfmt" \
+                  "run-$tm_name.tex" >/dev/null 2>&1 || :
+          else
+              /usr/bin/time -f %e -o t.txt "$engine" --format "$hfmt" \
+                  "$tm_name.tex" >/dev/null 2>&1 || :
+          fi ) || :
+        cat "$tm_dir/t.txt" >>"$work/times" 2>/dev/null || echo 0 >>"$work/times"
+        tm_i=$((tm_i + 1))
+    done
+    sort -n "$work/times" | awk 'NR==4 {print $1}'
+}
+
+if [ "$time_runs" -eq 1 ]; then
+    if ! /usr/bin/time -f %e -o /dev/null true >/dev/null 2>&1; then
+        echo
+        echo "--time wants GNU time at /usr/bin/time; no timings reported" >&2
+    else
+        echo
+        printf '%-10s %-11s %-11s %s\n' document reference hstex speedup
+        printf '%-10s %-11s %-11s %s\n' ---------- ----------- ----------- -------
+        while IFS='	' read -r name format path want note; do
+            [ -n "$name" ] || continue
+            ref_seconds=$(time_median ref "$name" "$format")
+            hs_seconds=$(time_median hstex "$name" "$format")
+            printf '%-10s %-11s %-11s %s\n' "$name" "${ref_seconds}s" \
+                "${hs_seconds}s" \
+                "$(awk -v r="$ref_seconds" -v h="$hs_seconds" \
+                     'BEGIN { if (h > 0) printf "%.2fx", r / h; else print "-" }')"
+        done <"$work/manifest.clean"
+        echo
+        echo "The document pass alone, each engine starting from a format it"
+        echo "already had. HSTeX's LaTeX format took ${format_seconds}s to build,"
+        echo "once, and is not counted above; the reference's was built once by"
+        echo "its distribution and is not counted either. HSTeX's plain format"
+        echo "took ${plain_format_seconds}s and is not counted above; the"
+        echo "reference starts a plain document from its own preloaded format."
+    fi
+fi
 if [ "$strict" -eq 1 ] && [ "$disagreed" -ne 0 ]; then
     exit 1
 fi
