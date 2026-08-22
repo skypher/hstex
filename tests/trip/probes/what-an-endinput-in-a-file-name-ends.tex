@@ -1,0 +1,41 @@
+% WHAT AN \endinput IN A FILE NAME ENDS.
+%
+% \endinput is EXPANDABLE, so one written where a file name is still being
+% scanned takes hold THERE rather than waiting to be obeyed -- and what it
+% takes hold of is whatever file is being read when the next LINE is
+% wanted. For
+%
+%   \input zzendin\endinput\relax
+%
+% that is zzendin, which comes out ONE LINE LONG: its first line is read
+% and no more. One space further on --
+%
+%   \input zzendin \endinput
+%
+% -- the name has already ended, so the \endinput is read after zzendin has
+% been read out, and ends the file that wrote it instead.
+%
+% At \tracingcommands=2 the \endinput draws a line of its own where the name
+% is being scanned, because that is where it is expanded.
+%
+% HSTeX dropped an \endinput that ended a file name, on the ground that
+% what is backed up after a name is not where one can take hold. The first
+% half of that is right and the second is not: it takes hold of the file
+% that has not been opened yet. trip line 424 writes
+% `\expandafter\stopinput\input tripos\endinput\input', and read three
+% lines of tripos where the reference reads one.
+%
+% This probe writes a file of its own; run it where that is welcome.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingcommands=2
+\immediate\openout9=zzendin
+\immediate\write9{\noexpand\message{[line one]}}
+\immediate\write9{\noexpand\message{[line two]}}
+\immediate\write9{\noexpand\message{[line three]}}
+\immediate\closeout9
+\message{[A an endinput that ended the file name]}
+\input zzendin\endinput\relax
+\message{[B and one that did not]}
+\input zzendin \relax
+\message{[done]}
+\end

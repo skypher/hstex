@@ -534,6 +534,26 @@ int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
            prints both. So only the lines to come are taken away; the one
            in hand is left to be read out. */
         struct hstex_mouth *mouth = &frame->value.file->mouth;
+        if (mouth->line_number == 0U) {
+            /* NOTHING HAS BEEN READ YET, which is how a file opened by an
+               \input whose name an \endinput ended arrives here: the line
+               it is left with is its FIRST, so the mouth is cut off at the
+               end of that one rather than at the start of it. */
+            size_t at = mouth->next_line_offset;
+            while (at < mouth->length && mouth->data[at] != (uint8_t)'\n' &&
+                   mouth->data[at] != (uint8_t)'\r') {
+                ++at;
+            }
+            if (at < mouth->length) {
+                uint8_t terminator = mouth->data[at++];
+                if (terminator == (uint8_t)'\r' && at < mouth->length &&
+                    mouth->data[at] == (uint8_t)'\n') {
+                    ++at;
+                }
+            }
+            mouth->length = at;
+            return 0;
+        }
         mouth->next_line_offset = mouth->length;
         return 0;
     }

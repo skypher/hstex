@@ -3849,23 +3849,9 @@ static int scan_input_filename_inner(struct hstex_engine *engine,
                 return -1;
             }
         } else {
-            /* The token that ends the name is read again -- with one
-               exception. Measured: `\\input fj\\endinput' does not end the
-               file that wrote it, where `\\input fj \\endinput' does. What
-               the reference backs up after a file name is not where an
-               \\endinput can take hold, and an \\endinput has no other
-               effect, so it is simply dropped here. */
-            bool ends_input = false;
-            if (hstex_token_is_control_sequence(token)) {
-                const struct hstex_meaning *meaning = hstex_engine_meaning(
-                    engine, hstex_token_control_sequence_id(token));
-                ends_input =
-                    meaning != NULL &&
-                    meaning->command == HSTEX_COMMAND_END_INPUT;
-            }
-            if (!braced && ends_input) {
-                break;
-            }
+            /* The token that ends the name is read again. An \\endinput is
+               never one of them: it is expanded where it stands, and takes
+               hold of the file the name is about to open. */
             if (!braced &&
                 push_one(engine, token, location, error, error_capacity) == 0) {
                 break;
@@ -4381,6 +4367,13 @@ static int execute_input(struct hstex_engine *engine, char *error,
                                         error_capacity);
     if (status == 0) {
         note_file_open(engine, path);
+        /* An \endinput read while this name was being scanned takes hold of
+           THIS file: its first line is read and no more. */
+        if (engine->end_input_pending) {
+            engine->end_input_pending = false;
+            status = hstex_source_end_current_file(&engine->sources, error,
+                                                   error_capacity);
+        }
     }
     free(path);
     free(filename);
@@ -10333,6 +10326,23 @@ static enum hstex_engine_result next_expanded_inner(
         if (meaning->command == HSTEX_COMMAND_PDF_LAST_MATCH) {
             if (expand_pdf_last_match(engine, *location, error,
                                       error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_END_INPUT) {
+            /* \endinput is EXPANDABLE, so one met while a file name is being
+               scanned takes hold there rather than waiting to be obeyed --
+               and what it takes hold of is whatever file is being read when
+               the next LINE is wanted. For `\input f\endinput' that is f,
+               which comes out one line long; for `\input f \endinput',
+               where the space ends the name, it is the file that wrote it. */
+            if (engine->scanning_file_name) {
+                engine->end_input_pending = true;
+                continue;
+            }
+            if (hstex_source_end_current_file(&engine->sources, error,
+                                              error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -17464,6 +17474,7 @@ static bool command_is_expandable(enum hstex_command command)
     /* \input is expanded rather than obeyed, which is why it is traced
        before a font whose name it ends is even looked for. */
     case HSTEX_COMMAND_INPUT:
+    case HSTEX_COMMAND_END_INPUT:
     case HSTEX_COMMAND_DETOKENIZE:
     case HSTEX_COMMAND_ELSE:
     case HSTEX_COMMAND_EXPAND_AFTER:

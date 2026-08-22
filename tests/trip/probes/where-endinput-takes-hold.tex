@@ -9,13 +9,14 @@
 %   * It takes hold the same way from inside a macro or a group.
 %
 %   * But `\input fj\endinput' does NOT end the file that wrote it, where
-%     `\input fj \endinput' -- one space more -- does. The difference is
-%     that without the space the \endinput is the token that ended the
-%     file name, and what the reference backs up after a file name is not
-%     where an \endinput can take hold. Since an \endinput has no other
-%     effect, this engine drops that one rather than reading it again.
-%     Any other terminator is still read again: `\input fj\message{[D]}'
-%     prints D.
+%     `\input fj \endinput' -- one space more -- does. \endinput is
+%     EXPANDABLE, so without the space it takes hold while the file name is
+%     still being scanned, and what it takes hold of is the file that name
+%     is about to open: fj comes out ONE LINE LONG. With the space the name
+%     has already ended, so the \endinput is read after fj has been read
+%     out, and ends the file that wrote it. See the probe
+%     what-an-endinput-in-a-file-name-ends. Any other terminator is read
+%     again: `\input fj\message{[D]}' prints D.
 %
 %   * \input with no name -- `\input' at the end of a line, with only a
 %     comment after it -- does nothing at all, in silence, and the file
