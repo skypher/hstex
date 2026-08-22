@@ -239,6 +239,29 @@ The last four bytes are in the list variant, whose `box_kind` is an enum and
 whose two flags are whole bytes; 44 would be worth about another 1.4%, which
 is under what an A/B here can see on its own.
 
+WHERE THE REST OF THE PLAIN-DOCUMENT GAP IS NOT. Setting `\hsize` wide enough
+that every paragraph is one line, with `\tolerance` high enough that nothing
+is hyphenated, takes line breaking and hyphenation out of the run almost
+entirely -- and the engine is still 0.41 times the reference over it, against
+0.40 with both of them in. So neither is where the gap lives, which is worth
+knowing because hyphenation is the largest named entry in the profile of the
+ordinary run at 6.5%, and looks like the thing to attack.
+
+What is left, over that document with breaking and hyphenating taken out, is
+flat: libc's memory routines 16.4%, `append_hbox_item` 7.2%, `next_output`
+5.3%, `dvi_hlist` 5.0%, `append_horizontal_character` 4.9%, `lig_advance`
+4.1%, `hstex_mouth_next` 4.0%, `raw_next` 3.7%, `font_lig_kern_from` 3.6%,
+and a tail. The lig/kern walk is the program the TFM format dictates rather
+than a search that could be replaced, and the node record has just been
+shrunk, which took the memory routines from about a fifth of the run to a
+sixth and `store_node` from 4.5% to 3.0%. The gap is in the per-character
+path and it is spread across all of it -- the same shape the expansion
+machinery turned out to have, and the same answer: no one place holds it.
+
+One thing there is not: an over-large dimension. `\hsize=100000pt` draws
+`! Dimension too large.` from both engines, in the same words, and both carry
+on with 16383.99998pt.
+
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
 asking `kpsewhich` where a file is once for each name rather than once for
