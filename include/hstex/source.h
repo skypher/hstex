@@ -32,7 +32,13 @@ enum hstex_token_source_flag {
     HSTEX_TOKEN_SOURCE_OWNS = 1U << 1,
     /* The tokens stand in the stack's own store, which is given back to
        `store_base` when the frame is popped. */
-    HSTEX_TOKEN_SOURCE_FROM_STORE = 1U << 2
+    HSTEX_TOKEN_SOURCE_FROM_STORE = 1U << 2,
+    /* Below what the frame reads, in the same run of store, stand the
+       lengths of the arguments the expansion was built from -- one word
+       each, as many as the macro takes. They are there so that an error
+       can draw the macro's own definition rather than the text that was
+       substituted into it; see hstex_source_hold_arguments_below. */
+    HSTEX_TOKEN_SOURCE_ARGUMENT_LENGTHS = 1U << 3
 };
 
 /* A frame is pushed and popped for every macro call a document makes -- some
@@ -167,6 +173,15 @@ int hstex_source_push_reserved(struct hstex_source_stack *stack, size_t count,
 hstex_token *hstex_source_push_room(struct hstex_source_stack *stack,
                                     size_t count,
                                     struct hstex_source_location location);
+
+/* Take `held` words off the front of what the frame on top reads, leaving
+   them in the store below it: the frame gives them back when it is popped,
+   and until then they are the caller's to read at `tokens - held`. The frame
+   also takes the definition, which it holds until it is done -- so that what
+   an error draws of a macro can be its own definition rather than the text
+   that was built from it. See src/engine.c, instantiate_macro. */
+void hstex_source_hold_arguments_below(struct hstex_source_stack *stack,
+                                       size_t held, uint32_t definition);
 
 /* A definition's own tokens, read where they stand rather than copied: the
    frame holds the definition until it has read them. */

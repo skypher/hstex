@@ -18,56 +18,36 @@
 % the second `#' of that tab, and the error is raised while the body is
 % being read.
 %
-% The reference draws two frames:
+% The reference draws two frames, and so does this engine now:
 %
 %   ! Only one # is allowed per tab.
 %   <argument> ##
 %
 %   \d #1\d ->#1#1
 %
-%   l.4 \halign{\tabskip1pt\d#\d
+% It used to draw one, `\d \d ->####' -- both halves the substituted text
+% rather than the definition, since `####' is what `#1#1' comes to once the
+% argument `#' has been put in twice and each drawn doubled.
 %
-% and hstex draws one, with neither the argument nor the definition in it:
+% WHY IT WAS HARD. The two engines expand a macro differently. The reference
+% pushes the body AS IT STANDS and walks it; when it reaches `#1' it pushes
+% the argument as a frame of its own, which is what `<argument>' names. This
+% engine builds the substituted text first and pushes that, so by the time
+% anything is read there is no body to show and no argument frame to show
+% above it.
 %
-%   ! Only one # is allowed per tab.
-%   \d \d ->####
+% WHAT WAS DONE, and what it costs: nothing is copied that was not copied
+% before. The expansion is built in the input stack's store as it always
+% was, with ONE WORD PER PARAMETER in front of it saying how long that
+% argument came out, and the frame holds the definition. That is enough for
+% both frames: walking the body against those lengths says how much of the
+% BODY the reading has covered and which argument it stands in, and that
+% argument's own tokens are inside the substituted text already, so they
+% need not be kept anywhere else. The words are given back with the frame.
 %
-%   l.4 \halign{\tabskip1pt\d#\d
-%
-% Read hstex's line against the reference's and both halves are the
-% substituted text rather than the definition: the matched text has lost its
-% `#1', and the body is `####' -- which is what `#1#1' comes to once the
-% argument `#' has been put in twice and each `#' drawn doubled, as a macro
-% parameter character is drawn.
-%
-% WHY. The two engines expand a macro differently. The reference pushes the
-% body AS IT STANDS and walks it; when it reaches `#1' it pushes the
-% argument as a frame of its own, which is what `<argument>' names, and pops
-% it at the end. hstex builds the substituted text first and pushes that, so
-% by the time anything is read there is no body to show and no argument
-% frame to show above it -- the frame holds a text that never existed in any
-% definition. src/engine.c, macro_call: a body that asks for no argument is
-% already pushed as the definition itself, and such a call draws the context
-% the reference draws; it is the bodies that substitute something which
-% cannot.
-%
-% This is the whole of the difference. Everything else the error draws --
-% the wording, the help, the line and its split -- already agrees.
-%
-% WHAT IT WOULD TAKE. Either of two, and the choice is a performance
-% question rather than a compatibility one:
-%
-%   - read the body where it stands and push an argument frame at each `#n',
-%     as the reference does. Nothing is copied, so a long argument put in
-%     twice costs less than it does now, and every token read costs a test
-%     for `#'.
-%
-%   - go on substituting, but keep the arguments alive with the frame
-%     instead of giving them back at the end of the call, and rebuild the
-%     two frames only when a context is drawn -- which is rare. The body and
-%     the argument lengths are enough to say which body token the reading
-%     stands at and how far into which argument. Reading stays as it is; a
-%     call holds its arguments until its frame is done.
+% The other way -- reading the body where it stands and pushing a frame per
+% `#n', as the reference does -- was costed and not taken; the measurements
+% are below.
 %
 % WHAT EACH WOULD COST, MEASURED. The counters `body parameter occurrences
 % per call' and `body length per call' were added to settle this. They have
@@ -121,16 +101,18 @@
 % of a macro. [C] takes two arguments undelimited and puts the second in
 % twice, so that the reading stands inside the second of them when the fault
 % is raised. The frame is named plainly `<argument>', not by number, and
-% holds that argument's tokens:
+% holds that argument's tokens; both engines now draw
 %
-%   ref:    <argument> ##
+%   <argument> ##
 %
-%           \e #1#2->#1#2#2
+%   \e #1#2->#1#2#2
 %
-%   hstex:  \e ->q####
+% where this engine used to draw `\e ->q####' -- `#1#2#2' with `q' put in
+% for the first and `#', drawn doubled, put in twice for the second.
 %
-% -- the same two halves substituted again, and `q####' is `#1#2#2' with `q'
-% put in for the first and `#', drawn doubled, put in twice for the second.
+% [C] is also what says the argument found must be the one the reading is
+% STANDING IN rather than the last one substituted: `#1' is `q' and `#2' is
+% `#', and it is `#2' the frame must name.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
 \tracingonline=1 \errorcontextlines=100
 \message{[A the trip case: an error while a substituted body is read]}

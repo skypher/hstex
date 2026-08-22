@@ -463,6 +463,28 @@ hstex_token *hstex_source_push_room(struct hstex_source_stack *stack,
     return room;
 }
 
+void hstex_source_hold_arguments_below(struct hstex_source_stack *stack,
+                                       size_t held, uint32_t definition)
+{
+    if (stack == NULL || stack->count == 0U) {
+        return;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count - 1U];
+    if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
+        return;
+    }
+    struct hstex_token_source *source = &frame->value.token_list;
+    if (held > (size_t)source->count) {
+        return;
+    }
+    /* `store_base` is left where it was, so what is held is given back with
+       the frame; only what the frame READS moves past it. */
+    source->tokens += held;
+    source->count -= (uint32_t)held;
+    source->definition = definition;
+    source->flags |= (uint8_t)HSTEX_TOKEN_SOURCE_ARGUMENT_LENGTHS;
+}
+
 int hstex_source_push_definition(struct hstex_source_stack *stack,
                                  const hstex_token *tokens, size_t count,
                                  uint32_t definition,

@@ -9763,9 +9763,24 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
     /* The expansion is built where it will be read from -- the room the
        input stack keeps for what it is reading -- and only finds room of its
        own where that store has none to spare. */
+    /* Room for the expansion, and in front of it one word for each argument
+       saying how long that argument came out. Nothing reads those words as
+       tokens: they are there so that an error raised while the body is being
+       read can draw the macro's own definition -- `\d #1\d ->#1#1' -- rather
+       than the text that was substituted into it, and can find each argument
+       inside that text to draw as well. One word per parameter per call, no
+       copying, and given back with the frame. See
+       tests/trip/probes/what-an-error-shows-of-a-macro-being-read.tex. */
+    size_t held = (size_t)macro->parameter_count;
     hstex_token *out =
-        hstex_source_push_room(&engine->sources, total, call_location);
+        hstex_source_push_room(&engine->sources, held + total, call_location);
     bool reserved = out != NULL;
+    if (reserved) {
+        for (size_t parameter = 0U; parameter < held; ++parameter) {
+            out[parameter] = (hstex_token)bounds[parameter].count;
+        }
+        out += held;
+    }
     if (!reserved) {
         if (vector_reserve(&expansion, total, error, error_capacity) != 0) {
             vector_destroy(&expansion);
@@ -9797,6 +9812,13 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
             vector_destroy(&expansion);
             goto cleanup;
         }
+    }
+    if (reserved) {
+        /* The frame holds the definition so that what an error draws of it
+           is the definition as it was when the call was made, whatever the
+           body does to it while it is being read. */
+        retain_definition(engine, identifier);
+        hstex_source_hold_arguments_below(&engine->sources, held, identifier);
     }
     hstex_source_name_top(&engine->sources,
                           (uint8_t)HSTEX_TOKEN_SOURCE_MACRO,
@@ -16295,9 +16317,126 @@ static const char *token_frame_tag(struct hstex_engine *engine,
 }
 
 /* A frame that holds tokens, written out as the reference writes one. */
+/* A run of tokens drawn as a definition draws them -- `#1' for a parameter
+   rather than the character it was written with -- which token_display_text
+   does not do, since it is drawing what was read rather than what was
+   defined. */
+struct shown_tokens {
+    uint8_t *bytes;
+    size_t count;
+    size_t capacity;
+};
+
+static void show_tokens_append(struct hstex_engine *engine,
+                               struct shown_tokens *into, hstex_token token)
+{
+    char scratch[256];
+    (void)append_token_description(engine, token, &into->bytes, &into->count,
+                                   &into->capacity, scratch, sizeof(scratch));
+}
+
+/* WHAT AN ERROR DRAWS OF A MACRO IT IS READING. The reference reads a body
+   as the definition wrote it and pushes each argument as a frame of its own,
+   so it draws the definition -- `\d #1\d ->#1#1' -- with an `<argument>'
+   above it. This engine substitutes the arguments into the body before it
+   pushes anything, so the frame holds a text no definition ever had. What it
+   also holds is the definition itself and the length each argument came to,
+   which is enough to draw both frames: walking the body against those
+   lengths says how much of the BODY the reading has covered, and which
+   argument it stands in -- and that argument's tokens are inside the
+   substituted text already. See
+   tests/trip/probes/what-an-error-shows-of-a-macro-being-read.tex. */
+static bool show_macro_frame_as_defined(struct hstex_engine *engine,
+                                        const struct hstex_token_source *list)
+{
+    if ((list->flags & (uint8_t)HSTEX_TOKEN_SOURCE_ARGUMENT_LENGTHS) == 0U ||
+        list->definition == 0U ||
+        (size_t)list->definition > engine->macro_count) {
+        return false;
+    }
+    const struct hstex_macro *macro = &engine->macros[list->definition - 1U];
+    size_t parameters = (size_t)macro->parameter_count;
+    const hstex_token *lengths = list->tokens - parameters;
+    /* Walk the body, counting off what each of its tokens came to, until the
+       reading is found. */
+    size_t at = 0U;
+    size_t read_body = 0U;
+    bool inside = false;
+    size_t argument_at = 0U;
+    size_t argument_count = 0U;
+    size_t argument_read = 0U;
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        hstex_token token = macro->replacement[index];
+        bool parameter = hstex_token_is_parameter(token);
+        size_t number = parameter
+                            ? (size_t)hstex_token_parameter_number(token)
+                            : 0U;
+        if (parameter && (number == 0U || number > parameters)) {
+            return false;
+        }
+        size_t span = parameter ? (size_t)lengths[number - 1U] : 1U;
+        if ((size_t)list->cursor >= at + span) {
+            at += span;
+            read_body = index + 1U;
+            /* The last thing read may be an argument that was read to its
+               end, and the reference still draws it. */
+            inside = parameter;
+            argument_at = at - span;
+            argument_count = span;
+            argument_read = span;
+            continue;
+        }
+        read_body = index;
+        inside = parameter;
+        argument_at = at;
+        argument_count = span;
+        argument_read = (size_t)list->cursor - at;
+        break;
+    }
+    struct shown_tokens before = {0};
+    struct shown_tokens after = {0};
+    if (inside && argument_at + argument_count <= (size_t)list->count) {
+        for (size_t index = 0U; index < argument_count; ++index) {
+            hstex_token token = list->tokens[argument_at + index];
+            show_tokens_append(engine, index < argument_read ? &before : &after,
+                               token);
+        }
+        show_context_lines(engine, "<argument> ", (const char *)before.bytes,
+                           before.count, (const char *)after.bytes,
+                           after.count);
+        free(before.bytes);
+        free(after.bytes);
+        struct shown_tokens empty = {0};
+        before = empty;
+        after = empty;
+    }
+    for (size_t index = 0U; index < macro->parameter_count_tokens; ++index) {
+        show_tokens_append(engine, &before, macro->parameter_text[index]);
+    }
+    (void)append_byte(&before.bytes, &before.count, &before.capacity,
+                      (uint8_t)'-', NULL, 0U);
+    (void)append_byte(&before.bytes, &before.count, &before.capacity,
+                      (uint8_t)'>', NULL, 0U);
+    for (size_t index = 0U; index < macro->replacement_count; ++index) {
+        show_tokens_append(engine, index < read_body ? &before : &after,
+                           macro->replacement[index]);
+    }
+    char scratch[128];
+    show_context_lines(engine,
+                       token_frame_tag(engine, list, scratch, sizeof(scratch)),
+                       (const char *)before.bytes, before.count,
+                       (const char *)after.bytes, after.count);
+    free(before.bytes);
+    free(after.bytes);
+    return true;
+}
+
 static void show_token_frame(struct hstex_engine *engine,
                              const struct hstex_token_source *list)
 {
+    if (show_macro_frame_as_defined(engine, list)) {
+        return;
+    }
     char before[512];
     char after[512];
     size_t before_length = 0U;
