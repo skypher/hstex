@@ -1,0 +1,37 @@
+% WHAT MIGRATES OUT OF AN ALIGNMENT ENTRY.
+%
+% An \insert, a \mark and a \vadjust written in a \halign's entry do not
+% stay there: the entry is packed as a horizontal box, so they move out of
+% it, and they stand BEHIND THE ROW in the alignment's own vertical list --
+% not behind the entry, and not behind the whole alignment.
+%
+%   \halign{#&#\cr A\mark{a}&B\mark{b}\cr C&D\mark{c}\cr}
+%
+%     .\hbox   (row one)
+%     .\mark{a}
+%     .\mark{b}
+%     .\hbox   (row two)
+%     .\mark{c}
+%
+% What a \vadjust moves is the material it holds; the node itself does not
+% survive, exactly as when a box goes into a vertical list.
+%
+% A \valign's entries are packed as VERTICAL lists, which keep what they
+% hold, so nothing moves out of one.
+%
+% This engine left all three inside the entry. trip line 340 writes an
+% alignment whose entries hold marks.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxdepth=99 \showboxbreadth=99
+\font\r=cmr10 \r
+\message{[A marks in the cells of a halign]}
+\setbox0=\vbox{\halign{#&#\cr A\mark{a}&B\mark{b}\cr C&D\mark{c}\cr}}
+\showbox0
+\message{[B an insertion and a vadjust in a cell]}
+\setbox0=\vbox{\halign{#\cr A\insert100{\hbox{}}\vadjust{\kern3pt}\cr}}
+\showbox0
+\message{[C the same in a valign]}
+\setbox0=\hbox{\valign{#\cr\hbox{A}\mark{a}\cr}}
+\showbox0
+\message{[done]}
+\end

@@ -1113,6 +1113,12 @@ struct hstex_align_row {
     size_t cell_count;
     uint32_t *items;
     size_t item_count;
+    /* What an \insert, a \mark or a \vadjust in one of the row's entries
+       left behind: it moves out of the entry as the entry is packed and
+       stands behind the row. See docs/DECISIONS.md,
+       what-migrates-out-of-an-alignment-entry. */
+    uint32_t *migrated;
+    size_t migrated_count;
     /* What \prevdepth stood at when a \noalign finished, which is what the
        rows after it are spaced from; see docs/DECISIONS.md,
        prevdepth-inside-noalign. */

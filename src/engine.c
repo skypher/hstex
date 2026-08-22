@@ -37151,6 +37151,7 @@ static void destroy_align_rows(struct hstex_align_row *rows, size_t count)
     for (size_t index = 0U; index < count; ++index) {
         free(rows[index].cells);
         free(rows[index].items);
+        free(rows[index].migrated);
     }
     free(rows);
 }
@@ -38303,6 +38304,13 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                                     error_capacity) != 0) {
             return -1;
         }
+        /* And what moved out of the row's entries stands behind the row. */
+        for (size_t item = 0U; item < rows[index].migrated_count; ++item) {
+            if (append_vbox_item(engine, rows[index].migrated[item], error,
+                                 error_capacity) != 0) {
+                return -1;
+            }
+        }
         /* A row of a displayed alignment is a display line, and says so; see
            docs/DECISIONS.md, display-alignments. */
         struct hstex_vbox_builder *list = engine->active_vbox_builder;
@@ -38724,6 +38732,38 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
             free(vertical_cell.node_identifiers);
             if (status != 0) {
                 break;
+            }
+            /* WHAT AN ENTRY LEAVES BEHIND MOVES OUT OF IT AS IT IS
+               PACKED and stands behind the row. Only a \halign's entries:
+               a \valign's are packed as vertical lists, which keep what
+               they hold. See docs/DECISIONS.md,
+               what-migrates-out-of-an-alignment-entry. */
+            if (!vertical) {
+                uint32_t *moved = NULL;
+                size_t moved_count = 0U;
+                if (migrate_out_of_hbox(engine, &box, &moved, &moved_count,
+                                        error, error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                if (moved_count != 0U) {
+                    void *grown = realloc(
+                        row->migrated,
+                        (row->migrated_count + moved_count) *
+                            sizeof(*row->migrated));
+                    if (grown == NULL) {
+                        free(moved);
+                        status = set_error(error, error_capacity,
+                                           "alignment migration allocation "
+                                           "failed");
+                        break;
+                    }
+                    row->migrated = grown;
+                    for (size_t move = 0U; move < moved_count; ++move) {
+                        row->migrated[row->migrated_count++] = moved[move];
+                    }
+                }
+                free(moved);
             }
             uint32_t identifier = 0U;
             if (store_box_node(engine, &box, 0, &identifier, error,
