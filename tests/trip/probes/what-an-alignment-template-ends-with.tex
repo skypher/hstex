@@ -1,0 +1,39 @@
+% WHAT AN ALIGNMENT TEMPLATE ENDS WITH.
+%
+% The second half of a column's template ends with a TOKEN of its own --
+% a name no document can write, which the reference calls \endtemplate --
+% and that token is part of the same list as the rest of the template. Two
+% things follow:
+%
+%   the context names it, so a fault drawn while the entry is finishing
+%   reads `<template> \endtemplate' where the column's second half is
+%   empty, and `<template> &\ifnum 0=`{\fi \endtemplate' where it is not;
+%
+%   a macro called at the very end of an entry can take it as its
+%   ARGUMENT. `\def\trap#1{}\halign{#\cr\trap\cr}' hands \trap the
+%   \endtemplate and draws nothing at all, where an entry that simply ran
+%   out would have drawn a runaway.
+%
+% What the token stands for is the end of the entry's material. It is not
+% traced for itself: what the reference traces is the \endv it turns into,
+% which is written `end of alignment template'.
+%
+% A lookahead sees it as any other token -- `\global\futurelet\x\relax&'
+% leaves \x meaning `\outer endtemplate:'.
+%
+% HSTeX ended a template where its tokens ran out, so there was no token to
+% name, to hand to a macro, or to look at. trip line 422 writes
+% `\e\trap\cr', which is \expandafter\trap\cr at the end of an entry.
+\catcode`\{=1 \catcode`\}=2 \catcode`&=4 \catcode`\#=6
+\tracingonline=1 \tracingcommands=2 \tracingmacros=2
+\hsize=100pt
+\message{[A a macro that takes the ending token as its argument]}
+\def\trap#1{}
+\setbox0=\vbox{\halign{#\cr\trap\cr}}
+\message{[B a lookahead at the end of an entry]}
+\setbox0=\vbox{\halign{#\cr A\global\futurelet\x\relax\cr}}
+\show\x
+\message{[C what the context names while an entry finishes]}
+\setbox0=\vbox{\halign{#&\undefinedhere#\cr A&B\cr}}
+\message{[done]}
+\end

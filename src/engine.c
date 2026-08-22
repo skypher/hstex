@@ -37052,18 +37052,38 @@ static int end_alignment_entry(struct hstex_engine *engine,
         0) {
         return -1;
     }
-    if (!entry->omit && entry->column < entry->column_count &&
-        entry->columns[entry->column].after_count != 0U) {
-        if (hstex_source_push_tokens(
-                &engine->sources, entry->columns[entry->column].after,
-                entry->columns[entry->column].after_count, origin, error,
-                error_capacity) != 0) {
-            return -1;
-        }
-        hstex_source_name_top(&engine->sources,
-                              (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
-                              engine->alignment_generation);
+    /* THE TEMPLATE ENDS WITH A TOKEN OF ITS OWN, part of the same list as
+       the rest of it: the reference's context writes it -- `<template>
+       \endtemplate' for a column with nothing else in its second half --
+       and a macro called at the end of an entry can take it as an argument.
+       trip line 422 hands one to \trap that way. */
+    hstex_token ending_token = 0U;
+    if (end_template_token(engine, &ending_token, error, error_capacity) != 0) {
+        return -1;
     }
+    const hstex_token *after = NULL;
+    size_t after_count = 0U;
+    if (!entry->omit && entry->column < entry->column_count) {
+        after = entry->columns[entry->column].after;
+        after_count = entry->columns[entry->column].after_count;
+    }
+    hstex_token *whole = token_block_alloc(after_count + 1U);
+    if (whole == NULL) {
+        return set_error(error, error_capacity,
+                         "alignment template allocation failed");
+    }
+    if (after_count != 0U) {
+        memcpy(whole, after, after_count * sizeof(*whole));
+    }
+    whole[after_count] = ending_token;
+    if (hstex_source_push_owned_tokens(&engine->sources, whole,
+                                       after_count + 1U, origin, error,
+                                       error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+                          engine->alignment_generation);
     return 0;
 }
 
@@ -41901,6 +41921,17 @@ handle_token:
 
         const struct hstex_meaning *meaning = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(*token));
+        /* THE TOKEN AN ALIGNMENT TEMPLATE ENDS WITH. The reference reads it
+           the way it reads anything else -- so a macro called at the end of
+           an entry can take it as an argument, and the context names it --
+           and what it stands for is the end of the entry's material. It is
+           not traced for itself: what the reference traces is the \endv it
+           turns into, which the entry's own ending writes. */
+        if (meaning->command == HSTEX_COMMAND_END_TEMPLATE &&
+            engine->alignment_entry != NULL &&
+            engine->alignment_entry->after_pushed) {
+            return HSTEX_ENGINE_EOF;
+        }
         /* Anything that is not a character ends the pair the ligature and
            kerning program was waiting on -- but a control sequence that
            stands for a character is a character, and goes on with the word
