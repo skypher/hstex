@@ -18,7 +18,19 @@
 % The marks CLASSES eTeX adds do NOT do this: `\show\botmarks' is
 % `> \botmarks=\botmarks.' and no more.
 %
-% HSTeX gave the name alone. trip line 320 writes \show\botmark.
+% A TRACE, though, gives the name alone: \tracingcommands writes
+% `{\botmark}' and \tracingrestores writes `{restoring \botmark=\botmark}'.
+% Only \show and \meaning ask what a command HOLDS; a trace asks what it
+% IS.
+%
+% HSTeX gave the name alone everywhere, and then, once \show was put right,
+% gave the text everywhere. trip line 320 writes \show\botmark.
+%
+% Still open here: the text a mark expands into is read back from a frame
+% the reference calls `<mark>' and shows as a token list, with a parameter
+% character doubled; HSTeX calls it `<inserted text>' and shows it singly.
+% And the reference traces the `#' it reads back as a command before
+% refusing it, where HSTeX refuses it untraced.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
 \tracingonline=1
 \output={\global\setbox9=\box255}
@@ -37,5 +49,14 @@
 \message{<\meaning\topmark><\meaning\firstmark><\meaning\botmark>}
 \message{[D a \let to one shows the mark it names]}
 \let\bm=\botmark \show\bm
+\message{[E a trace names a mark without its text]}
+\tracingcommands=2
+\botmark
+\let\bm=\botmark \bm
+\tracingcommands=0
+\message{[F so does a restore]}
+\tracingrestores=1
+\begingroup \let\botmark=\relax \endgroup
+\tracingrestores=0
 \message{[done]}
 \end

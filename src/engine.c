@@ -222,10 +222,12 @@ static int insert_every_box(struct hstex_engine *engine, size_t which,
    prefix before giving up and saying `\ETC.'; nought means all of it. The
    count is taken token by token, so the one that reaches the limit is shown
    whole. */
+/* `mark_text' asks for the text a mark holds as well as its name, which is
+   what \show and \meaning give and what a trace does not. */
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
                          size_t *capacity_out, size_t *after_prefix,
-                         size_t limit, bool *truncated,
+                         size_t limit, bool *truncated, bool mark_text,
                          char *error, size_t error_capacity);
 static int serialize_control_sequence(struct hstex_engine *engine,
                                       hstex_token token, uint8_t **bytes,
@@ -9207,7 +9209,7 @@ static void trace_macro_expansion(struct hstex_engine *engine,
     size_t after_prefix = 0U;
     char scratch[256];
     if (meaning_bytes(engine, token, &bytes, &count, &capacity, &after_prefix,
-                      0U, NULL, scratch, sizeof(scratch)) != 0 ||
+                      0U, NULL, true, scratch, sizeof(scratch)) != 0 ||
         after_prefix > count) {
         free(bytes);
         return;
@@ -17685,8 +17687,8 @@ static void trace_restore(struct hstex_engine *engine,
         engine->meanings[save->index - 1U] = save->previous.meaning;
         bool cut = false;
         if (meaning_bytes(engine, hstex_token_control_sequence(save->index),
-                          &bytes, &count, &capacity, NULL, 32U, &cut, scratch,
-                          sizeof(scratch)) == 0) {
+                          &bytes, &count, &capacity, NULL, 32U, &cut, false,
+                          scratch, sizeof(scratch)) == 0) {
             print_bytes(engine, (const char *)bytes, count);
             if (cut) {
                 print_escaped_name(engine, "ETC.");
@@ -17909,7 +17911,7 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
         size_t capacity = 0U;
         char scratch[256];
         if (meaning_bytes(engine, token, &bytes, &count, &capacity, NULL, 0U,
-                          NULL, scratch, sizeof(scratch)) != 0) {
+                          NULL, false, scratch, sizeof(scratch)) != 0) {
             describe_token(engine, token, named, sizeof(named));
         } else {
             if (count > sizeof(named) - 1U) {
@@ -18061,7 +18063,8 @@ static int execute_show(struct hstex_engine *engine, char *error,
     size_t capacity = 0U;
     size_t after_prefix = SIZE_MAX;
     if (meaning_bytes(engine, subject, &bytes, &count, &capacity,
-                      &after_prefix, 0U, NULL, error, error_capacity) != 0) {
+                      &after_prefix, 0U, NULL, true, error,
+                      error_capacity) != 0) {
         free(bytes);
         return -1;
     }
@@ -25134,7 +25137,7 @@ static int append_character_meaning(struct hstex_engine *engine,
 static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                          uint8_t **bytes_out, size_t *count_out,
                          size_t *capacity_out, size_t *after_prefix,
-                         size_t limit, bool *truncated,
+                         size_t limit, bool *truncated, bool mark_text,
                          char *error, size_t error_capacity)
 {
     uint8_t *bytes = NULL;
@@ -25330,7 +25333,7 @@ static int meaning_bytes(struct hstex_engine *engine, hstex_token subject,
                 free(bytes);
                 return -1;
             }
-        } else if (meaning->command == HSTEX_COMMAND_MARK_TEXT &&
+        } else if (meaning->command == HSTEX_COMMAND_MARK_TEXT && mark_text &&
                    meaning->value.integer < 8) {
             /* One of the five marks TeX82 has shows what it holds as well as
                what it is: the name, a colon, and then the text, which \show
@@ -25433,7 +25436,7 @@ static int expand_meaning(struct hstex_engine *engine,
     size_t count = 0U;
     size_t capacity = 0U;
     if (meaning_bytes(engine, subject, &bytes, &count, &capacity, NULL, 0U,
-                      NULL, error, error_capacity) != 0) {
+                      NULL, true, error, error_capacity) != 0) {
         return -1;
     }
     (void)capacity;
