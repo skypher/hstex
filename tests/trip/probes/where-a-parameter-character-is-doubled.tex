@@ -1,0 +1,38 @@
+% WHERE A PARAMETER CHARACTER IS DOUBLED.
+%
+% A token list SHOWN anywhere writes a parameter character twice, so that
+% what is written could be read back to give the same list again. Measured
+% against pdftex in four places at once:
+%
+%   \everypar={A#B}, an error inside it   <everypar> A##
+%   \def\m{C#D}, an error inside it       \m ->C##
+%   \toks0={G#H} \showthe\toks0           > G##H.
+%   \show of a macro, and \meaning        already doubled here
+%
+% This engine wrote one # in the first three. It is the same rule the
+% fourth already followed: a list is written the way \show writes one
+% WHEREVER it is written.
+%
+% What is NOT doubled is a macro's PARAMETER text: `\def\p#1x#2{...}' shows
+% as `\p #1x#2->...'. Those are not parameter characters in a list but the
+% marks of where an argument goes, and each is written once with its number
+% after it.
+%
+% trip line 121 puts a mark holding om#ega back to be read, and every error
+% under it shows the text.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \hsize=100pt
+\message{[A a parameter character in a token parameter]}
+\everypar={A#B}
+\indent \par
+\message{[B one in a macro's body]}
+\def\m{C#D}
+\m \par
+\message{[C one in a token register shown]}
+\toks0={G#H}
+\showthe\toks0
+\message{[D but a parameter text is written as it stands]}
+\def\p#1x#2{A#1B##C#2}
+\show\p
+\message{[done]}
+\end

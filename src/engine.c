@@ -15747,11 +15747,19 @@ static int token_display_text(struct hstex_engine *engine, hstex_token token,
 {
     *length = 0U;
     if (hstex_token_is_character(token)) {
-        if (capacity == 0U) {
+        /* A LIST BEING SHOWN DOUBLES A PARAMETER CHARACTER, so that what is
+           written could be read back to give the same list again. */
+        size_t want =
+            hstex_token_category(token) == (uint8_t)HSTEX_CAT_PARAMETER ? 2U
+                                                                       : 1U;
+        if (capacity < want) {
             return -1;
         }
         buffer[0] = (char)hstex_token_character_code(token);
-        *length = 1U;
+        if (want == 2U) {
+            buffer[1] = buffer[0];
+        }
+        *length = want;
         return 0;
     }
     if (!hstex_token_is_control_sequence(token)) {
@@ -18121,6 +18129,12 @@ static int execute_show_the(struct hstex_engine *engine, char *error,
             const struct hstex_token_source *list = &frame->value.token_list;
             for (uint32_t cursor = list->cursor;
                  cursor < list->count && status == 0; ++cursor) {
+                if (hstex_token_is_character(list->tokens[cursor]) &&
+                    hstex_token_category(list->tokens[cursor]) ==
+                        (uint8_t)HSTEX_CAT_PARAMETER) {
+                    print_byte(engine, (char)hstex_token_character_code(
+                                           list->tokens[cursor]));
+                }
                 status = print_one_token(engine, list->tokens[cursor], true,
                                          error, error_capacity);
             }
