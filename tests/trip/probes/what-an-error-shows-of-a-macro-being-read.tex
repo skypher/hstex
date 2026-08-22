@@ -1,0 +1,107 @@
+% WHAT AN ERROR SHOWS OF A MACRO IT IS READING.
+%
+% A fault raised while a macro's body is being read draws the macro in the
+% context: its name, the text it matched, `->', and its body, with the
+% reading marked where it stands. A body that asks for an argument draws a
+% frame of its own above that one, `<argument>', holding what the argument
+% was.
+%
+% trip.tex line 329 defines a macro with a delimited parameter,
+%
+%   \def\d#1\d{#1#1}
+%
+% and line 333 puts `\d#\d' where an alignment preamble is being read. The
+% preamble scanner does not expand, so \d is not expanded there: it is
+% expanded by the LOOKAHEAD OF THE GLUE SCAN in front of it -- `\tabskip1ex
+% plus7200bp minus 4\wd4' has read a dimension and is looking to see whether
+% another unit follows. The expansion puts `##' in the preamble, which is
+% the second `#' of that tab, and the error is raised while the body is
+% being read.
+%
+% The reference draws two frames:
+%
+%   ! Only one # is allowed per tab.
+%   <argument> ##
+%
+%   \d #1\d ->#1#1
+%
+%   l.4 \halign{\tabskip1pt\d#\d
+%
+% and hstex draws one, with neither the argument nor the definition in it:
+%
+%   ! Only one # is allowed per tab.
+%   \d \d ->####
+%
+%   l.4 \halign{\tabskip1pt\d#\d
+%
+% Read hstex's line against the reference's and both halves are the
+% substituted text rather than the definition: the matched text has lost its
+% `#1', and the body is `####' -- which is what `#1#1' comes to once the
+% argument `#' has been put in twice and each `#' drawn doubled, as a macro
+% parameter character is drawn.
+%
+% WHY. The two engines expand a macro differently. The reference pushes the
+% body AS IT STANDS and walks it; when it reaches `#1' it pushes the
+% argument as a frame of its own, which is what `<argument>' names, and pops
+% it at the end. hstex builds the substituted text first and pushes that, so
+% by the time anything is read there is no body to show and no argument
+% frame to show above it -- the frame holds a text that never existed in any
+% definition. src/engine.c, macro_call: a body that asks for no argument is
+% already pushed as the definition itself, and such a call draws the context
+% the reference draws; it is the bodies that substitute something which
+% cannot.
+%
+% This is the whole of the difference. Everything else the error draws --
+% the wording, the help, the line and its split -- already agrees.
+%
+% WHAT IT WOULD TAKE. Either of two, and the choice is a performance
+% question rather than a compatibility one:
+%
+%   - read the body where it stands and push an argument frame at each `#n',
+%     as the reference does. Nothing is copied, so a long argument put in
+%     twice costs less than it does now, and every token read costs a test
+%     for `#'.
+%
+%   - go on substituting, but keep the arguments alive with the frame
+%     instead of giving them back at the end of the call, and rebuild the
+%     two frames only when a context is drawn -- which is rare. The body and
+%     the argument lengths are enough to say which body token the reading
+%     stands at and how far into which argument. Reading stays as it is; a
+%     call holds its arguments until its frame is done.
+%
+% The counters `body parameter occurrences per call' and `body length per
+% call' that src/engine.c reports on exit were added to measure this. Over
+% trip's second pass, 85 calls of 111 substitute nothing at all and are
+% already right; 9 put one occurrence in and 17 put two.
+%
+% WHAT IS DRAWN HERE. [A] is the trip case cut down to its own file: the
+% same definition, the same glue lookahead, the same error. [B] is the same
+% macro under \tracingmacros, which hstex already draws exactly as the
+% reference does -- so it is the context that is wrong and not the drawing
+% of a macro. [C] takes two arguments undelimited and puts the second in
+% twice, so that the reading stands inside the second of them when the fault
+% is raised. The frame is named plainly `<argument>', not by number, and
+% holds that argument's tokens:
+%
+%   ref:    <argument> ##
+%
+%           \e #1#2->#1#2#2
+%
+%   hstex:  \e ->q####
+%
+% -- the same two halves substituted again, and `q####' is `#1#2#2' with `q'
+% put in for the first and `#', drawn doubled, put in twice for the second.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1 \errorcontextlines=100
+\message{[A the trip case: an error while a substituted body is read]}
+\def\d#1\d{#1#1}
+\halign{\tabskip1pt\d#\d\cr}
+\message{[B the same macro as tracingmacros draws it, which already agrees]}
+\tracingmacros=2
+\setbox0=\hbox{\d A\d}
+\tracingmacros=0
+\message{[C which argument the context names]}
+\def\e#1#2{#1#2#2}
+\halign{\tabskip1pt\e q#\cr}
+\message{[done]}
+\end
