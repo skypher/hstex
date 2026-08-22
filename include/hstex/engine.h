@@ -1465,7 +1465,7 @@ struct hstex_node {
     /* A kern written as \kern is explicit: it may be broken at and it is not
        thrown away at the start of a line. A kern the engine put there itself
        -- a font kern, an italic correction, math spacing -- is not. */
-    bool explicit_kern : 1;
+    bool explicit_kern;
     int32_t width;
     int32_t height;
     int32_t depth;
@@ -1513,12 +1513,12 @@ struct hstex_node {
             enum hstex_box_kind box_kind : 8;
             /* This box is the line a display formula was set as, which
                \showbox says so of; see docs/DECISIONS.md, display-math. */
-            bool display : 1;
+            bool display;
             /* This box stands for a column an entry beside it spans, and is
                not an entry of the row: it keeps the size it was made with
                rather than the row's. See docs/DECISIONS.md,
                what-an-entry-that-spans-is-set-to. */
-            bool spanned_over : 1;
+            bool spanned_over;
             struct hstex_glue_set glue;
         } list;
         struct {

@@ -230,23 +230,28 @@ variant, and the record 48. The list variant then went the same way -- its
 `box_kind` an `enum hstex_box_kind : 8` and its two flags a bit each -- which
 takes the union to 24 and **the record to 44 bytes**, from 60.
 
-WHAT IT IS WORTH IS NOT SETTLED. Over a document of nothing but words,
-twenty-one interleaved rounds of each, `user+sys`: the least of the 60-byte
-runs is 2.37 seconds against the 44-byte's 2.27, which is 4.2%; the median is
-2.60 against 2.56, which is 1.5%. Those do not agree, and the spread within
-one binary -- 2.37 to 2.60, a tenth -- is larger than the difference being
-looked for. The machine was carrying a load average of 66 on 64 processors
-at the time, so the memory bandwidth this change is about was itself being
-contended for. `docs/BENCHMARK_CONTRACT.md` asks for the median, which says
-1.5%.
+It is worth **4.7%**, and finding that out took disentangling two effects
+that were cancelling.
 
-An earlier run of the same A/B over the first of the two steps read 5.1%,
-which this does not support; it is recorded here as a measurement that did
-not survive being repeated rather than as a result. What can be said is that
-the record is smaller, that the corpus and trip agree exactly as before, and
-that the direction is right -- the padding experiment, which moved the size
-far enough to be read through the noise, is the only measurement here that a
-loaded machine cannot argue with.
+A first A/B said 1.5%, well under what the padding experiment predicted for
+sixteen bytes. Padding is the instrument that reads through a loaded machine,
+so it was asked a question an A/B cannot answer: what does the SIZE cost,
+here, now? Growing the 44-byte record back to 60, 76 and 108 bytes moved the
+median from 2.57 processor seconds to 2.70, 2.73 and 2.95 -- so sixteen bytes
+are worth about 5% and the direction was never in doubt. Then the same
+padding was used to ask what the REWRITE cost, by comparing the old 60-byte
+engine against the new one padded back to 60: at equal size the new one was
+3.6% slower. Five per cent gained on size, three and a half given back on
+something else, and the 1.5% an A/B saw is what was left.
+
+What it was given back on: the two flags beside the packed enums had been
+made one-bit fields, and a one-bit field is written by reading its byte,
+masking and storing it again -- on every node a document makes. The enums
+needed `: 8` to make the record 44 bytes; the flags never needed to be bits
+at all, and are plain `bool` again at the same 44. At equal size the two
+engines then measure the same to within 0.00%, and 60 against 44 measures
+**4.71% by the median and 4.96% by the least of fifteen** -- the two agreeing,
+which is the thing to look for on a machine carrying a load average of 64.
 
 The measurement wanted a document ten times the size of the one the profile
 was taken over. At 0.31 seconds a run, `/usr/bin/time` resolves 10ms, which
