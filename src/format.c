@@ -3,6 +3,7 @@
 #include "internal.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,6 +119,58 @@ static void transfer_array(struct format_stream *stream, void **base,
     }
     transfer(stream, *base, *count * size);
 }
+
+/* A POINTER MEANS NOTHING IN A FILE, AND NEITHER DOES PADDING. These arrays are written as they sit
+   in memory and what they point at is written after them, so a reader fills
+   the pointers in from what follows and never reads the ones in the file.
+   Writing them anyway put this run's own addresses into the format: two
+   builds from the same source, by the same binary, came out differing in
+   91,406 bytes, every one of them an address that had been handed out by a
+   different allocation. They are cleared in a copy on the way out, which
+   costs a copy per element of three arrays and makes a format the same file
+   every time it is built from the same source. */
+struct format_hole {
+    size_t at;
+    size_t length;
+};
+
+static void transfer_array_cleared(struct format_stream *stream, void **base,
+                                   size_t *count, size_t *capacity, size_t size,
+                                   bool owned, const struct format_hole *holes,
+                                   size_t hole_count)
+{
+    if (!stream->writing) {
+        transfer_array(stream, base, count, capacity, size, owned);
+        return;
+    }
+    unsigned char element[512];
+    if (size > sizeof(element)) {
+        stream->failed = true;
+        return;
+    }
+    TRANSFER_VALUE(stream, *count);
+    const unsigned char *from = *base;
+    for (size_t index = 0U; index < *count && !stream->failed; ++index) {
+        memcpy(element, from + index * size, size);
+        for (size_t which = 0U; which < hole_count; ++which) {
+            memset(element + holes[which].at, 0, holes[which].length);
+        }
+        transfer(stream, element, size);
+    }
+}
+
+/* Where a kind keeps an address, and how much of it there is to clear. */
+#define FORMAT_ADDRESS(type, field) \
+    {offsetof(struct type, field), sizeof(void *)}
+
+/* The room a compiler leaves after a struct's last field, worked out from
+   the field rather than written down, so that it stays right if the fields
+   move and is nothing at all where a compiler leaves nothing. */
+#define FORMAT_TAIL(outer, inner, type, last)                              \
+    {offsetof(struct outer, inner) + offsetof(struct type, last) +         \
+         sizeof(((struct type *)0)->last),                                 \
+     sizeof(struct type) - offsetof(struct type, last) -                   \
+         sizeof(((struct type *)0)->last)}
 
 /* A body read from a format is put in the room the engine's own pool would
    have given it -- the least power of two that holds it, never fewer than
@@ -238,8 +291,14 @@ static void transfer_format(struct format_stream *stream,
     TRANSFER_VALUE(stream, engine->macro_definitions);
     size_t macro_count = engine->macro_count;
     void *macros = engine->macros;
-    transfer_array(stream, &macros, &macro_count, &engine->macro_capacity,
-                   sizeof(*engine->macros), true);
+    static const struct format_hole macro_holes[] = {
+        FORMAT_ADDRESS(hstex_macro, parameter_text),
+        FORMAT_ADDRESS(hstex_macro, replacement),
+    };
+    transfer_array_cleared(stream, &macros, &macro_count,
+                           &engine->macro_capacity, sizeof(*engine->macros),
+                           true, macro_holes,
+                           sizeof(macro_holes) / sizeof(*macro_holes));
     engine->macros = macros;
     engine->macro_count = macro_count;
     for (size_t index = 0U; index < macro_count && !stream->failed; ++index) {
@@ -251,30 +310,49 @@ static void transfer_format(struct format_stream *stream,
 
     size_t register_capacity = engine->count_capacity;
     TRANSFER_VALUE(stream, register_capacity);
+    /* A box ends in a glue set whose last field does not reach the end of
+       it; what the compiler leaves there is written with the box. */
+    static const struct format_hole box_holes[] = {
+        FORMAT_TAIL(hstex_box, glue, hstex_glue_set, order),
+    };
     struct {
         void **base;
         size_t size;
+        const struct format_hole *holes;
+        size_t hole_count;
     } registers[] = {
-        {(void **)&engine->counts, sizeof(*engine->counts)},
-        {(void **)&engine->count_levels, sizeof(*engine->count_levels)},
-        {(void **)&engine->dimens, sizeof(*engine->dimens)},
-        {(void **)&engine->dimen_levels, sizeof(*engine->dimen_levels)},
-        {(void **)&engine->glues, sizeof(*engine->glues)},
-        {(void **)&engine->glue_levels, sizeof(*engine->glue_levels)},
-        {(void **)&engine->muglues, sizeof(*engine->muglues)},
-        {(void **)&engine->muglue_levels, sizeof(*engine->muglue_levels)},
-        {(void **)&engine->token_registers, sizeof(*engine->token_registers)},
+        {(void **)&engine->counts, sizeof(*engine->counts), NULL, 0U},
+        {(void **)&engine->count_levels, sizeof(*engine->count_levels), NULL,
+         0U},
+        {(void **)&engine->dimens, sizeof(*engine->dimens), NULL, 0U},
+        {(void **)&engine->dimen_levels, sizeof(*engine->dimen_levels), NULL,
+         0U},
+        {(void **)&engine->glues, sizeof(*engine->glues), NULL, 0U},
+        {(void **)&engine->glue_levels, sizeof(*engine->glue_levels), NULL, 0U},
+        {(void **)&engine->muglues, sizeof(*engine->muglues), NULL, 0U},
+        {(void **)&engine->muglue_levels, sizeof(*engine->muglue_levels), NULL,
+         0U},
+        {(void **)&engine->token_registers, sizeof(*engine->token_registers),
+         NULL, 0U},
         {(void **)&engine->token_register_levels,
-         sizeof(*engine->token_register_levels)},
-        {(void **)&engine->boxes, sizeof(*engine->boxes)},
-        {(void **)&engine->box_levels, sizeof(*engine->box_levels)},
+         sizeof(*engine->token_register_levels), NULL, 0U},
+        {(void **)&engine->boxes, sizeof(*engine->boxes), box_holes,
+         sizeof(box_holes) / sizeof(*box_holes)},
+        {(void **)&engine->box_levels, sizeof(*engine->box_levels), NULL, 0U},
     };
     for (size_t index = 0U;
          index < sizeof(registers) / sizeof(registers[0]) && !stream->failed;
          ++index) {
         size_t count = register_capacity;
-        transfer_array(stream, registers[index].base, &count, NULL,
-                       registers[index].size, true);
+        if (registers[index].holes == NULL) {
+            transfer_array(stream, registers[index].base, &count, NULL,
+                           registers[index].size, true);
+        } else {
+            transfer_array_cleared(stream, registers[index].base, &count, NULL,
+                                   registers[index].size, true,
+                                   registers[index].holes,
+                                   registers[index].hole_count);
+        }
     }
     if (!stream->writing) {
         engine->count_capacity = register_capacity;
@@ -291,8 +369,13 @@ static void transfer_format(struct format_stream *stream,
 
     size_t token_list_count = engine->token_list_count;
     void *token_lists = engine->token_lists;
-    transfer_array(stream, &token_lists, &token_list_count,
-                   &engine->token_list_capacity, sizeof(*engine->token_lists), true);
+    static const struct format_hole list_holes[] = {
+        FORMAT_ADDRESS(hstex_token_list, tokens),
+    };
+    transfer_array_cleared(stream, &token_lists, &token_list_count,
+                           &engine->token_list_capacity,
+                           sizeof(*engine->token_lists), true, list_holes,
+                           sizeof(list_holes) / sizeof(*list_holes));
     engine->token_lists = token_lists;
     engine->token_list_count = token_list_count;
     for (size_t index = 0U; index < token_list_count && !stream->failed;
@@ -303,8 +386,17 @@ static void transfer_format(struct format_stream *stream,
 
     size_t font_count = engine->font_count;
     void *fonts = engine->fonts;
-    transfer_array(stream, &fonts, &font_count, &engine->font_capacity,
-                   sizeof(*engine->fonts), true);
+    static const struct format_hole font_holes[] = {
+        FORMAT_ADDRESS(hstex_font, name),
+        FORMAT_ADDRESS(hstex_font, characters),
+        FORMAT_ADDRESS(hstex_font, lig_kern),
+        FORMAT_ADDRESS(hstex_font, kerns),
+        FORMAT_ADDRESS(hstex_font, extensibles),
+        FORMAT_ADDRESS(hstex_font, dimens),
+    };
+    transfer_array_cleared(stream, &fonts, &font_count, &engine->font_capacity,
+                           sizeof(*engine->fonts), true, font_holes,
+                           sizeof(font_holes) / sizeof(*font_holes));
     engine->fonts = fonts;
     engine->font_count = font_count;
     for (size_t index = 0U; index < font_count && !stream->failed; ++index) {

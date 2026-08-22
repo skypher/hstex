@@ -961,6 +961,99 @@ static int test_arguments_put_in_more_than_once(void)
 static const struct hstex_meaning *meaning_named(struct hstex_engine *engine,
                                                  const char *name);
 
+/* THE SAME SOURCE MAKES THE SAME FILE. A format is the engine's arrays
+   written out as they stand in memory, and an array can carry things that
+   are nobody's state: the address of what a macro's body is kept in, and
+   the room a compiler leaves between a box's last field and the next box.
+   Neither is read back -- a reader fills the addresses in from what follows
+   and never looks at the padding -- but both were written, and both differ
+   from one run to the next. Two engines built here from the same source
+   write the same bytes, or something got into the file that should not have
+   been there. The two are built before either is written so that their
+   arrays cannot be standing where the other's stood. */
+static int test_a_format_is_the_same_file_twice(void)
+{
+    const char source[] =
+        "\\catcode`\\@=11 \\def\\a#1{[#1]}\\count5=17 \\dimen3=2pt "
+        "\\skip2=3pt plus 1fil \\toks1={xy}\\setbox4=\\hbox{}\\font\\f=cmr10 \\f "
+        "\\hyphenation{man-u-script}\\dump%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine first;
+    struct hstex_engine second;
+    if (prepare_engine(&first, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    if (prepare_engine(&second, path, true, error, sizeof(error)) != 0) {
+        hstex_engine_destroy(&first);
+        (void)unlink(path);
+        return 1;
+    }
+    struct hstex_engine *engines[2] = {&first, &second};
+    char written[2][64];
+    int status = 0;
+    for (size_t which = 0U; which < 2U && status == 0; ++which) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result result;
+        do {
+            result = hstex_engine_next_output(engines[which], &token, &location,
+                                              error, sizeof(error));
+        } while (result == HSTEX_ENGINE_TOKEN);
+        (void)strcpy(written[which], "/tmp/hstex-format-twice-XXXXXX");
+        int descriptor = mkstemp(written[which]);
+        if (result != HSTEX_ENGINE_EOF || descriptor < 0) {
+            status = 1;
+            break;
+        }
+        (void)close(descriptor);
+        if (hstex_engine_write_format(engines[which], written[which], error,
+                                      sizeof(error)) != 0) {
+            (void)fprintf(stderr, "format write failed: %s\n", error);
+            status = 1;
+        }
+    }
+    if (status == 0) {
+        FILE *one = fopen(written[0], "rb");
+        FILE *other = fopen(written[1], "rb");
+        if (one == NULL || other == NULL) {
+            status = 1;
+        } else {
+            for (;;) {
+                char left[4096];
+                char right[4096];
+                size_t took = fread(left, 1U, sizeof(left), one);
+                size_t taken = fread(right, 1U, sizeof(right), other);
+                if (took != taken || memcmp(left, right, took) != 0) {
+                    (void)fprintf(stderr,
+                                  "two formats from one source differ\n");
+                    status = 1;
+                    break;
+                }
+                if (took == 0U) {
+                    break;
+                }
+            }
+        }
+        if (one != NULL) {
+            (void)fclose(one);
+        }
+        if (other != NULL) {
+            (void)fclose(other);
+        }
+    }
+    (void)unlink(written[0]);
+    (void)unlink(written[1]);
+    hstex_engine_destroy(&first);
+    hstex_engine_destroy(&second);
+    (void)unlink(path);
+    return status;
+}
+
 /* A format is the engine's state put by once the format source has been
    read: the names it knows and what they mean, the registers, the
    parameters, the fonts and the patterns. What is read back is what was put
@@ -14103,6 +14196,7 @@ int main(void)
         test_arguments_put_in_more_than_once() != 0 ||
         test_what_a_page_leaves_behind() != 0 ||
         test_a_format_a_run_starts_from() != 0 ||
+        test_a_format_is_the_same_file_twice() != 0 ||
         test_macro_flags() != 0 || test_ini_bootstrap() != 0 ||
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||

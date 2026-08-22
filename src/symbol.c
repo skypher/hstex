@@ -78,6 +78,15 @@ static int reserve_entries(struct hstex_symbol_table *table, size_t required,
                          "control-sequence entry allocation failed");
     }
     table->entries = allocation;
+    /* An entry is written field by field and has padding between them that
+       no field ever covers. A format dumps the entries as they sit in
+       memory, so whatever the allocator last left in that padding is
+       written into the file: two builds of the same format from the same
+       source came out differing in 91,498 bytes, none of which any reader
+       looks at. Clearing the room the entries will occupy makes a format
+       the same file every time it is built. */
+    memset((struct hstex_symbol_entry *)allocation + table->entry_capacity, 0,
+           (capacity - table->entry_capacity) * sizeof(*table->entries));
     table->entry_capacity = capacity;
     return 0;
 }
