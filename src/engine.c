@@ -30433,6 +30433,34 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
 }
 
 /* The node a hyphen makes in the font the word is set in. */
+/* How many of a word's letters one node of the list stands for: a character
+   stands for itself, a ligature for the letters it was made of, and a kern
+   for none. */
+static size_t letters_a_node_stands_for(const struct hstex_engine *engine,
+                                        uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0U;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    if (node->kind == HSTEX_NODE_CHARACTER) {
+        return 1U;
+    }
+    if (node->kind != HSTEX_NODE_LIGATURE) {
+        return 0U;
+    }
+    return node->value.character.original_count == 0U
+               ? 1U
+               : (size_t)node->value.character.original_count;
+}
+
+static bool node_is_a_kern(const struct hstex_engine *engine,
+                           uint32_t identifier)
+{
+    return identifier != 0U && (size_t)identifier <= engine->node_count &&
+           engine->nodes[identifier - 1U].kind == HSTEX_NODE_KERN;
+}
+
 static int make_hyphen_node(struct hstex_engine *engine, uint32_t font,
                             uint32_t *identifier, char *error,
                             size_t error_capacity)
@@ -30760,6 +30788,11 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         }
         size_t letter = 0U;
         size_t word_start = word.count != 0U ? word.positions[0] : index;
+        /* Where the run the last discretionary made reaches to. A break
+           inside it is not one that can be taken: the reference develops
+           both branches of a break until they fall back into step, and
+           whatever hyphen points it passed on the way are gone. */
+        size_t settled_to = 0U;
         while (status == 0 && index < word.end) {
             /* How many of the word's letters this one node stands for; a
                break inside a ligature is not one HSTeX can take. */
@@ -30768,7 +30801,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                    word.positions[letter + here] == index) {
                 ++here;
             }
-            bool wanted = here != 0U && letter >= 1U && breaks[letter] != 0U;
+            bool blocked = index < settled_to;
+            bool wanted =
+                !blocked && here != 0U && letter >= 1U && breaks[letter] != 0U;
             size_t previous = wanted ? word.positions[letter - 1U] : 0U;
             bool adjacent = wanted && previous + 1U == index;
             /* A kern the font put between the two letters is not there when
@@ -30913,11 +30948,19 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     break;
                 }
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
-                /* A hyphen that joins the letter in front of it is set with
-                   it, and the discretionary then replaces that letter; see
-                   docs/DECISIONS.md, a-hyphen-that-ligatures. */
+                /* THE LETTER IN FRONT OF THE BREAK IS SET AGAIN TOGETHER
+                   WITH THE HYPHEN whenever the font has anything to say
+                   about the pair -- a ligature OR a kern. The discretionary
+                   then replaces that letter, and the kern the font had put
+                   after it. See docs/DECISIONS.md, a-hyphen-that-ligatures. */
+                size_t covered = adjacent ? 1U : 2U;
                 bool joined = false;
-                if (hyphen != 0U && adjacent) {
+                /* The letter in front of the break can only be set again if
+                   it is still the engine's to set: one an earlier
+                   discretionary already read is gone, and what is left is a
+                   hyphen standing on its own. */
+                bool fresh = previous >= settled_to;
+                if (hyphen != 0U && fresh) {
                     const struct hstex_font *metrics =
                         font_by_identifier(engine, word.font);
                     const struct hstex_node *before =
@@ -30937,10 +30980,11 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                                 error_capacity) != 0) {
                             status = -1;
                         }
-                        joins = step.kind == HSTEX_LIG_KERN_LIGATURE;
+                        joins = step.kind == HSTEX_LIG_KERN_LIGATURE ||
+                                step.kind == HSTEX_LIG_KERN_KERN;
                     }
-                    if (status == 0 && joins && written != 0U &&
-                        result[written - 1U] == items[previous]) {
+                    if (status == 0 && joins && written >= covered &&
+                        result[written - covered] == items[previous]) {
                         uint8_t letters[8];
                         size_t letter_count = 0U;
                         if (before->kind == HSTEX_NODE_LIGATURE &&
@@ -30972,7 +31016,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                         } else {
                             disc.value.disc.pre_start = start;
                             disc.value.disc.pre_count = (uint16_t)pre_count;
-                            disc.value.disc.replace_count = 1U;
+                            disc.value.disc.replace_count = (uint8_t)covered;
                             joined = true;
                         }
                     }
@@ -30980,15 +31024,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 if (status != 0) {
                     break;
                 }
-                if (joined) {
-                    /* The letter it replaces has been written out already. */
-                    --written;
-                } else if (hyphen != 0U && adjacent) {
+                if (!joined && hyphen != 0U && (adjacent || !fresh)) {
                     status = store_list_run(engine, &hyphen, 1U,
                                             &disc.value.disc.pre_start, error,
                                             error_capacity);
                     disc.value.disc.pre_count = 1U;
-                } else if (hyphen != 0U) {
+                } else if (!joined && hyphen != 0U) {
                     uint32_t pre[2] = {items[previous], hyphen};
                     status = store_list_run(engine, pre, 2U,
                                             &disc.value.disc.pre_start, error,
@@ -31004,22 +31045,18 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 if (status != 0) {
                     break;
                 }
-                if (kerned) {
-                    /* The two nodes the discretionary replaces have already
-                       been written out; it belongs in front of them. */
-                    written -= 2U;
-                }
+                /* The nodes it replaces have been written out already; they
+                   belong behind it. */
+                size_t back = joined ? covered : ((kerned && fresh) ? 2U : 0U);
+                written -= back;
                 if (reserve_hyphenated_items(&result, &capacity, written + 4U,
                                              error, error_capacity) != 0) {
                     status = -1;
                     break;
                 }
                 result[written++] = placed;
-                if (kerned) {
-                    result[written++] = items[previous];
-                    result[written++] = items[previous + 1U];
-                } else if (joined) {
-                    result[written++] = items[previous];
+                for (size_t item = 0U; item < back; ++item) {
+                    result[written++] = items[previous + item];
                 }
             }
             /* A break that falls inside a ligature replaces it: the two
@@ -31027,7 +31064,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                as the text that is used when the line does not break. See
                docs/DECISIONS.md, breaking-inside-a-ligature. */
             size_t inside = 0U;
-            for (size_t item = 1U; status == 0 && item < here; ++item) {
+            for (size_t item = 1U; status == 0 && !blocked && item < here;
+                 ++item) {
                 if (breaks[letter + item] != 0U) {
                     inside = item;
                     break;
@@ -31041,9 +31079,16 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 memcpy(originals, node->value.character.originals,
                        sizeof(originals));
                 uint32_t pre[8];
-                uint32_t post[8];
                 size_t pre_count = 0U;
                 size_t post_count = 0U;
+                /* WHAT FOLLOWS THE BREAK IS THE REST OF THE WORD, not the
+                   rest of this ligature: the two branches are developed
+                   until they fall back into step, and the discretionary
+                   replaces everything up to where they do. See
+                   docs/DECISIONS.md, breaking-inside-a-ligature. */
+                size_t cut = letter + inside;
+                size_t room = (word.count + 8U) * 4U + 64U;
+                uint32_t *post = calloc(room, sizeof(*post));
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
                 /* THE HYPHEN IS ONE OF THE LETTERS THE FONT IS ASKED ABOUT:
                    it goes in behind the ones before the break and the whole
@@ -31064,29 +31109,97 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     before[before_count++] =
                         (uint8_t)metrics->hyphen_character;
                 }
-                if (inside < original_count && has_hyphen &&
+                if (post != NULL && inside < original_count && has_hyphen &&
                     reconstitute_characters(engine, word.font, before,
                                             before_count, false, false, pre,
                                             8U, &pre_count, error,
                                             error_capacity) == 0 &&
-                    reconstitute_characters(
-                        engine, word.font, originals + inside,
-                        (size_t)original_count - inside, false, false, post,
-                        8U, &post_count, error, error_capacity) == 0) {
+                    reconstitute_characters(engine, word.font,
+                                            word.letters + cut,
+                                            word.count - cut, false, false,
+                                            post, room, &post_count, error,
+                                            error_capacity) == 0) {
+                    /* HOW FAR THE TWO BRANCHES RUN BEFORE THEY FALL BACK
+                       INTO STEP is counted in LETTERS, not in nodes: each
+                       takes one more of the font's own steps whenever it
+                       stands behind the other, and they are in step again
+                       when both have read the same letters. What the major
+                       branch read by then is what the discretionary
+                       replaces. */
+                    size_t minor_at = cut;
+                    size_t major_at = letter + here;
+                    size_t major_item = index + 1U;
+                    size_t letter_at = letter + here;
+                    size_t taken = 0U;
+                    /* A kern the font put after this node belongs to the
+                       step that made it. */
+                    while (major_item < word.end &&
+                           (letter_at >= word.count ||
+                            word.positions[letter_at] > major_item)) {
+                        ++major_item;
+                    }
+                    while (minor_at != major_at) {
+                        if (minor_at < major_at) {
+                            if (taken >= post_count) {
+                                break;
+                            }
+                            minor_at += letters_a_node_stands_for(
+                                engine, post[taken]);
+                            ++taken;
+                            /* A kern the font asked for belongs to the step
+                               that made it. */
+                            while (taken < post_count &&
+                                   node_is_a_kern(engine, post[taken])) {
+                                ++taken;
+                            }
+                            continue;
+                        }
+                        if (major_item >= word.end) {
+                            break;
+                        }
+                        size_t stood = 0U;
+                        while (letter_at < word.count &&
+                               word.positions[letter_at] == major_item) {
+                            ++stood;
+                            ++letter_at;
+                        }
+                        major_at += stood;
+                        ++major_item;
+                        /* A node standing for no letter of its own -- a kern
+                           the font put in -- belongs to the step in front of
+                           it. */
+                        while (major_item < word.end &&
+                               (letter_at >= word.count ||
+                                word.positions[letter_at] > major_item)) {
+                            ++major_item;
+                        }
+                    }
+                    if (taken == 0U) {
+                        taken = post_count;
+                    }
+                    size_t stop = major_item;
+                    if (stop <= index) {
+                        stop = index + 1U;
+                    }
+                    size_t tail = post_count - taken;
+                    size_t replaced = stop - index;
                     uint32_t start = 0U;
-                    if (store_list_run(engine, pre, pre_count, &start, error,
+                    if (replaced > 255U ||
+                        store_list_run(engine, pre, pre_count, &start, error,
                                        error_capacity) != 0) {
-                        status = -1;
+                        status = replaced > 255U ? status : -1;
                     } else {
                         disc.value.disc.pre_start = start;
                         disc.value.disc.pre_count = (uint16_t)pre_count;
-                        if (store_list_run(engine, post, post_count, &start,
-                                           error, error_capacity) != 0) {
+                        if (store_list_run(engine, post, post_count - tail,
+                                           &start, error,
+                                           error_capacity) != 0) {
                             status = -1;
                         } else {
                             disc.value.disc.post_start = start;
-                            disc.value.disc.post_count = (uint16_t)post_count;
-                            disc.value.disc.replace_count = 1U;
+                            disc.value.disc.post_count =
+                                (uint16_t)(post_count - tail);
+                            disc.value.disc.replace_count = (uint8_t)replaced;
                             uint32_t placed = 0U;
                             if (store_node(engine, &disc, &placed, error,
                                            error_capacity) != 0 ||
@@ -31096,10 +31209,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                                 status = -1;
                             } else {
                                 result[written++] = placed;
+                                settled_to = stop;
                             }
                         }
                     }
                 }
+                free(post);
             }
             if (status == 0 &&
                 reserve_hyphenated_items(&result, &capacity, written + 1U,

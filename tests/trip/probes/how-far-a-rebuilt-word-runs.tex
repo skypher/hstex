@@ -1,0 +1,50 @@
+% HOW FAR A REBUILT WORD RUNS.
+%
+% When a break falls between two letters one ligature was made of, BOTH
+% BRANCHES ARE DEVELOPED UNTIL THEY FALL BACK INTO STEP, and the
+% discretionary replaces everything the unbroken branch read by then.
+% Being in step is counted in LETTERS, not in nodes: each branch takes one
+% more of the font's own steps whenever it stands behind the other.
+%
+% Measured against pdftex with trip.tfm, where BB, AA and CA are ligatures
+% and the font kerns a good deal:
+%
+%   BB      \discretionary replacing 1   C(=B-) | [BB]
+%   BBB     \discretionary replacing 3   C      | [BB]
+%   BBBB    \discretionary replacing 3   C      | [BB] kern B
+%   BBBBB   \discretionary replacing 5   C      | [BB] kern [BB]
+%
+% Two more rules come with it:
+%
+%   * the letter in front of the break is set again together with the
+%     hyphen whenever the font has ANYTHING to say about the pair -- a
+%     kern as well as a ligature. `AAB' breaks after AA into
+%     `A kern3.0 -', and the discretionary replaces the ligature AND the
+%     kern the font had put after it;
+%
+%   * a letter an earlier discretionary has already read is gone. The
+%     second break in `AAB' therefore draws a bare `\discretionary' with a
+%     hyphen and nothing else, replacing nothing.
+%
+% This engine took a break inside a ligature to replace that one node, and
+% set what followed the break from the rest of that ligature alone. trip
+% line 195 hyphenates a word made of these ligatures.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxdepth=99 \showboxbreadth=99
+\font\rip=trip \rip \hyphenchar\rip=`-
+\lccode`A=1 \lccode`B=2 \lccode`C=3 \uchyph=1
+\patterns{A1B B1B B1C C1A A1A}
+\hsize=1000pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\def\try#1{\message{[<#1>]}\setbox1=\vbox{\noindent A #1\par}\showbox1 }
+\try{BB}
+\try{BBB}
+\try{BBBB}
+\try{BBBBB}
+\try{AAB}
+\try{AAAB}
+\try{AABB}
+\try{CACA}
+\try{BABAB}
+\try{AABBCA}
+\message{[done]}
+\end
