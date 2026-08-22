@@ -26,11 +26,11 @@
 % HSTeX gave the name alone everywhere, and then, once \show was put right,
 % gave the text everywhere. trip line 320 writes \show\botmark.
 %
-% Still open here: the text a mark expands into is read back from a frame
-% the reference calls `<mark>' and shows as a token list, with a parameter
-% character doubled; HSTeX calls it `<inserted text>' and shows it singly.
-% And the reference traces the `#' it reads back as a command before
-% refusing it, where HSTeX refuses it untraced.
+% The text a mark expands into is read back from a frame the reference
+% calls `<mark>', not `<inserted text>'.
+%
+% Still open here: the reference traces the `#' it reads back as a command
+% before refusing it, where HSTeX refuses it untraced.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
 \tracingonline=1
 \output={\global\setbox9=\box255}

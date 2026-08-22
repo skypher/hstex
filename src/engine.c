@@ -8450,8 +8450,13 @@ static int expand_mark_text(struct hstex_engine *engine, int32_t which,
     if (list == NULL || list->count == 0U) {
         return 0;
     }
-    return hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
-                                    location, error, error_capacity);
+    if (hstex_source_push_tokens(&engine->sources, list->tokens, list->count,
+                                 location, error, error_capacity) != 0) {
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources, (uint8_t)HSTEX_TOKEN_SOURCE_MARK,
+                          0U);
+    return 0;
 }
 
 static int push_detokenized_character(struct hstex_token_vector *output,
@@ -15862,6 +15867,8 @@ static const char *token_frame_tag(struct hstex_engine *engine,
         return "<template> ";
     case HSTEX_TOKEN_SOURCE_WRITE:
         return "<write> ";
+    case HSTEX_TOKEN_SOURCE_MARK:
+        return "<mark> ";
     case HSTEX_TOKEN_SOURCE_ARGUMENT:
         return "<argument> ";
     case HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER: {
