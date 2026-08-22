@@ -1,0 +1,29 @@
+% WHAT A RUNAWAY EXPANDED DEFINITION SHOWS.
+%
+% \edef and \xdef gather their bodies WITH EXPANSION, and an \outer macro
+% met in one runs away exactly as it does in a \def: the reference draws
+% `Runaway definition?' with the parameter text, the `->', and as much of
+% the body as it had read.
+%
+%   \edef\n#1{[#1]\bad}
+%
+%   Runaway definition?
+%   #1->[#1]
+%   ! Forbidden control sequence found while scanning definition of \n.
+%
+% This engine drew the fault and not the runaway for the two that expand;
+% the plain \def already drew both. trip line 365 writes
+% \xdef\a^^C1{\d#1\d\l{#2}\l#1\par\a^^@^^@a and runs away in it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\tracingonline=1
+\outer\def\bad{}
+\message{[A a runaway in a def]}
+\def\m#1{[#1]\bad}
+\message{[B one in an edef]}
+\edef\n#1{[#1]\bad}
+\message{[C one in an xdef]}
+\xdef\o#1{[#1]\bad}
+\message{[D one in a message]}
+\message{[x\bad]}
+\message{[done]}
+\end

@@ -189,6 +189,9 @@ static uint8_t shown_parameter_character = (uint8_t)'#';
    list. */
 static const struct hstex_token_vector *runaway_partial = NULL;
 static const char *runaway_partial_prefix = NULL;
+/* What stands in FRONT of the `->' a runaway definition is shown from: the
+   parameter text it had matched. Nought for anything but a definition. */
+static const struct hstex_token_vector *runaway_partial_lead = NULL;
 static void print_escaped_name(struct hstex_engine *engine, const char *name);
 static void print_escape_character(struct hstex_engine *engine);
 static void print_esc_text(struct hstex_engine *engine, const char *text);
@@ -10863,9 +10866,19 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         bool previous_gathering = engine->gathering_expanded_text;
         const char *previous_definition_name =
             engine->expanded_definition_name;
+        const struct hstex_token_vector *previous_runaway = runaway_partial;
+        const char *previous_runaway_prefix = runaway_partial_prefix;
+        const struct hstex_token_vector *previous_runaway_lead =
+            runaway_partial_lead;
         if (expanded_replacement) {
             engine->inhibit_protected_expansion = true;
             engine->gathering_expanded_text = true;
+            /* A definition gathered WITH EXPANSION shows what ran away the
+               same way one gathered plainly does: the parameter text, the
+               `->', and as much of the body as had been read. */
+            runaway_partial_lead = &parameter_text;
+            runaway_partial_prefix = "->";
+            runaway_partial = &replacement;
             engine->expanded_definition_name = definition_named;
         }
         enum hstex_engine_result result =
@@ -10876,6 +10889,9 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         engine->inhibit_protected_expansion = previous_inhibition;
         engine->gathering_expanded_text = previous_gathering;
         engine->expanded_definition_name = previous_definition_name;
+        runaway_partial = previous_runaway;
+        runaway_partial_prefix = previous_runaway_prefix;
+        runaway_partial_lead = previous_runaway_lead;
         /* Tokens delivered by \unexpanded or \the are inserted verbatim and
            are not rescanned for parameter markers. */
         bool current_unexpanded =
@@ -25081,7 +25097,8 @@ static void report_runaway_list(struct hstex_engine *engine, const char *what,
 /* The same, from whatever list the engine is filling. */
 static void report_runaway(struct hstex_engine *engine, const char *what)
 {
-    report_runaway_list(engine, what, NULL, runaway_partial_prefix,
+    report_runaway_list(engine, what, runaway_partial_lead,
+                        runaway_partial_prefix,
                         runaway_partial);
 }
 
@@ -25776,9 +25793,11 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
     const char *previous_text_name = engine->expanded_text_name;
     const struct hstex_token_vector *previous_partial = runaway_partial;
     const char *previous_prefix = runaway_partial_prefix;
+    const struct hstex_token_vector *previous_lead = runaway_partial_lead;
     engine->expanded_text_name = scanning;
     runaway_partial = text;
     runaway_partial_prefix = NULL;
+    runaway_partial_lead = NULL;
     for (;;) {
         hstex_token token = 0U;
         struct hstex_source_location location;
@@ -25807,6 +25826,7 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
                 engine->expanded_text_name = previous_text_name;
                 runaway_partial = previous_partial;
                 runaway_partial_prefix = previous_prefix;
+                runaway_partial_lead = previous_lead;
                 return -1;
             }
             hstex_token closer = hstex_token_character(
@@ -25816,6 +25836,7 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
                 engine->expanded_text_name = previous_text_name;
                 runaway_partial = previous_partial;
                 runaway_partial_prefix = previous_prefix;
+                runaway_partial_lead = previous_lead;
                 return -1;
             }
             hstex_source_name_top(&engine->sources,
@@ -25829,6 +25850,7 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
             engine->expanded_text_name = previous_text_name;
             runaway_partial = previous_partial;
             runaway_partial_prefix = previous_prefix;
+            runaway_partial_lead = previous_lead;
             if (result == HSTEX_ENGINE_EOF) {
                 return set_error(error, error_capacity,
                                  "File ended while scanning %s", scanning);
@@ -25841,6 +25863,7 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
                 engine->expanded_text_name = previous_text_name;
                 runaway_partial = previous_partial;
                 runaway_partial_prefix = previous_prefix;
+                runaway_partial_lead = previous_lead;
                 return 0;
             }
         } else if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
@@ -25850,6 +25873,7 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
             engine->expanded_text_name = previous_text_name;
             runaway_partial = previous_partial;
             runaway_partial_prefix = previous_prefix;
+            runaway_partial_lead = previous_lead;
             return -1;
         }
     }
