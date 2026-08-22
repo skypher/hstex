@@ -740,7 +740,10 @@ enum hstex_group_kind {
     HSTEX_GROUP_MATH_SHIFT,  /* $ ... $ */
     /* One entry of an alignment. A `}' that closes this one closes nothing
        a document opened, so the reference guesses a \cr instead. */
-    HSTEX_GROUP_ALIGN
+    HSTEX_GROUP_ALIGN,
+    /* The group an \output routine runs in. The `}' that closes it ends the
+       routine, whatever is left of the routine's text. */
+    HSTEX_GROUP_OUTPUT
 };
 
 enum hstex_save_kind {
@@ -2090,6 +2093,16 @@ struct hstex_engine {
        follow a font's name is. \input met there does not open its file: it
        stands a \relax in front of itself and waits. */
     bool scanning_file_name;
+    /* The `}' that closes an \output routine's own group has been obeyed,
+       so the routine is over whatever is left of its text. */
+    bool output_group_closed;
+    /* And its text had more to give than its own braces account for, so what
+       is left is dropped rather than read. */
+    bool output_group_unbalanced;
+    /* An \endinput met while a file name was being scanned. It takes hold of
+       whatever file is being read when the next LINE is wanted -- which for
+       `\input f\endinput' is f, not the file that wrote it. */
+    bool end_input_pending;
     /* How many held-over insertions stand at the front of the contribution
        list. What an output routine builds goes in behind them, not in front:
        the reference puts its list on the page after the heldover insertions

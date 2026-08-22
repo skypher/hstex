@@ -1,0 +1,54 @@
+% WHAT AN UNBALANCED OUTPUT ROUTINE DRAWS.
+%
+% The `}' that closes an \output routine's own group ends the routine, and
+% what the routine's text still has to give is material its own braces do
+% not account for. The reference says so:
+%
+%   \let\rb=}
+%   \output={\relax\rb\global\setbox9=\box255}
+%   ! Unbalanced output routine.
+%   <output> {\relax \rb
+%                        \global \setbox 9=\box 255}
+%   Your sneaky output routine has problematic {'s and/or }'s.
+%   I can't handle that very well; good luck.
+%
+% and then throws the rest of the text away unread -- so the \setbox never
+% runs, and \box255 is left over:
+%
+%   ! Output routine didn't use all of \box255.
+%   Your \output commands should empty \box255,
+%   e.g., by saying `\shipout\box255'.
+%   Proceed; I'll discard its present contents.
+%
+%   The following box has been deleted:
+%   \vbox(10.0+0.0)x0.0 []
+%
+% It does NOT say so where the closer was the last token of that text, nor
+% where it was the last of a list something PUT BACK -- a number scan
+% reading one digit too far puts the `}' back, and that is not the
+% routine's fault. So `\output={\global\setbox9=\box255\rb}' passes in
+% silence: the \rb ends the number, is put back, and closes the routine.
+%
+% trip line 426 writes a routine ending `\unvbox255\end\rb}', where the
+% \end after the number leaves the \rb to be read from the routine's own
+% text -- so the reference draws the fault and HSTeX drew nothing.
+%
+% Found and left open: after the silent case above, the reference reads the
+% routine's own `}' afterwards and draws `Too many }'s'. HSTeX bounds a
+% routine's text with the end of what it pushed rather than with the text
+% itself, so what is left over goes with the bound.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingcommands=2
+\let\rb=}
+\vsize=10pt \hsize=100pt \topskip=0pt \showboxbreadth=3 \showboxdepth=3
+\message{[A a routine whose closer is read from its own text]}
+\output={\relax\rb\global\setbox9=\box255}
+\hbox{}\penalty-10000
+\message{[B one whose closer was put back by a number scan]}
+\output={\global\setbox9=\box255\rb}
+\hbox{}\penalty-10000
+\message{[C an ordinary routine]}
+\output={\global\setbox9=\box255}
+\hbox{}\penalty-10000
+\message{[done]}
+\end

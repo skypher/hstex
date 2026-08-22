@@ -23172,9 +23172,12 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
         return ship_out_box(engine, 255U, error, error_capacity);
     }
     uint32_t level_before_output = engine->group_level;
-    if (begin_group(engine, HSTEX_GROUP_BRACE, error, error_capacity) != 0) {
+    /* The routine's own group. The `}' that closes it ends the routine,
+       whatever is left of the routine's text. */
+    if (begin_group(engine, HSTEX_GROUP_OUTPUT, error, error_capacity) != 0) {
         return -1;
     }
+    engine->output_group_closed = false;
     /* A paragraph may begin inside the routine, so the shape one would take
        is cleared here -- INSIDE the routine's group, so that what the
        document set is saved and comes back when the routine ends.
@@ -23260,6 +23263,19 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
             break;
         }
     }
+    if (status == 0 && engine->output_group_closed &&
+        engine->output_group_unbalanced) {
+        /* Only where the routine's braces did not come out even is what is
+           left of its text dropped; a `}' the routine's own text ends with
+           is read where it stands. */
+        hstex_token spare = 0U;
+        struct hstex_source_location whence;
+        while (raw_next(engine, &spare, &whence, error, error_capacity) ==
+               HSTEX_ENGINE_TOKEN) {
+        }
+    }
+    engine->output_group_closed = false;
+    engine->output_group_unbalanced = false;
     if (status == 0 && engine->building_paragraph) {
         status = finish_paragraph_line(engine, NULL, error, error_capacity);
     }
@@ -23319,9 +23335,11 @@ static int fire_up(struct hstex_engine *engine, size_t from, char *error,
            lets the next page be built at all. */
         static const char *const help[] = {
             "Your \\output commands should empty \\box255,",
-            "e.g., by saying `\\shipout\\box255'.", NULL};
+            "e.g., by saying `\\shipout\\box255'.",
+            "Proceed; I'll discard its present contents.", NULL};
         tex_error(engine, help,
                   "Output routine didn't use all of \\box255");
+        report_deleted_box(engine, &engine->boxes[255]);
         struct hstex_box empty = {0};
         empty.kind = HSTEX_BOX_VOID;
         status = assign_box(engine, 255U, empty, true, error, error_capacity);
@@ -41863,8 +41881,54 @@ handle_token:
                         engine->integer_parameters
                             [HSTEX_INTEGER_FLOATING_PENALTY];
                 }
+                /* THE `}' THAT CLOSES AN OUTPUT ROUTINE ends it, and what
+                   the routine's text still has to give is material its own
+                   braces do not account for. The reference says so unless
+                   the closer was the last token of that text, or the last of
+                   a list something put back -- a number scan reading one
+                   digit too far puts the `}' back, and that is not the
+                   routine's fault. */
+                bool closing_output =
+                    current_group_kind(engine) == HSTEX_GROUP_OUTPUT;
+                if (closing_output) {
+                    bool unbalanced = true;
+                    if (engine->sources.count != 0U) {
+                        const struct hstex_source_frame *frame =
+                            &engine->sources
+                                 .frames[engine->sources.count - 1U];
+                        if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
+                            const struct hstex_token_source *list =
+                                &frame->value.token_list;
+                            unbalanced =
+                                list->cursor < list->count ||
+                                !(list->source_kind ==
+                                      (uint8_t)
+                                          HSTEX_TOKEN_SOURCE_BACKED_UP ||
+                                  (list->source_kind ==
+                                       (uint8_t)
+                                           HSTEX_TOKEN_SOURCE_TOKEN_PARAMETER &&
+                                   list->frame_name ==
+                                       (uint32_t)HSTEX_TOKEN_OUTPUT));
+                        }
+                    }
+                    engine->output_group_unbalanced = unbalanced;
+                    if (unbalanced) {
+                        static const char *const sneaky[] = {
+                            "Your sneaky output routine has problematic {'s "
+                            "and/or }'s.",
+                            "I can't handle that very well; good luck.",
+                            NULL};
+                        tex_error(engine, sneaky, "Unbalanced output routine");
+                    }
+                }
                 if (end_group(engine, error, error_capacity) < 0) {
                     return HSTEX_ENGINE_ERROR;
+                }
+                if (closing_output) {
+                    /* The routine is over: what its text still holds is not
+                       material for the list it was building. */
+                    engine->output_group_closed = true;
+                    return HSTEX_ENGINE_EOF;
                 }
                 /* A box body is executed on the live input; when the group it
                    opened closes, the box is complete and the builder takes
