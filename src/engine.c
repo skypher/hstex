@@ -10785,6 +10785,17 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     }
 
     struct hstex_token_vector replacement = {0};
+    /* The name a diagnostic calls this definition while its body is being
+       gathered. It is the same name for every token of the body, and
+       working it out again for each of them was ten million descriptions in
+       a format build -- twenty-six a definition -- so it is worked out
+       here, once, for a target that does not change while the body is
+       read. */
+    char definition_named[128];
+    if (expanded_replacement) {
+        describe_token(engine, target, definition_named,
+                       sizeof(definition_named));
+    }
     size_t depth = empty_body ? 0U : 1U;
     while (depth != 0U) {
         /* Where the body is being read from a list of tokens standing
@@ -10852,12 +10863,9 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
         bool previous_gathering = engine->gathering_expanded_text;
         const char *previous_definition_name =
             engine->expanded_definition_name;
-        char definition_named[128];
         if (expanded_replacement) {
             engine->inhibit_protected_expansion = true;
             engine->gathering_expanded_text = true;
-            describe_token(engine, target, definition_named,
-                           sizeof(definition_named));
             engine->expanded_definition_name = definition_named;
         }
         enum hstex_engine_result result =
