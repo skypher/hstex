@@ -16113,6 +16113,35 @@ static void show_token_frame(struct hstex_engine *engine,
    the input stack, the line of the file at the bottom, and `...` for
    whatever lies between that \errorcontextlines does not ask for. See
    docs/DECISIONS.md, error-context. */
+/* The line a \read is taking, shown the way the reference shows it: named
+   for the stream it came from rather than for a line of a file. */
+static void show_read_line(struct hstex_engine *engine)
+{
+    const struct hstex_mouth *mouth = engine->reading_mouth;
+    if (mouth == NULL) {
+        return;
+    }
+    /* A stream whose line was never there shows the stream and nothing
+       else. */
+    bool empty = mouth->data == NULL || mouth->line_number == 0U;
+    const char *line = empty ? "" : (const char *)mouth->data + mouth->line_start;
+    size_t length = empty ? 0U : mouth->line_content_length;
+    size_t cursor = empty ? 0U : mouth->line_cursor;
+    if (cursor > length) {
+        cursor = length;
+    }
+    char tag[32];
+    int tag_length = engine->reading_stream < 0 || engine->reading_stream > 15
+                         ? snprintf(tag, sizeof(tag), "<read *> ")
+                         : snprintf(tag, sizeof(tag), "<read %d> ",
+                                    engine->reading_stream);
+    if (tag_length < 0) {
+        return;
+    }
+    show_context_lines(engine, tag, line, cursor, line + cursor,
+                       length - cursor);
+}
+
 static void show_error_context(struct hstex_engine *engine)
 {
     struct hstex_source_stack *stack = &engine->sources;
@@ -16121,7 +16150,21 @@ static void show_error_context(struct hstex_engine *engine)
     bool omitted = false;
     int32_t room =
         engine->integer_parameters[HSTEX_INTEGER_ERROR_CONTEXT_LINES];
-    for (size_t index = stack->count; index > file_index; --index) {
+    for (size_t index = stack->count;; --index) {
+        /* The line a \read is taking stands where the read began -- which
+           may be right where the file is, so this is asked before the walk
+           stops at it. */
+        if (engine->reading_mouth != NULL && index == engine->reading_base) {
+            if (shown != 0U && (int32_t)shown > room) {
+                omitted = true;
+            } else {
+                show_read_line(engine);
+                ++shown;
+            }
+        }
+        if (index <= file_index) {
+            break;
+        }
         const struct hstex_source_frame *frame = &stack->frames[index - 1U];
         if (frame->kind != HSTEX_SOURCE_TOKEN_LIST) {
             continue;
@@ -39775,6 +39818,13 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
     buffer[length] = (uint8_t)'\n';
     struct hstex_mouth mouth;
     hstex_mouth_init(&mouth, buffer, length + 1U, &engine->lexical_state);
+    /* Where in the stack this line stands, so that a fault raised while it
+       is being read names it. */
+    const struct hstex_mouth *previous_reading = engine->reading_mouth;
+    int32_t previous_stream = engine->reading_stream;
+    size_t previous_base = engine->reading_base;
+    engine->reading_mouth = &mouth;
+    engine->reading_base = engine->sources.count;
     /* A LINE THAT HAS GONE WRONG IS STILL READ TO ITS END. Where a brace
        closes what the line never opened, or an \outer name turns up, the
        reference stops taking tokens for the macro but goes on ASKING for
@@ -39800,6 +39850,9 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
             continue;
         }
         if (result == HSTEX_MOUTH_ERROR) {
+            engine->reading_mouth = previous_reading;
+            engine->reading_stream = previous_stream;
+            engine->reading_base = previous_base;
             hstex_mouth_destroy(&mouth);
             free(buffer);
             return -1;
@@ -39830,19 +39883,37 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
             hstex_token ending =
                 hstex_token_character((uint8_t)HSTEX_CAT_SPACE, (uint8_t)' ');
             if (vector_push(replacement, ending, error, error_capacity) != 0) {
+                engine->reading_mouth = previous_reading;
+                engine->reading_stream = previous_stream;
+                engine->reading_base = previous_base;
                 hstex_mouth_destroy(&mouth);
                 free(buffer);
                 return -1;
+            }
+            /* AND A `}' IS PUT IN BEHIND IT, which is read like any other:
+               where the line has a `{' still open the brace closes it and the
+               line is read on, and where it has not the line is given up.
+               The reference puts it on the input stack, where the fault's
+               context names it, and reads it back from there; HSTeX reads
+               the line beside the stack, so the frame stands only for as
+               long as the fault is being drawn. */
+            hstex_token closer = hstex_token_character(
+                (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
+            bool drawn = hstex_source_push_tokens(&engine->sources, &closer,
+                                                  1U, location, NULL, 0U) == 0;
+            if (drawn) {
+                hstex_source_name_top(&engine->sources,
+                                      (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED,
+                                      0U);
             }
             tex_error(engine, help,
                       "Forbidden control sequence found while scanning "
                       "definition of %s",
                       named);
-            /* AND A `}' IS PUT IN BEHIND IT, which is read like any other:
-               where the line has a `{' still open the brace closes it and the
-               line is read on, and where it has not the line is given up. */
-            token = hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP,
-                                          (uint8_t)'}');
+            if (drawn) {
+                hstex_source_pop(&engine->sources);
+            }
+            token = closer;
         }
         if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
             ++*balance;
@@ -39854,11 +39925,17 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
             --*balance;
         }
         if (vector_push(replacement, token, error, error_capacity) != 0) {
+            engine->reading_mouth = previous_reading;
+            engine->reading_stream = previous_stream;
+            engine->reading_base = previous_base;
             hstex_mouth_destroy(&mouth);
             free(buffer);
             return -1;
         }
     }
+    engine->reading_mouth = previous_reading;
+    engine->reading_stream = previous_stream;
+    engine->reading_base = previous_base;
     hstex_mouth_destroy(&mouth);
     free(buffer);
     return 0;
@@ -39957,7 +40034,22 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
                     "This \\read has unbalanced braces.", NULL};
                 report_runaway_list(engine, "definition", NULL, "->",
                                     &replacement);
+                /* The reference has already begun reading the line that
+                   turned out not to be there, so the fault's context names
+                   the stream with nothing on it. */
+                struct hstex_mouth blank;
+                hstex_mouth_init(&blank, NULL, 0U, &engine->lexical_state);
+                const struct hstex_mouth *held = engine->reading_mouth;
+                int32_t held_stream = engine->reading_stream;
+                size_t held_base = engine->reading_base;
+                engine->reading_mouth = &blank;
+                engine->reading_stream = stream;
+                engine->reading_base = engine->sources.count;
                 tex_error(engine, help, "File ended within \\read");
+                engine->reading_mouth = held;
+                engine->reading_stream = held_stream;
+                engine->reading_base = held_base;
+                hstex_mouth_destroy(&blank);
             }
             static const uint8_t name[] = "par";
             hstex_cs_id identifier = 0U;
@@ -39972,6 +40064,7 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
             }
             break;
         }
+        engine->reading_stream = stream;
         status = append_read_line(engine, target, &replacement,
                                   (const uint8_t *)line, (size_t)length,
                                   &balance, error, error_capacity);

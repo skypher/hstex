@@ -40,10 +40,13 @@
 % reads its own tripos.tex back with \uppercase made \outer and `0' made
 % invalid, which is every one of these at once.
 %
-% Found and left open: the reference's context for all of this names the
-% line being read -- `<read 3> gamma 0' -- and the brace it put in --
-% `<inserted text> }'. HSTeX reads the line beside the source stack rather
-% than on it, so neither frame is there to show.
+% The reference's context for all of this NAMES THE LINE BEING READ, for the
+% stream it came from rather than for a line of a file -- `<read 3> gamma 0'
+% -- and names the brace it put in above it -- `<inserted text> }'. Where
+% the file ran out with braces still open, the line that was never there is
+% named too: `<read 3>' with nothing on it. HSTeX reads the line beside the
+% source stack rather than on it, and remembers where in the stack it
+% belongs so that the context can name it in its place.
 \catcode`\{=1 \catcode`\}=2
 \tracingonline=1
 \lccode`\<=`\{ \lowercase{\gdef\lb{<}}

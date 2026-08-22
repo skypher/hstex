@@ -2117,6 +2117,13 @@ struct hstex_engine {
     /* Set once the command now in hand has been traced, so that a token put
        in its place and read again is not traced a second time. */
     bool command_traced;
+    /* A \read's line, while it is being read: the reference reads it on the
+       input stack, where a fault's context names it `<read n>'; HSTeX reads
+       it beside the stack and remembers here where in the stack it belongs.
+       Null when no \read is running. See docs/DECISIONS.md, error-context. */
+    const struct hstex_mouth *reading_mouth;
+    int32_t reading_stream;
+    size_t reading_base;
     /* A `{' a scan asked for and put in front of what follows: the
        reference reads it inside the scan and never gives it to the main
        loop, so it draws no trace line. See docs/DECISIONS.md,
