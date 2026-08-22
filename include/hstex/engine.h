@@ -1095,6 +1095,10 @@ struct hstex_align_column {
        sets the width even when it is negative; see docs/DECISIONS.md,
        a-column-of-negative-width. */
     bool measured;
+    /* Whether any row BEGINS an entry in this column, as against only
+       spanning into it. Nothing stands in front of a column no row begins
+       in; see finish_alignment. */
+    bool started;
 };
 
 /* One entry of a row: an unset box of its natural width, and how many

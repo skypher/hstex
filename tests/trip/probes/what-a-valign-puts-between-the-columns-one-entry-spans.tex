@@ -26,29 +26,33 @@
 % column it covers, and what it already covers is counted as the columns
 % plus THE TABSKIPS BETWEEN THEM.
 %
-% THE RULE IS NOT `A \valign HAS NO GLUE INSIDE A SPAN'. That was tried --
-% not counting the tabskip while measuring, and drawing zero in its place --
-% and [B] is the case that refutes it: one row that spans and one that does
-% not. There the reference draws the \tabskip in full, 10.0, in the spanning
-% row as well, and the change made HSTeX draw 0.0. Backed out.
+% THE RULE IS NOT `A \valign HAS NO GLUE INSIDE A SPAN'. That was tried
+% first -- not counting the tabskip while measuring, and drawing zero in its
+% place -- and [B] refutes it: one row that spans and one that does not,
+% where the reference draws the \tabskip in full, 10.0, in the spanning row
+% as well. Recorded because it is the obvious rule and it is wrong.
 %
-% [B] does not settle the measuring question, only the drawing one: its
-% second row sizes both columns on its own, so the span has nothing left to
-% make up and the loop never reaches the arithmetic that counts the tabskip.
+% THE RULE, WHICH [C] AND [D] SETTLE: NOTHING STANDS IN FRONT OF A COLUMN NO
+% ROW BEGINS IN. In [A] every row spans both columns, so no row begins in the
+% second, and the glue in front of it is zero. In [B] the second row begins
+% in both, so both glues are drawn. [C] separates the two halves of that:
+% three columns, every row written `A\span&C', so no row begins in column one
+% and every row begins in column two -- and the reference draws 0.0 in front
+% of column one and the \tabskip in full in front of column two.
 %
-% WHERE TO LOOK NEXT. What is different about [A] is that NO ROW EVER STARTS
-% IN THE SECOND COLUMN. This engine already has a notion of how many columns
-% a set of rows `reached', and drops the tabskip after the ones past it --
-% see finish_alignment, `the ones past the last one used stand in the row the
-% preamble is packed as, with no width and NO TABSKIP AFTER THEM'. A column
-% that is only ever spanned INTO may be the same kind of thing, which would
-% put the zero in the column's own record and explain the other place it
-% shows: the packed preamble row of [A] draws `10.0 0.0 10.0' in the
-% reference and `10.0 10.0 10.0' here, and one rule in the record would give
-% both.
+% AND IT IS NOT A \valign RULE. [D] is [C] written as an \halign and the
+% reference does the same thing, which is why the five \halign cases of
+% what-an-entry-that-spans-is-set-to.tex never caught it: every one of them
+% has a row that begins in every column, so no column is ever only spanned
+% into. HSTeX drew the \tabskip there and gave the column what was left,
+% which for [D] came to a box of width -2.49998.
 %
-% An \halign is already exact for all of this; see
-% what-an-entry-that-spans-is-set-to.tex, whose five cases agree box for box.
+% Settled in the column's own record rather than where the glue is drawn,
+% because three places read it: the measuring loop counts what a span
+% already covers as the columns plus the glue between them, each row draws
+% it, and the row the preamble is packed as draws it again -- which is why
+% [A] drew `10.0 0.0 10.0' in the reference against `10.0 10.0 10.0' here.
+% One rule in the record gives all three.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
 \tracingonline=1 \showboxbreadth=99 \showboxdepth=99
 \font\tenrm=cmr10 \tenrm
@@ -70,6 +74,14 @@
 \message{[B one row spans and one does not: the glue is drawn in full]}
 \tabskip=10pt
 \setbox0=\hbox{\valign to -5pt{#&#\cr \hbox{A}\span\cr \hbox{B}&\hbox{C}\cr}}
+\showbox0
+\message{[C nothing begins in column one; something does begin in column two]}
+\setbox0=\hbox{\valign to -5pt{#&#&#\cr \hbox{A}\span&\hbox{C}\cr
+  \hbox{B}\span&\hbox{D}\cr}}
+\showbox0
+\message{[D the same as an \halign, which does it too]}
+\setbox0=\vbox{\halign{#&#&#\cr \hbox{A}\span&\hbox{C}\cr
+  \hbox{B}\span&\hbox{D}\cr}}
 \showbox0
 \message{[done]}
 \end

@@ -38919,6 +38919,45 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
     for (size_t index = 0U; index < column_count; ++index) {
         columns[index].width = 0;
         columns[index].measured = false;
+        columns[index].started = false;
+    }
+    /* NOTHING STANDS IN FRONT OF A COLUMN NO ROW BEGINS IN. A column that
+       every row only spans INTO is never the start of an entry, and the
+       reference puts no \tabskip before it -- so the column keeps the whole
+       of what the entry spanning into it came to, rather than the entry's
+       extent less the glue.
+
+       Measured, over `\valign to -5pt' and over \halign alike, with three
+       columns and every row written `A\span&C': the glue in front of column
+       one is 0.0 and the glue in front of column two, which the rows do
+       begin in, is the \tabskip in full. And with one row that spans and
+       one that does not, every column is begun in somewhere and every glue
+       is drawn in full. See
+       tests/trip/probes/what-a-valign-puts-between-the-columns-one-entry-spans.tex.
+
+       It has to be settled here, in the column's own record, rather than
+       where the glue is drawn: the measuring loop below counts what a span
+       already covers as the columns it covers plus the glue between them,
+       and the row the preamble is packed as draws the same glue again. One
+       rule in the record gives all three. */
+    for (size_t index = 0U; index < row_count; ++index) {
+        if (rows[index].noalign) {
+            continue;
+        }
+        size_t column = 0U;
+        for (size_t cell = 0U; cell < rows[index].cell_count; ++cell) {
+            if (column >= column_count) {
+                break;
+            }
+            columns[column].started = true;
+            column += rows[index].cells[cell].span;
+        }
+    }
+    for (size_t index = 1U; index < column_count; ++index) {
+        if (!columns[index].started) {
+            struct hstex_glue none = {0};
+            columns[index - 1U].tabskip = none;
+        }
     }
     /* Short spans first, so that a wide one only has to make up what the
        columns it covers still lack. */
