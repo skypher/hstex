@@ -29309,6 +29309,17 @@ static int try_break_at(struct hstex_engine *engine,
                         bool final_pass, char *error, size_t error_capacity)
 {
     int32_t penalty = site->penalty;
+    /* THE PENALTY IS BROUGHT INTO RANGE FIRST. Ten thousand or more forbids
+       the break outright, and ten thousand or more the other way IS exactly
+       -10000 from here on, whatever the document wrote -- so the reference
+       traces `p=-10000' for a `\penalty-1000000000', and takes the break as
+       a forced one, which a raw -1000000000 would not have matched. */
+    if (penalty >= HSTEX_INFINITE_PENALTY) {
+        return 0;
+    }
+    if (penalty <= HSTEX_EJECT_PENALTY) {
+        penalty = HSTEX_EJECT_PENALTY;
+    }
     int64_t minimal[HSTEX_FIT_COUNT];
     size_t best[HSTEX_FIT_COUNT];
     int32_t best_line[HSTEX_FIT_COUNT];

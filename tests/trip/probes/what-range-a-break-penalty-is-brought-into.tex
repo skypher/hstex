@@ -1,0 +1,32 @@
+% WHAT RANGE A BREAK PENALTY IS BROUGHT INTO.
+%
+% The penalty at a breakpoint is brought into range before anything is done
+% with it. Ten thousand or more forbids the break outright; ten thousand or
+% more the other way IS exactly -10000 from there on, whatever the document
+% wrote. So
+%
+%   A\penalty-1000000000 A\par
+%
+% traces `p=-10000', not `p=-1000000000' -- and, because -10000 is what the
+% forced break is recognised BY, the break is taken as a forced one and its
+% demerits are the artificial `d=*' rather than a number.
+%
+% HSTeX carried the penalty as written, so a penalty below the forced one
+% was traced as itself and weighed as an ordinary penalty. trip line 147
+% writes \penalty-1000000000 in a paragraph.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingparagraphs=1
+\font\rip=trip \rip
+\hsize=100pt \parindent=0pt \hbadness=10000
+\message{[A a penalty far below the forced one]}
+\setbox0=\vbox{A\penalty-1000000000 A\par}
+\message{[B the forced one itself]}
+\setbox0=\vbox{A\penalty-10000 A\par}
+\message{[C a penalty that forbids a break]}
+\setbox0=\vbox{A\penalty10000 A\par}
+\message{[D one far above it]}
+\setbox0=\vbox{A\penalty1000000000 A\par}
+\message{[E an ordinary one]}
+\setbox0=\vbox{A\penalty50 A\par}
+\message{[done]}
+\end
