@@ -244,8 +244,15 @@ echo "$((total - disagreed))/$total documents agree with the reference"
 # Seven warm runs of one engine over one document, each in an output directory
 # of its own, and the median of what they took. A single run on a machine with
 # other tenants varies by about a fifth, so the median of seven is what
-# docs/BENCHMARK_CONTRACT.md asks for. This shell has no local variables, so
-# these names are deliberately distinct from every other loop's.
+# docs/BENCHMARK_CONTRACT.md asks for.
+#
+# The clock is read either side of each run rather than the run being handed
+# to `time', because `time' resolves ten milliseconds and the shortest
+# document here takes fifty: a tick would be a fifth of the answer, and a
+# five per cent change -- which is about what a worthwhile one is -- would
+# not show at all. Asked for in nanoseconds and reported in milliseconds.
+# This shell has no local variables, so these names are deliberately distinct
+# from every other loop's.
 time_median() {
     tm_side=$1
     tm_name=$2
@@ -261,31 +268,32 @@ time_median() {
             printf '\\pdfoutput=0 %s \\input %s \\end\n' "$clock" "$tm_name" \
                 >"$tm_dir/run-$tm_name.tex"
         fi
+        tm_started=$(date +%s%N)
         ( cd "$tm_dir"
           if [ "$tm_side" = ref ] && [ "$tm_format" = plain ]; then
-              /usr/bin/time -f %e -o t.txt pdftex -output-format=dvi \
-                  -interaction=nonstopmode "$clock \\input $tm_name \\end" \
-                  >/dev/null 2>&1 || :
+              pdftex -output-format=dvi -interaction=nonstopmode \
+                  "$clock \\input $tm_name \\end" >/dev/null 2>&1 || :
           elif [ "$tm_side" = ref ]; then
-              /usr/bin/time -f %e -o t.txt pdflatex -interaction=nonstopmode \
-                  "$tm_name.tex" >/dev/null 2>&1 || :
+              pdflatex -interaction=nonstopmode "$tm_name.tex" \
+                  >/dev/null 2>&1 || :
           elif [ "$tm_format" = plain ]; then
-              /usr/bin/time -f %e -o t.txt "$engine" --format "$plainfmt" \
-                  "run-$tm_name.tex" >/dev/null 2>&1 || :
+              "$engine" --format "$plainfmt" "run-$tm_name.tex" \
+                  >/dev/null 2>&1 || :
           else
-              /usr/bin/time -f %e -o t.txt "$engine" --format "$hfmt" \
-                  "$tm_name.tex" >/dev/null 2>&1 || :
+              "$engine" --format "$hfmt" "$tm_name.tex" >/dev/null 2>&1 || :
           fi ) || :
-        cat "$tm_dir/t.txt" >>"$work/times" 2>/dev/null || echo 0 >>"$work/times"
+        tm_ended=$(date +%s%N)
+        echo "$tm_started $tm_ended" |
+            awk '{ printf "%.1f\n", ($2 - $1) / 1000000 }' >>"$work/times"
         tm_i=$((tm_i + 1))
     done
     sort -n "$work/times" | awk 'NR==4 {print $1}'
 }
 
 if [ "$time_runs" -eq 1 ]; then
-    if ! /usr/bin/time -f %e -o /dev/null true >/dev/null 2>&1; then
+    if [ "$(date +%N)" = "N" ]; then
         echo
-        echo "--time wants GNU time at /usr/bin/time; no timings reported" >&2
+        echo "--time wants a date(1) that reads nanoseconds; none reported" >&2
     else
         echo
         printf '%-10s %-11s %-11s %s\n' document reference hstex speedup
@@ -294,8 +302,8 @@ if [ "$time_runs" -eq 1 ]; then
             [ -n "$name" ] || continue
             ref_seconds=$(time_median ref "$name" "$format")
             hs_seconds=$(time_median hstex "$name" "$format")
-            printf '%-10s %-11s %-11s %s\n' "$name" "${ref_seconds}s" \
-                "${hs_seconds}s" \
+            printf '%-10s %-11s %-11s %s\n' "$name" "${ref_seconds}ms" \
+                "${hs_seconds}ms" \
                 "$(awk -v r="$ref_seconds" -v h="$hs_seconds" \
                      'BEGIN { if (h > 0) printf "%.2fx", r / h; else print "-" }')"
         done <"$work/manifest.clean"
