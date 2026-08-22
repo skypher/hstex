@@ -31994,8 +31994,15 @@ static struct hstex_glue math_glue_in_points(struct hstex_glue glue,
 {
     struct hstex_glue result = glue;
     result.width = scaled_by_unit(glue.width, unit);
-    result.stretch = scaled_by_unit(glue.stretch, unit);
-    result.shrink = scaled_by_unit(glue.shrink, unit);
+    /* AN INFINITE PART IS NOT IN MU AND IS NOT SCALED: a fil is a fil
+       whatever the quad is, and only a finite stretch or shrink is a length
+       the mu stands for. See docs/DECISIONS.md, math-glue-in-points. */
+    if (glue.stretch_order == 0U) {
+        result.stretch = scaled_by_unit(glue.stretch, unit);
+    }
+    if (glue.shrink_order == 0U) {
+        result.shrink = scaled_by_unit(glue.shrink, unit);
+    }
     return result;
 }
 
