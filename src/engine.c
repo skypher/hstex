@@ -17138,7 +17138,7 @@ static void show_noad(struct hstex_engine *engine,
 {
     switch ((enum hstex_noad_kind)noad->kind) {
     case HSTEX_NOAD_STYLE:
-        print_text(engine, math_style_name(noad->atom_class));
+        print_esc_text(engine, math_style_name(noad->atom_class));
         return;
     case HSTEX_NOAD_NODE:
         if (noad->node != 0U && (size_t)noad->node <= engine->node_count) {
@@ -17193,8 +17193,10 @@ static void show_noad(struct hstex_engine *engine,
     case HSTEX_NOAD_ATOM:
         /* A \vcenter is set and spaced as an ordinary atom but is not one,
            and the reference names it for what it is. */
-        print_text(engine, noad->vcentered ? "\\vcenter"
-                                           : atom_class_name(noad->atom_class));
+        print_esc_text(engine,
+                       noad->vcentered
+                           ? "\\vcenter"
+                           : atom_class_name(noad->atom_class));
         break;
     case HSTEX_NOAD_OVERLINE:
         print_esc_text(engine, "\\overline");
@@ -17216,12 +17218,13 @@ static void show_noad(struct hstex_engine *engine,
         /* \left ... \right is one inner atom holding a list that begins with
            its opening delimiter and ends with its closing one, which is how
            the reference writes it. */
-        print_text(engine, atom_class_name(noad->atom_class));
+        print_esc_text(engine, atom_class_name(noad->atom_class));
         break;
     }
     if (noad->kind == (uint8_t)HSTEX_NOAD_ATOM &&
         noad->atom_class == (uint8_t)HSTEX_ATOM_OP && noad->limits != 0U) {
-        print_text(engine, noad->limits == 1U ? "\\limits" : "\\nolimits");
+        print_esc_text(engine,
+                       noad->limits == 1U ? "\\limits" : "\\nolimits");
     }
     if (noad->kind == (uint8_t)HSTEX_NOAD_FENCE) {
         if (depth < threshold) {
@@ -17318,7 +17321,8 @@ static void show_math_level(struct hstex_engine *engine,
     }
     if (list->pending_atom != 0U) {
         print_byte(engine, '\n');
-        print_text(engine, atom_class_name((uint8_t)(list->pending_atom - 1U)));
+        print_esc_text(engine,
+                       atom_class_name((uint8_t)(list->pending_atom - 1U)));
     }
     if (!list->has_fraction) {
         return;
@@ -35275,7 +35279,14 @@ static int build_math_fence(struct hstex_engine *engine,
        closing atom, so they are put into the list while it is set and the
        boxes are spliced in where they stood. See docs/DECISIONS.md,
        delimiters-are-atoms. */
-    if (status == 0) {
+    /* A GROUP THAT TURNED INTO A FRACTION is not spaced that way: what
+       stands between the delimiters is the fraction alone, and the numerator
+       is what was read BEFORE the \over, delimiter and all left out of it.
+       The two atoms would fall inside the numerator and move the split, and
+       they would earn no space anyway -- an opening before an inner atom and
+       an inner before a closing are both spaced by nothing. See
+       docs/DECISIONS.md, fractions. */
+    if (status == 0 && !list->has_fraction) {
         struct hstex_noad opening = {
             .kind = (uint8_t)HSTEX_NOAD_ATOM,
             .atom_class = (uint8_t)HSTEX_ATOM_OPEN,

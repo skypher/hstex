@@ -36,9 +36,12 @@
 \setbox0=\vbox{\hrule\hbox to 10pt{A\hskip 1pt plus 2pt\lower1pt\copy1\discretionary{A}{B}{C}}
   \penalty 3\kern2pt\mark{m}\vadjust{}\insert100{}\lineskip=1pt \hbox{}\hbox{}}
 \showbox0
-\message{[B a formula]}
+\message{[B a formula, and a math list of noads]}
 \setbox0=\hbox{$A\over B\mathchoice{A}{B}{C}{D}\radical"270370 A\underline{A}\left(A\right)$}
 \showbox0
+\setbox0=\hbox{$A\mathbin{B}\mathop{C}\limits^D\mathpunct{E}\mathinner{F}
+ \vcenter{\hbox{}}\mathrel{G}\displaystyle\left(H\over I\right)
+ \underline{J}\overline{K}\showlists$}
 \message{[C the whatsits]}
 \setbox2=\hbox{\write3{a\relax b}\openout4=zzesc \closeout4 \special{s}}
 \showbox2
