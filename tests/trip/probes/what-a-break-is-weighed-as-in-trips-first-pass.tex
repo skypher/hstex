@@ -43,18 +43,46 @@
 %   - \looseness, which trip's \everypar sets;
 %   - \emergencystretch, which trip sets.
 %
-% So the reproduction wants something else of trip's line 76-79 --
-% `\hbox{\hbadness100\valign{#\cr\hskip-9pt7A\righthyphenmin0\setlanguage\?
-% \unhbox0{*\language`b11\noboundary}1Z1pts\patterns{q9q} -\0qq
-% \showlists{\language\?\noboundary111}\hyphenchar\rip=`-\cr}}' -- and the
-% candidates left are the ones this file does not reach: `*' being a space by
-% catcode, \setlanguage and \language changing mid-paragraph, \righthyphenmin
-% nought, \noboundary, patterns given while the paragraph is being read, and
-% \hyphenchar being changed to another character before the \cr -- \rip and
-% \trip being one font, so setting one sets the other.
+% BISECTED, AND IT TAKES TWO THINGS. trip.tex's own first 76 lines followed
+% by
+%
+%   \hskip-9pt\righthyphenmin0
+%   1Z1pts\patterns{q9q} -\0qq \showlists{\language\?\noboundary111}%
+%   \cr}}\showbox0}
+%   \fi\end
+%
+% still diverges, in the same place and by the same numbers. Cutting it
+% further says which two ingredients carry it, each necessary and neither
+% sufficient:
+%
+%   - `\righthyphenmin0'. Put back to 2 or more, or left out so that it keeps
+%     the 1000000000 of trip line 68, the two engines agree exactly.
+%   - `\language\?' inside the group after \showlists -- a language change
+%     PART WAY THROUGH the paragraph. Take it out and they agree exactly.
+%
+% Everything else in those lines can go: \showlists itself, the braces round
+% the group, \noboundary, `\patterns{q9q}' given mid-line,
+% `\hyphenchar\rip=`-', \setlanguage, \unhbox0, `7A', and the whole of trip's
+% line 79 bar the \cr. Only `\hskip-9pt' changes anything, and only the size
+% of the difference -- 40 differing trace lines with it, 16 without.
+%
+% So it is a language changed mid-paragraph together with a \righthyphenmin
+% that the paragraph did not begin with. What that pair does is decide which
+% words may be hyphenated where: a language whatsit carries the two
+% hyphenmins as they stand when it is made, and the words in front of the
+% first one are hyphenated by what the paragraph BEGAN with. Written out on
+% its own -- a paragraph entered with \righthyphenmin 1000000000, a word, then
+% `\righthyphenmin0 \language5', then another word -- the two engines agree,
+% so the pair alone is not the whole of it either. What is left between that
+% and trip is the rest of trip's state: two languages whose patterns differ,
+% \lccode`A=1 and \lccode 1 = 49 from line 71-72, and \patterns given for
+% language 255 and for 256.
+%
+% (The reproduction above is a recipe rather than a file: trip.tex is fetched
+% and pinned, never vendored, so nothing here may carry its lines.)
 %
 % WHAT IS DRAWN HERE is the set that agrees, kept so that the next attempt
-% starts past it.
+% starts past it rather than at the diff again.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
 \tracingonline=1 \tracingparagraphs=1
 \font\trip=trip \trip
