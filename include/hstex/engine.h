@@ -1442,6 +1442,18 @@ struct hstex_pdf_open_link {
     bool running_width;
 };
 
+/* What an insertion remembers besides its list, kept beside the nodes rather
+   than in them. There are three of these fields and one is a whole
+   struct hstex_glue, which together made the insert variant 36 bytes and the
+   widest of the ten -- so every node a document makes carried the room an
+   insertion needs, and a document makes very few insertions. Behind an index
+   the variant is 24. See README.md. */
+struct hstex_insert_detail {
+    struct hstex_glue split_top_skip;
+    int32_t split_max_depth;
+    int32_t float_cost;
+};
+
 struct hstex_node {
     /* Kept in a byte rather than an int, and the flag beside it in a bit.
        A corpus run makes ten million of these and every byte of the record
@@ -1543,9 +1555,9 @@ struct hstex_node {
             uint32_t node_start;
             uint32_t node_count;
             uint16_t number;
-            struct hstex_glue split_top_skip;
-            int32_t split_max_depth;
-            int32_t float_cost;
+            /* Where the rest of it stands, one more than its place in
+               engine->insert_details; zero for an insertion that has none. */
+            uint32_t detail;
         } insert;
         struct {
             /* An enum hstex_whatsit_kind. */
@@ -2341,6 +2353,12 @@ struct hstex_engine {
        begin. Kept here, at the end, rather than beside the streams: what a
        run reads on its hot path should not be pushed about by it. */
     char *write_stream_paths[16];
+    /* What the insertions remember, one entry per insertion node that has
+       any. Appended to and never compacted: a document makes very few, and
+       what a page leaves behind does not reach in here. */
+    struct hstex_insert_detail *insert_details;
+    size_t insert_detail_count;
+    size_t insert_detail_capacity;
 };
 
 int hstex_engine_init(struct hstex_engine *engine, char *error,

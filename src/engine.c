@@ -3322,6 +3322,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->box_levels);
     free(engine->nodes);
     free(engine->list_items);
+    free(engine->insert_details);
     free(engine->token_lists);
     free(engine->fonts);
     free(engine->hyphen_roots);
@@ -11735,6 +11736,52 @@ static int store_node(struct hstex_engine *engine,
     return 0;
 }
 
+/* WHAT AN INSERTION REMEMBERS BESIDES ITS LIST. These three fields stood in
+   every node once, because a union is as wide as its widest arm; they stand
+   here instead. An insertion whose index is zero reads as all zeroes, which
+   is what the fields held before they moved. */
+static struct hstex_insert_detail insert_detail_of(
+    const struct hstex_engine *engine, const struct hstex_node *node)
+{
+    struct hstex_insert_detail none = {0};
+    uint32_t at = node->value.insert.detail;
+    if (at == 0U || (size_t)at > engine->insert_detail_count) {
+        return none;
+    }
+    return engine->insert_details[at - 1U];
+}
+
+static int store_insert_detail(struct hstex_engine *engine,
+                               const struct hstex_insert_detail *detail,
+                               uint32_t *at, char *error,
+                               size_t error_capacity)
+{
+    if (engine->insert_detail_count >= (size_t)UINT32_MAX) {
+        return set_error(error, error_capacity, "too many insertions");
+    }
+    if (engine->insert_detail_count == engine->insert_detail_capacity) {
+        size_t capacity = engine->insert_detail_capacity == 0U
+                              ? 8U
+                              : engine->insert_detail_capacity * 2U;
+        if (capacity > SIZE_MAX / sizeof(*engine->insert_details)) {
+            return set_error(error, error_capacity,
+                             "insertion detail capacity overflow");
+        }
+        void *room = realloc(engine->insert_details,
+                             capacity * sizeof(*engine->insert_details));
+        if (room == NULL) {
+            return set_error(error, error_capacity,
+                             "insertion detail allocation failed");
+        }
+        engine->insert_details = room;
+        engine->insert_detail_capacity = capacity;
+    }
+    engine->insert_details[engine->insert_detail_count] = *detail;
+    *at = (uint32_t)engine->insert_detail_count + 1U;
+    ++engine->insert_detail_count;
+    return 0;
+}
+
 /* Nodes and the lists that hold them are made and never unmade: a run of the
    corpus makes ten million nodes, and at the end of a page can still reach
    only a few thousand of them. Between one page and the next, with nothing
@@ -12090,6 +12137,10 @@ static void compact_nodes(struct hstex_engine *engine)
     free(to.places);
     free(engine->nodes);
     free(engine->list_items);
+    /* Not the insertion details: this is the compaction at a page boundary,
+       and it builds new node and list arenas to replace these two. Nothing
+       compacts the details -- an insertion that survives keeps the index it
+       had -- so the array they are in is the one that stays. */
     engine->nodes = to.nodes;
     engine->node_count = to.count;
     engine->node_capacity = to.capacity;
@@ -17002,20 +17053,21 @@ static void show_node(struct hstex_engine *engine,
         /* The \splittopskip an insertion kept is written as a whole glue,
            stretch and shrink and all. */
         print_text(engine, "; split(");
-        show_scaled(engine, node->value.insert.split_top_skip.width);
-        if (node->value.insert.split_top_skip.stretch != 0) {
+        struct hstex_insert_detail shown = insert_detail_of(engine, node);
+        show_scaled(engine, shown.split_top_skip.width);
+        if (shown.split_top_skip.stretch != 0) {
             print_text(engine, " plus ");
-            show_glue_amount(engine, node->value.insert.split_top_skip.stretch,
-                             node->value.insert.split_top_skip.stretch_order);
+            show_glue_amount(engine, shown.split_top_skip.stretch,
+                             shown.split_top_skip.stretch_order);
         }
-        if (node->value.insert.split_top_skip.shrink != 0) {
+        if (shown.split_top_skip.shrink != 0) {
             print_text(engine, " minus ");
-            show_glue_amount(engine, node->value.insert.split_top_skip.shrink,
-                             node->value.insert.split_top_skip.shrink_order);
+            show_glue_amount(engine, shown.split_top_skip.shrink,
+                             shown.split_top_skip.shrink_order);
         }
         print_byte(engine, ',');
-        show_scaled(engine, node->value.insert.split_max_depth);
-        print_formatted(engine, "); float cost %d", node->value.insert.float_cost);
+        show_scaled(engine, shown.split_max_depth);
+        print_formatted(engine, "); float cost %d", shown.float_cost);
         if (node->value.insert.node_count != 0U &&
             (size_t)node->value.insert.node_start +
                     node->value.insert.node_count <=
@@ -23396,7 +23448,7 @@ static int hold_over_insertions(struct hstex_engine *engine,
             struct hstex_glue standing =
                 engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP];
             engine->glue_parameters[HSTEX_GLUE_SPLIT_TOP_SKIP] =
-                broken.value.insert.split_top_skip;
+                insert_detail_of(engine, &broken).split_top_skip;
             struct hstex_box packed = {0};
             int status = prune_split_top(engine, rest, rest_count, &packed,
                                          error, error_capacity);
@@ -24012,7 +24064,7 @@ static int build_page(struct hstex_engine *engine, char *error,
                     /* This class has already had to be split on this page,
                        so nothing more of it can go here. */
                     engine->page_integers[HSTEX_PAGE_INSERT_PENALTIES] +=
-                        node.value.insert.float_cost;
+                        insert_detail_of(engine, &node).float_cost;
                 } else if ((wanted <= 0 || wanted <= room) &&
                            (int64_t)size + record->held <=
                                engine->dimens[number]) {
@@ -24052,7 +24104,7 @@ static int build_page(struct hstex_engine *engine, char *error,
                     size_t at = vertical_break_measured(
                         engine, engine->list_items + node.value.insert.node_start,
                         node.value.insert.node_count, (int32_t)allowed,
-                        node.value.insert.split_max_depth, &reached,
+                        insert_detail_of(engine, &node).split_max_depth, &reached,
                         &at_penalty);
                     trace_page_split(engine, number, (int32_t)allowed, reached,
                                      at_penalty);
@@ -36475,6 +36527,16 @@ static int execute_insert(struct hstex_engine *engine, char *error,
     if (status != 0) {
         return -1;
     }
+    struct hstex_insert_detail detail = {
+        .split_top_skip = settings.split_top_skip,
+        .split_max_depth = settings.split_max_depth,
+        .float_cost = settings.float_cost,
+    };
+    uint32_t detail_at = 0U;
+    if (store_insert_detail(engine, &detail, &detail_at, error,
+                            error_capacity) != 0) {
+        return -1;
+    }
     struct hstex_node node = {
         .kind = HSTEX_NODE_INSERT,
         /* What the page builder measures: everything the list came to. */
@@ -36483,9 +36545,7 @@ static int execute_insert(struct hstex_engine *engine, char *error,
             .node_start = packed.node_start,
             .node_count = packed.node_count,
             .number = (uint16_t)number,
-            .split_top_skip = settings.split_top_skip,
-            .split_max_depth = settings.split_max_depth,
-            .float_cost = settings.float_cost,
+            .detail = detail_at,
         },
     };
     if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
@@ -45331,12 +45391,13 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
     case HSTEX_NODE_INSERT:
         digest_bytes(digest, &node->value.insert.number,
                      sizeof(node->value.insert.number));
-        digest_bytes(digest, &node->value.insert.split_top_skip,
-                     sizeof(node->value.insert.split_top_skip));
-        digest_bytes(digest, &node->value.insert.split_max_depth,
-                     sizeof(node->value.insert.split_max_depth));
-        digest_bytes(digest, &node->value.insert.float_cost,
-                     sizeof(node->value.insert.float_cost));
+        /* Hashed by what it says rather than by where it is kept: the index
+           is this run's own, while what it points at is the insertion. */
+        struct hstex_insert_detail held = insert_detail_of(engine, node);
+        digest_bytes(digest, &held.split_top_skip, sizeof(held.split_top_skip));
+        digest_bytes(digest, &held.split_max_depth,
+                     sizeof(held.split_max_depth));
+        digest_bytes(digest, &held.float_cost, sizeof(held.float_cost));
         digest_node_run(digest, engine, node->value.insert.node_start,
                         node->value.insert.node_count);
         break;

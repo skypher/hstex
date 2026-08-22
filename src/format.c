@@ -26,6 +26,7 @@ static uint64_t hstex_format_layout(void)
     const size_t widths[] = {
         sizeof(struct hstex_engine),  sizeof(struct hstex_macro),
         sizeof(struct hstex_meaning), sizeof(struct hstex_node),
+        sizeof(struct hstex_insert_detail),
         sizeof(struct hstex_box),     sizeof(struct hstex_font),
         sizeof(struct hstex_glue),    sizeof(struct hstex_save_entry),
     };
@@ -366,6 +367,12 @@ static void transfer_format(struct format_stream *stream,
     transfer_array(stream, &list_items, &engine->list_item_count,
                    &engine->list_item_capacity, sizeof(*engine->list_items), true);
     engine->list_items = list_items;
+    /* What the insertion nodes point at; see struct hstex_insert_detail. */
+    void *insert_details = engine->insert_details;
+    transfer_array(stream, &insert_details, &engine->insert_detail_count,
+                   &engine->insert_detail_capacity,
+                   sizeof(*engine->insert_details), true);
+    engine->insert_details = insert_details;
 
     size_t token_list_count = engine->token_list_count;
     void *token_lists = engine->token_lists;
