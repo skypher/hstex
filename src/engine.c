@@ -212,6 +212,8 @@ static void nest_note(struct hstex_engine *engine);
 /* The `{' a box body or a list must begin with. */
 static int scan_left_brace(struct hstex_engine *engine, char *error,
                            size_t error_capacity);
+static int require_left_brace(struct hstex_engine *engine, char *error,
+                              size_t error_capacity);
 static int insert_every_box(struct hstex_engine *engine, size_t which,
                             char *error, size_t error_capacity);
 /* The text of a meaning and the name of a control sequence, both wanted by
@@ -36222,6 +36224,11 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         ++outer->choice_index;
         --outer->choice_remaining;
         pop_math_list(engine);
+        /* The brace of the branch that follows is wanted here, where the one
+           before has just closed. */
+        if (status == 0 && outer->choice_remaining != 0U) {
+            status = require_left_brace(engine, error, error_capacity);
+        }
         return status;
     }
     /* One ordinary atom in braces is that atom: {x} carries scripts exactly
@@ -36499,6 +36506,58 @@ static int execute_math_style(struct hstex_engine *engine, int32_t style,
    keeps the one the current style calls for, spliced into the list so that
    its atoms space against their neighbours; see docs/DECISIONS.md,
    math-choices. */
+/* A MANDATORY left brace that the caller has not read yet: the four
+   branches of a \mathchoice each want one, and the reference reads it the
+   moment the branch before is done rather than waiting to see what turns up.
+   A brace that is there is put back for the executor to open the branch
+   with; one that is not is reported and put in. Spaces, \relax and an
+   undefined name are stepped over, the same as for any mandatory brace. */
+static int require_left_brace(struct hstex_engine *engine, char *error,
+                              size_t error_capacity)
+{
+    static const char *const help[] = {
+        "A left brace was mandatory here, so I've put one in.",
+        "You might want to delete and/or insert some corrections",
+        "so that I will find a matching right brace soon.",
+        "(If you're confused by all this, try typing `I}' now.)", NULL};
+    hstex_token token = 0U;
+    struct hstex_source_location location;
+    for (;;) {
+        if (expanded_next_non_space_unrestricted(engine, &token, &location,
+                                                 error, error_capacity) !=
+            HSTEX_ENGINE_TOKEN) {
+            return set_error(error, error_capacity,
+                             "end of input where a { was expected");
+        }
+        if (hstex_token_is_control_sequence(token)) {
+            const struct hstex_meaning *meaning = hstex_engine_meaning(
+                engine, hstex_token_control_sequence_id(token));
+            if (meaning->command == HSTEX_COMMAND_RELAX) {
+                continue;
+            }
+            if (meaning->command == HSTEX_COMMAND_UNDEFINED) {
+                record_executing_name(engine, token);
+                report_undefined_control_sequence(engine);
+                continue;
+            }
+        }
+        break;
+    }
+    if (push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (token_is_effective_begin_group(engine, token)) {
+        return 0;
+    }
+    tex_error(engine, help, "Missing { inserted");
+    /* The brace is PUT IN rather than put back, so it does not undo a
+       reading any count has already seen. */
+    return hstex_source_push_one(
+        &engine->sources,
+        hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{'),
+        location, error, error_capacity);
+}
+
 static int execute_math_choice(struct hstex_engine *engine, char *error,
                                size_t error_capacity)
 {
@@ -36518,7 +36577,7 @@ static int execute_math_choice(struct hstex_engine *engine, char *error,
     builder->choice_remaining = 4U;
     builder->choice_index = 0U;
     builder->choice_noad = builder->count - 1U;
-    return 0;
+    return require_left_brace(engine, error, error_capacity);
 }
 
 /* \delimiter names a small and a large variant. Used on its own it is the

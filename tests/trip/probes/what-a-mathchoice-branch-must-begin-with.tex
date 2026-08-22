@@ -1,0 +1,41 @@
+% WHAT A MATHCHOICE BRANCH MUST BEGIN WITH.
+%
+% \mathchoice reads FOUR sub-formulas, and each of them begins with a brace
+% the reference insists on -- read the moment the branch before is done,
+% rather than taken as it turns up:
+%
+%   $\mathchoice{a}{b}{c}\relax d$
+%   ! Missing { inserted.
+%   <to be read again>
+%                      d
+%   A left brace was mandatory here, so I've put one in.
+%
+% Spaces, \relax and an undefined name are stepped over on the way, the same
+% as for any mandatory brace -- so the \relax above is not the branch, and
+% the `d' is what the fault names.
+%
+% A brace put in this way opens the branch like any other, so what follows
+% is swept into it and the formula's own closing token then finds a group
+% still open: `Missing } inserted' for each one, once per level.
+%
+% HSTeX waited for a `{' to turn up and made whatever came instead into
+% ordinary math material, so it drew none of this. trip line 438 writes
+% \mathchoice twice, the second with only three branches before an
+% \endgroup, which the reference recovers from in four faults.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1
+\font\rip=trip \fontdimen22\rip=7pt \rip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont1=\rip \scriptfont1=\rip \scriptscriptfont1=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\message{[A a fourth branch that is not a brace]}
+\setbox0=\hbox{$\mathchoice{a}{b}{c}\relax d$}
+\message{[B a second branch that is not a brace]}
+\setbox0=\hbox{$\mathchoice{a}\relax{c}{d}$}
+\message{[C an endgroup where a branch belongs, with groups open]}
+\setbox0=\hbox{$\begingroup{{\mathchoice{}{}{}\endgroup$}
+\message{[D four branches, as they should be]}
+\setbox0=\hbox{$\mathchoice{a}{b}{c}{d}$}
+\message{[done]}
+\end
