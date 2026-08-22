@@ -31186,6 +31186,27 @@ static bool set_the_same_way(const struct hstex_engine *engine, uint32_t left,
                   one->value.character.original_count) == 0;
 }
 
+/* WHAT A \tabskip COMES TO once a row's glue setting is applied to it, which
+   is what an entry spanning past it is measured against. See
+   docs/DECISIONS.md, what-an-entry-that-spans-is-set-to. */
+static int32_t tabskip_set_width(struct hstex_glue skip,
+                                 struct hstex_glue_set set)
+{
+    int32_t width = skip.width;
+    if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_NORMAL || set.total == 0) {
+        return width;
+    }
+    double ratio = (double)set.needed / (double)set.total;
+    if (set.sign == (uint8_t)HSTEX_GLUE_SIGN_STRETCHING) {
+        if (skip.stretch_order == set.order) {
+            width += rounded_amount(ratio * (double)skip.stretch);
+        }
+    } else if (skip.shrink_order == set.order) {
+        width -= rounded_amount(ratio * (double)skip.shrink);
+    }
+    return width;
+}
+
 /* A WORD IS SET AGAIN FROM ITS LETTERS BEFORE IT IS BROKEN. The reference
    rebuilds the whole run it is about to break, so what the two branches of a
    break are developed against is the run its letters make rather than the
@@ -38907,6 +38928,20 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                \tabskip and an EMPTY box of each one's width. See
                docs/DECISIONS.md, what-an-entry-that-spans-is-set-to. */
             int64_t width = column < column_count ? columns[column].width : 0;
+            /* AN ENTRY THAT SPANS IS SET TO FILL ALL THE COLUMNS IT COVERS
+               even though the box it becomes is only as wide as the first of
+               them: what it is measured against is those columns and the
+               \tabskip between them AS THE ROW'S OWN GLUE SETTING LEAVES
+               THEM. */
+            int64_t reach = width;
+            for (size_t step = 1U; step < entry->span; ++step) {
+                size_t at = column + step;
+                reach += tabskip_set_width(at - 1U < column_count
+                                               ? columns[at - 1U].tabskip
+                                               : leading,
+                                           prototype);
+                reach += at < column_count ? columns[at].width : 0;
+            }
             /* The entry is set to the column's width, so its glue takes up
                whatever the column is wider by; see docs/DECISIONS.md,
                the-entries-of-a-row. */
@@ -38916,7 +38951,7 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
                     engine, engine->list_items + set.value.list.node_start,
                     set.value.list.node_count);
                 set.value.list.glue =
-                    packing_glue_set(entry->width, (int32_t)width, &spare);
+                    packing_glue_set(entry->width, (int32_t)reach, &spare);
             }
             if (vertical) {
                 /* The entry is set to the height its row came to, and is as

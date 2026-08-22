@@ -17,5 +17,17 @@
 \setbox0=\vbox{\halign{\hbox to 10pt{}#\tabskip=2pt&\hbox to 20pt{}#\tabskip=3pt&\hbox to 30pt{}#\tabskip=4pt\cr
   a\span b&c\cr \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
 \showbox0
+\message{[D one with glue, which fills all the columns it covers]}
+\tabskip=3pt
+\setbox0=\vbox{\halign{#&#&#\cr
+  \hbox to 5pt{}\hskip 0pt plus 1fil\span \hbox to 5pt{}&c\cr
+  \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
+\showbox0
+\message{[E the same where the row itself has to shrink]}
+\tabskip=3pt minus 2pt
+\setbox0=\vbox{\halign to 120pt{#&#&#\cr
+  \hbox to 5pt{}\hskip 0pt plus 1fil\span \hbox to 5pt{}&c\cr
+  \hbox to 40pt{}&\hbox to 50pt{}&\hbox to 60pt{}\cr}}
+\showbox0
 \message{[done]}
 \end
