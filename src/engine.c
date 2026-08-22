@@ -40262,15 +40262,14 @@ static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                           (const uint8_t *)"relax", 5U, &relax) != 1) {
         return set_error(error, error_capacity, "relax is not defined");
     }
-    hstex_token *pair = token_block_alloc(2U);
-    if (pair == NULL) {
-        return set_error(error, error_capacity,
-                         "conditional relax allocation failed");
+    /* Each goes back ON ITS OWN, the token first and the \relax over it:
+       the reference backs them up one at a time, so the frame the \relax
+       stood in is spent and gone by the time anything below it is shown. */
+    if (push_one(engine, token, location, error, error_capacity) != 0) {
+        return -1;
     }
-    pair[0] = hstex_token_control_sequence(relax);
-    pair[1] = token;
-    return hstex_source_push_owned_tokens(&engine->sources, pair, 2U, location,
-                                          error, error_capacity);
+    return push_one(engine, hstex_token_control_sequence(relax), location,
+                    error, error_capacity);
 }
 
 /* \else, \or, and \fi met while the innermost conditional is still scanning

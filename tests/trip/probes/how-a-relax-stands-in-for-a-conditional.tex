@@ -1,0 +1,27 @@
+% HOW A \relax STANDS IN FOR A CONDITIONAL.
+%
+% An \else, \or or \fi met while something is scanning a number stands for
+% \relax: it terminates the scan and stays in the input for the conditional
+% to find afterwards. The reference backs the two up ONE AT A TIME -- the
+% token first, the \relax over it -- so the frame the \relax stood in is
+% spent and gone by the time a fault below it is shown:
+%
+%   ! Missing number, treated as zero.
+%   <to be read again>
+%                      \relax
+%   <to be read again>
+%                      \fi
+%
+% This engine pushed the pair as one inserted text, so the second frame
+% still held the \fi and drew `<inserted text> \relax' with the \fi behind
+% the reading.
+%
+% trip line 419 writes \ifcase1\or\ifeof\fi.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \errorcontextlines=5
+\message{[A a \fi where a number should be]}
+\ifcase1 \or\ifeof\fi\fi\fi
+\message{[B an \else where a number should be]}
+\ifcase1 \or\ifnum\else\fi\fi\fi
+\message{[done]}
+\end
