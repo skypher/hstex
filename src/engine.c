@@ -3546,9 +3546,12 @@ static enum hstex_engine_result raw_next(
         uint8_t came_from = engine->sources.top != NULL
                                 ? engine->sources.top->source_kind
                                 : (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+        uint32_t frame_name =
+            engine->sources.top != NULL ? engine->sources.top->frame_name : 0U;
         int noted = note_alignment_token(
             engine, *token,
-            came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+            came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE &&
+                frame_name == engine->alignment_generation,
             came_from == (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, error,
             error_capacity);
         if (noted < 0) {
@@ -3655,6 +3658,14 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
             --entry->nesting;
         } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
             ++entry->nesting;
+        }
+    }
+    /* A preamble's count is undone the same way. */
+    if (engine->preamble_nesting != NULL) {
+        if (token_is_category(token, HSTEX_CAT_BEGIN_GROUP)) {
+            --*engine->preamble_nesting;
+        } else if (token_is_category(token, HSTEX_CAT_END_GROUP)) {
+            ++*engine->preamble_nesting;
         }
     }
     return hstex_source_push_one(&engine->sources, token, location, error,
@@ -36687,8 +36698,15 @@ static int scan_align_preamble(struct hstex_engine *engine,
     bool seen_marker = false;
     /* A tab or a \cr inside braces belongs to whatever the braces hold and
        does not end a column: trip line 332 writes a whole \halign inside a
-       template. See tests/trip/probes/what-ends-a-preamble-column.tex. */
+       template. See tests/trip/probes/what-ends-a-preamble-column.tex. The
+       count is kept where the reader can reach it, so that a brace the
+       preamble read anywhere -- inside a conditional it skipped, inside a
+       macro it expanded -- is counted; and it runs BELOW NOUGHT as readily
+       as above it, which is what leaves a `\cr' standing in a template
+       rather than dividing a column. */
     int depth = 0;
+    int *previous_nesting = engine->preamble_nesting;
+    engine->preamble_nesting = &depth;
     int status = 0;
 
     for (;;) {
@@ -36842,15 +36860,6 @@ static int scan_align_preamble(struct hstex_engine *engine,
             seen_marker = true;
             continue;
         }
-        if (token_is_effective_category(engine, token,
-                                        (uint8_t)HSTEX_CAT_BEGIN_GROUP)) {
-            ++depth;
-        } else if (token_is_effective_category(engine, token,
-                                               (uint8_t)HSTEX_CAT_END_GROUP)) {
-            if (depth > 0) {
-                --depth;
-            }
-        }
         if (depth == 0 &&
             token_is_effective_category(engine, token,
                                         (uint8_t)HSTEX_CAT_ALIGNMENT_TAB)) {
@@ -36909,11 +36918,13 @@ static int scan_align_preamble(struct hstex_engine *engine,
         seen_marker = false;
         if (hstex_token_is_control_sequence(token)) {
             /* \cr ended the preamble. */
+            engine->preamble_nesting = previous_nesting;
             *out_columns = columns;
             *out_count = count;
             return 0;
         }
     }
+    engine->preamble_nesting = previous_nesting;
     vector_destroy(&before);
     vector_destroy(&after);
     destroy_align_columns(columns, count);
@@ -36934,11 +36945,16 @@ static int execute_alignment(struct hstex_engine *engine, bool vertical,
        alignment itself began on, so one alignment inside another's entry
        must give the outer one its line back. */
     int32_t outer_line = engine->alignment_line;
+    /* And a mark of its own, so that its templates are told from the ones
+       it is being read out of. */
+    uint32_t outer_generation = engine->alignment_generation;
+    engine->alignment_generation = ++engine->alignment_generations_made;
     engine->alignment_entry = NULL;
     int status = execute_alignment_inner(engine, vertical, error,
                                          error_capacity);
     engine->alignment_entry = outer;
     engine->alignment_line = outer_line;
+    engine->alignment_generation = outer_generation;
     return status;
 }
 
@@ -37045,7 +37061,8 @@ static int end_alignment_entry(struct hstex_engine *engine,
             return -1;
         }
         hstex_source_name_top(&engine->sources,
-                              (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
+                              (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+                              engine->alignment_generation);
     }
     return 0;
 }
@@ -37057,6 +37074,17 @@ static int note_alignment_token(struct hstex_engine *engine, hstex_token token,
                                 bool from_template, bool from_pushback,
                                 char *error, size_t error_capacity)
 {
+    engine->alignment_token_from_template = from_template;
+    /* A preamble counts every brace it reads, wherever it was read from. */
+    if (engine->preamble_nesting != NULL) {
+        if (token_is_effective_category(engine, token,
+                                        (uint8_t)HSTEX_CAT_BEGIN_GROUP)) {
+            ++*engine->preamble_nesting;
+        } else if (token_is_effective_category(engine, token,
+                                               (uint8_t)HSTEX_CAT_END_GROUP)) {
+            --*engine->preamble_nesting;
+        }
+    }
     struct hstex_align_entry *entry = engine->alignment_entry;
     if (entry == NULL || entry->after_pushed) {
         return 0;
@@ -37222,7 +37250,8 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
             status = -1;
         } else {
             hstex_source_name_top(&engine->sources,
-                                  (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
+                                  (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+                              engine->alignment_generation);
         }
     }
     while (status == 0 && !finished) {
@@ -37312,7 +37341,8 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                 } else {
                     hstex_source_name_top(
                         &engine->sources,
-                        (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE, 0U);
+                        (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+                        engine->alignment_generation);
                 }
             }
             continue;
@@ -41557,6 +41587,13 @@ handle_token:
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
             if (token_is_category(*token, HSTEX_CAT_ALIGNMENT_TAB)) {
+                /* A tab that came from a TEMPLATE divides nothing: no
+                   separator can be met while a template is being read, so
+                   the reference names it and drops it. */
+                if (engine->alignment_token_from_template) {
+                    report_misplaced(engine, *token, misplaced_ampersand_help);
+                    continue;
+                }
                 if (engine->alignment_entry != NULL &&
                     !engine->alignment_entry->after_pushed) {
                     if (end_alignment_entry(engine, HSTEX_ALIGN_END_TAB, error,
@@ -41876,6 +41913,9 @@ handle_token:
         bool ends_an_entry =
             (meaning->command == HSTEX_COMMAND_CR ||
              meaning->command == HSTEX_COMMAND_SPAN) &&
+            /* One that came from a template ends nothing and IS traced, the
+               way any command the main loop obeyed is. */
+            !engine->alignment_token_from_template &&
             engine->alignment_entry != NULL &&
             !engine->alignment_entry->after_pushed;
         if (engine->has_pending_character && !ends_an_entry &&
@@ -42295,6 +42335,12 @@ handle_token:
             continue;
         case HSTEX_COMMAND_CR:
         case HSTEX_COMMAND_SPAN:
+            /* One that came from a TEMPLATE divides nothing; see the tab
+               above. */
+            if (engine->alignment_token_from_template) {
+                report_misplaced(engine, *token, misplaced_tab_help);
+                continue;
+            }
             /* A tab or \cr ends the entry from wherever it turns up, which
                may be inside a box the entry's template opened. */
             if (engine->alignment_entry != NULL &&

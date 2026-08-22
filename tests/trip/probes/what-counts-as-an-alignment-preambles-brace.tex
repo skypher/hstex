@@ -1,0 +1,56 @@
+% WHAT COUNTS AS AN ALIGNMENT PREAMBLE'S BRACE.
+%
+% A preamble counts the braces it reads and divides columns at a tab or a
+% \cr only where that count is NOUGHT. Two things about the count are not
+% obvious, and trip line 420 turns on both:
+%
+%   \halign\relax{\span\iffalse}\fi\cr#&\ifnum0=`{\fi\cr\cr}
+%
+%   -- a brace read ANYWHERE counts, including one a conditional the
+%   preamble skipped swallowed. The `\span\iffalse' expands the \iffalse,
+%   whose false text is `}', and that brace takes the count to MINUS ONE;
+%
+%   -- the count runs BELOW NOUGHT as readily as above it. So the `\cr'
+%   after the `\fi' divides nothing and goes into the template, and the `&'
+%   after the `#' goes into the other half of it; the `{' in `\ifnum0=`{'
+%   brings the count back to nought, and the `\cr' after it is the one that
+%   ends the preamble.
+%
+% What is left is ONE column whose halves are `\cr' and `&\ifnum0=`{\fi'.
+% A tab or a \cr that comes out of a template like that DIVIDES NOTHING --
+% no separator can be met while a template is being read -- so the
+% reference names it and drops it:
+%
+%   ! Misplaced \cr.
+%   <template> \cr
+%   ! Misplaced alignment tab character &.
+%   <template> &
+%
+% and each is traced as a command the main loop obeyed, which a tab or \cr
+% that really ends an entry is not.
+%
+% A template of an alignment FURTHER OUT is not that: an \halign whose text
+% is being read out of an enclosing alignment's template is reading its own
+% rows, and a \crcr there ends a row as it always would. trip line 336
+% writes exactly that.
+%
+% HSTeX held its count at nought on the way down and counted only the
+% braces its own preamble loop read, so the `\cr' divided a column that had
+% no `#' in it and the whole line came out differently.
+%
+% Found and left open: the reference's template frame ends with an
+% \endtemplate TOKEN, which its context writes; HSTeX ends a template where
+% its tokens run out, so the context stops one token short and the frame the
+% reference elides with `...' is not there to elide.
+\catcode`\{=1 \catcode`\}=2 \catcode`&=4 \catcode`\#=6
+\tracingonline=1 \tracingcommands=2
+\hsize=100pt
+\message{[A a preamble whose braces do not come out even]}
+\halign\relax{\span\iffalse}\fi\cr#&\ifnum0=`{\fi\cr\cr}
+\message{[B an alignment read out of another's template]}
+\def\I{\halign{##\cr A\crcr}}
+\setbox0=\vbox{\halign{\I#\cr B\cr}}
+\message{[C an ordinary preamble, whose braces do come out even]}
+\setbox0=\vbox{\halign{\hbox{#}&#\cr A&B\cr}}
+\message{[done]}
+\end

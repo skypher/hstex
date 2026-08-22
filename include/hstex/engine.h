@@ -2064,6 +2064,25 @@ struct hstex_engine {
     struct hstex_page_insert *page_inserts;
     size_t page_insert_count;
     size_t page_insert_capacity;
+    /* The braces an alignment PREAMBLE has read, counted the way an entry's
+       are: a tab or a \cr divides columns only where the count is nought,
+       and the count runs below nought as readily as above it. It is the
+       scan's own local, reached from here so that a brace read anywhere --
+       inside a conditional the preamble skipped, inside a macro it expanded
+       -- is counted where the reference counts it. Null while no preamble is
+       being scanned. */
+    int *preamble_nesting;
+    /* The tab or \cr just read came from a template of THE ALIGNMENT NOW
+       BEING READ, where no such token can divide anything: the reference is
+       reading the template at a brace count no separator can match, so it
+       names the token and drops it. A template of an alignment further out
+       -- one whose text an inner \halign is being read from -- is not that,
+       and its tokens are the inner alignment's own. */
+    bool alignment_token_from_template;
+    /* Which alignment is being read, so that its templates can be told from
+       an enclosing alignment's. Nought where none is. */
+    uint32_t alignment_generation;
+    uint32_t alignment_generations_made;
     /* \immediate was just read, so the next output command acts now instead
        of leaving a whatsit behind; see docs/DECISIONS.md, whatsits. */
     bool immediate_pending;
