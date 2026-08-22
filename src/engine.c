@@ -36682,8 +36682,10 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         return status;
     }
     /* One ordinary atom in braces is that atom: {x} carries scripts exactly
-       as x does, however deeply the braces nest. */
-    if (inner->count == 1U &&
+       as x does, however deeply the braces nest. A list that turned into a
+       FRACTION is not one atom, however few noads stand on either side of
+       the \over: `{B\over}' is a fraction with an empty denominator. */
+    if (inner->count == 1U && !inner->has_fraction &&
         inner->noads[0].kind == (uint8_t)HSTEX_NOAD_ATOM &&
         inner->noads[0].atom_class == (uint8_t)HSTEX_ATOM_ORD &&
         !inner->noads[0].vcentered &&
@@ -36699,7 +36701,7 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
        braces would have made, scripts and all. Only an ordinary atom gives
        way to it: \mathop{...} and a script keep the sub-formula. See
        docs/DECISIONS.md, an-accent-alone-in-braces. */
-    if (inner->count == 1U &&
+    if (inner->count == 1U && !inner->has_fraction &&
         inner->noads[0].kind == (uint8_t)HSTEX_NOAD_ACCENT &&
         inner->slot == (uint8_t)HSTEX_MATH_SLOT_NONE &&
         outer->slot == (uint8_t)HSTEX_MATH_SLOT_NONE &&
