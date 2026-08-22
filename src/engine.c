@@ -34471,7 +34471,47 @@ static int translate_math_list_with(struct hstex_engine *engine,
             }
             if (present == 0) {
                 /* The font has no such character; the reference carries on
-                   without it. */
+                   without it -- except for a large operator, which is set in
+                   a box of its own whatever became of its nucleus, and the
+                   box is hung on the axis even when it is empty. Measured
+                   with a family whose font has not got the character: an
+                   \mathop draws `\hbox(0.0+0.0)x0.0, shifted -2.5' where
+                   the axis is 2.5pt, and every other class -- ord, bin, rel,
+                   open, close, punct, inner -- draws nothing at all. trip
+                   line 275 writes `\mathop y' in a font with no y, and that
+                   empty box is the one thing its second pass drew that this
+                   engine did not. See docs/DECISIONS.md, large-operators. */
+                if (noad->atom_class == (uint8_t)HSTEX_ATOM_OP) {
+                    struct hstex_node empty = {
+                        .kind = HSTEX_NODE_LIST,
+                        .value.list = {.box_kind = (uint8_t)HSTEX_BOX_HLIST},
+                    };
+                    if (centre_on_axis(engine, size, &empty, error,
+                                       error_capacity) != 0) {
+                        return -1;
+                    }
+                    if (noad->limits == 1U ||
+                        (noad->limits == 0U &&
+                         style < (uint8_t)HSTEX_STYLE_TEXT)) {
+                        if (build_operator_limits(engine, noad, style, 0,
+                                                  &empty, error,
+                                                  error_capacity) != 0 ||
+                            append_hbox_node(engine, &empty, error,
+                                             error_capacity) != 0) {
+                            return -1;
+                        }
+                        continue;
+                    }
+                    if (append_hbox_node(engine, &empty, error,
+                                         error_capacity) != 0 ||
+                        attach_math_scripts(engine, noad, style,
+                                            empty.height - empty.shift,
+                                            empty.depth + empty.shift, false,
+                                            0, error, error_capacity) != 0) {
+                        return -1;
+                    }
+                    continue;
+                }
                 if (attach_math_scripts(engine, noad, style, 0, 0, true, 0,
                                         error, error_capacity) != 0) {
                     return -1;
