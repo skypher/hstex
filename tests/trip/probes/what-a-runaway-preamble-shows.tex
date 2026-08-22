@@ -1,0 +1,33 @@
+% WHAT A RUNAWAY PREAMBLE SHOWS.
+%
+% An \outer macro met while an alignment's preamble is being read draws
+% `Runaway preamble?' and what had been read of the TEMPLATE it was met in,
+% the way a runaway definition draws its body:
+%
+%   Runaway preamble?
+%   {A
+%   ! Forbidden control sequence found while scanning preamble of \halign.
+%   <inserted text>
+%                   \cr }
+%
+% This engine drew the fault and not the runaway.
+%
+% And a column that reaches its \cr or its & with no # in it draws
+% `Missing # inserted in alignment preamble' with THE TOKEN PUT BACK, so
+% the fault's context names it and the column ends on the second reading
+% with nothing in its second half:
+%
+%   ! Missing # inserted in alignment preamble.
+%   <to be read again>
+%                      \cr
+%
+% trip line 363 writes \^^C{{\span\ifcase3 \lo#\cr............89{}\cr}.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1
+\outer\def\lo{L}
+\message{[A an outer macro in the first half of a template]}
+\setbox0=\vbox{\halign{{A\lo#\cr B\cr}}
+\message{[B one in the second half]}
+\setbox0=\vbox{\halign{#B\lo\cr C\cr}}
+\message{[done]}
+\end

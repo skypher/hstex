@@ -37259,6 +37259,10 @@ static int scan_align_preamble(struct hstex_engine *engine,
             char named[128];
             describe_token(engine, engine->executing_token, named,
                            sizeof(named));
+            /* What had been read of the template it was met in is shown
+               first, the way a runaway definition's body is. */
+            report_runaway_list(engine, "preamble", NULL, NULL,
+                                seen_marker ? &after : &before);
             tex_error(engine, help,
                       "Forbidden control sequence found while scanning "
                       "preamble of %s",
@@ -37310,9 +37314,19 @@ static int scan_align_preamble(struct hstex_engine *engine,
                         "There should be exactly one # between &'s, when an",
                         "\\halign or \\valign is being set up. In this case you had",
                         "none, so I've put one in; maybe that will work.", NULL};
+                    /* PUT BACK AND READ AGAIN: the reference backs the \cr
+                       up before it complains, so the fault's context names
+                       it, and the column then ends on the second reading
+                       with nothing in its second half. */
+                    if (push_one(engine, token, location, error,
+                                 error_capacity) != 0) {
+                        status = -1;
+                        break;
+                    }
                     tex_error(engine, help,
                               "Missing # inserted in alignment preamble");
                     seen_marker = true;
+                    continue;
                 }
                 status = 0;
                 goto finish_column;
@@ -37347,13 +37361,20 @@ static int scan_align_preamble(struct hstex_engine *engine,
                 continue;
             }
             if (!seen_marker) {
-                    static const char *const help[] = {
-                        "There should be exactly one # between &'s, when an",
-                        "\\halign or \\valign is being set up. In this case you had",
-                        "none, so I've put one in; maybe that will work.", NULL};
-                    tex_error(engine, help,
-                              "Missing # inserted in alignment preamble");
+                static const char *const help[] = {
+                    "There should be exactly one # between &'s, when an",
+                    "\\halign or \\valign is being set up. In this case you had",
+                    "none, so I've put one in; maybe that will work.", NULL};
+                /* Put back and read again, as above. */
+                if (push_one(engine, token, location, error,
+                             error_capacity) != 0) {
+                    status = -1;
+                    break;
+                }
+                tex_error(engine, help,
+                          "Missing # inserted in alignment preamble");
                 seen_marker = true;
+                continue;
             }
             goto finish_column;
         }
