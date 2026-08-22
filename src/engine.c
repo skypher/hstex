@@ -29091,6 +29091,12 @@ static void trace_short_display(struct hstex_engine *engine,
         case HSTEX_NODE_LIST:
         case HSTEX_NODE_UNSET:
         case HSTEX_NODE_WHATSIT:
+        /* An insertion, a mark and a \vadjust stand in a horizontal list
+           until the line they are on is packed, and a short display shows
+           each of them the way it shows a box: as `[]'. */
+        case HSTEX_NODE_INSERT:
+        case HSTEX_NODE_MARK:
+        case HSTEX_NODE_ADJUST:
             print_text(engine, "[]");
             trace->column = true;
             break;
