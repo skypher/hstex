@@ -1,0 +1,45 @@
+% WHAT AN OVERFULL BOX IS GIVEN.
+%
+% A horizontal box that is too wide by more than \hfuzz is given a RULE at
+% its right, as wide as \overfullrule, and that rule goes INSIDE the box:
+%
+%   \overfullrule=5pt \hfuzz=0pt
+%   \setbox0=\hbox to 0pt{A}
+%   Overfull \hbox (2.0pt too wide) detected at line 6
+%   \rip A|
+%
+%   \hbox(7.0+1.0)x0.0
+%   .\rip A
+%   .\rule(*+*)x5.0
+%
+% It is put there AFTER the box has been packed, so its own width is no
+% part of what was measured -- the box above is still `2.0pt too wide',
+% which is the A alone.
+%
+% Three things get none: a box where \overfullrule is nothing; one that is
+% reported only because \hbadness is under a hundred, without being over by
+% more than \hfuzz; and a VERTICAL box, however overfull.
+%
+% HSTeX gave none at all, so every line of trip's that did not fit was one
+% node short -- twenty of them in the second pass, and the short display of
+% each lost its `|'.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=10 \showboxdepth=10
+\font\rip=trip \rip
+\message{[A overfull, with an overfull rule]}
+\overfullrule=5pt \hfuzz=0pt
+\setbox0=\hbox to 0pt{A}\showbox0
+\message{[B overfull, with no rule asked for]}
+\overfullrule=0pt
+\setbox0=\hbox to 0pt{A}\showbox0
+\message{[C overfull within \noexpand\hfuzz, so reported only by badness]}
+\overfullrule=5pt \hfuzz=3pt \hbadness=99
+\setbox0=\hbox to 0pt{A}\showbox0
+\message{[D underfull, which draws no rule]}
+\hfuzz=0pt \hbadness=0
+\setbox0=\hbox to 20pt{A}\showbox0
+\message{[E a vertical box, which draws none either]}
+\overfullrule=5pt \vfuzz=0pt \vbadness=0
+\setbox0=\vbox to 0pt{\hbox{}\kern10pt}\showbox0
+\message{[done]}
+\end

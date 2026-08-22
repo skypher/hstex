@@ -12960,6 +12960,38 @@ static int finalize_hbox(struct hstex_engine *engine,
         list_total_glue(engine, builder->node_identifiers, builder->count);
     engine->badness = packing_badness(builder->width, box->width, &total);
     box->glue = packing_glue_set(builder->width, box->width, &total);
+    /* AN OVERFULL BOX GETS A RULE. The reference draws \overfullrule at the
+       right of a horizontal box that is too wide by more than \hfuzz, and
+       puts it IN the box -- after the box has been packed, so the rule's own
+       width is no part of what was measured. A box reported only because
+       \hbadness is under a hundred gets none, nor does one where
+       \overfullrule is nothing, nor a vertical box. */
+    int64_t excess = builder->width - (int64_t)box->width;
+    int32_t rule_width = engine->dimen_parameters[HSTEX_DIMEN_OVERFULL_RULE];
+    if (!engine->packing_quietly && builder->count != 0U && rule_width > 0 &&
+        excess > 0 && total.shrink_order == 0U &&
+        excess - (int64_t)total.shrink >
+            (int64_t)engine->dimen_parameters[HSTEX_DIMEN_HFUZZ]) {
+        struct hstex_node rule = {
+            .kind = HSTEX_NODE_RULE,
+            .width = rule_width,
+            .height = HSTEX_RUNNING_DIMEN,
+            .depth = HSTEX_RUNNING_DIMEN,
+        };
+        uint32_t identifier = 0U;
+        if (store_node(engine, &rule, &identifier, error, error_capacity) != 0 ||
+            reserve_hbox_items(builder, builder->count + 1U, error,
+                               error_capacity) != 0) {
+            return -1;
+        }
+        builder->node_identifiers[builder->count++] = identifier;
+        if (builder->count > (size_t)UINT32_MAX ||
+            engine->list_item_count > (size_t)UINT32_MAX - builder->count ||
+            reserve_list_items(engine, engine->list_item_count + builder->count,
+                               error, error_capacity) != 0) {
+            return -1;
+        }
+    }
     report_packing(engine, box, builder->width, &total, false,
                    builder->node_identifiers, builder->count);
     if (builder->count != 0U) {
