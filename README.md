@@ -189,6 +189,27 @@ against 47. A fresh `hstex` -> BibTeX -> `hstex` -> `hstex` build of the
 whole thing takes 52.6 seconds against `pdflatex`'s 75.5. Every run above is
 the least of six, taken alternately on one pinned processor.
 
+That holds for a LaTeX document, where expanding macros is most of the work.
+It does not hold for a plain one, where setting the type is. Both engines
+starting from a format they already had, and the least of seven runs taken
+alternately: `gentle`, ninety-seven pages of plain TeX, takes 0.24 processor
+seconds against `pdftex`'s 0.10, and a document of nothing but words -- four
+hundred paragraphs, no macro call in it at all -- takes 0.35 against 0.14.
+So the engine is about two and a half times SLOWER wherever the macro
+machinery it was tuned for is not what the document is spending its time on.
+`tests/corpus/run-corpus.sh --time` reports this per document.
+
+Where that time goes, over the document of nothing but words: a fifth of the
+run is inside libc's memory routines, and the caller of most of it is
+`store_node`, which is 4.5% of the whole run copying one `struct hstex_node`
+into the arena per node. The struct is 60 bytes and a run of the corpus makes
+ten million of them; ten of those bytes are the `originals` a ligature is
+taken apart with, carried by every node whether or not it is a ligature.
+Sixty is also an unhappy stride, since no node begins where a cache line
+does. Shrinking the node -- the originals behind an index, the variants
+packed -- and filling it where it stands rather than building it and copying
+it in are the two things measurement points at; neither has been tried yet.
+
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
 asking `kpsewhich` where a file is once for each name rather than once for
