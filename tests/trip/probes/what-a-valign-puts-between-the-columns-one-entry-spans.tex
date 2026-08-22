@@ -1,0 +1,75 @@
+% WHAT A \valign PUTS BETWEEN THE COLUMNS ONE ENTRY SPANS.
+%
+% This is trip's line 337 cut down to its own file. That line says
+%
+%   A&\omit\valign to -5pt{#&#\cr A\char`}\span\cr{ }\span\cr}\cr
+%
+% -- a \valign set to a NEGATIVE height whose every row ends in \span, so
+% every row covers both of the columns and no row ever starts in the second.
+% What trip's second pass draws of it, twice over:
+%
+%   ref:    ....\glue(\tabskip) 0.0
+%           ....\vbox(8.0+0.0)x0.0
+%   hstex:  ....\glue(\tabskip) 4.49998 plus 7227.0
+%           ....\vbox(3.50002+0.0)x0.0
+%
+% and 8.0 - 4.49998 = 3.50002 exactly, so the two are not disagreeing about
+% any length: they are splitting one length between the glue and the box in
+% two different ways. [A] below is the whole of that in six lines.
+%
+% WHAT THE REFERENCE DOES, measured over three \tabskip values -- 4.5pt,
+% 10pt and nothing at all. The glue in front of the covered column is 0.0
+% every time, and the column keeps the entry's whole extent, 6.83331, every
+% time. HSTeX draws the \tabskip and gives the column what is left, which is
+% 2.33331 at 4.5pt and -3.16669 at 10pt. Where it comes from is the
+% measuring loop in finish_alignment: a span's excess goes to the LAST
+% column it covers, and what it already covers is counted as the columns
+% plus THE TABSKIPS BETWEEN THEM.
+%
+% THE RULE IS NOT `A \valign HAS NO GLUE INSIDE A SPAN'. That was tried --
+% not counting the tabskip while measuring, and drawing zero in its place --
+% and [B] is the case that refutes it: one row that spans and one that does
+% not. There the reference draws the \tabskip in full, 10.0, in the spanning
+% row as well, and the change made HSTeX draw 0.0. Backed out.
+%
+% [B] does not settle the measuring question, only the drawing one: its
+% second row sizes both columns on its own, so the span has nothing left to
+% make up and the loop never reaches the arithmetic that counts the tabskip.
+%
+% WHERE TO LOOK NEXT. What is different about [A] is that NO ROW EVER STARTS
+% IN THE SECOND COLUMN. This engine already has a notion of how many columns
+% a set of rows `reached', and drops the tabskip after the ones past it --
+% see finish_alignment, `the ones past the last one used stand in the row the
+% preamble is packed as, with no width and NO TABSKIP AFTER THEM'. A column
+% that is only ever spanned INTO may be the same kind of thing, which would
+% put the zero in the column's own record and explain the other place it
+% shows: the packed preamble row of [A] draws `10.0 0.0 10.0' in the
+% reference and `10.0 10.0 10.0' here, and one rule in the record would give
+% both.
+%
+% An \halign is already exact for all of this; see
+% what-an-entry-that-spans-is-set-to.tex, whose five cases agree box for box.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\tenrm=cmr10 \tenrm
+\message{[A every row spans, which is trip line 337]}
+\tabskip=4.5pt plus 7227pt
+\setbox0=\hbox{\valign to -5pt{#&#\cr \hbox{A}\span\cr \hbox{B}\span\cr}}
+\showbox0
+\message{[A' the same with a plain tabskip, and with none]}
+\tabskip=10pt
+\setbox0=\hbox{\valign to -5pt{#&#\cr \hbox{A}\span\cr \hbox{B}\span\cr}}
+\showbox0
+\tabskip=0pt
+\setbox0=\hbox{\valign to -5pt{#&#\cr \hbox{A}\span\cr \hbox{B}\span\cr}}
+\showbox0
+\message{[A'' three columns, every row spanning all of them]}
+\tabskip=6pt
+\setbox0=\hbox{\valign to -5pt{#&#&#\cr \hbox{A}\span\span\cr \hbox{B}\span\span\cr}}
+\showbox0
+\message{[B one row spans and one does not: the glue is drawn in full]}
+\tabskip=10pt
+\setbox0=\hbox{\valign to -5pt{#&#\cr \hbox{A}\span\cr \hbox{B}&\hbox{C}\cr}}
+\showbox0
+\message{[done]}
+\end
