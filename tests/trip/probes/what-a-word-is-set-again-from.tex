@@ -1,0 +1,14 @@
+% What a word is set again from when it is hyphenated: where the node in
+% front of its first letter is a character or a ligature of the word's own
+% font, the reference takes THAT NODE TOO into the run the discretionary
+% replaces, and starts the ligature program again from what it was made of.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \rip \hyphenchar\rip=`\- \lccode`q=`q \lccode`\-=`\-
+\hsize=100pt \parindent=0pt \pretolerance=-1 \tolerance=10000
+\patterns{q9q}
+\message{[A a word whose first letter follows a ligature]}
+\setbox1=\vbox{\noindent\ \0qq \par}
+\showbox1
+\message{[done]}
+\end
