@@ -1439,7 +1439,7 @@ struct hstex_node {
             /* What a ligature was made of, so that \showbox can name it and
                a later pass can take it apart again; see
                docs/DECISIONS.md, ligature-originals. */
-            uint8_t originals[6];
+            uint8_t originals[10];
             uint8_t original_count;
             /* Which ends of the ligature the boundary character took part
                in: 2 for the left, 1 for the right, as the reference's
@@ -1832,7 +1832,7 @@ struct hstex_engine {
        happens, so the list is never observed mid-pair. */
     bool has_pending_character;
     /* What the character held back was made of, if it is a ligature. */
-    uint8_t pending_originals[6];
+    uint8_t pending_originals[10];
     uint8_t pending_original_count;
     bool pending_is_ligature;
     /* The boundary character has taken part in the word being built, at one

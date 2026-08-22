@@ -11080,24 +11080,22 @@ static int scan_future_let(struct hstex_engine *engine, char *error,
         meaning.value.token = source;
     }
 
-    struct hstex_token_vector replay = {0};
-    if (vector_push(&replay, first, error, error_capacity) != 0 ||
-        (!at_boundary &&
-         vector_push(&replay, second, error, error_capacity) != 0)) {
-        vector_destroy(&replay);
-        return -1;
-    }
     bool global = assignment_is_global(engine, engine->pending_global);
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
     if (set_meaning(engine, hstex_token_control_sequence_id(target), meaning,
                     global, error, error_capacity) != 0) {
-        vector_destroy(&replay);
         return -1;
     }
-    (void)second_location;
-    return push_owned_vector(engine, &replay, first_location, error,
-                             error_capacity);
+    /* Each of the two is put back ON ITS OWN, the second one first: the
+       reference backs the pair up one token at a time, so a fault under
+       them draws a frame for each -- `<recently read> \foo' over
+       `<to be read again> \endtemplate'. */
+    if (!at_boundary &&
+        push_one(engine, second, second_location, error, error_capacity) != 0) {
+        return -1;
+    }
+    return push_one(engine, first, first_location, error, error_capacity);
 }
 
 /* The name a font takes from the control sequence that declared it. A
@@ -28085,7 +28083,7 @@ struct hstex_lig_item {
        a character of the list: it takes part in the program and then goes
        away, leaving its mark on whatever it helped make. */
     bool is_boundary;
-    uint8_t originals[6];
+    uint8_t originals[10];
     uint8_t original_count;
 };
 
@@ -31001,14 +30999,14 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     }
                     if (status == 0 && joins && written >= covered &&
                         result[written - covered] == items[previous]) {
-                        uint8_t letters[8];
+                        uint8_t letters[16];
                         size_t letter_count = 0U;
                         if (before->kind == HSTEX_NODE_LIGATURE &&
                             before->value.character.original_count != 0U) {
                             uint8_t originals =
                                 before->value.character.original_count;
-                            if (originals > 7U) {
-                                originals = 7U;
+                            if (originals > 15U) {
+                                originals = 15U;
                             }
                             for (uint8_t item = 0U; item < originals; ++item) {
                                 letters[letter_count++] =
@@ -31019,12 +31017,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                                 (uint8_t)before->value.character.character;
                         }
                         letters[letter_count++] = hyphen_code;
-                        uint32_t pre[8];
+                        uint32_t pre[48];
                         size_t pre_count = 0U;
                         uint32_t start = 0U;
                         if (reconstitute_characters(engine, word.font, letters,
                                                     letter_count, false, false,
-                                                    pre, 8U, &pre_count, error,
+                                                    pre, 48U, &pre_count, error,
                                                     error_capacity) != 0 ||
                             store_list_run(engine, pre, pre_count, &start,
                                            error, error_capacity) != 0) {
@@ -31090,11 +31088,11 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             if (status == 0 && inside != 0U) {
                 const struct hstex_node *node =
                     &engine->nodes[items[index] - 1U];
-                uint8_t originals[6];
+                uint8_t originals[10];
                 uint8_t original_count = node->value.character.original_count;
                 memcpy(originals, node->value.character.originals,
                        sizeof(originals));
-                uint32_t pre[8];
+                uint32_t pre[48];
                 size_t pre_count = 0U;
                 size_t post_count = 0U;
                 /* WHAT FOLLOWS THE BREAK IS THE REST OF THE WORD, not the
@@ -31111,8 +31109,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                    run is set again, so a font that ligatures a letter with
                    a hyphen does so here. See docs/DECISIONS.md,
                    breaking-inside-a-ligature. */
-                uint8_t before[8];
-                size_t before_count = inside < 6U ? inside : 6U;
+                uint8_t before[16];
+                size_t before_count = inside < 15U ? inside : 15U;
                 memcpy(before, originals, before_count);
                 const struct hstex_font *metrics =
                     font_by_identifier(engine, word.font);
@@ -31128,7 +31126,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 if (status == 0 && post != NULL && inside < original_count &&
                     reconstitute_characters(engine, word.font, before,
                                             before_count, false, false, pre,
-                                            8U, &pre_count, error,
+                                            48U, &pre_count, error,
                                             error_capacity) == 0 &&
                     reconstitute_characters(engine, word.font,
                                             word.letters + cut,
