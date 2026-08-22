@@ -1,0 +1,13 @@
+% Whether a word set again to be hyphenated meets the left boundary again:
+% the reference looks at what the word was made of the first time.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \rip \hyphenchar\rip=`\- \lccode`q=`q
+\hsize=100pt \parindent=0pt \pretolerance=-1 \tolerance=10000
+\patterns{q9q}
+\message{[A a word set as usual]}
+\setbox1=\vbox{\noindent\ qq \par}\showbox1
+\message{[B a word begun after \string\noboundary]}
+\setbox1=\vbox{\noindent\ \noboundary qq \par}\showbox1
+\message{[done]}
+\end
