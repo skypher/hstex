@@ -1,0 +1,29 @@
+% WHAT A RULE BETWEEN AN ALIGNMENT'S ROWS TAKES.
+%
+% A rule \noalign leaves in an alignment's own list takes whatever it does
+% not settle for itself FROM THE BOX THE PREAMBLE IS PACKED AS. For a
+% \halign that box is an hbox as wide as the alignment, so a running width
+% becomes the alignment's width -- which is how \hline spans a table. For a
+% \valign it is a vbox as TALL as the alignment and of no depth, so a
+% \vrule with nothing but its width settled comes out
+%
+%   \rule(10.0+0.0)x0.4      in a \valign 10pt tall
+%   \rule(40.0+0.0)x0.4      in \valign to 40pt
+%
+% This engine settled the width and left the other two running. trip line
+% 182 writes \noalign{ \vrule width0pt{ }} in a \valign.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxdepth=9 \showboxbreadth=9 \hsize=100pt
+\font\rip=trip \rip
+\message{[A a valign, a rule with every dimension running]}
+\setbox0=\hbox{\valign{#\cr\noalign{\vrule}\hbox to 30pt{\vrule height 7pt depth 3pt width 0pt}\cr}}
+\showbox0
+\message{[B a valign to a height]}
+\setbox0=\hbox{\valign to 40pt{#\cr\noalign{\vrule}\hbox to 30pt{\vrule height 7pt depth 3pt width 0pt}\cr}}
+\showbox0
+\message{[C two columns]}
+\setbox0=\hbox{\valign{#\cr\noalign{\vrule}\hbox to 30pt{\vrule height 7pt depth 3pt width 0pt}\cr
+  \hbox to 50pt{\vrule height 1pt depth 2pt width 0pt}\cr}}
+\showbox0
+\message{[done]}
+\end

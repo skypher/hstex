@@ -37767,14 +37767,24 @@ static int finish_alignment(struct hstex_engine *engine, bool vertical,
     for (size_t index = 0U; index < row_count; ++index) {
         if (rows[index].noalign) {
             for (size_t item = 0U; item < rows[index].item_count; ++item) {
-                /* A rule \noalign left in the alignment's own list, with no
-                   width of its own, is as wide as the alignment; see
+                /* A rule \noalign left in the alignment's own list takes
+                   whatever it does not settle for itself FROM THE BOX THE
+                   PREAMBLE IS PACKED AS -- as wide as a \halign, as tall as
+                   a \valign, and no deeper than either. See
                    docs/DECISIONS.md, a-rule-between-rows. */
                 uint32_t held = rows[index].items[item];
                 if (held != 0U && (size_t)held <= engine->node_count &&
-                    engine->nodes[held - 1U].kind == HSTEX_NODE_RULE &&
-                    engine->nodes[held - 1U].width == HSTEX_RUNNING_DIMEN) {
-                    engine->nodes[held - 1U].width = (int32_t)final_width;
+                    engine->nodes[held - 1U].kind == HSTEX_NODE_RULE) {
+                    struct hstex_node *shaped = &engine->nodes[held - 1U];
+                    if (shaped->width == HSTEX_RUNNING_DIMEN) {
+                        shaped->width = vertical ? 0 : (int32_t)final_width;
+                    }
+                    if (shaped->height == HSTEX_RUNNING_DIMEN) {
+                        shaped->height = vertical ? (int32_t)final_width : 0;
+                    }
+                    if (shaped->depth == HSTEX_RUNNING_DIMEN) {
+                        shaped->depth = 0;
+                    }
                 }
                 if (vertical) {
                     /* Between the columns of a \\valign, \\noalign leaves
