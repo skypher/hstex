@@ -28457,6 +28457,9 @@ struct hstex_lig_item {
        a character of the list: it takes part in the program and then goes
        away, leaving its mark on whatever it helped make. */
     bool is_boundary;
+    /* Which ends of it the boundary took part in, where the item was made
+       from a node that already stood in the list. */
+    uint8_t boundary;
     uint8_t originals[10];
     uint8_t original_count;
 };
@@ -31029,8 +31032,10 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
        docs/DECISIONS.md, boundary-characters. */
     if (seed != NULL) {
         /* What stood in front of the word takes the place of the boundary:
-           the run starts from it, already made. */
+           the run starts from it, already made -- and where the boundary had
+           taken part in making it, the node it becomes says so again. */
         work[work_count++] = *seed;
+        engine->lig_left_hit = (seed->boundary & 2U) != 0U;
     } else if (from_left_boundary && metrics->boundary_label >= 0) {
         lig_item_plain(&work[work_count], 0U, false);
         work[work_count].is_boundary = true;
@@ -31181,6 +31186,93 @@ static bool set_the_same_way(const struct hstex_engine *engine, uint32_t left,
                   one->value.character.original_count) == 0;
 }
 
+/* A WORD IS SET AGAIN FROM ITS LETTERS BEFORE IT IS BROKEN. The reference
+   rebuilds the whole run it is about to break, so what the two branches of a
+   break are developed against is the run its letters make rather than the
+   nodes the setting happened to leave -- which differ where the setting was
+   broken part-way, by a character the font has not got standing among them.
+   The paragraph's list is handed back with the run replaced. Where the
+   rebuilt run is what was already there, nothing is done at all.
+   See docs/DECISIONS.md, a-word-set-again-before-it-is-broken. */
+static int rebuild_word_before_breaking(struct hstex_engine *engine,
+                                        const uint32_t **items, size_t *count,
+                                        uint32_t **owned,
+                                        const struct hstex_word *word,
+                                        size_t word_start, bool meets_left,
+                                        char *error, size_t error_capacity)
+{
+    if (word->count == 0U || word->end <= word_start) {
+        return 0;
+    }
+    /* What stands in front of the word's first letter is taken into the run
+       where it is a character or a ligature of the word's own font. */
+    struct hstex_lig_item seed_item;
+    bool seeded = false;
+    if (word_start != 0U) {
+        uint32_t ahead_of = (*items)[word_start - 1U];
+        if (ahead_of != 0U && (size_t)ahead_of <= engine->node_count) {
+            const struct hstex_node *front = &engine->nodes[ahead_of - 1U];
+            if ((front->kind == HSTEX_NODE_CHARACTER ||
+                 front->kind == HSTEX_NODE_LIGATURE) &&
+                front->value.character.font == word->font) {
+                memset(&seed_item, 0, sizeof(seed_item));
+                seed_item.character =
+                    (uint8_t)front->value.character.character;
+                seed_item.is_ligature = front->kind == HSTEX_NODE_LIGATURE;
+                seed_item.original_count =
+                    front->value.character.original_count;
+                seed_item.boundary = front->value.character.boundary;
+                memcpy(seed_item.originals, front->value.character.originals,
+                       sizeof(seed_item.originals));
+                seeded = true;
+            }
+        }
+    }
+    size_t base = word_start - (seeded ? 1U : 0U);
+    size_t room = (word->end - base) * 4U + (size_t)word->count * 8U + 64U;
+    uint32_t *rebuilt = calloc(room, sizeof(*rebuilt));
+    if (rebuilt == NULL) {
+        return set_error(error, error_capacity,
+                         "hyphenation rebuild allocation failed");
+    }
+    size_t made = 0U;
+    if (reconstitute_seeded(engine, word->font, seeded ? &seed_item : NULL,
+                            word->letters, word->count,
+                            !seeded && meets_left,
+                            word_meets_right_boundary(engine, *items,
+                                                      word->end),
+                            rebuilt, room, &made, error,
+                            error_capacity) != 0) {
+        free(rebuilt);
+        return -1;
+    }
+    bool same = made == word->end - base;
+    for (size_t at = 0U; same && at < made; ++at) {
+        same = set_the_same_way(engine, rebuilt[at], (*items)[base + at]);
+    }
+    if (same) {
+        free(rebuilt);
+        return 0;
+    }
+    size_t tail = *count - word->end;
+    size_t total = base + made + tail;
+    uint32_t *next = calloc(total == 0U ? 1U : total, sizeof(*next));
+    if (next == NULL) {
+        free(rebuilt);
+        return set_error(error, error_capacity,
+                         "hyphenation rebuild allocation failed");
+    }
+    memcpy(next, *items, base * sizeof(*next));
+    memcpy(next + base, rebuilt, made * sizeof(*next));
+    memcpy(next + base + made, *items + word->end, tail * sizeof(*next));
+    free(rebuilt);
+    free(*owned);
+    *owned = next;
+    *items = next;
+    *count = total;
+    return 0;
+}
+
 /* Puts a discretionary wherever the patterns allow a break in a word, and
    returns the paragraph's nodes again with those discretionaries in them.
    See docs/DECISIONS.md, hyphenation. */
@@ -31210,6 +31302,9 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
     size_t written = 0U;
     size_t index = 0U;
     int status = 0;
+    /* The list the walk reads, which is the one handed in until a word has
+       to be set again. */
+    uint32_t *owned = NULL;
     /* Nothing between the two ends of a formula is hyphenated; see
        docs/DECISIONS.md, no-hyphens-inside-a-formula. */
     bool breaking = true;
@@ -31276,6 +31371,39 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
         bool meets_left =
             word_metrics == NULL || word_metrics->boundary_label < 0 ||
             word_meets_left_boundary(engine, items, count, word_start);
+        /* THE WORD IS SET AGAIN FROM ITS LETTERS BEFORE ANY BREAK IS TAKEN.
+           The reference rebuilds the run it is going to break rather than
+           breaking the nodes that are already there, so a run the setting
+           had broken -- a character the font has not got standing in the
+           middle of it, say -- is joined again first. Where the rebuilt run
+           is what was there, which is every word but a handful, nothing
+           moves. See docs/DECISIONS.md, a-word-set-again-before-it-is-
+           broken. */
+        bool wanted_anywhere = false;
+        for (size_t at = 1U; at < word.count; ++at) {
+            if (breaks[at] != 0U) {
+                wanted_anywhere = true;
+                break;
+            }
+        }
+        if (wanted_anywhere &&
+            rebuild_word_before_breaking(engine, &items, &count, &owned, &word,
+                                         word_start, meets_left, error,
+                                         error_capacity) != 0) {
+            status = -1;
+            break;
+        }
+        if (wanted_anywhere) {
+            /* The word stands in other nodes now, so where its letters are
+               is asked again. */
+            if (!read_hyphenatable_word(engine, items, count, index, &word)) {
+                continue;
+            }
+            word_start = word.count != 0U ? word.positions[0] : index;
+            meets_left =
+                word_metrics == NULL || word_metrics->boundary_label < 0 ||
+                word_meets_left_boundary(engine, items, count, word_start);
+        }
         /* Where the run the last discretionary made reaches to. A break
            inside it is not one that can be taken: the reference develops
            both branches of a break until they fall back into step, and
@@ -31339,6 +31467,8 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                                 front->kind == HSTEX_NODE_LIGATURE;
                             seed_item.original_count =
                                 front->value.character.original_count;
+                            seed_item.boundary =
+                                front->value.character.boundary;
                             memcpy(seed_item.originals,
                                    front->value.character.originals,
                                    sizeof(seed_item.originals));
@@ -31538,8 +31668,13 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                         uint32_t pre[48];
                         size_t pre_count = 0U;
                         uint32_t start = 0U;
+                        /* The character beyond the word's right end takes
+                           part in what goes in front of the break too: the
+                           reference hands the font's boundary to that
+                           reconstitution as it does to the one after the
+                           break. */
                         if (reconstitute_characters(engine, word.font, letters,
-                                                    letter_count, false, false,
+                                                    letter_count, false, true,
                                                     pre, 48U, &pre_count, error,
                                                     error_capacity) != 0 ||
                             store_list_run(engine, pre, pre_count, &start,
@@ -31803,6 +31938,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
             ++index;
         }
     }
+    free(owned);
     if (status != 0) {
         free(result);
         return -1;
