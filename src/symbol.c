@@ -9,10 +9,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A table starts where the primitives leave off. Registering them alone
+   interns 431 names of 3,971 bytes, so a table that began at 32 entries
+   climbed to 512 by doubling -- four copies of the entries, four of the
+   names and four rehashes of the slots -- before the first line of a
+   document was read, and every engine made paid for the climb again. The
+   figures below are those, measured after hstex_engine_init and rounded up
+   to the powers of two the doubling would have reached. Overshooting costs
+   20 KB of memory per table and nothing else. */
 enum {
-    HSTEX_INITIAL_SLOT_CAPACITY = 64,
-    HSTEX_INITIAL_ENTRY_CAPACITY = 32,
-    HSTEX_INITIAL_BYTE_CAPACITY = 256,
+    HSTEX_INITIAL_SLOT_CAPACITY = 1024,
+    HSTEX_INITIAL_ENTRY_CAPACITY = 512,
+    HSTEX_INITIAL_BYTE_CAPACITY = 4096,
 };
 
 static int set_error(char *error, size_t capacity, const char *format, ...)

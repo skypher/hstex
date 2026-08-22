@@ -930,8 +930,12 @@ static int32_t read_big_endian_i32(const uint8_t *bytes)
     return (int32_t)value;
 }
 
-static char *tfm_filename(const char *name, char *error,
-                          size_t error_capacity)
+/* The name a metric file is looked for under. The caller lends a buffer,
+   since a font name that does not fit one is not a thing that happens; only
+   a name too long for it is allocated, and what comes back is freed only
+   when it is not the buffer that was lent. */
+static char *tfm_filename(const char *name, char *lent, size_t capacity,
+                          char *error, size_t error_capacity)
 {
     size_t length = strlen(name);
     bool has_extension =
@@ -941,7 +945,8 @@ static char *tfm_filename(const char *name, char *error,
         (void)set_error(error, error_capacity, "font filename is too long");
         return NULL;
     }
-    char *filename = malloc(length + suffix_length + 1U);
+    size_t needed = length + suffix_length + 1U;
+    char *filename = needed <= capacity ? lent : malloc(needed);
     if (filename == NULL) {
         (void)set_error(error, error_capacity,
                         "font filename allocation failed");
@@ -1000,13 +1005,17 @@ static int open_tfm(struct hstex_engine *engine, const char *name,
                     struct hstex_input *input, char *error,
                     size_t error_capacity)
 {
-    char *filename = tfm_filename(name, error, error_capacity);
+    char lent[128];
+    char *filename = tfm_filename(name, lent, sizeof(lent), error,
+                                  error_capacity);
     if (filename == NULL) {
         return -1;
     }
     char *path = access(filename, R_OK) == 0 ? strdup(filename)
                                              : resolve_file(engine, filename);
-    free(filename);
+    if (filename != lent) {
+        free(filename);
+    }
     if (path == NULL) {
         return set_error(error, error_capacity,
                          "font metric file not found: %s", name);
