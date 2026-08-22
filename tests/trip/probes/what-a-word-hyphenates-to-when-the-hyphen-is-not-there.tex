@@ -62,8 +62,22 @@
 \message{[B the same word with a hyphenchar the font does have]}
 \hyphenchar\trip=`-
 \setbox0=\vbox{\noindent 1 111\par}\showbox0
-\message{[C and cmr10, which agrees at every hyphenchar]}
-\font\tenrm=cmr10 \tenrm \lccode`a=`a \patterns{a1a}
+\message{[C every character below a space, which used to be drawn raw]}
+% FIXED. show_ascii let 9, 10 and 11 through unescaped, because the same
+% predicate governs what the engine writes of its own text -- where a newline
+% must stay a newline. A character out of a document is not that: the
+% reference draws 8 to 12 alike as ^^H ^^I ^^J ^^K ^^L, and cmr10's `ff'
+% ligature IS character 11, so every box holding one came out with a raw
+% vertical tab in it. Found here, and nothing to do with hyphenation.
+\newlinechar=-1
+\font\tenrm=cmr10 \tenrm
+\setbox0=\hbox{\char8 \char9 \char10 \char11 \char12 }\showbox0
+\message{[D an ff ligature, which is character 11]}
+\lccode`o=`o \lccode`f=`f \lccode`e=`e \lccode`r=`r
+\patterns{o1ffer}
+\setbox0=\vbox{\noindent x offer\par}\showbox0
+\message{[E and cmr10 hyphenchars, which agree everywhere]}
+\lccode`a=`a \patterns{a1a}
 \hyphenchar\tenrm=200 \setbox0=\vbox{\noindent x aaaaa\par}
 \hyphenchar\tenrm=1 \setbox0=\vbox{\noindent x aaaaa\par}
 \hyphenchar\tenrm=5 \setbox0=\vbox{\noindent x aaaaa\par}

@@ -16757,7 +16757,16 @@ static void show_ascii(struct hstex_engine *engine, uint8_t code)
         print_line(engine);
         return;
     }
-    if (character_needs_caret(code)) {
+    /* EVERYTHING BELOW A SPACE IS WRITTEN ^^, TAB AND NEWLINE INCLUDED.
+       character_needs_caret lets 9, 10 and 11 through because it also
+       governs what the engine writes of its OWN text, where a newline has to
+       stay a newline -- print_line hands one to the same path, and so do the
+       literals with a `\n' in them. A character out of a document is not
+       that: the reference draws characters 8 to 12 in a box as `^^H', `^^I',
+       `^^J', `^^K', `^^L' alike, which is what cmr10's `ff' ligature --
+       character 11 -- comes out as. Measured; see
+       tests/trip/probes/what-a-word-hyphenates-to-when-the-hyphen-is-not-there.tex. */
+    if (code < 32U || code == 127U) {
         print_text(engine, "^^");
         print_byte(engine,
                    (char)(code < 64U ? code + 64U : code - 64U));
