@@ -1,0 +1,27 @@
+% WHAT A \write TEXT IS TRACED AS.
+%
+% A \write's text is a token list begun like any other, and at
+% \tracingmacros=2 the reference draws it the way it draws a token
+% parameter's or a \mark's:
+%
+%   \write->a\c b
+%
+% An EMPTY text draws `\write->' and nothing after it.
+%
+% This engine drew nothing for a \write. trip line 431 writes
+% \immediate\write10{\string\caution \l} with \tracingmacros at 2.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingmacros=2
+\message{[A a write text traced]}
+\immediate\openout9=zzwt
+\def\c{C}
+\immediate\write9{a\c b}
+\message{[B an empty one]}
+\immediate\write9{}
+\message{[C a mark and a token parameter for comparison]}
+\mark{m\c}
+\everypar={p\c}
+\setbox0=\vbox{\noindent x\par}
+\immediate\closeout9
+\message{[done]}
+\end

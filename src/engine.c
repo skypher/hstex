@@ -25939,6 +25939,55 @@ static int scan_expanded_text_from_input(struct hstex_engine *engine,
    closes the group early leaves the brace standing, which is `Unbalanced
    write command'. HSTeX had bounded the text with nothing but the end of the
    input, so neither fault could be drawn. */
+/* The frozen name the reference puts behind a \write text, so that the text
+   ends where it was meant to and the context under a fault in it says so.
+   See docs/DECISIONS.md, how-a-write-text-is-bounded. */
+static int end_write_token(struct hstex_engine *engine, hstex_token *token,
+                           char *error, size_t error_capacity)
+{
+    static const uint8_t name[] = "endwrite";
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                            HSTEX_SYMBOL_REGULAR, name, sizeof(name) - 1U,
+                            &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* It is an OUTER MACRO WITH NOTHING IN IT. What it is for is to be
+       READ, so that the text ends where it was meant to -- and being outer
+       is what stops a text that ran past its own brace from swallowing it:
+       the reference draws `Forbidden control sequence found while scanning
+       text of \write' instead. */
+    const struct hstex_meaning *standing =
+        hstex_engine_meaning(engine, identifier);
+    if (standing->command != HSTEX_COMMAND_MACRO) {
+        uint32_t record = engine->macro_free_list;
+        if (record != 0U) {
+            engine->macro_free_list = engine->macros[record - 1U].next_free;
+        } else {
+            if (reserve_macros(engine, engine->macro_count + 1U, error,
+                               error_capacity) != 0) {
+                return -1;
+            }
+            ++engine->macro_count;
+            record = (uint32_t)engine->macro_count;
+        }
+        struct hstex_macro *empty = &engine->macros[record - 1U];
+        memset(empty, 0, sizeof(*empty));
+        empty->flags = (uint8_t)HSTEX_MACRO_OUTER;
+        struct hstex_meaning meaning = {
+            .command = HSTEX_COMMAND_MACRO,
+            .level = 0U,
+            .value = {.macro_identifier = record},
+        };
+        if (set_meaning(engine, identifier, meaning, true, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+    }
+    *token = hstex_token_control_sequence(identifier);
+    return 0;
+}
+
 static int expand_write_text(struct hstex_engine *engine,
                              struct hstex_token_vector *text,
                              struct hstex_source_location location,
@@ -25952,14 +26001,58 @@ static int expand_write_text(struct hstex_engine *engine,
     }
     hstex_token closer =
         hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
-    if (push_one(engine, closer, location, error, error_capacity) != 0) {
+    hstex_token ending = 0U;
+    if (end_write_token(engine, &ending, error, error_capacity) != 0) {
         (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
         vector_destroy(text);
         return -1;
     }
-    /* The brace is put in rather than read again, and the context says so. */
+    /* The brace and the name that ends the text are PUT IN together, as one
+       inserted list, and the context shows them so. */
+    hstex_token *pair = token_block_alloc(2U);
+    if (pair == NULL) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        return set_error(error, error_capacity,
+                         "write terminator allocation failed");
+    }
+    pair[0] = closer;
+    pair[1] = ending;
+    if (hstex_source_push_owned_tokens(&engine->sources, pair, 2U, location,
+                                       error, error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        return -1;
+    }
     hstex_source_name_top(&engine->sources,
                           (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    /* A text begun here is traced the way a token parameter's is: at two and
+       above, `\write->' and what it holds -- an empty one included. */
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] > 1) {
+        uint8_t *shown = NULL;
+        size_t shown_count = 0U;
+        size_t shown_room = 0U;
+        char scratch[256];
+        bool made = true;
+        for (size_t index = 0U; made && index < text->count; ++index) {
+            if (append_token_description(engine, text->data[index], &shown,
+                                         &shown_count, &shown_room, scratch,
+                                         sizeof(scratch)) != 0) {
+                made = false;
+            }
+        }
+        if (made) {
+            print_fresh_line(engine);
+            print_escaped_name(engine, "write");
+            print_text(engine, "->");
+            if (shown_count != 0U) {
+                print_bytes(engine, (const char *)shown, shown_count);
+            }
+            print_line(engine);
+            (void)fflush(diagnostic_stream(engine));
+        }
+        free(shown);
+    }
     if (push_owned_vector(engine, text, location, error, error_capacity) != 0) {
         (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
         vector_destroy(text);
@@ -25978,7 +26071,8 @@ static int expand_write_text(struct hstex_engine *engine,
         hstex_token after = 0U;
         struct hstex_source_location where;
         if (raw_next(engine, &after, &where, error, error_capacity) ==
-            HSTEX_ENGINE_TOKEN) {
+            HSTEX_ENGINE_TOKEN &&
+            normalize_frozen_control_sequence(after) != ending) {
             static const char *const help[] = {
                 "On this page there's a \\write with fewer real {'s than }'s.",
                 "I can't handle that very well; good luck.", NULL};
