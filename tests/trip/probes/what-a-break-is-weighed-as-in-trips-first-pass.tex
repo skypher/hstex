@@ -1,0 +1,83 @@
+% WHAT ONE BREAK IS WEIGHED AS, IN TRIP'S FIRST PASS.
+%
+% This is the last divergence in trip's first pass, and the whole of it. The
+% two engines agree line for line up to `@@27:' and then part company at the
+% breakpoint after `[]11-1':
+%
+%   ref:    @\discretionary via @@0 b=42 p=88 d=9508
+%           @@28: line 1.1- t=9508 -> @@0
+%           @\discretionary via @@25 b=10000 p=88 d=100007744
+%           @\discretionary via @@23 b=1558 p=88 d=2436108
+%           @\discretionary via @@22 b=6396 p=88 d=40916560
+%
+%   hstex:  @\discretionary via @@0 b=2 p=88 d=7748
+%           @@28: line 1.2- t=7748 -> @@0
+%           @\discretionary via @@25 b=10000 p=88 d=100007744
+%           @\discretionary via @@22 b=12 p=88 d=7888
+%
+% ONE NUMBER, AND EVERYTHING ELSE FOLLOWS FROM IT. The demerits agree given
+% the badness -- d = b^2 + p^2, trip having \linepenalty nought, and 42^2 +
+% 88^2 = 9508 exactly, 2^2 + 88^2 = 7748 exactly -- so nothing is wrong with
+% the demerit arithmetic. The fitness class follows from the badness too: 42
+% is loose and 2 is decent, which is `line 1.1-' against `line 1.2-'. And the
+% breaks HSTeX then leaves out, `via @@23' and `via @@24' and the two
+% `@\par via' that follow them, are the ones that would have been reached
+% through a class it never made. One badness is the whole fault.
+%
+% HOW MUCH IT MATTERS, WHICH IS LESS THAN IT LOOKS. Every substantive
+% difference in that pass is a `@' line -- the exploration trace and nothing
+% else. The `\showbox0' trip draws afterwards agrees box for box, the
+% eighteen diagnostics agree in the reference's own words, and the second
+% pass reads the same format. So the two engines CHOOSE the same breaks and
+% set the same material; they differ over what they considered on the way.
+%
+% WHAT IT IS NOT. Each of these was written down and found to agree exactly,
+% in trip's own font, at line widths where the badness comes out finite:
+%
+%   - a box in the line before the word that breaks;
+%   - a hyphenation discretionary, with \hyphenchar a character the font has
+%     and one it has not;
+%   - interword glue with stretch, over four line widths from 40pt to 120pt;
+%   - the paragraph inside a \valign entry, which is where trip's is;
+%   - a negative \hskip at the head of the paragraph, which trip has;
+%   - \looseness, which trip's \everypar sets;
+%   - \emergencystretch, which trip sets.
+%
+% So the reproduction wants something else of trip's line 76-79 --
+% `\hbox{\hbadness100\valign{#\cr\hskip-9pt7A\righthyphenmin0\setlanguage\?
+% \unhbox0{*\language`b11\noboundary}1Z1pts\patterns{q9q} -\0qq
+% \showlists{\language\?\noboundary111}\hyphenchar\rip=`-\cr}}' -- and the
+% candidates left are the ones this file does not reach: `*' being a space by
+% catcode, \setlanguage and \language changing mid-paragraph, \righthyphenmin
+% nought, \noboundary, patterns given while the paragraph is being read, and
+% \hyphenchar being changed to another character before the \cr -- \rip and
+% \trip being one font, so setting one sets the other.
+%
+% WHAT IS DRAWN HERE is the set that agrees, kept so that the next attempt
+% starts past it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \tracingparagraphs=1
+\font\trip=trip \trip
+\parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\hyphenchar\trip=`1
+\lccode`1=`1 \lccode`A=`A \lccode`B=`B
+\patterns{1A1 A1B}
+\setbox0=\hbox to 7pt{}
+\message{[A a box before the word that breaks, over four widths]}
+\hsize=40pt \noindent \copy0 1AB 1AB 1AB\par
+\hsize=60pt \noindent \copy0 1AB 1AB 1AB\par
+\hsize=80pt \noindent \copy0 1AB 1AB 1AB\par
+\hsize=120pt \noindent \copy0 1AB 1AB 1AB\par
+\message{[B a hyphen character the font has not got]}
+\hsize=60pt \hyphenchar\trip=200 \noindent \copy0 1AB 1AB 1AB\par
+\hyphenchar\trip=`1
+\message{[C inside a valign entry, with a negative hskip at its head]}
+\setbox1=\hbox{\valign{#\cr\hskip-9pt 1AB 1AB \copy0 1AB1AB\cr}}
+\message{[D the same under looseness]}
+\setbox1=\hbox{\valign{#\cr\looseness-1 \hskip-9pt 1AB 1AB \copy0 1AB1AB\cr}}
+\message{[E and with emergencystretch]}
+\emergencystretch=9pt
+\setbox1=\hbox{\valign{#\cr\hskip-9pt 1AB 1AB \copy0 1AB1AB\cr}}
+\emergencystretch=0pt
+\message{[done]}
+\end
