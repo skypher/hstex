@@ -36597,10 +36597,6 @@ static int add_overfull_rule(struct hstex_engine *engine,
             (int64_t)engine->dimen_parameters[HSTEX_DIMEN_HFUZZ]) {
         return 0;
     }
-    if ((size_t)box->node_start + box->node_count !=
-        engine->list_item_count) {
-        return 0;
-    }
     struct hstex_node rule = {
         .kind = HSTEX_NODE_RULE,
         .width = rule_width,
@@ -36608,13 +36604,33 @@ static int add_overfull_rule(struct hstex_engine *engine,
         .depth = HSTEX_RUNNING_DIMEN,
     };
     uint32_t identifier = 0U;
-    if (store_node(engine, &rule, &identifier, error, error_capacity) != 0 ||
-        reserve_list_items(engine, engine->list_item_count + 1U, error,
+    if (store_node(engine, &rule, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    if ((size_t)box->node_start + box->node_count == engine->list_item_count) {
+        /* The equation's nodes are the last in the store, so the rule joins
+           them where they stand. */
+        if (reserve_list_items(engine, engine->list_item_count + 1U, error,
+                               error_capacity) != 0) {
+            return -1;
+        }
+        engine->list_items[engine->list_item_count++] = identifier;
+        box->node_count += 1U;
+        return 0;
+    }
+    /* Otherwise the run is written out again with the rule behind it. */
+    size_t held = box->node_count;
+    if (reserve_list_items(engine, engine->list_item_count + held + 1U, error,
                            error_capacity) != 0) {
         return -1;
     }
-    engine->list_items[engine->list_item_count++] = identifier;
-    box->node_count += 1U;
+    size_t start = engine->list_item_count;
+    memcpy(engine->list_items + start, engine->list_items + box->node_start,
+           held * sizeof(*engine->list_items));
+    engine->list_items[start + held] = identifier;
+    engine->list_item_count = start + held + 1U;
+    box->node_start = (uint32_t)start;
+    box->node_count = (uint32_t)(held + 1U);
     return 0;
 }
 
