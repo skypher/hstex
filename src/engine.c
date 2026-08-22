@@ -31133,6 +31133,26 @@ static bool word_meets_right_boundary(const struct hstex_engine *engine,
            node->value.character.boundary != 0U;
 }
 
+/* And whether it meets the boundary beyond its LEFT end, which is settled
+   the same way: only where the word's first node is a ligature the boundary
+   took part in. A word begun after \noboundary starts with a plain
+   character and is set again without one. */
+static bool word_meets_left_boundary(const struct hstex_engine *engine,
+                                     const uint32_t *items, size_t count,
+                                     size_t word_start)
+{
+    if (word_start >= count) {
+        return false;
+    }
+    uint32_t first = items[word_start];
+    if (first == 0U || (size_t)first > engine->node_count) {
+        return false;
+    }
+    const struct hstex_node *node = &engine->nodes[first - 1U];
+    return node->kind == HSTEX_NODE_LIGATURE &&
+           (node->value.character.boundary & 2U) != 0U;
+}
+
 /* Two nodes stand for the same thing when they would be set the same way. */
 static bool set_the_same_way(const struct hstex_engine *engine, uint32_t left,
                              uint32_t right)
@@ -31343,10 +31363,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 taken[count_before++] = (uint8_t)metrics->hyphen_character;
                 size_t made_before = 0U;
                 size_t made_after = 0U;
+                bool from_boundary =
+                    !seeded && previous == word_start &&
+                    word_meets_left_boundary(engine, items, count, word_start);
                 if (reconstitute_seeded(engine, word.font,
                                         seeded ? &seed_item : NULL, taken,
-                                        count_before,
-                                        !seeded && previous == word_start,
+                                        count_before, from_boundary,
                                         true, behind, room, &made_before,
                                         error, error_capacity) != 0 ||
                     reconstitute_characters(engine, word.font,

@@ -1,7 +1,7 @@
-% What stands after the break when a word is set again: the rest of the word,
-% met by the boundary beyond its right end only where the word met one the
-% first time. A word whose boundary was cancelled ends in a plain character
-% and is set again without one.
+% What a word set again is met by at each of its ends: the boundary takes
+% part only where it took part the first time.  A word whose boundary was
+% cancelled at one end begins or ends in a plain character rather than in a
+% ligature the boundary helped make, and is set again without one there.
 \catcode`\{=1 \catcode`\}=2
 \tracingonline=1 \showboxbreadth=99 \showboxdepth=99
 \font\rip=trip \rip \hyphenchar\rip=`\- \lccode`1=`1
@@ -11,5 +11,7 @@
 \setbox1=\vbox{\noindent\ 11 \par}\showbox1
 \message{[B one whose boundary is cancelled]}
 \setbox1=\vbox{\noindent\ 11\noboundary\ \par}\showbox1
+\message{[C one begun after \string\noboundary]}
+\setbox1=\vbox{\noindent\ \noboundary11 \par}\showbox1
 \message{[done]}
 \end
