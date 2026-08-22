@@ -1,0 +1,35 @@
+% WHAT A HYPHEN LIGATURES WITH.
+%
+% When a break falls between two letters that were set as one ligature,
+% both halves are set again -- and THE HYPHEN IS ONE OF THE LETTERS THE
+% FONT'S PROGRAM IS RUN OVER. trip.tfm ligatures `B' with `-' into `C', so
+%
+%   \hyphenchar\rip=`- \patterns{B1B}  on the word BB
+%
+% gives
+%
+%   ..\discretionary replacing 1
+%   ...\rip C (ligature B-)
+%   ..|\rip B
+%   ..\rip A (ligature BB)
+%
+% -- ONE character before the break, not a `B' and a `-'. cmr10 ligatures no
+% letter with a hyphen, which is why the words in the probe for
+% breaking-inside-a-ligature never showed this.
+%
+% This engine set the letters again and then put a plain hyphen behind
+% them. trip line 195 hyphenates a word of trip.tfm's own ligatures.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxdepth=99 \showboxbreadth=99
+\font\rip=trip \rip \hyphenchar\rip=`-
+\lccode`A=1 \lccode`B=2 \lccode`C=3 \uchyph=1
+\patterns{A1B B1B B1C C1A}
+\hsize=1000pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\message{[A a break inside a BB ligature]}
+\setbox1=\vbox{\noindent A BB\par}
+\showbox1
+\message{[B one inside a CA ligature]}
+\setbox1=\vbox{\noindent A CACA\par}
+\showbox1
+\message{[done]}
+\end

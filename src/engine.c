@@ -31044,21 +31044,35 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 uint32_t post[8];
                 size_t pre_count = 0U;
                 size_t post_count = 0U;
-                uint32_t hyphen = 0U;
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
-                if (inside < original_count &&
-                    reconstitute_characters(engine, word.font, originals,
-                                            inside, false, false, pre, 7U,
-                                            &pre_count, error,
+                /* THE HYPHEN IS ONE OF THE LETTERS THE FONT IS ASKED ABOUT:
+                   it goes in behind the ones before the break and the whole
+                   run is set again, so a font that ligatures a letter with
+                   a hyphen does so here. See docs/DECISIONS.md,
+                   breaking-inside-a-ligature. */
+                uint8_t before[8];
+                size_t before_count = inside < 6U ? inside : 6U;
+                memcpy(before, originals, before_count);
+                const struct hstex_font *metrics =
+                    font_by_identifier(engine, word.font);
+                bool has_hyphen =
+                    metrics != NULL && metrics->characters != NULL &&
+                    metrics->hyphen_character >= 0 &&
+                    metrics->hyphen_character <= 255 &&
+                    metrics->characters[metrics->hyphen_character].tag >= 0;
+                if (has_hyphen) {
+                    before[before_count++] =
+                        (uint8_t)metrics->hyphen_character;
+                }
+                if (inside < original_count && has_hyphen &&
+                    reconstitute_characters(engine, word.font, before,
+                                            before_count, false, false, pre,
+                                            8U, &pre_count, error,
                                             error_capacity) == 0 &&
                     reconstitute_characters(
                         engine, word.font, originals + inside,
                         (size_t)original_count - inside, false, false, post,
-                        8U, &post_count, error, error_capacity) == 0 &&
-                    make_hyphen_node(engine, word.font, &hyphen, error,
-                                     error_capacity) == 0 &&
-                    hyphen != 0U) {
-                    pre[pre_count++] = hyphen;
+                        8U, &post_count, error, error_capacity) == 0) {
                     uint32_t start = 0U;
                     if (store_list_run(engine, pre, pre_count, &start, error,
                                        error_capacity) != 0) {
