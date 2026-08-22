@@ -1,0 +1,15 @@
+% A discretionary hyphen whose character the font has not got: the hyphen is
+% made where \- stands, so the fault is reported there and the discretionary
+% is left with nothing in front of the break.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracinglostchars=2 \tracingcommands=1
+\showboxbreadth=99 \showboxdepth=99
+\font\rip=trip \rip \hyphenchar\rip=`\?
+\message{[A a hyphen the font has not got]}
+\setbox0=\hbox{\-B}\showbox0
+\message{[B one it has]}
+\hyphenchar\rip=`\-
+\setbox0=\hbox{\-B}\showbox0
+\tracingcommands=0
+\message{[done]}
+\end

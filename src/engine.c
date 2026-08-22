@@ -13347,6 +13347,10 @@ static int execute_discretionary(struct hstex_engine *engine, char *error,
 
 /* \- is a discretionary whose pre-break text is the font's hyphen, and
    nothing at all when that font has no hyphen character. */
+static int make_hyphen_node(struct hstex_engine *engine, uint32_t font,
+                            uint32_t *identifier, char *error,
+                            size_t error_capacity);
+
 static int execute_discretionary_hyphen(struct hstex_engine *engine,
                                         char *error, size_t error_capacity)
 {
@@ -13355,24 +13359,16 @@ static int execute_discretionary_hyphen(struct hstex_engine *engine,
         return -1;
     }
     struct hstex_node node = {.kind = HSTEX_NODE_DISCRETIONARY};
-    const struct hstex_font *font =
-        font_by_identifier(engine, engine->current_font);
-    int32_t hyphen = font == NULL ? -1 : font->hyphen_character;
-    if (hyphen >= 0 && hyphen < 256 && font->characters != NULL &&
-        font->characters[hyphen].tag >= 0) {
-        const struct hstex_char_metric *metric = &font->characters[hyphen];
-        struct hstex_node character = {
-            .kind = HSTEX_NODE_CHARACTER,
-            .width = metric->width,
-            .height = metric->height,
-            .depth = metric->depth,
-            .value.character = {.font = engine->current_font,
-                                .character = (uint32_t)hyphen},
-        };
-        uint32_t identifier = 0U;
-        if (store_node(engine, &character, &identifier, error,
-                       error_capacity) != 0 ||
-            store_list_run(engine, &identifier, 1U, &node.value.disc.pre_start,
+    /* THE HYPHEN IS MADE HERE, where \- stands, so a font that has not got
+       the character says so here and the discretionary is left with nothing
+       in front of the break. See docs/DECISIONS.md, missing-characters. */
+    uint32_t identifier = 0U;
+    if (make_hyphen_node(engine, engine->current_font, &identifier, error,
+                         error_capacity) != 0) {
+        return -1;
+    }
+    if (identifier != 0U) {
+        if (store_list_run(engine, &identifier, 1U, &node.value.disc.pre_start,
                            error, error_capacity) != 0) {
             return -1;
         }
