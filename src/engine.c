@@ -22408,6 +22408,32 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
         print_line(engine);
         (void)fflush(diagnostic_stream(engine));
     }
+    /* A PAGE THAT WILL NOT FIT IN A PAGE DESCRIPTION IS NOT WRITTEN. The
+       reference measures the box against the largest dimension it can hold
+       -- eighteen feet or so -- taking \voffset and \hoffset into account,
+       says so, and throws the page away. What it does around that goes on:
+       the counts close with their `]', \deadcycles goes back to nought, and
+       the run carries on. The box is shown as deleted unless \tracingoutput
+       has shown it already. trip line 432 ships a \vbox 16384pt tall. */
+    int64_t total_height = (int64_t)box->height + box->depth +
+                           engine->dimen_parameters[HSTEX_DIMEN_VOFFSET];
+    int64_t total_width =
+        (int64_t)box->width + engine->dimen_parameters[HSTEX_DIMEN_HOFFSET];
+    if (box->height > HSTEX_MAX_DIMEN || box->depth > HSTEX_MAX_DIMEN ||
+        total_height > HSTEX_MAX_DIMEN || total_width > HSTEX_MAX_DIMEN) {
+        static const char *const help[] = {
+            "The page just created is more than 18 feet tall or",
+            "more than 18 feet wide, so I suspect something went wrong.",
+            NULL};
+        tex_error(engine, help, "Huge page cannot be shipped out");
+        if (!tracing_shipout) {
+            report_deleted_box(engine, box);
+            print_byte(engine, ']');
+        }
+        (void)fflush(diagnostic_stream(engine));
+        engine->page_integers[HSTEX_PAGE_DEAD_CYCLES] = 0;
+        return 0;
+    }
     /* Whatever the page was carrying is done now, in the order it was
        written; see docs/DECISIONS.md, whatsits. */
     if (perform_shipout_whatsits(engine, box, error, error_capacity) != 0) {

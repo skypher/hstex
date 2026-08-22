@@ -1,0 +1,43 @@
+% WHAT A PAGE TOO LARGE TO SHIP DRAWS.
+%
+% A page description holds a dimension of at most about eighteen feet, and
+% a page that will not fit in one is NOT WRITTEN:
+%
+%   \shipout\vbox to 16384pt{\hbox{}}
+%   ! Huge page cannot be shipped out.
+%   The page just created is more than 18 feet tall or
+%   more than 18 feet wide, so I suspect something went wrong.
+%
+%   The following box has been deleted:
+%   \vbox(16384.0+0.0)x0.0 []
+%
+% Four measurements are looked at: the height on its own, the depth on its
+% own, the height and depth and \voffset together, and the width and
+% \hoffset together.
+%
+% What goes on around the shipping happens anyway -- the counts close with
+% their `]', \deadcycles goes back to nought, and the run carries on -- so
+% only the page itself is lost. The deleted box is shown unless
+% \tracingoutput has shown it already, in which case the reference does not
+% show it twice.
+%
+% HSTeX wrote the page and said nothing. trip line 432 ships a \vbox
+% 16384pt tall, which is one scaled point over the limit.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=3 \showboxdepth=3
+\message{[A a page taller than the description can hold]}
+\shipout\vbox to 16384pt{\hbox{}}
+\message{[B one that fits]}
+\shipout\vbox to 100pt{\hbox{}}
+\message{[C too wide, through \noexpand\hoffset]}
+\hoffset=16000pt
+\shipout\hbox to 1000pt{}
+\hoffset=0pt
+\message{[D the same, with \noexpand\tracingoutput on]}
+\tracingoutput=1
+\shipout\vbox to 16384pt{\hbox{}}
+\tracingoutput=0
+\message{[E deep rather than tall]}
+\shipout\hbox{\vrule depth 16384pt}
+\message{[done]}
+\end
