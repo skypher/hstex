@@ -215,10 +215,29 @@ seconds to 0.31, 0.35 and 0.37, so a node costs about a third of a per cent
 of the run per byte. Filling the node where it stands rather than building
 it and copying it in is therefore NOT the lever it looks like -- the copy is
 into a cold arena, and the cache miss it takes happens either way -- while
-shrinking the record to 44 bytes should be worth about five per cent. Sixty
-to 44 means the insert variant's `\splittopskip` behind an index, since it
-alone sets the union at 36 bytes and insertions are rare; `kind` and
-`box_kind` as bytes rather than enums; and the flags packed.
+shrinking the record is.
+
+It is now 48 bytes, and the paragraph above describes what it was. The kind
+is an `enum hstex_node_kind : 8` -- a bit-field rather than a plain byte, so
+that a switch over it is still checked for the kinds it does not name -- with
+the explicit-kern flag in a bit beside it, which takes the header from 24
+bytes to 20. And what an insertion remembers besides its list, a whole
+`struct hstex_glue` and two dimensions, now stands in an arena of its own
+behind an index: that variant was 36 bytes and the widest of the ten, so
+every node a document made carried the room an insertion needs, and a
+document makes very few insertions. The union is 28 now, set by the list
+variant, and the record 48. Measured over a document of nothing but words,
+interleaved, the least of seven runs each: 2.43 processor seconds against
+2.56, so **5.1% faster**.
+
+That measurement wanted a document ten times the size of the one the profile
+was taken over. At 0.31 seconds a run, `/usr/bin/time` resolves 10ms, which
+is 3% a tick, and the same A/B read 0.0% -- not a result of no change, just a
+number too coarse to hold a result. A 2.5-second run resolves it.
+
+The last four bytes are in the list variant, whose `box_kind` is an enum and
+whose two flags are whole bytes; 44 would be worth about another 1.4%, which
+is under what an A/B here can see on its own.
 
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
