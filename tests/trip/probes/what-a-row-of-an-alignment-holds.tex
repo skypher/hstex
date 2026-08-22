@@ -1,0 +1,12 @@
+% What a row of an alignment holds before its first entry: the reference
+% begins each row with the preamble's \tabskip glue, and starts the row's
+% own prevdepth or space factor at nothing rather than at the usual value.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \showboxbreadth=10 \showboxdepth=10
+\tabskip=3pt
+\message{[A a row of an \string\halign]}
+\setbox0=\vbox{\halign{#\showlists&#\cr A&B\cr}}
+\message{[B a row of a \string\valign]}
+\setbox0=\hbox{\valign{#\showlists&#\cr \hbox{}&\hbox{}\cr}}
+\message{[done]}
+\end

@@ -148,6 +148,10 @@ void hstex_source_name_top(struct hstex_source_stack *stack, uint8_t kind,
 int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity);
+/* The same, BEGUN rather than put back: it clears nothing away under it. */
+int hstex_source_begin_one(struct hstex_source_stack *stack, hstex_token token,
+                           struct hstex_source_location location, char *error,
+                           size_t error_capacity);
 /* Room in the stack's own store for tokens about to be read, or NULL where
    the store has none to spare. What it returns stands until the frame that
    `hstex_source_push_reserved` makes for it is popped, and nothing else may

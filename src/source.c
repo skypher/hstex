@@ -322,6 +322,37 @@ int hstex_source_push_owned_tokens(struct hstex_source_stack *stack,
     return 0;
 }
 
+/* One token BEGUN rather than put back: a list of one, which clears nothing
+   away under it. The reference begins such a list where it hands an outer
+   name back to be read again and where it puts a brace in behind it. */
+int hstex_source_begin_one(struct hstex_source_stack *stack, hstex_token token,
+                           struct hstex_source_location location, char *error,
+                           size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity, "invalid token-source request");
+    }
+    if (reserve_frames(stack, stack->count + 1U, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_source_frame *frame = &stack->frames[stack->count++];
+    struct hstex_token_source *source = &frame->value.token_list;
+    frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+    source->held = token;
+    source->tokens = &source->held;
+    source->count = 1U;
+    source->cursor = 0U;
+    source->location = location;
+    source->definition = 0U;
+    source->store_base = 0U;
+    source->flags = (uint8_t)HSTEX_TOKEN_SOURCE_HOLDS_OWN;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP;
+    source->frame_name = 0U;
+    ++stack->pushes;
+    note_top_frame(stack);
+    return 0;
+}
+
 int hstex_source_push_one(struct hstex_source_stack *stack, hstex_token token,
                           struct hstex_source_location location, char *error,
                           size_t error_capacity)

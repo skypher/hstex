@@ -8277,9 +8277,12 @@ static int scan_balanced_group(struct hstex_engine *engine,
             }
             hstex_token inserted = hstex_token_character(
                 (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
-            if (push_one(engine, token, location, error, error_capacity) != 0 ||
-                push_one(engine, inserted, location, error,
-                         error_capacity) != 0) {
+            /* Both are BEGUN rather than put back, so what stands spent
+               under them is left standing and the context names it. */
+            if (hstex_source_begin_one(&engine->sources, token, location,
+                                       error, error_capacity) != 0 ||
+                hstex_source_begin_one(&engine->sources, inserted, location,
+                                       error, error_capacity) != 0) {
                 return -1;
             }
             /* What is put in is inserted, and the context says so. */
@@ -8303,6 +8306,17 @@ static int scan_balanced_group(struct hstex_engine *engine,
             tex_error(engine, help,
                       "Forbidden control sequence found while scanning %s",
                       what);
+            /* AND THE NAME ITSELF BECOMES A SPACE, which joins what was
+               being gathered -- the reference hands a copy back to be read
+               again and turns the reading it had into a space. That space
+               is what a \string standing in front of the name later reads,
+               rather than the brace the recovery put in. */
+            if (vector_push(argument,
+                            hstex_token_character((uint8_t)HSTEX_CAT_SPACE,
+                                                  (uint8_t)' '),
+                            error, error_capacity) != 0) {
+                return -1;
+            }
             continue;
         }
         if (!long_macro && token_is_paragraph(engine, token)) {
@@ -10259,10 +10273,12 @@ static enum hstex_engine_result next_expanded_inner(
                     NULL};
                 hstex_token close = hstex_token_character(
                     (uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
-                if (push_one(engine, current, *location, error,
-                             error_capacity) != 0 ||
-                    push_one(engine, close, *location, error,
-                             error_capacity) != 0) {
+                /* Both are BEGUN rather than put back, so what stands spent
+                   under them is left standing and the context names it. */
+                if (hstex_source_begin_one(&engine->sources, current, *location,
+                                           error, error_capacity) != 0 ||
+                    hstex_source_begin_one(&engine->sources, close, *location,
+                                           error, error_capacity) != 0) {
                     return HSTEX_ENGINE_ERROR;
                 }
                 /* The } is inserted, and the context says so. */
@@ -17638,6 +17654,35 @@ static void show_current_page(struct hstex_engine *engine, char *prefix,
     }
 }
 
+/* A row of an alignment stands with the alignment's leading \tabskip glue
+   already in it, before any entry has been read: the reference begins the
+   row's list with that glue. See docs/DECISIONS.md, a-row-of-an-alignment. */
+static void show_row_tabskip(struct hstex_engine *engine,
+                             const struct hstex_nest_level *level,
+                             const char *prefix, int32_t threshold)
+{
+    if (!level->row_tabskip_known || threshold < 0) {
+        return;
+    }
+    (void)prefix;
+    print_fresh_line(engine);
+    print_escaped_name(engine, "glue");
+    print_byte(engine, '(');
+    print_escaped_name(engine, "tabskip");
+    print_text(engine, ") ");
+    show_scaled(engine, level->row_tabskip.width);
+    if (level->row_tabskip.stretch != 0) {
+        print_text(engine, " plus ");
+        show_glue_amount(engine, level->row_tabskip.stretch,
+                         level->row_tabskip.stretch_order);
+    }
+    if (level->row_tabskip.shrink != 0) {
+        print_text(engine, " minus ");
+        show_glue_amount(engine, level->row_tabskip.shrink,
+                         level->row_tabskip.shrink_order);
+    }
+}
+
 /* \showlists: every list the engine is building, innermost first, each with
    the mode it is being built in, where that began, and what the mode keeps
    beside the list. See docs/DECISIONS.md, showlists. */
@@ -17682,6 +17727,7 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
             continue;
         }
         if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
+            show_row_tabskip(engine, level, prefix, threshold);
             if (level->hbox != NULL) {
                 show_builder_list(engine, level->hbox->node_identifiers,
                                   level->hbox->count, prefix, threshold,
@@ -17706,6 +17752,7 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
                 print_text(engine, "### recent contributions:");
             }
         }
+        show_row_tabskip(engine, level, prefix, threshold);
         if (level->mode == (uint8_t)HSTEX_MODE_VERTICAL && level->vbox != NULL) {
             show_builder_list(engine, level->vbox->node_identifiers,
                               level->vbox->count, prefix, threshold,
@@ -38893,6 +38940,22 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
                             error, error_capacity) != 0) {
             status = -1;
             break;
+        }
+        {
+            /* A row begins with the alignment's leading \tabskip already in
+               it, and with the count the row's direction keeps standing at
+               NOTHING rather than at the usual value: a \halign row starts
+               at space factor 0, a \valign row at prevdepth 0. See
+               docs/DECISIONS.md, a-row-of-an-alignment. */
+            struct hstex_nest_level *row_level =
+                &engine->nest[engine->nest_count - 1U];
+            row_level->row_tabskip_known = true;
+            row_level->row_tabskip = leading;
+            if (vertical) {
+                row_level->prev_depth = 0;
+            } else {
+                row_level->space_factor = 0;
+            }
         }
         size_t cell_capacity = 0U;
         size_t column = 0U;

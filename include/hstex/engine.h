@@ -1044,6 +1044,11 @@ struct hstex_nest_level {
        ever stands in, so their levels say what they are once and are not
        told again. */
     bool fixed;
+    /* A ROW of an alignment begins with the \tabskip glue that stood when
+       the alignment began, and \showlists shows it standing there even
+       before the row's first entry is read. */
+    bool row_tabskip_known;
+    struct hstex_glue row_tabskip;
     /* The list an \output routine builds, which \showlists says so of. */
     bool output_routine;
     /* One more than the index of the math list this level is building, or
