@@ -1,0 +1,22 @@
+% When a display is set: after its SECOND $ has been read, which may itself
+% have to be expanded for -- so what the setting reports stands behind
+% whatever that reading drew. But whether the formula can be set at all is
+% settled FIRST, before the second $ is looked for.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \tracinglostchars=2 \tracingcommands=1 \tracingmacros=2
+\font\rip=trip \font\rm=cmr10 \font\sy=cmsy10 \font\ex=cmex10
+\textfont0=\rm \scriptfont0=\rm \scriptscriptfont0=\rm
+\textfont1=\rm \scriptfont1=\rm \scriptscriptfont1=\rm
+\textfont2=\sy \scriptfont2=\sy \scriptscriptfont2=\sy
+\textfont3=\ex \scriptfont3=\ex \scriptscriptfont3=\ex
+\hsize=100pt \parindent=0pt
+\font\trip=trip \def\z{$}
+\message{[A a display whose second $ is a macro's]}
+\textfont0=\trip \scriptfont0=\trip \scriptscriptfont0=\trip
+\setbox0=\vbox{\noindent\hbox{}$$\hbox{}\fam0 \char`v$\z\relax}
+\message{[B one whose fonts are not there at all]}
+\textfont3=\nullfont \scriptfont3=\nullfont \scriptscriptfont3=\nullfont
+\setbox0=\vbox{\noindent\hbox{}$$\hbox{}\fam0 \char`v$\z\relax}
+\tracingcommands=0
+\message{[done]}
+\end

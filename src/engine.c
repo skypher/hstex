@@ -34390,7 +34390,7 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
 /* The closing $$ centres the formula in \displaywidth, surrounds it with the
    display penalties and skips, and lets the paragraph carry on. */
 /* Translate the formula the engine has been reading into a box. */
-static int package_displayed_formula(struct hstex_engine *engine,
+static int package_displayed_formula(struct hstex_engine *engine, bool deleted,
                                      struct hstex_box *box, char *error,
                                      size_t error_capacity)
 {
@@ -34404,10 +34404,10 @@ static int package_displayed_formula(struct hstex_engine *engine,
     engine->active_hbox_builder = &builder;
     /* A display is deleted for want of the fonts to measure it against
        just as an inline formula is: what is packaged is then an empty box
-       where the formula would have been. */
-    int status = math_fonts_are_missing(engine)
-                     ? 0
-                     : translate_math_list(engine, list, error, error_capacity);
+       where the formula would have been.  WHETHER IT IS DELETED IS SETTLED
+       BEFORE THE SECOND $ IS READ, and the setting itself happens after. */
+    int status =
+        deleted ? 0 : translate_math_list(engine, list, error, error_capacity);
     engine->active_hbox_builder = previous;
     if (status == 0) {
         status = finalize_hbox(engine, &builder, false, false, 0, box, error,
@@ -36865,7 +36865,8 @@ static int end_display_math(struct hstex_engine *engine,
         if (engine->math_floor != 0U) {
             --engine->math_floor;
         }
-        if (package_displayed_formula(engine, &equation, error,
+        if (package_displayed_formula(engine, math_fonts_are_missing(engine),
+                                      &equation, error,
                                       error_capacity) != 0) {
             return -1;
         }
@@ -43039,18 +43040,20 @@ handle_token:
                            reference reports its `Insufficient extension
                            fonts' before it complains about the single $. */
                         struct hstex_box packaged = {0};
-                        if (package_displayed_formula(engine, &packaged, error,
-                                                      error_capacity) != 0) {
-                            return HSTEX_ENGINE_ERROR;
-                        }
-                        /* The formula's own list is gone by the time the
-                           second $ is looked for, so the mode there is the
-                           one the list it was part of is built in. For the
-                           display that is the vertical list it will join --
-                           internal vertical inside a \vbox; for an equation
-                           NUMBER it is the display itself, which is still
-                           standing. \tracingcommands names either for an
-                           \expandafter between the two $. */
+                        /* WHETHER THE FORMULA CAN BE SET AT ALL is settled
+                           first of all: the reference looks for the fonts a
+                           formula is measured against before it goes looking
+                           for the second $, so what it says of them stands
+                           in front of whatever that reading expands. */
+                        bool deleted = math_fonts_are_missing(engine);
+                        /* The formula's own list is finished with by the
+                           time the second $ is looked for, so the mode there
+                           is the one the list it was part of is built in. For
+                           the display that is the vertical list it will join
+                           -- internal vertical inside a \vbox; for an
+                           equation NUMBER it is the display itself, which is
+                           still standing. \tracingcommands names either for
+                           an \expandafter between the two $. */
                         if (engine->reading_equation_number) {
                             engine->mode = HSTEX_MODE_MATH;
                             engine->inner_mode = false;
@@ -43073,6 +43076,16 @@ handle_token:
                                     second, where, error, error_capacity) != 0) {
                                 return HSTEX_ENGINE_ERROR;
                             }
+                        }
+                        /* AND IT IS SET ONLY ONCE THAT SECOND $ IS IN: what
+                           the setting reports -- a character the family's
+                           font has not got, an undefined family -- stands
+                           after whatever reading the second $ expanded. See
+                           docs/DECISIONS.md, when-a-display-is-set. */
+                        if (package_displayed_formula(engine, deleted,
+                                                      &packaged, error,
+                                                      error_capacity) != 0) {
+                            return HSTEX_ENGINE_ERROR;
                         }
                         if (end_display_math(engine, packaged, error,
                                              error_capacity) != 0) {
