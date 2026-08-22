@@ -16150,21 +16150,44 @@ static void show_error_context(struct hstex_engine *engine)
         return;
     }
     const struct hstex_mouth *mouth = &file->mouth;
+    if (mouth->data == NULL) {
+        return;
+    }
     /* A line that has been read to its end is still the line the error is
        on: the mouth keeps where it stood until it loads the next one, so
        what is shown is that line with the reading at its end. */
-    if (mouth->line_number == 0U || mouth->data == NULL) {
-        return;
-    }
     const char *line = (const char *)mouth->data + mouth->line_start;
     size_t length = mouth->line_content_length;
     size_t cursor = mouth->line_cursor;
+    unsigned number = (unsigned)mouth->line_number;
+    /* A FILE JUST OPENED IS ALREADY ON ITS FIRST LINE. The reference reads
+       that line as it opens the file, so a fault raised before anything has
+       been taken from it still draws `l.1' and the whole line after the
+       reading. HSTeX loads a line only when it wants a character from it,
+       so the line is worked out here. See docs/DECISIONS.md, error-context. */
+    if (mouth->line_number == 0U) {
+        size_t start = mouth->next_line_offset;
+        if (start >= mouth->length) {
+            return;
+        }
+        size_t end = start;
+        while (end < mouth->length && mouth->data[end] != (uint8_t)'\n' &&
+               mouth->data[end] != (uint8_t)'\r') {
+            ++end;
+        }
+        while (end > start && mouth->data[end - 1U] == (uint8_t)' ') {
+            --end;
+        }
+        line = (const char *)mouth->data + start;
+        length = end - start;
+        cursor = 0U;
+        number = 1U;
+    }
     if (cursor > length) {
         cursor = length;
     }
     char tag[32];
-    int tag_length =
-        snprintf(tag, sizeof(tag), "l.%u ", (unsigned)mouth->line_number);
+    int tag_length = snprintf(tag, sizeof(tag), "l.%u ", number);
     if (tag_length < 0) {
         return;
     }

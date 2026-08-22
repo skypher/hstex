@@ -1,0 +1,28 @@
+% WHAT LINE A FILE JUST OPENED IS ON.
+%
+% The reference reads a file's FIRST LINE as it opens the file, so a fault
+% raised before anything has been taken from that line still draws `l.1'
+% and the whole line standing after the reading. This probe reads ITSELF,
+% so the line shown is the comment above:
+%
+%   ! Undefined control sequence.
+%   \stop ->\undefinedone
+%   l.1 
+%       % WHAT LINE A FILE JUST OPENED IS ON.
+%
+% This engine loads a line only when it wants a character from it, so it
+% had no line to show and drew none. trip line 424 writes
+% \expandafter\stopinput\input tripos, whose \stopinput errors before
+% tripos.tex's first line -- an empty one -- has been read.
+\catcode`\{=1 \catcode`\}=2
+\ifx\again\undefined
+  \tracingonline=1
+  \def\again{}
+  \def\stop{\undefinedone}
+  \message{[A a file read before anything is taken from it]}
+  \expandafter\stop\input what-line-a-file-just-opened-is-on
+  \message{[done]}
+  \end
+\else
+  \endinput
+\fi
