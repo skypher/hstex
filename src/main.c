@@ -311,7 +311,12 @@ static int make_format(const char *format_path, const char *format_file)
 {
     char error[512] = {0};
     struct hstex_engine engine;
-    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+    /* Built the way it will be run: the format source is latex.ltx, which
+       reaches \count256 as soon as it finds \marks, and that is a register
+       only an eTeX-enabled engine has. The capacity is written into the
+       format, so a run reading it back gets the same pool whatever it
+       started with. See run_latex below. */
+    if (hstex_engine_init_extended(&engine, true, error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
