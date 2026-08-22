@@ -1,0 +1,42 @@
+% WHAT \noexpand HOLDS BACK, AND FOR HOW LONG.
+%
+% \noexpand holds the name behind it back for ONE READING. The reading that
+% spends the holding gets a name that behaves as \relax -- so the name is
+% OBEYED, does nothing, and is TRACED:
+%
+%   \noexpand\undefinedtwo      {\relax}      and no fault at all
+%
+% HSTeX dropped the name without a word, so \tracingcommands lost a line
+% wherever a document writes \noexpand outside a text being gathered.
+%
+% \expandafter READS the name it holds back, and that reading is the one
+% that spends the holding: what goes back is the bare name, expanded when
+% it is read again. So
+%
+%   \expandafter\expandafter\noexpand\undefined
+%
+% -- where the inner \expandafter fetches the name \noexpand had just held
+% -- draws
+%
+%   ! Undefined control sequence.
+%   <recently read> \undefined
+%
+% where a plain `\noexpand\undefined' draws nothing. trip line 437 writes
+% exactly that pair.
+%
+% A name that was never expandable is not held back at all: \noexpand\relax
+% is \relax, and a character token passes through untouched.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracingcommands=2
+\message{[A the expandafter-expandafter-noexpand idiom over an undefined name]}
+\expandafter\expandafter\noexpand\undefined\noexpand\expandafter\relax
+\message{[B noexpand alone over an undefined name]}
+\noexpand\undefinedtwo
+\message{[C noexpand over a defined macro]}
+\def\m{X}\setbox0=\hbox{\noexpand\m}\showthe\wd0
+\message{[D noexpand over an unexpandable primitive]}
+\noexpand\relax
+\message{[E noexpand over a character]}
+\setbox0=\hbox{\noexpand A}\showthe\wd0
+\message{[done]}
+\end

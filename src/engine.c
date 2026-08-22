@@ -9724,6 +9724,17 @@ static int expand_after(struct hstex_engine *engine,
         return -1;
     }
     (void)location;
+    /* THE TOKEN HELD BACK HAS BEEN READ, and reading a name that \noexpand
+       held back spends the holding: the reference's marker is gone once the
+       name behind it has been fetched, so what goes back is the bare name
+       and it is expanded when it is read again. That is what
+       `\expandafter\expandafter\noexpand\undefined' turns on -- trip line
+       437 writes it, and the reference reports the undefined name. */
+    if (hstex_token_is_frozen_control_sequence(first) &&
+        !hstex_token_is_unexpanded_control_sequence(first)) {
+        first = hstex_token_control_sequence(
+            hstex_token_control_sequence_id(first));
+    }
     return push_one(engine, first, first_location, error, error_capacity);
 }
 
@@ -41336,11 +41347,26 @@ static enum hstex_engine_result next_output(
         }
         if (engine->returned_unexpanded &&
             hstex_token_is_control_sequence(*token)) {
-            if (engine->returned_unexpanded_executable &&
-                push_one(engine, *token, *location, error, error_capacity) !=
-                    0) {
+            if (engine->returned_unexpanded_executable) {
+                if (push_one(engine, *token, *location, error,
+                             error_capacity) != 0) {
+                    return HSTEX_ENGINE_ERROR;
+                }
+                continue;
+            }
+            /* A NAME \noexpand HELD BACK IS \relax FOR THIS ONE READING.
+               The reference obeys that \relax -- which does nothing, and
+               spends no prefix waiting for a command -- and traces it, so
+               `\noexpand\undefined' draws `{\relax}' and no fault. */
+            static const uint8_t name[] = "relax";
+            hstex_cs_id identifier = 0U;
+            if (hstex_symbol_intern(&engine->lexical_state.symbols,
+                                    HSTEX_SYMBOL_REGULAR, name,
+                                    sizeof(name) - 1U, &identifier, error,
+                                    error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
+            trace_command(engine, hstex_token_control_sequence(identifier));
             continue;
         }
 
