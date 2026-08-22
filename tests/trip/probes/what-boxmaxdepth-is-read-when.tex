@@ -1,0 +1,44 @@
+% WHAT \boxmaxdepth IS READ WHEN.
+%
+% A vertical box's depth is its trailing depth, but no more than
+% \boxmaxdepth; whatever exceeds that counts as height instead. The value
+% that counts is the one IN FORCE INSIDE THE BOX, taken before the box's
+% own group is closed -- so a \boxmaxdepth set in the box is the one that
+% limits it, even though the assignment is undone the moment the box ends.
+%
+%   \boxmaxdepth=1000pt
+%   \setbox0=\vbox{\boxmaxdepth=2pt\copy1}     (\dp1=5pt)
+%     -> \vbox(3.0+2.0)x0.0
+%
+% A NEGATIVE \boxmaxdepth is a limit like any other: the depth comes out
+% negative and the height gains what it lost, so
+% `\vbox to10pt{\boxmaxdepth=-1pt\mark{v}}' is \vbox(10.0+-1.0).
+%
+% This engine read the parameter after the box's group had closed, so it
+% used whatever stood outside. trip line 316 writes
+% \vbox to10pt{\boxmaxdepth=-1pt\mark{vii}}.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxdepth=9 \showboxbreadth=9 \vbadness=10000
+\setbox1=\hbox{}\dp1=5pt
+\message{[A a plain vbox with a deep box]}
+\setbox0=\vbox{\copy1}
+\showbox0
+\message{[B one to a height]}
+\setbox0=\vbox to10pt{\copy1}
+\showbox0
+\message{[C with boxmaxdepth outside]}
+\boxmaxdepth=2pt
+\setbox0=\vbox{\copy1}
+\showbox0
+\message{[D with boxmaxdepth inside]}
+\boxmaxdepth=1000pt
+\setbox0=\vbox{\boxmaxdepth=2pt\copy1}
+\showbox0
+\message{[E a negative one, over an empty list]}
+\setbox0=\vbox to10pt{\boxmaxdepth=-1pt\mark{v}}
+\showbox0
+\message{[F and over a box with depth]}
+\setbox0=\vbox to10pt{\boxmaxdepth=-1pt\copy1}
+\showbox0
+\message{[done]}
+\end

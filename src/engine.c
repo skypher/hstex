@@ -75,6 +75,12 @@ struct hstex_vbox_builder {
        may already hold rows: an empty builder is not an empty list. See
        docs/DECISIONS.md, a-rule-between-rows. */
     bool continues;
+    /* WHAT \boxmaxdepth SAID INSIDE THE BOX, taken before the box's own
+       group is closed: the reference reads it there, so a `\boxmaxdepth'
+       set in the box is the one that limits it. Nought until it is taken.
+       See docs/DECISIONS.md, what-boxmaxdepth-is-read-when. */
+    bool max_depth_known;
+    int32_t max_depth;
 };
 
 /* The environment a file search is started with; POSIX puts it here. */
@@ -13570,7 +13576,10 @@ static int finalize_vbox(struct hstex_engine *engine,
        \boxmaxdepth; whatever exceeds it counts as height instead. */
     int64_t height = builder->extent;
     int32_t depth = builder->trailing_depth;
-    int32_t limit = engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
+    int32_t limit =
+        builder->max_depth_known
+            ? builder->max_depth
+            : engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
     if (depth > limit) {
         height += (int64_t)depth - limit;
         depth = limit;
@@ -42583,6 +42592,17 @@ handle_token:
                             NULL};
                         tex_error(engine, sneaky, "Unbalanced output routine");
                     }
+                }
+                /* WHAT \boxmaxdepth SAYS INSIDE A BOX is what limits it,
+                   and it is taken BEFORE the box's own group is closed --
+                   which is here, one step before the restore. See
+                   docs/DECISIONS.md, what-boxmaxdepth-is-read-when. */
+                if (engine->group_stop_armed &&
+                    engine->group_level <= engine->group_stop_level + 1U &&
+                    engine->active_vbox_builder != NULL) {
+                    engine->active_vbox_builder->max_depth =
+                        engine->dimen_parameters[HSTEX_DIMEN_BOX_MAX_DEPTH];
+                    engine->active_vbox_builder->max_depth_known = true;
                 }
                 if (end_group(engine, error, error_capacity) < 0) {
                     return HSTEX_ENGINE_ERROR;
