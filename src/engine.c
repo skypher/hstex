@@ -15849,6 +15849,35 @@ static int token_display_text(struct hstex_engine *engine, hstex_token token,
         *length = want;
         return 0;
     }
+    /* A NAME \noexpand HELD BACK stands in the list behind the frozen name
+       the reference puts in front of it. HSTeX keeps the holding as a flag
+       on the name itself, so the frozen one is written here. See
+       docs/DECISIONS.md, what-a-noexpand-holds-back. */
+    size_t held = 0U;
+    if (hstex_token_is_frozen_control_sequence(token) &&
+        !hstex_token_is_unexpanded_control_sequence(token)) {
+        static const char marker[] = "\\notexpanded: ";
+        for (size_t index = 0U; marker[index] != '\0'; ++index) {
+            if (held >= capacity) {
+                return -1;
+            }
+            if (marker[index] == '\\') {
+                int32_t escape =
+                    engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
+                if (escape < 0 || escape > 255) {
+                    continue;
+                }
+                buffer[held++] = (char)(unsigned char)escape;
+                continue;
+            }
+            buffer[held++] = marker[index];
+        }
+        token = hstex_token_control_sequence(
+            hstex_token_control_sequence_id(token));
+    } else if (hstex_token_is_frozen_control_sequence(token)) {
+        token = hstex_token_control_sequence(
+            hstex_token_control_sequence_id(token));
+    }
     if (!hstex_token_is_control_sequence(token)) {
         return -1;
     }
@@ -15861,11 +15890,11 @@ static int token_display_text(struct hstex_engine *engine, hstex_token token,
         free(bytes);
         return -1;
     }
-    if (count > capacity) {
-        count = capacity;
+    if (count > capacity - held) {
+        count = capacity - held;
     }
-    memcpy(buffer, bytes, count);
-    *length = count;
+    memcpy(buffer + held, bytes, count);
+    *length = held + count;
     free(bytes);
     return 0;
 }

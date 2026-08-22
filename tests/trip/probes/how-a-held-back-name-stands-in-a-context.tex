@@ -1,0 +1,22 @@
+% HOW A HELD-BACK NAME STANDS IN A CONTEXT.
+%
+% \noexpand puts a FROZEN NAME of its own in front of the name it holds
+% back, and both stand in the list a fault's context draws:
+%
+%   ! Undefined control sequence.
+%   <recently read> \undefined
+%   <to be read again>
+%                      \notexpanded: \relax
+%
+% The frozen name is written with the escape character, as any other name
+% in a diagnostic is. HSTeX keeps the holding as a mark on the name itself
+% rather than as a token in front of it, so it wrote nothing at all there.
+%
+% trip line 437 writes \expandafter\expandafter\noexpand\undefined
+% \noexpand\expandafter.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \errorcontextlines=5
+\message{[A a held-back name in the context of a fault]}
+\expandafter\expandafter\noexpand\undefined\noexpand\relax
+\message{[done]}
+\end
