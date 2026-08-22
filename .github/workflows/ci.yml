@@ -142,7 +142,11 @@ jobs:
           run: |
             meson setup build
             meson compile -C build
-            meson test -C build --print-errorlogs
+            # These images carry no TeX installation, so the engine test --
+            # which reads real font metrics -- has nothing to read. It is the
+            # same set the TeX-less macOS images run; see above.
+            meson test -C build --print-errorlogs \
+              scan input catcode symbol mouth source
 
   netbsd:
     name: NetBSD 11
@@ -159,7 +163,11 @@ jobs:
           run: |
             meson setup build
             meson compile -C build
-            meson test -C build --print-errorlogs
+            # These images carry no TeX installation, so the engine test --
+            # which reads real font metrics -- has nothing to read. It is the
+            # same set the TeX-less macOS images run; see above.
+            meson test -C build --print-errorlogs \
+              scan input catcode symbol mouth source
 
   openbsd:
     name: OpenBSD 7.9
@@ -176,4 +184,8 @@ jobs:
           run: |
             meson setup build
             meson compile -C build
-            meson test -C build --print-errorlogs
+            # These images carry no TeX installation, so the engine test --
+            # which reads real font metrics -- has nothing to read. It is the
+            # same set the TeX-less macOS images run; see above.
+            meson test -C build --print-errorlogs \
+              scan input catcode symbol mouth source

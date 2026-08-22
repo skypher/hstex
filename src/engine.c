@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <poll.h>
 #include <spawn.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -4108,23 +4109,86 @@ static void finder_stop(struct hstex_engine *engine)
     }
     free(finder->marker_answer);
     finder->marker_answer = NULL;
+    finder->pending_held = 0U;
 }
 
+/* How long the tool is given to answer before this run stops waiting on it.
+   It answers in milliseconds, so a wait this long is not a slow answer but
+   no answer: either `stdbuf' did not manage to turn off the buffering the
+   tool does on a pipe, and what it has said is sitting in that buffer, or
+   the name it was started with was one it could not find, and it is waiting
+   to be asked about another rather than talking. Neither can be told apart
+   from a pause while it works, so the wait is bounded and a run that
+   reaches the bound stops asking this way. */
+enum { HSTEX_FINDER_ANSWER_MILLISECONDS = 5000 };
+
+/* Whether the tool has been found unusable, which is a property of the
+   installation rather than of any one engine: an engine that gave up on it
+   would otherwise be followed by another that waits the same wait, and a
+   run that builds engines by the hundred would wait all of them. */
+static bool hstex_finder_unusable = false;
+
+/* Whether the marker has been found to be a name the tool can find, which is
+   asked once per run rather than at every start; see finder_start. */
+static bool hstex_finder_marker_found = false;
+
 /* One line of what the tool says, without what ends it, or NULL where it has
-   stopped talking. */
+   stopped talking, said nothing in the time it was given, or said a line
+   longer than any answer could be. The caller falls back to a child process
+   per name for each of those, which is slower and always answers. */
 static char *finder_answer(struct hstex_file_finder *finder)
 {
-    char *line = NULL;
-    size_t capacity = 0U;
-    ssize_t length = getline(&line, &capacity, finder->answers);
-    if (length < 0) {
-        free(line);
-        return NULL;
+    int descriptor = fileno(finder->answers);
+    for (;;) {
+        char *end = memchr(finder->pending, '\n', finder->pending_held);
+        if (end != NULL) {
+            size_t length = (size_t)(end - finder->pending);
+            char *line = malloc(length + 1U);
+            if (line == NULL) {
+                return NULL;
+            }
+            memcpy(line, finder->pending, length);
+            line[length] = '\0';
+            size_t consumed = length + 1U;
+            memmove(finder->pending, finder->pending + consumed,
+                    finder->pending_held - consumed);
+            finder->pending_held -= consumed;
+            while (length > 0U && line[length - 1U] == '\r') {
+                line[--length] = '\0';
+            }
+            return line;
+        }
+        if (finder->pending_held == sizeof(finder->pending)) {
+            return NULL;
+        }
+        struct pollfd waiting;
+        waiting.fd = descriptor;
+        waiting.events = POLLIN;
+        waiting.revents = 0;
+        int ready = poll(&waiting, 1U, HSTEX_FINDER_ANSWER_MILLISECONDS);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return NULL;
+        }
+        if (ready == 0) {
+            return NULL;
+        }
+        ssize_t received =
+            read(descriptor, finder->pending + finder->pending_held,
+                 sizeof(finder->pending) - finder->pending_held);
+        if (received < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return NULL;
+        }
+        if (received == 0) {
+            return NULL;
+        }
+        finder->pending_held += (size_t)received;
     }
-    while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r')) {
-        line[--length] = '\0';
-    }
-    return line;
 }
 
 /* Start the tool with its questions and its answers on pipes of their own.
@@ -4133,6 +4197,29 @@ static char *finder_answer(struct hstex_file_finder *finder)
 static bool finder_start(struct hstex_engine *engine)
 {
     struct hstex_file_finder *finder = &engine->finder;
+    if (hstex_finder_unusable) {
+        return false;
+    }
+    /* The whole scheme rests on the marker being a name the tool finds, since
+       what it says about the marker is what tells a name it found from one it
+       did not. Where the marker is not found the tool would answer the
+       opening question with nothing at all and wait to be asked another --
+       so it is looked for first by a child that ends on its own, which
+       answers or fails but never waits. Where it stands is a property of the
+       installation and not of this engine or of what the run has written
+       since, so it is looked for once and the answer kept: the tool is
+       started often enough that a child for each would cost more than the
+       one it is being started to save. */
+    if (!hstex_finder_marker_found) {
+        char *marker_path = resolve_with_kpsewhich(hstex_finder_marker);
+        if (marker_path == NULL) {
+            hstex_finder_unusable = true;
+            return false;
+        }
+        free(marker_path);
+        hstex_finder_marker_found = true;
+    }
+    finder->pending_held = 0U;
     int questions[2];
     int answers[2];
     if (pipe(questions) != 0) {
@@ -4196,7 +4283,11 @@ static bool finder_start(struct hstex_engine *engine)
        first thing the tool says. */
     finder->marker_answer = finder_answer(finder);
     if (finder->marker_answer == NULL || finder->marker_answer[0] == '\0') {
+        /* It was started and did not say what it was started to say, so it
+           is not going to be talked to this way at all: what it says is
+           sitting in a buffer nothing here can reach. */
         finder_stop(engine);
+        hstex_finder_unusable = true;
         return false;
     }
     finder->generation = engine->file_generation;
@@ -4247,6 +4338,7 @@ static char *finder_ask(struct hstex_engine *engine, const char *filename)
     if (answer == NULL) {
         finder_stop(engine);
         finder->broken = true;
+        hstex_finder_unusable = true;
         return resolve_with_kpsewhich(filename);
     }
     if (strcmp(answer, finder->marker_answer) == 0) {
@@ -45749,6 +45841,7 @@ static void park_a_chunk(struct hstex_engine *engine)
         engine->finder.answers = NULL;
         engine->finder.child = 0;
         engine->finder.marker_answer = NULL;
+        engine->finder.pending_held = 0U;
         engine->finder.broken = false;
         /* The bytes still in hand belong to the chunk before this one, which
            will write them itself; this chunk's own begin where the run had

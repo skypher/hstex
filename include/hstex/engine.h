@@ -16,7 +16,19 @@
    two hundred names. See docs/DECISIONS.md, finding-a-file. */
 struct hstex_file_finder {
     FILE *questions;
+    /* The tool's answers. Nothing is read through this stream: it is held
+       for the descriptor it owns and the closing it does, while the reading
+       is done on that descriptor directly, so that a wait for more can be
+       bounded. Stdio would hide whether a line is already in hand, and a
+       wait that cannot be bounded is a run that a tool which never answers
+       stops for good. */
     FILE *answers;
+    /* What the tool has said that has not been given out yet. One read
+       brings in whatever has arrived, which for a name it found is both
+       that name's answer and the marker's; the second is kept here until it
+       is asked for. */
+    char pending[8192];
+    size_t pending_held;
     /* The child, kept as a plain integer so that this header needs nothing
        from <sys/types.h>; zero where none is running. */
     int child;
