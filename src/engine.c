@@ -40608,12 +40608,14 @@ static int insert_right_delimiter(struct hstex_engine *engine,
     }
     hstex_token stop =
         hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'.');
-    /* Read back out as \right, then the ., then the token that was too
-       early -- so they go in the other order. */
+    /* The token that was too early is put BACK, so it stands in a frame of
+       its own that the context calls `<to be read again>'. The two that are
+       put IN are ONE inserted text, which is what the context names above
+       it: `<inserted text> \right .' on one line, not two frames. */
+    hstex_token inserted[2] = {hstex_token_control_sequence(identifier), stop};
     if (push_one(engine, offending, location, error, error_capacity) != 0 ||
-        push_one(engine, stop, location, error, error_capacity) != 0 ||
-        push_one(engine, hstex_token_control_sequence(identifier), location,
-                 error, error_capacity) != 0) {
+        hstex_source_push_tokens(&engine->sources, inserted, 2U, location,
+                                 error, error_capacity) != 0) {
         return -1;
     }
     tex_error(engine, help, "Missing \\right. inserted");
