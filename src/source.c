@@ -567,6 +567,57 @@ int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
     return set_error(error, error_capacity, "source boundary is not active");
 }
 
+/* THE SPENT HALF OF A TEMPLATE STAYS STANDING when the boundary an alignment
+   entry was read under is taken away. The reference has no boundary there at
+   all: the list it read the template from is still on its input stack when
+   the entry is done with, so a fault drawn next names it. The block moves to
+   a fresh frame rather than being copied. */
+int hstex_source_pop_boundary_keeping_template(struct hstex_source_stack *stack,
+                                               char *error,
+                                               size_t error_capacity)
+{
+    if (stack == NULL) {
+        return set_error(error, error_capacity, "invalid source boundary pop");
+    }
+    hstex_token *kept = NULL;
+    size_t kept_count = 0U;
+    struct hstex_source_location kept_at = {0};
+    uint32_t kept_name = 0U;
+    if (stack->count != 0U) {
+        struct hstex_source_frame *top = &stack->frames[stack->count - 1U];
+        struct hstex_token_source *source = &top->value.token_list;
+        if (top->kind == HSTEX_SOURCE_TOKEN_LIST &&
+            source->source_kind ==
+                (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER &&
+            (source->flags & (uint8_t)HSTEX_TOKEN_SOURCE_OWNS) != 0U) {
+            kept = (hstex_token *)source->tokens;
+            kept_count = source->count;
+            kept_at = source->location;
+            kept_name = source->frame_name;
+            source->flags =
+                (uint8_t)(source->flags &
+                          (uint8_t) ~(unsigned)HSTEX_TOKEN_SOURCE_OWNS);
+        }
+    }
+    if (hstex_source_pop_boundary(stack, error, error_capacity) != 0) {
+        free(kept);
+        return -1;
+    }
+    if (kept == NULL) {
+        return 0;
+    }
+    if (hstex_source_push_owned_tokens(stack, kept, kept_count, kept_at, error,
+                                       error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_token_source *source =
+        &stack->frames[stack->count - 1U].value.token_list;
+    source->source_kind = (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER;
+    source->frame_name = kept_name;
+    source->cursor = source->count;
+    return 0;
+}
+
 int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
                                   size_t error_capacity)
 {

@@ -1,0 +1,12 @@
+% Where an alignment finds a tab too many: the reference looks for the column
+% as soon as the entry the tab ended is done with -- while the template that
+% tab put in is still standing -- rather than when the token that would begin
+% the next entry is read.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \errorcontextlines=5
+\message{[A a tab too many]}
+\setbox0=\vbox{\halign{A#B&C#D\cr x&y&z\cr}}
+\message{[B one whose entry is empty]}
+\setbox0=\vbox{\halign{A#B&C#D\cr x&y&\cr}}
+\message{[done]}
+\end

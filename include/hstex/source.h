@@ -191,6 +191,11 @@ void hstex_source_settle(struct hstex_source_stack *stack);
 void hstex_source_pop(struct hstex_source_stack *stack);
 int hstex_source_pop_boundary(struct hstex_source_stack *stack, char *error,
                               size_t error_capacity);
+/* The same, but the spent half of an alignment template standing on top of
+   the boundary is left standing rather than taken away with it. */
+int hstex_source_pop_boundary_keeping_template(struct hstex_source_stack *stack,
+                                               char *error,
+                                               size_t error_capacity);
 int hstex_source_end_current_file(struct hstex_source_stack *stack, char *error,
                                   size_t error_capacity);
 enum hstex_mouth_result hstex_source_next(

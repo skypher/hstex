@@ -38356,8 +38356,12 @@ static int evaluate_align_cell(struct hstex_engine *engine, bool vertical,
                     break;
                 }
             }
-            if (hstex_source_pop_boundary(&engine->sources, error,
-                                          error_capacity) != 0) {
+            /* The spent half of the template stays standing: the reference
+               has no boundary there, and a fault drawn as soon as the entry
+               is done with names the template it came out of. See
+               docs/DECISIONS.md, where-an-extra-tab-is-found. */
+            if (hstex_source_pop_boundary_keeping_template(
+                    &engine->sources, error, error_capacity) != 0) {
                 status = -1;
                 break;
             }
@@ -39379,6 +39383,31 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
             entry->span = span;
             column += span;
             if (ending == HSTEX_ALIGN_END_CR) {
+                break;
+            }
+            /* THE TAB THAT ENDED THE ENTRY IS WHERE AN EXTRA ONE IS FOUND,
+               not the token that would begin the next entry: the reference
+               looks for the column as soon as the entry is done with, while
+               the template that tab put in is still standing, so that is what
+               its context draws. See docs/DECISIONS.md, where-an-extra-tab-
+               is-found. */
+            int further = extend_align_columns(&columns, &column_count,
+                                               &column_capacity, loop_start,
+                                               preamble_columns, column, error,
+                                               error_capacity);
+            if (further < 0) {
+                status = -1;
+                break;
+            }
+            if (further > 0) {
+                static const char *const help[] = {
+                    "You have given more \\span or & marks than there were",
+                    "in the preamble to the \\halign or \\valign now in "
+                    "progress.",
+                    "So I'll assume that you meant to type \\cr instead.",
+                    NULL};
+                tex_error(engine, help,
+                          "Extra alignment tab has been changed to \\cr");
                 break;
             }
         }
