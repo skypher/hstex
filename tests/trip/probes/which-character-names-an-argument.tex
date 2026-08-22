@@ -1,0 +1,35 @@
+% WHICH CHARACTER NAMES AN ARGUMENT.
+%
+% A macro's parameter text may use more than one parameter character.
+% \tracingmacros names each argument with the one THAT parameter was
+% written with:
+%
+%   \def\a #1#2U3U4{...}   \a ABCD
+%
+%   \a #1#2U3U4->[U1|U2|U3|U4]
+%   #1<-A
+%   #2<-B
+%   U3<-C
+%   U4<-D
+%
+% The BODY, though, is written with the LAST of them throughout -- the
+% reference carries one character through the whole list and the parameter
+% text keeps setting it, so what is left when the body is reached is the
+% last parameter's.
+%
+% This engine named every argument with the body's character. trip line 366
+% defines \lo with the parameter text #1#2U3#4#5#6#7#8#989{ and line 367
+% calls it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\U=6
+\tracingonline=1 \tracingmacros=2
+\message{[A a macro whose parameters use two different characters]}
+\def\a #1#2U3U4{[#1|#2|U3|U4]}
+\a ABCD
+\message{[B and what \show makes of it]}
+\show\a
+\message{[C one that starts with the other character]}
+\def\b U1#2{[U1|#2]}
+\b EF
+\show\b
+\message{[done]}
+\end

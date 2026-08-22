@@ -9286,8 +9286,12 @@ static void trace_token_parameter(struct hstex_engine *engine, size_t which)
 /* And one line per argument as it is matched: `#1<-' and what was taken. A
    parameter character in an argument is shown doubled, as it is everywhere
    a token list is shown. */
+/* `written' is the character the macro's parameter text used for THIS
+   parameter -- the reference names each argument with its own, so a macro
+   whose text reads `#1#2U3#4' labels the third `U3'. */
 static void trace_macro_argument(struct hstex_engine *engine, unsigned number,
-                                 const hstex_token *tokens, size_t count)
+                                 uint8_t written, const hstex_token *tokens,
+                                 size_t count)
 {
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] <= 0) {
         return;
@@ -9305,7 +9309,7 @@ static void trace_macro_argument(struct hstex_engine *engine, unsigned number,
         }
     }
     print_fresh_line(engine);
-    print_formatted(engine, "%c%u<-", (char)shown_parameter_character, number);
+    print_formatted(engine, "%c%u<-", (char)written, number);
     print_bytes(engine, (const char *)bytes, bytes_count);
     print_line(engine);
     free(bytes);
@@ -9454,8 +9458,18 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         }
         bounds[next_parameter - 1U].start = start;
         bounds[next_parameter - 1U].count = arena->count - start;
-        trace_macro_argument(engine, next_parameter, arena->data + start,
-                             arena->count - start);
+        uint8_t written = (uint8_t)'#';
+        for (size_t index = 0U; index < macro->parameter_count_tokens;
+             ++index) {
+            hstex_token one = macro->parameter_text[index];
+            if (hstex_token_is_parameter(one) &&
+                hstex_token_parameter_number(one) == (uint8_t)next_parameter) {
+                written = hstex_token_parameter_character(one);
+                break;
+            }
+        }
+        trace_macro_argument(engine, next_parameter, written,
+                             arena->data + start, arena->count - start);
         ++next_parameter;
     }
     if ((macro->shape & (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS) == 0U &&

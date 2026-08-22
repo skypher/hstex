@@ -1,0 +1,22 @@
+% HOW A \futurelet PUTS ITS TWO TOKENS BACK.
+%
+% \futurelet reads two tokens and puts BOTH back -- each on its own, the
+% second one first, so a fault raised while the first is being obeyed draws
+% a frame for each:
+%
+%   <recently read> \foo
+%   <to be read again> \bar
+%
+% This engine put the pair back as one inserted text and drew one frame.
+%
+% trip line 408 writes \global\futurelet\endt\foo& inside an alignment, so
+% the second token is the \endtemplate the & stands for, and the reference
+% shows the template's own frame under the two.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \errorcontextlines=5
+\message{[A a futurelet whose two tokens are both wrong]}
+\futurelet\x\foo\bar
+\message{[B one whose look-ahead is a character]}
+\futurelet\y\baz A
+\message{[done]}
+\end
