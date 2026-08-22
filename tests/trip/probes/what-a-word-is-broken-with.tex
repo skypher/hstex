@@ -1,0 +1,44 @@
+% WHAT A WORD IS BROKEN WITH.
+%
+% \hyphenchar names the character a hyphenated word is broken with. Three
+% cases, measured against pdftex with trip.tfm:
+%
+%   \hyphenchar\rip=`?    the font has no `?': the word is still broken,
+%                         with NOTHING in front of the break, and
+%                         \tracinglostchars names the character that is
+%                         missing, as it names any other;
+%   \hyphenchar\rip=`-    the font has `-': the usual break;
+%   \hyphenchar\rip=-1    no hyphen character at all: the word is not
+%                         broken.
+%
+% This engine left a word whose hyphen character the font had not got
+% whole, and said nothing about it. trip breaks BBBBBB in a font whose
+% \hyphenchar is `?'.
+%
+% Found and left open: the reference names the missing character while it
+% is breaking the line that wants it, so under \tracingparagraphs the line
+% falls among the trace; HSTeX breaks the words of a paragraph before it
+% weighs any of them, so its line comes first.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \tracinglostchars=1
+\showboxdepth=99 \showboxbreadth=99
+\output={\shipout\box255}
+\font\rip=trip \rip
+\lccode`A=1 \lccode`B=2 \lccode`C=3 \uchyph=1
+\patterns{A1B B1B B1C C1A A1A}
+\vsize=20000pt \hsize=10pt \parindent=0pt
+\pretolerance=-1 \tolerance=10000 \hbadness=10000
+\message{[A a hyphen character the font has not got]}
+\hyphenchar\rip=`?
+\setbox1=\vbox{\noindent A BBBB\par}
+\showbox1
+\message{[B one it has]}
+\hyphenchar\rip=`-
+\setbox1=\vbox{\noindent A BBBB\par}
+\showbox1
+\message{[C and none at all]}
+\hyphenchar\rip=-1
+\setbox1=\vbox{\noindent A BBBB\par}
+\showbox1
+\message{[done]}
+\end

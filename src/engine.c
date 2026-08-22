@@ -30475,8 +30475,15 @@ static int make_hyphen_node(struct hstex_engine *engine, uint32_t font,
     *identifier = 0U;
     const struct hstex_font *metrics = font_by_identifier(engine, font);
     if (metrics == NULL || metrics->characters == NULL ||
-        metrics->hyphen_character < 0 || metrics->hyphen_character > 255 ||
-        metrics->characters[metrics->hyphen_character].tag < 0) {
+        metrics->hyphen_character < 0 || metrics->hyphen_character > 255) {
+        return 0;
+    }
+    if (metrics->characters[metrics->hyphen_character].tag < 0) {
+        /* A HYPHEN THE FONT HAS NOT GOT is named where \tracinglostchars
+           asks, as any other missing character is, and the word is broken
+           without one. See docs/DECISIONS.md, missing-characters. */
+        char_warning(engine, metrics,
+                     (uint8_t)metrics->hyphen_character);
         return 0;
     }
     const struct hstex_char_metric *metric =
@@ -31107,16 +31114,16 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 memcpy(before, originals, before_count);
                 const struct hstex_font *metrics =
                     font_by_identifier(engine, word.font);
-                bool has_hyphen =
-                    metrics != NULL && metrics->characters != NULL &&
-                    metrics->hyphen_character >= 0 &&
-                    metrics->hyphen_character <= 255 &&
-                    metrics->characters[metrics->hyphen_character].tag >= 0;
-                if (has_hyphen) {
+                uint32_t hyphen_here = 0U;
+                if (make_hyphen_node(engine, word.font, &hyphen_here, error,
+                                     error_capacity) != 0) {
+                    status = -1;
+                }
+                if (hyphen_here != 0U && metrics != NULL) {
                     before[before_count++] =
                         (uint8_t)metrics->hyphen_character;
                 }
-                if (post != NULL && inside < original_count && has_hyphen &&
+                if (status == 0 && post != NULL && inside < original_count &&
                     reconstitute_characters(engine, word.font, before,
                                             before_count, false, false, pre,
                                             8U, &pre_count, error,
