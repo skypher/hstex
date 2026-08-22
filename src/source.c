@@ -117,13 +117,18 @@ static void pop_frame(struct hstex_source_stack *stack)
     note_top_frame(stack);
 }
 
+/* THE HALF OF A TEMPLATE AFTER THE ENTRY IS NOT CLEARED AWAY when it has
+   been read: the reference keeps it, so a fault under what came out of it
+   still names it. Everything else spent goes. */
 static void pop_exhausted_token_frames(struct hstex_source_stack *stack)
 {
     while (stack->count != 0U) {
         struct hstex_source_frame *frame =
             &stack->frames[stack->count - 1U];
         if (frame->kind != HSTEX_SOURCE_TOKEN_LIST ||
-            frame->value.token_list.cursor < frame->value.token_list.count) {
+            frame->value.token_list.cursor < frame->value.token_list.count ||
+            frame->value.token_list.source_kind ==
+                (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER) {
             break;
         }
         pop_frame(stack);

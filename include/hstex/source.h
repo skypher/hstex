@@ -133,7 +133,11 @@ enum hstex_token_source_kind {
        reference names for what it is. */
     HSTEX_TOKEN_SOURCE_WRITE,
     /* The text one of the mark primitives expands into. */
-    HSTEX_TOKEN_SOURCE_MARK
+    HSTEX_TOKEN_SOURCE_MARK,
+    /* The half of a template that follows the entry. It is named `<template>'
+       as the half before it is, but it is NOT cleared away when it has been
+       read: the reference keeps it, and a fault under it says so. */
+    HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER
 };
 
 /* Say what the frame just pushed is, so that an error can name it. */

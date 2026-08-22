@@ -3602,7 +3602,8 @@ static enum hstex_engine_result raw_next(
             engine->sources.top != NULL ? engine->sources.top->frame_name : 0U;
         int noted = note_alignment_token(
             engine, *token,
-            came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE &&
+            (came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE ||
+             came_from == (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER) &&
                 frame_name == engine->alignment_generation,
             came_from == (uint8_t)HSTEX_TOKEN_SOURCE_BACKED_UP, error,
             error_capacity);
@@ -16016,6 +16017,7 @@ static const char *token_frame_tag(struct hstex_engine *engine,
         return list->cursor < list->count ? "<to be read again> "
                                           : "<recently read> ";
     case HSTEX_TOKEN_SOURCE_TEMPLATE:
+    case HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER:
         return "<template> ";
     case HSTEX_TOKEN_SOURCE_WRITE:
         return "<write> ";
@@ -37791,7 +37793,7 @@ static int end_alignment_entry(struct hstex_engine *engine,
         return -1;
     }
     hstex_source_name_top(&engine->sources,
-                          (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER,
                           engine->alignment_generation);
     return 0;
 }

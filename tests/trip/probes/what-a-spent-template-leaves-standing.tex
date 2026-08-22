@@ -1,0 +1,27 @@
+% WHAT A SPENT TEMPLATE LEAVES STANDING.
+%
+% The half of an alignment template that follows the entry ends with the
+% frozen name that closes the entry, and the frame it was read from is NOT
+% cleared away once that name has come out of it: the reference keeps it,
+% so a fault under what came out of it still names it.
+%
+%   \halign{#&#\cr\global\futurelet\endt\foo&B\cr}
+%
+%   ! Undefined control sequence.
+%   <recently read> \foo
+%   <to be read again>
+%                      \endtemplate
+%   <template> \endtemplate
+%
+% Everything else spent IS cleared away where a token is put back or a
+% macro is called, which is the room the reference saves.
+%
+% This engine cleared the template's frame away with the rest. trip line
+% 408 writes \global\futurelet\endt\foo& inside an alignment.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\&=4
+\tracingonline=1 \errorcontextlines=5
+\message{[A a futurelet whose look-ahead is the end of an entry]}
+\setbox0=\vbox{\halign{#&#\cr\global\futurelet\endt\foo&B\cr}}
+\message{<\meaning\endt>}
+\message{[done]}
+\end
