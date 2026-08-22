@@ -188,6 +188,8 @@ static uint8_t shown_parameter_character = (uint8_t)'#';
 static const struct hstex_token_vector *runaway_partial = NULL;
 static const char *runaway_partial_prefix = NULL;
 static void print_escaped_name(struct hstex_engine *engine, const char *name);
+static void print_escape_character(struct hstex_engine *engine);
+static void print_esc_text(struct hstex_engine *engine, const char *text);
 static const char *token_parameter_name(uint32_t parameter);
 static void report_runaway(struct hstex_engine *engine, const char *what);
 static void show_glue_set(struct hstex_engine *engine,
@@ -12931,7 +12933,10 @@ static void report_packing(struct hstex_engine *engine,
         return;
     }
     print_line(engine);
-    print_formatted(engine, "%s(", kind);
+    /* The BOX is drawn with the escape character, though the words above it
+       name `\\hbox' and `\\vbox' whatever that character is. */
+    print_esc_text(engine, kind);
+    print_byte(engine, '(');
     show_scaled(engine, box->height);
     print_byte(engine, '+');
     show_scaled(engine, box->depth);
@@ -16257,7 +16262,8 @@ static void show_whatsit(struct hstex_engine *engine,
 {
     uint8_t kind = node->value.whatsit.kind;
     if (kind == (uint8_t)HSTEX_WHATSIT_LANGUAGE) {
-        print_formatted(engine, "\\setlanguage%d (hyphenmin %u,%u)",
+        print_escape_character(engine);
+        print_formatted(engine, "setlanguage%d (hyphenmin %u,%u)",
                         node->value.whatsit.number,
                         (unsigned int)node->value.whatsit.stream,
                         (unsigned int)node->value.whatsit.action);
@@ -16267,7 +16273,8 @@ static void show_whatsit(struct hstex_engine *engine,
         static const char *const actions[4] = {"push", "pop", "set",
                                                "current"};
         uint8_t action = node->value.whatsit.action;
-        print_formatted(engine, "\\pdfcolorstack %u %s",
+        print_escape_character(engine);
+        print_formatted(engine, "pdfcolorstack %u %s",
                       (unsigned int)node->value.whatsit.stream,
                       actions[action > 3U ? 0U : action]);
         if (action == 1U || action == 3U) {
@@ -16291,7 +16298,7 @@ static void show_whatsit(struct hstex_engine *engine,
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
-        print_text(engine, "\\pdfdest ");
+        print_esc_text(engine, "\\pdfdest ");
         if (node->value.whatsit.stream != 0U) {
             uint8_t *text = NULL;
             size_t text_count = 0U;
@@ -16309,7 +16316,7 @@ static void show_whatsit(struct hstex_engine *engine,
                 print_bytes(engine, (const char *)text, text_count);
             }
             if (cut) {
-                print_text(engine, "\\ETC.");
+                print_esc_text(engine, "\\ETC.");
             }
             print_byte(engine, '}');
             free(text);
@@ -16336,7 +16343,7 @@ static void show_whatsit(struct hstex_engine *engine,
         static const char *const modes[4] = {"", " direct", " page",
                                              " shipout"};
         uint8_t mode = node->value.whatsit.action;
-        print_text(engine, "\\pdfliteral");
+        print_esc_text(engine, "\\pdfliteral");
         print_text(engine, modes[mode > 3U ? 0U : mode]);
         uint8_t *text = NULL;
         size_t text_count = 0U;
@@ -16354,7 +16361,7 @@ static void show_whatsit(struct hstex_engine *engine,
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_END_LINK) {
-        print_text(engine, "\\pdfendlink");
+        print_esc_text(engine, "\\pdfendlink");
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_START_LINK ||
@@ -16422,7 +16429,7 @@ static void show_whatsit(struct hstex_engine *engine,
         print_bytes(engine, (const char *)bytes, byte_count);
     }
     if (truncated) {
-        print_text(engine, "\\ETC.");
+        print_esc_text(engine, "\\ETC.");
     }
     if (kind != (uint8_t)HSTEX_WHATSIT_OPEN_OUT) {
         print_byte(engine, '}');
@@ -16435,7 +16442,7 @@ static void show_character(struct hstex_engine *engine,
 {
     const struct hstex_font *font =
         font_by_identifier(engine, node->value.character.font);
-    print_byte(engine, '\\');
+    print_escape_character(engine);
     size_t length = 0U;
     const uint8_t *name = NULL;
     enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
@@ -16510,7 +16517,7 @@ static void show_node(struct hstex_engine *engine,
         /* A column whose width is not settled yet. The reference writes its
            three dimensions and nothing else: no glue set, no shift, and
            never what stands inside it. */
-        print_text(engine, "\\unsetbox(");
+        print_esc_text(engine, "\\unsetbox(");
         show_scaled(engine, packed_dimen(node->height));
         print_byte(engine, '+');
         show_scaled(engine, packed_dimen(node->depth));
@@ -16518,7 +16525,10 @@ static void show_node(struct hstex_engine *engine,
         show_scaled(engine, packed_dimen(node->width));
         return;
     case HSTEX_NODE_LIST: {
-        print_text(engine, node->value.list.box_kind == HSTEX_BOX_VLIST ? "\\vbox(" : "\\hbox(");
+        print_esc_text(engine,
+                       node->value.list.box_kind == HSTEX_BOX_VLIST
+                           ? "\\vbox("
+                           : "\\hbox(");
         show_scaled(engine, packed_dimen(node->height));
         print_byte(engine, '+');
         show_scaled(engine, packed_dimen(node->depth));
@@ -16547,7 +16557,7 @@ static void show_node(struct hstex_engine *engine,
         return;
     }
     case HSTEX_NODE_RULE:
-        print_text(engine, "\\rule(");
+        print_esc_text(engine, "\\rule(");
         show_rule_dimen(engine, node->height);
         print_byte(engine, '+');
         show_rule_dimen(engine, node->depth);
@@ -16571,10 +16581,10 @@ static void show_node(struct hstex_engine *engine,
             return;
         }
         const char *name = glue_parameter_name(node->value.glue.parameter);
-        print_text(engine, "\\glue");
+        print_esc_text(engine, "\\glue");
         if (name != NULL) {
-            print_text(engine, "(\\");
-            print_text(engine, name);
+            print_byte(engine, '(');
+            print_escaped_name(engine, name);
             print_byte(engine, ')');
         }
         /* The marker \nonscript leaves has no size to show. */
@@ -16586,7 +16596,7 @@ static void show_node(struct hstex_engine *engine,
         return;
     }
     case HSTEX_NODE_KERN:
-        print_text(engine, "\\kern");
+        print_esc_text(engine, "\\kern");
         if (node->explicit_kern || node->value.kern.margin == 3U) {
             print_byte(engine, ' ');
         }
@@ -16600,7 +16610,8 @@ static void show_node(struct hstex_engine *engine,
         }
         return;
     case HSTEX_NODE_PENALTY:
-        print_formatted(engine, "\\penalty %d", node->value.penalty);
+        print_escape_character(engine);
+        print_formatted(engine, "penalty %d", node->value.penalty);
         return;
     case HSTEX_NODE_CHARACTER:
         show_character(engine, node);
@@ -16625,7 +16636,7 @@ static void show_node(struct hstex_engine *engine,
         print_byte(engine, ')');
         return;
     case HSTEX_NODE_ADJUST:
-        print_text(engine, "\\vadjust");
+        print_esc_text(engine, "\\vadjust");
         if (node->value.list.node_count != 0U &&
             (size_t)node->value.list.node_start +
                     node->value.list.node_count <=
@@ -16640,7 +16651,8 @@ static void show_node(struct hstex_engine *engine,
         show_whatsit(engine, node);
         return;
     case HSTEX_NODE_INSERT: {
-        print_formatted(engine, "\\insert%u, natural size ",
+        print_escape_character(engine);
+        print_formatted(engine, "insert%u, natural size ",
                       (unsigned int)node->value.insert.number);
         show_scaled(engine, packed_dimen(node->height));
         /* The \splittopskip an insertion kept is written as a whole glue,
@@ -16672,7 +16684,7 @@ static void show_node(struct hstex_engine *engine,
         return;
     }
     case HSTEX_NODE_MARK: {
-        print_text(engine, "\\mark");
+        print_esc_text(engine, "\\mark");
         if (node->value.mark.class_number != 0U) {
             print_formatted(engine, "s%u",
                           (unsigned int)node->value.mark.class_number);
@@ -16692,14 +16704,15 @@ static void show_node(struct hstex_engine *engine,
         return;
     }
     case HSTEX_NODE_MATH:
-        print_text(engine, node->value.math.after ? "\\mathoff" : "\\mathon");
+        print_esc_text(engine,
+                       node->value.math.after ? "\\mathoff" : "\\mathon");
         if (packed_dimen(node->width) != 0) {
             print_text(engine, ", surrounded ");
             show_scaled(engine, packed_dimen(node->width));
         }
         return;
     case HSTEX_NODE_DISCRETIONARY: {
-        print_text(engine, "\\discretionary");
+        print_esc_text(engine, "\\discretionary");
         if (node->value.disc.replace_count != 0U) {
             print_formatted(engine, " replacing %u",
                           (unsigned int)node->value.disc.replace_count);
@@ -17036,7 +17049,8 @@ static void show_math_field(struct hstex_engine *engine,
         prefix[depth] = marker;
         print_byte(engine, '\n');
         print_bytes(engine, prefix, depth + 1U);
-        print_formatted(engine, "\\fam%d ", (int)field->family);
+        print_escape_character(engine);
+        print_formatted(engine, "fam%d ", (int)field->family);
         show_ascii(engine, (uint8_t)field->character);
         return;
     }
@@ -17071,7 +17085,7 @@ static void show_math_fraction(struct hstex_engine *engine,
                                bool waiting, char *prefix, size_t depth,
                                size_t threshold, size_t breadth)
 {
-    print_text(engine, "\\fraction, thickness ");
+    print_esc_text(engine, "\\fraction, thickness ");
     if (fraction->fraction_default_thickness) {
         print_text(engine, "= default");
     } else {
@@ -17134,14 +17148,14 @@ static void show_noad(struct hstex_engine *engine,
         }
         return;
     case HSTEX_NOAD_MU_KERN:
-        print_text(engine, "\\mkern");
+        print_esc_text(engine, "\\mkern");
         show_scaled(engine, noad->kern);
         print_text(engine, "mu");
         return;
     case HSTEX_NOAD_MU_GLUE:
         /* Math glue is written in mu, and a finite stretch or shrink is
            written in mu too; an infinite one keeps its own order. */
-        print_text(engine, "\\glue(\\mskip) ");
+        print_esc_text(engine, "\\glue(\\mskip) ");
         show_scaled(engine, noad->glue.width);
         print_text(engine, "mu");
         if (noad->glue.stretch != 0) {
@@ -17162,11 +17176,11 @@ static void show_noad(struct hstex_engine *engine,
         }
         return;
     case HSTEX_NOAD_NONSCRIPT:
-        print_text(engine, "\\glue(\\nonscript)");
+        print_esc_text(engine, "\\glue(\\nonscript)");
         return;
     case HSTEX_NOAD_CHOICE: {
         static const char marks[4] = {'D', 'T', 'S', 's'};
-        print_text(engine, "\\mathchoice");
+        print_esc_text(engine, "\\mathchoice");
         for (size_t branch = 0U; branch < 4U; ++branch) {
             show_math_sublist(engine, noad->choices[branch], prefix,
                               depth + 1U, threshold, breadth, marks[branch]);
@@ -17174,7 +17188,7 @@ static void show_noad(struct hstex_engine *engine,
         return;
     }
     case HSTEX_NOAD_MIDDLE:
-        print_text(engine, "\\middle");
+        print_esc_text(engine, "\\middle");
         show_math_delimiter(engine, noad->delimiter);
         return;
     case HSTEX_NOAD_ATOM:
@@ -17184,18 +17198,19 @@ static void show_noad(struct hstex_engine *engine,
                                            : atom_class_name(noad->atom_class));
         break;
     case HSTEX_NOAD_OVERLINE:
-        print_text(engine, "\\overline");
+        print_esc_text(engine, "\\overline");
         break;
     case HSTEX_NOAD_UNDERLINE:
-        print_text(engine, "\\underline");
+        print_esc_text(engine, "\\underline");
         break;
     case HSTEX_NOAD_RADICAL:
-        print_text(engine, "\\radical");
+        print_esc_text(engine, "\\radical");
         show_math_delimiter(engine, noad->delimiter);
         break;
     case HSTEX_NOAD_ACCENT:
-        print_text(engine, "\\accent");
-        print_formatted(engine, "\\fam%d ", (int)((noad->delimiter >> 8) & 0xF));
+        print_esc_text(engine, "\\accent");
+        print_escape_character(engine);
+        print_formatted(engine, "fam%d ", (int)((noad->delimiter >> 8) & 0xF));
         show_ascii(engine, (uint8_t)(noad->delimiter & 0xFF));
         break;
     case HSTEX_NOAD_FENCE:
@@ -17214,13 +17229,13 @@ static void show_noad(struct hstex_engine *engine,
             prefix[depth] = '.';
             print_byte(engine, '\n');
             print_bytes(engine, prefix, depth + 1U);
-            print_text(engine, "\\left");
+            print_esc_text(engine, "\\left");
             show_math_delimiter(engine, noad->left_delimiter);
             show_math_sublist(engine, noad->nucleus.sublist, prefix,
                               depth + 1U, threshold, breadth, '.');
             print_byte(engine, '\n');
             print_bytes(engine, prefix, depth + 1U);
-            print_text(engine, "\\right");
+            print_esc_text(engine, "\\right");
             show_math_delimiter(engine, noad->delimiter);
         } else {
             print_text(engine, " []");
@@ -17285,7 +17300,7 @@ static void show_math_level(struct hstex_engine *engine,
     /* The delimiter a \left opened stands at the head of the list it opened. */
     if (list->is_left_group) {
         print_byte(engine, '\n');
-        print_text(engine, "\\left");
+        print_esc_text(engine, "\\left");
         show_math_delimiter(engine, list->left_delimiter);
     }
     size_t from = 0U;
@@ -17386,7 +17401,8 @@ static void show_current_page(struct hstex_engine *engine, char *prefix,
     for (size_t entry = 0U; entry < engine->page_insert_count; ++entry) {
         const struct hstex_page_insert *record = &engine->page_inserts[entry];
         print_line(engine);
-        print_formatted(engine, "\\insert%u adds ", (unsigned)record->number);
+        print_escape_character(engine);
+        print_formatted(engine, "insert%u adds ", (unsigned)record->number);
         int32_t factor = 1000;
         if ((size_t)record->number < engine->count_capacity) {
             factor = engine->counts[(size_t)record->number];
@@ -17651,14 +17667,36 @@ static void trace_glue(struct hstex_engine *engine,
    out of range it is nothing at all: measured, `\escapechar=`|' makes a
    restore read `{restoring |count5=7}' and `\escapechar=-1' makes it
    `{restoring count5=7}'. */
-static void print_escaped_name(struct hstex_engine *engine, const char *name)
+/* THE ESCAPE CHARACTER STANDS WHEREVER A NAME IS WRITTEN: not only in a
+   fault's words but in every box a diagnostic draws, so `\escapechar`|'
+   turns \vbox into |vbox. Nought or above 255 writes nothing at all. */
+static void print_escape_character(struct hstex_engine *engine)
 {
     int32_t escape =
         engine->integer_parameters[HSTEX_INTEGER_ESCAPE_CHARACTER];
     if (escape >= 0 && escape <= 255) {
         print_byte(engine, (char)(unsigned char)escape);
     }
+}
+
+static void print_escaped_name(struct hstex_engine *engine, const char *name)
+{
+    print_escape_character(engine);
     print_text(engine, name);
+}
+
+/* A run of text in which every `\' is the escape character. */
+static void print_esc_text(struct hstex_engine *engine, const char *text)
+{
+    const char *at = text;
+    while (*at != '\0') {
+        if (*at == '\\') {
+            print_escape_character(engine);
+        } else {
+            print_byte(engine, *at);
+        }
+        ++at;
+    }
 }
 
 /* The same for a control sequence, named as it was written. */
@@ -24932,7 +24970,7 @@ static void report_runaway_list(struct hstex_engine *engine, const char *what,
         print_bytes(engine, (const char *)bytes, count);
     }
     if (cut) {
-        print_text(engine, "\\ETC.");
+        print_esc_text(engine, "\\ETC.");
     }
     free(bytes);
 }
@@ -29101,7 +29139,7 @@ static void trace_font(struct hstex_engine *engine,
     trace->font = font;
     trace->font_known = true;
     const struct hstex_font *metrics = font_by_identifier(engine, font);
-    print_byte(engine, '\\');
+    print_escape_character(engine);
     size_t length = 0U;
     const uint8_t *name = NULL;
     enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
@@ -29547,9 +29585,10 @@ static int try_break_at(struct hstex_engine *engine,
                 state->trace.printed = end;
                 trace_newline(engine, &state->trace);
             }
-            print_formatted(engine, "@%s via @@%zu b=",
-                          trace_break_name(engine, items, count, breakpoint),
-                          index);
+            print_byte(engine, '@');
+            print_esc_text(engine,
+                           trace_break_name(engine, items, count, breakpoint));
+            print_formatted(engine, " via @@%zu b=", index);
             if (badness > HSTEX_INFINITE_BADNESS) {
                 print_byte(engine, '*');
             } else {
@@ -39855,9 +39894,14 @@ static int report_forbidden_in_skipped_text(struct hstex_engine *engine,
                             HSTEX_SYMBOL_REGULAR, fi_name,
                             sizeof(fi_name) - 1U, &fi, error,
                             error_capacity) != 0 ||
-        push_one(engine, token, where, error, error_capacity) != 0 ||
-        push_one(engine, hstex_token_control_sequence(fi), where, error,
-                 error_capacity) != 0) {
+        push_one(engine, token, where, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* The \fi is PUT IN, so it stands in an inserted text of its own; the
+       macro that gave it away is put BACK and is read again. */
+    hstex_token inserted = hstex_token_control_sequence(fi);
+    if (hstex_source_push_tokens(&engine->sources, &inserted, 1U, where, error,
+                                 error_capacity) != 0) {
         return -1;
     }
     tex_error(engine, help,
