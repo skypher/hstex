@@ -45251,8 +45251,13 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
         return;
     }
     const struct hstex_node *node = &engine->nodes[identifier - 1U];
-    digest_bytes(digest, &node->kind, sizeof(node->kind));
-    digest_bytes(digest, &node->explicit_kern, sizeof(node->explicit_kern));
+    /* Both are bit-fields, which have no address of their own: copy each out
+       before it is hashed. The digest is over what a node says, not over how
+       it is laid out, so the width taken here is the width of the value. */
+    uint8_t digest_kind = (uint8_t)node->kind;
+    uint8_t digest_explicit = node->explicit_kern ? 1U : 0U;
+    digest_bytes(digest, &digest_kind, sizeof(digest_kind));
+    digest_bytes(digest, &digest_explicit, sizeof(digest_explicit));
     digest_bytes(digest, &node->width, sizeof(node->width));
     digest_bytes(digest, &node->height, sizeof(node->height));
     digest_bytes(digest, &node->depth, sizeof(node->depth));

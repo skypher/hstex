@@ -1443,11 +1443,17 @@ struct hstex_pdf_open_link {
 };
 
 struct hstex_node {
-    enum hstex_node_kind kind;
+    /* Kept in a byte rather than an int, and the flag beside it in a bit.
+       A corpus run makes ten million of these and every byte of the record
+       is worth about a third of a per cent of a run that sets type; see
+       README.md. The kind stays its own enum rather than becoming a plain
+       byte so that a switch over it is still checked for the kinds it does
+       not name. */
+    enum hstex_node_kind kind : 8;
     /* A kern written as \kern is explicit: it may be broken at and it is not
        thrown away at the start of a line. A kern the engine put there itself
        -- a font kern, an italic correction, math spacing -- is not. */
-    bool explicit_kern;
+    bool explicit_kern : 1;
     int32_t width;
     int32_t height;
     int32_t depth;
