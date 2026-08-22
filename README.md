@@ -298,6 +298,35 @@ Nor are the two things done for every character that look like they might be
 doing work every time. `fix_language` returns at once unless the language
 actually changed, and `font_by_identifier` is a bounds check and an index.
 
+WHAT THE PER-CHARACTER PATH ACTUALLY DOES, counted rather than sampled.
+`gprof` call counts do not care what else the machine is running, which
+makes them readable where a timing is not. Over the document of nothing but
+words -- 2,759,171 letters, set with the line breaking and the hyphenating
+taken out -- built `-pg -fno-inline` so that nothing is folded away:
+
+    16.3   hstex_token_kind_of            per letter
+    11.6   hstex_token_is_character
+     9.4   token_is_category
+     3.8   reserve_hbox_items
+     2.5   leader_box_of
+     2.5   append_hbox_item
+     1.3   append_hbox_node
+     1.2   the token pipeline, end to end
+     1.0   append_horizontal_character
+
+The reading is not that these are calls in the shipped engine -- at `-O2`
+the small ones are folded in, which is why this build has to forbid it. It
+is that ONE LETTER COSTS ABOUT THIRTY-SEVEN TOKEN CLASSIFICATIONS. The
+pipeline that fetches it is entered 1.2 times, which is as it should be and
+says the layering is not the cost; what the letter is asked, over and over
+by each layer that handles it, is. `leader_box_of` is asked two and a half
+times per letter and answers `not glue' every time.
+
+That is the shape of a path that could be fused -- one place that knows it
+is looking at an ordinary character and does the whole of the work for it --
+and it is the first concrete account of where the plain-document factor
+lives, as against the flat profile above. It has not been attempted.
+
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
 asking `kpsewhich` where a file is once for each name rather than once for
