@@ -3998,10 +3998,36 @@ static char *join_path(const char *directory, const char *filename)
     return path;
 }
 
+/* A pipe whose descriptors do not outlive an exec.
+   THE TOOL MUST NOT BE HELD OPEN BY SOMEBODY ELSE'S CHILD. A run starts
+   other children while these descriptors are open -- another engine's tool,
+   another name being looked up -- and a plain pipe() reaches every one of
+   them. A child holding the write end of a pipe keeps it open after the
+   engine that made it has closed its own copy, so the tool at the other end
+   never reads the end of its input, never exits, and the wait for it never
+   returns. The descriptors the intended child is given are dup2'd onto its
+   stdin and stdout, which clears the flag on the copies it keeps. */
+static int open_private_pipe(int descriptors[2])
+{
+    if (pipe(descriptors) != 0) {
+        return -1;
+    }
+    for (int which = 0; which < 2; ++which) {
+        int flags = fcntl(descriptors[which], F_GETFD);
+        if (flags < 0 ||
+            fcntl(descriptors[which], F_SETFD, flags | FD_CLOEXEC) != 0) {
+            (void)close(descriptors[0]);
+            (void)close(descriptors[1]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static char *resolve_with_kpsewhich(const char *filename)
 {
     int descriptors[2];
-    if (pipe(descriptors) != 0) {
+    if (open_private_pipe(descriptors) != 0) {
         return NULL;
     }
     /* The child is started without copying this process's page tables, which
@@ -4101,9 +4127,15 @@ static void finder_stop(struct hstex_engine *engine)
         finder->answers = NULL;
     }
     if (finder->child > 0) {
+        /* Its input has been closed, so it would end of its own accord.
+           It is ended outright all the same: nothing here needs what it
+           might still have to say, and a wait for a child that something
+           else has kept alive would never return. Its number cannot have
+           been given to anything else, since it has not been reaped. */
+        pid_t child = (pid_t)finder->child;
         int status = 0;
-        while (waitpid((pid_t)finder->child, &status, 0) < 0 &&
-               errno == EINTR) {
+        (void)kill(child, SIGKILL);
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
         }
         finder->child = 0;
     }
@@ -4222,10 +4254,10 @@ static bool finder_start(struct hstex_engine *engine)
     finder->pending_held = 0U;
     int questions[2];
     int answers[2];
-    if (pipe(questions) != 0) {
+    if (open_private_pipe(questions) != 0) {
         return false;
     }
-    if (pipe(answers) != 0) {
+    if (open_private_pipe(answers) != 0) {
         (void)close(questions[0]);
         (void)close(questions[1]);
         return false;

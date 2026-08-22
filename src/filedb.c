@@ -24,6 +24,7 @@
 #include "hstex/input.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -357,8 +358,19 @@ static int load_tree(struct hstex_file_db *database, const char *tree)
 static char *ask_variable(const char *variable)
 {
     int descriptors[2];
+    /* Not inherited by any other child: see open_private_pipe in
+       src/engine.c for what a leaked write end does to the tool. */
     if (pipe(descriptors) != 0) {
         return NULL;
+    }
+    for (int which = 0; which < 2; ++which) {
+        int flags = fcntl(descriptors[which], F_GETFD);
+        if (flags < 0 ||
+            fcntl(descriptors[which], F_SETFD, flags | FD_CLOEXEC) != 0) {
+            (void)close(descriptors[0]);
+            (void)close(descriptors[1]);
+            return NULL;
+        }
     }
     posix_spawn_file_actions_t actions;
     if (posix_spawn_file_actions_init(&actions) != 0) {
