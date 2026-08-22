@@ -16794,12 +16794,20 @@ static int print_one_token(struct hstex_engine *engine, hstex_token token,
    level, with no dots before its nodes. */
 static void show_builder_list(struct hstex_engine *engine,
                               const uint32_t *items, size_t count,
-                              char *prefix, size_t threshold, size_t breadth)
+                              char *prefix, int32_t threshold, size_t breadth)
 {
     if (items == NULL || count == 0U) {
         return;
     }
-    show_node_list(engine, items, count, prefix, 0U, threshold, breadth, '.');
+    /* A DEPTH BELOW NOUGHT SHOWS NOTHING OF THE LIST AT ALL, the way it
+       shows nothing of a box: ` []' on the line the heading stands on. An
+       EMPTY list draws not even that. */
+    if (threshold < 0) {
+        print_text(engine, " []");
+        return;
+    }
+    show_node_list(engine, items, count, prefix, 0U, (size_t)threshold, breadth,
+                   '.');
 }
 
 /* A level of the nest is pushed where a list starts being built and popped
@@ -17258,7 +17266,7 @@ static void show_noad_list(struct hstex_engine *engine,
    fraction that is waiting for it. */
 static void show_math_level(struct hstex_engine *engine,
                             const struct hstex_nest_level *level,
-                            char *prefix, size_t threshold, size_t breadth)
+                            char *prefix, int32_t threshold, size_t breadth)
 {
     if (level->math == 0U || (size_t)level->math > engine->math_depth) {
         return;
@@ -17276,8 +17284,15 @@ static void show_math_level(struct hstex_engine *engine,
         from = list->fraction_at < list->count ? list->fraction_at
                                                : list->count;
     }
-    show_noad_list(engine, list->noads + from, list->count - from, NULL,
-                   prefix, 0U, threshold, breadth, '.');
+    /* A depth below nought shows nothing of the list, as everywhere else. */
+    if (threshold < 0) {
+        if (list->count > from) {
+            print_text(engine, " []");
+        }
+    } else {
+        show_noad_list(engine, list->noads + from, list->count - from, NULL,
+                       prefix, 0U, (size_t)threshold, breadth, '.');
+    }
     if (list->pending_atom != 0U) {
         print_byte(engine, '\n');
         print_text(engine, atom_class_name((uint8_t)(list->pending_atom - 1U)));
@@ -17298,9 +17313,13 @@ static void show_math_level(struct hstex_engine *engine,
     };
     print_byte(engine, '\n');
     print_text(engine, "this will begin denominator of:");
+    if (threshold < 0) {
+        print_text(engine, " []");
+        return;
+    }
     print_byte(engine, '\n');
     show_math_fraction(engine, &waiting, list->noads, from, true, prefix, 0U,
-                       threshold, breadth);
+                       (size_t)threshold, breadth);
 }
 
 /* The totals the page builder holds, written the way a glue is: the height,
@@ -17333,7 +17352,7 @@ static void print_page_totals(struct hstex_engine *engine)
    that has reached the page adds a line saying how much of the page it took,
    and where one had to be split, which insertion of its class that was. */
 static void show_current_page(struct hstex_engine *engine, char *prefix,
-                              size_t threshold, size_t breadth)
+                              int32_t threshold, size_t breadth)
 {
     const struct hstex_vbox_builder *page = engine->page_builder;
     if (page == NULL || page->count == 0U) {
@@ -17403,9 +17422,6 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
     if (breadth <= 0) {
         breadth = 5;
     }
-    if (threshold < 0) {
-        threshold = 0;
-    }
     if (threshold > 255) {
         threshold = 255;
     }
@@ -17431,15 +17447,15 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
             print_text(engine, " (\\output routine)");
         }
         if (level->math != 0U) {
-            show_math_level(engine, level, prefix, (size_t)threshold,
+            show_math_level(engine, level, prefix, threshold,
                             (size_t)breadth);
             continue;
         }
         if (level->mode == (uint8_t)HSTEX_MODE_HORIZONTAL) {
             if (level->hbox != NULL) {
                 show_builder_list(engine, level->hbox->node_identifiers,
-                                  level->hbox->count, prefix,
-                                  (size_t)threshold, (size_t)breadth);
+                                  level->hbox->count, prefix, threshold,
+                                  (size_t)breadth);
             }
             print_fresh_line(engine);
             print_formatted(engine, "spacefactor %d", level->space_factor);
@@ -17453,7 +17469,7 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
            yet taken; the page the builder has made of what it took stands
            in front of it, with a heading of its own for each. */
         if (index == 1U) {
-            show_current_page(engine, prefix, (size_t)threshold,
+            show_current_page(engine, prefix, threshold,
                               (size_t)breadth);
             if (level->vbox != NULL && level->vbox->count != 0U) {
                 print_fresh_line(engine);
@@ -17462,7 +17478,7 @@ static int execute_show_lists(struct hstex_engine *engine, char *error,
         }
         if (level->mode == (uint8_t)HSTEX_MODE_VERTICAL && level->vbox != NULL) {
             show_builder_list(engine, level->vbox->node_identifiers,
-                              level->vbox->count, prefix, (size_t)threshold,
+                              level->vbox->count, prefix, threshold,
                               (size_t)breadth);
         }
         print_fresh_line(engine);

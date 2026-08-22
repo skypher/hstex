@@ -1,0 +1,41 @@
+% WHAT A NEGATIVE SHOW DEPTH DOES TO \showlists.
+%
+% \showboxdepth=-1 shows nothing of a box but ` []'. It does the same to
+% every list \showlists writes -- each is written the way a box's contents
+% are, so each draws ` []' on the line its heading stands on:
+%
+%   ### internal vertical mode entered at line 7 []
+%   ### current page: []
+%   ### recent contributions: []
+%   ### horizontal mode entered at line 12 (...) []
+%   ### math mode entered at line 12 []
+%   this will begin denominator of: []
+%
+% An EMPTY list draws not even that: the heading stands alone, as it does at
+% any depth. The lines under each heading -- prevdepth, spacefactor, the
+% page's totals -- are written whatever the depth is.
+%
+% This engine took a negative depth for nought and wrote the first level of
+% every list. trip sets \showboxdepth and \showboxbreadth to -1 before
+% several of its \showlists.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1
+\hsize=100pt \vsize=2000pt \parindent=0pt
+\font\rip=trip \rip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont1=\rip \scriptfont1=\rip \scriptscriptfont1=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\message{[A a vertical list, depth -1]}
+\showboxdepth=-1 \showboxbreadth=-1
+\setbox0=\vbox{A\par\showlists}
+\message{[B a formula]}
+\setbox0=\hbox{$A B\showlists$}
+\message{[C a formula with a fraction]}
+\setbox0=\hbox{$A\over B\showlists$}
+\message{[D the same three at depth 1]}
+\showboxdepth=1 \showboxbreadth=5
+\setbox0=\vbox{A\par\showlists}
+\setbox0=\hbox{$A\over B\showlists$}
+\message{[done]}
+\end
