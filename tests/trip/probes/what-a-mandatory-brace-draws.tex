@@ -1,0 +1,40 @@
+% WHAT A MANDATORY BRACE DRAWS.
+%
+% A `{' that a SCAN asks for -- \mathchoice's four branches, and every
+% other place a left brace is mandatory -- is read inside that scan and
+% never reaches the main loop, so \tracingcommands draws NOTHING for it.
+% Nor for the one the reference puts in when the brace is missing.
+%
+%   \mathchoice{A}{B}{C}{D}   draws {\mathchoice}, {the letter A},
+%                             {end-group character }}, and so on: four
+%                             closing braces and not one opening one
+%
+% A brace that opens an ORDINARY group is another matter and is drawn: in
+% `\mathchoice A{B}{C}{D}' the first branch is the letter A, and the {B},
+% {C} and {D} after it are groups inside that branch, each of which draws
+% its opening brace.
+%
+% This engine hands every mandatory brace to the main loop, so that one
+% machinery opens every group; it now marks the brace as one not to draw.
+% trip line 438 writes \mathchoice{}a}{A|{}}{\mathchoice}{}{\relax{}{B\over}.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1
+\font\r=cmr10 \font\s=cmsy10 \font\x=cmex10 \r
+\textfont0=\r \scriptfont0=\r \scriptscriptfont0=\r
+\textfont1=\r \scriptfont1=\r \scriptscriptfont1=\r
+\textfont2=\s \scriptfont2=\s \scriptscriptfont2=\s
+\textfont3=\x \scriptfont3=\x \scriptscriptfont3=\x
+\message{[A a mathchoice with all four braces]}
+\tracingcommands=2
+\setbox0=\hbox{$\mathchoice{A}{B}{C}{D}$}
+\tracingcommands=0
+\message{[B one whose first brace is missing]}
+\tracingcommands=2
+\setbox0=\hbox{$\mathchoice A{B}{C}{D}$}
+\tracingcommands=0
+\message{[C a plain group]}
+\tracingcommands=2
+\setbox0=\hbox{{A}}
+\tracingcommands=0
+\message{[done]}
+\end

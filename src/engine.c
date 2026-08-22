@@ -37028,15 +37028,23 @@ static int require_left_brace(struct hstex_engine *engine, char *error,
         return -1;
     }
     if (token_is_effective_begin_group(engine, token)) {
+        /* The reference reads this brace inside the scan; HSTeX hands it to
+           the main loop so that one machinery opens every group, and marks
+           it as one the main loop is not to draw. */
+        engine->mandatory_brace = true;
         return 0;
     }
     tex_error(engine, help, "Missing { inserted");
     /* The brace is PUT IN rather than put back, so it does not undo a
        reading any count has already seen. */
-    return hstex_source_push_one(
-        &engine->sources,
-        hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{'),
-        location, error, error_capacity);
+    if (hstex_source_push_one(
+            &engine->sources,
+            hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{'),
+            location, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->mandatory_brace = true;
+    return 0;
 }
 
 static int execute_math_choice(struct hstex_engine *engine, char *error,
@@ -42173,9 +42181,11 @@ handle_token:
                for it to draw. */
             if (!engine->command_traced && !engine->pending_global &&
                 engine->pending_macro_flags == 0U &&
-                !engine->display_alignment && !engine->accent_pending) {
+                !engine->display_alignment && !engine->accent_pending &&
+                !engine->mandatory_brace) {
                 trace_command(engine, *token);
             }
+            engine->mandatory_brace = false;
             /* A formula is delimited by math shifts rather than braces, so
                the executor recognises them itself; see docs/DECISIONS.md,
                math-mode. */
