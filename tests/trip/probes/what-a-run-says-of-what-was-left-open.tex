@@ -1,0 +1,23 @@
+% WHAT A RUN SAYS OF WHAT WAS LEFT OPEN.
+%
+% \end says what the run was still inside. After the group line comes ONE
+% LINE FOR EACH CONDITIONAL still open, innermost first, naming the \if it
+% was and the line it began on:
+%
+%   (\end occurred inside a group at level 1)
+%   (\end occurred when \if on line 5 was incomplete)
+%   (\end occurred when \ifcase on line 4 was incomplete)
+%   (\end occurred when \iftrue on line 3 was incomplete)
+%
+% The name is written with whatever \escapechar says, as the group line's
+% is. This engine said the group and nothing of the conditionals.
+%
+% trip ends with three conditionals open, on lines 442, 419 and 413.
+\catcode`\{=1 \catcode`\}=2
+\message{[A three conditionals left open at the end]}
+\iftrue
+\ifcase 1 \or
+\if AA
+\begingroup
+\message{[done]}
+\end

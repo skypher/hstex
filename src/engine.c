@@ -16396,8 +16396,7 @@ static void show_whatsit(struct hstex_engine *engine,
     }
     static const char *const names[4] = {"write", "openout", "closeout",
                                          "special"};
-    print_byte(engine, '\\');
-    print_text(engine, names[kind > 3U ? 0U : kind]);
+    print_escaped_name(engine, names[kind > 3U ? 0U : kind]);
     if (kind != (uint8_t)HSTEX_WHATSIT_SPECIAL) {
         uint8_t stream = node->value.whatsit.stream;
         if (stream < 16U) {
@@ -41464,6 +41463,31 @@ int hstex_engine_run(struct hstex_engine *engine,
         print_formatted(engine, " occurred inside a group at level %u)",
                         (unsigned)engine->group_level);
         print_line(engine);
+    }
+    /* And each conditional still open, innermost first, named by the \if it
+       was and the line it began on. See docs/DECISIONS.md,
+       what-a-run-says-at-its-end. */
+    if (engine->end_requested) {
+        for (size_t index = engine->conditional_count; index != 0U; --index) {
+            const struct hstex_conditional *opened =
+                &engine->conditionals[index - 1U];
+            char named[128] = "";
+            if (opened->opener != 0U) {
+                describe_token(engine,
+                               hstex_token_control_sequence(opened->opener),
+                               named, sizeof(named));
+            }
+            print_fresh_line(engine);
+            print_byte(engine, '(');
+            print_escaped_name(engine, "end");
+            print_formatted(engine, " occurred when %s", named);
+            if (opened->line != 0U) {
+                print_formatted(engine, " on line %u", (unsigned)opened->line);
+            }
+            print_text(engine, " was incomplete)");
+            print_line(engine);
+        }
+        engine->conditional_count = 0U;
     }
     (void)fflush(diagnostic_stream(engine));
     /* The reference stops where the input stops: a paragraph still being
