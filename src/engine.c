@@ -32186,6 +32186,16 @@ static int math_character_metric(struct hstex_engine *engine,
     }
     if (resolved->characters == NULL ||
         resolved->characters[field->character].tag < 0) {
+        /* A character the family's font has not got is dropped, and the
+           reference says so where \tracinglostchars asks, exactly as it
+           does for one in text. A family still holding \nullfont has said
+           so already, in words of its own, and says nothing more here. See
+           docs/DECISIONS.md, missing-characters. */
+        if (complain && resolved != font_by_identifier(engine,
+                                                       engine->null_font)) {
+            char_warning(engine, resolved,
+                         (uint8_t)(field->character & 0xFFU));
+        }
         return 0;
     }
     *font = resolved;

@@ -1,0 +1,36 @@
+% WHAT A MATH FAMILY HAS NOT GOT.
+%
+% A character its font has not got is dropped and NAMED, in a formula just
+% as in text: with \tracinglostchars=1 and trip.tfm in family 1,
+%
+%   $v$        Missing character: There is no v in font trip!
+%   $A^v$      the same, in a script
+%   $v\over A$ the same, in a fraction
+%
+% and nothing at all with \tracinglostchars at nought. A family still
+% holding \nullfont says so in words of its own -- `\textfont 1 is
+% undefined' -- and says nothing more here.
+%
+% This engine dropped a math character in silence. trip line 283 writes
+% `v' in a family whose font is trip.tfm.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3 \catcode`\^=7 \catcode`\_=8
+\tracingonline=1 \tracinglostchars=1 \showboxdepth=9 \showboxbreadth=9
+\font\t=trip \font\s=cmsy10 \font\x=cmex10 \font\r=cmr10 \r
+\textfont0=\t \scriptfont0=\t \scriptscriptfont0=\t
+\textfont1=\t \scriptfont1=\t \scriptscriptfont1=\t
+\textfont2=\s \scriptfont2=\s \scriptscriptfont2=\s
+\textfont3=\x \scriptfont3=\x \scriptscriptfont3=\x
+\message{[A a math character the family's font has not got]}
+\setbox0=\hbox{$v$}
+\showbox0
+\message{[B one in a script]}
+\setbox0=\hbox{$A^v$}
+\showbox0
+\message{[C one in a fraction]}
+\setbox0=\hbox{$v\over A$}
+\showbox0
+\message{[D and with the warning off]}
+\tracinglostchars=0
+\setbox0=\hbox{$v$}
+\message{[done]}
+\end
