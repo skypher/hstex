@@ -10,13 +10,16 @@
 # glibc is installed at all. It is still glibc's code inside, statically.
 #
 # --musl links against musl instead, which is what independence of this
-# machine's libc means in practice: a smaller binary carrying no GNU
-# runtime. It needs musl-gcc, from the musl-tools package on Debian and
-# Ubuntu. Two things to know before publishing a number taken from one:
-# the heap tuning in src/main.c is glibc's own and quietly does nothing
-# under musl, and musl's allocator is the slower of the two under the
-# allocation the engine does. A musl build is the portable one, not the
-# fast one.
+# machine's libc means in practice: a binary of half the size carrying no
+# GNU runtime at all. It needs musl-gcc, from the musl-tools package on
+# Debian and Ubuntu, or from musl's own source configured with a --prefix,
+# which wants no root and takes a minute. Two things to know before
+# publishing a number taken from one: the heap tuning in src/main.c is
+# glibc's own and quietly does nothing under musl, and musl's allocator is
+# the slower of the two here -- the engine test runs about five per cent
+# longer against it, 3.29s where glibc's static build takes 3.12s, the two
+# built alike in every other way. A musl build is the portable one, not
+# the fast one.
 #
 # musl-gcc is the toolchain to use, not a clang-and-lld one: the runtime
 # dispatch in src/scan.c asks __builtin_cpu_supports, whose
