@@ -33901,6 +33901,11 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
        \prevdepth and \prevgraf on that vertical level. A fresh level is
        pushed for the paragraph when the display gives it back. */
     nest_pop(engine);
+    /* And the mode goes back to the list under it before anything notes it:
+       a display inside a \vbox stands in an INTERNAL vertical list, and the
+       level that holds it must be left saying so. */
+    engine->mode = HSTEX_MODE_VERTICAL;
+    engine->inner_mode = vertical_list_is_inner(engine);
     int32_t size = pre_display_size(
         engine, &line, line_shift_for(engine, engine->prev_graf),
         had_line);

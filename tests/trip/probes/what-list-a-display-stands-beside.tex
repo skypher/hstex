@@ -1,0 +1,36 @@
+% WHAT LIST A DISPLAY STANDS BESIDE.
+%
+% A display ends the paragraph it interrupted and stands BESIDE its lines
+% in the vertical list that holds them -- so the list a display is in is
+% the one the paragraph was in, INTERNAL where the paragraph was inside a
+% \vbox. \tracingcommands says so: the `}' that ends
+%
+%   \vbox{\noindent A$$B$$\ifvmode\fi C\par}
+%
+% draws `{internal vertical mode: end-group character }}', and the blank
+% space after it draws `{vertical mode: blank space  }' because the mode
+% has changed.
+%
+% This engine let the paragraph's own mode stand while the display took
+% over, so the level holding the display was left saying `vertical mode'
+% and everything after it in that \vbox was named wrongly. trip line 397
+% writes a display inside a \vbox and asks \ifvmode right after it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1
+\font\r=cmr10 \font\s=cmsy10 \font\x=cmex10 \r
+\textfont0=\r \scriptfont0=\r \scriptscriptfont0=\r
+\textfont1=\r \scriptfont1=\r \scriptscriptfont1=\r
+\textfont2=\s \scriptfont2=\s \scriptscriptfont2=\s
+\textfont3=\x \scriptfont3=\x \scriptscriptfont3=\x
+\hsize=100pt \parindent=0pt \hbadness=10000 \vbadness=10000
+\message{[A a display inside a vbox]}
+\tracingcommands=2
+\setbox0=\vbox{\noindent A$$B$$\ifvmode\fi C\par}
+\tracingcommands=0
+\message{[B one at the outer level]}
+\vsize=20000pt \output={\shipout\box255}
+\tracingcommands=2
+\noindent A$$B$$\ifvmode\fi C\par
+\tracingcommands=0
+\message{[done]}
+\end
