@@ -148,7 +148,7 @@ static int report_forbidden_in_skipped_text(struct hstex_engine *engine,
                                             size_t target, hstex_token token,
                                             char *error,
                                             size_t error_capacity);
-static int next_conditional_operand(struct hstex_engine *engine,
+static int next_conditional_operand(struct hstex_engine *engine, bool *held,
                                     hstex_token *token, char *error,
                                     size_t error_capacity);
 static int math_append_character(struct hstex_engine *engine, uint8_t code,
@@ -40557,9 +40557,45 @@ static int scan_if_case(struct hstex_engine *engine, char *error,
                                error_capacity);
 }
 
-static int if_character_code(const struct hstex_engine *engine,
-                             hstex_token token)
+/* A TOKEN \noexpand HELD BACK stands for what it MEANS unless what it means
+   is expandable -- and one that is expandable stands for nothing at all,
+   EXCEPT where the token is an ACTIVE CHARACTER, which stands for that
+   character. `\if\string~\noexpand~' is true. See docs/DECISIONS.md,
+   what-a-noexpand-holds-back. */
+static bool held_back_active_character(const struct hstex_engine *engine,
+                                       hstex_token token, bool held,
+                                       uint8_t *character)
 {
+    if (!held || !hstex_token_is_control_sequence(token)) {
+        return false;
+    }
+    hstex_cs_id identifier = hstex_token_control_sequence_id(token);
+    const struct hstex_meaning *meaning =
+        hstex_engine_meaning(engine, identifier);
+    if (!command_is_expandable(meaning->command) &&
+        meaning->command != HSTEX_COMMAND_UNDEFINED) {
+        return false;
+    }
+    enum hstex_symbol_kind kind = HSTEX_SYMBOL_REGULAR;
+    const uint8_t *name = NULL;
+    size_t length = 0U;
+    if (hstex_symbol_name(&((struct hstex_engine *)engine)
+                               ->lexical_state.symbols,
+                          identifier, &kind, &name, &length) != 0 ||
+        kind != HSTEX_SYMBOL_ACTIVE || length != 1U || name == NULL) {
+        return false;
+    }
+    *character = name[0];
+    return true;
+}
+
+static int if_character_code(const struct hstex_engine *engine,
+                             hstex_token token, bool held)
+{
+    uint8_t active = 0U;
+    if (held_back_active_character(engine, token, held, &active)) {
+        return (int)active;
+    }
     if (hstex_token_is_character(token)) {
         return (int)hstex_token_character_code(token);
     }
@@ -40590,21 +40626,27 @@ static int scan_if_char(struct hstex_engine *engine, char *error,
     hstex_token right = 0U;
     /* \if reads its two operands the same way \ifcat does, undefined
        control sequences and all. */
-    if (next_conditional_operand(engine, &left, error, error_capacity) != 0 ||
-        next_conditional_operand(engine, &right, error, error_capacity) != 0) {
+    bool left_held = false;
+    bool right_held = false;
+    if (next_conditional_operand(engine, &left_held, &left, error,
+                                 error_capacity) != 0 ||
+        next_conditional_operand(engine, &right_held, &right, error,
+                                 error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
     }
-    return finish_conditional(
-        engine, conditional,
-        if_character_code(engine, left) == if_character_code(engine, right),
-        error, error_capacity);
+    return finish_conditional(engine, conditional,
+                              if_character_code(engine, left, left_held) ==
+                                  if_character_code(engine, right, right_held),
+                              error, error_capacity);
 }
 
-static int next_conditional_operand(struct hstex_engine *engine, hstex_token *token,
-                               char *error, size_t error_capacity)
+static int next_conditional_operand(struct hstex_engine *engine, bool *held,
+                                    hstex_token *token, char *error,
+                                    size_t error_capacity)
 {
     struct hstex_source_location location;
+    *held = false;
     /* An undefined control sequence met while expanding is reported and
        GONE -- "I'll forget about whatever was undefined" -- so the operand
        is whatever follows it, not a \relax standing in its place.
@@ -40621,6 +40663,7 @@ static int next_conditional_operand(struct hstex_engine *engine, hstex_token *to
             hstex_engine_meaning(engine,
                                  hstex_token_control_sequence_id(*token))
                     ->command != HSTEX_COMMAND_UNDEFINED) {
+            *held = engine->returned_unexpanded;
             return 0;
         }
         report_undefined_control_sequence(engine);
@@ -40628,8 +40671,12 @@ static int next_conditional_operand(struct hstex_engine *engine, hstex_token *to
 }
 
 static int if_category_code(const struct hstex_engine *engine,
-                            hstex_token token)
+                            hstex_token token, bool held)
 {
+    uint8_t active = 0U;
+    if (held_back_active_character(engine, token, held, &active)) {
+        return (int)HSTEX_CAT_ACTIVE;
+    }
     if (hstex_token_is_character(token)) {
         return (int)hstex_token_category(token);
     }
@@ -40653,14 +40700,20 @@ static int scan_if_cat(struct hstex_engine *engine, char *error,
     }
     hstex_token left = 0U;
     hstex_token right = 0U;
-    if (next_conditional_operand(engine, &left, error, error_capacity) != 0 ||
-        next_conditional_operand(engine, &right, error, error_capacity) != 0) {
+    bool left_held = false;
+    bool right_held = false;
+    if (next_conditional_operand(engine, &left_held, &left, error,
+                                 error_capacity) != 0 ||
+        next_conditional_operand(engine, &right_held, &right, error,
+                                 error_capacity) != 0) {
         engine->conditional_count = conditional;
         return -1;
     }
     return finish_conditional(
         engine, conditional,
-        if_category_code(engine, left) == if_category_code(engine, right), error,
+        if_category_code(engine, left, left_held) ==
+            if_category_code(engine, right, right_held),
+        error,
         error_capacity);
 }
 

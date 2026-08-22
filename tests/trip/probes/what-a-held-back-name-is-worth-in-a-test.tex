@@ -1,0 +1,34 @@
+% WHAT A HELD-BACK NAME IS WORTH IN A TEST.
+%
+% \if and \ifcat compare what their two operands MEAN. A name \noexpand
+% held back means \relax -- and a test reads it as NO CHARACTER AT ALL,
+% which is a character code of 256 and a category of 16, so two of them
+% match each other and nothing else.
+%
+% EXCEPT where the held-back name is an ACTIVE CHARACTER: that stands for
+% the character itself, code and category 13 alike. Measured against pdftex
+% with \catcode`\~=13 \def~{y}:
+%
+%   \if~\noexpand~                     F   (the first ~ expands to y)
+%   \ifcat\noexpand~\noexpand~         T
+%   \if\noexpand~\noexpand~            T
+%   \ifcat\noexpand~ A                 F
+%   \if\string~\noexpand~              T   <- a `~' of category 12 matches
+%   \ifcat\noexpand\one\noexpand\two   T   (both are no character)
+%   \if\noexpand\one\noexpand~         F   <- and one of them is not
+%
+% This engine read every held-back name as no character, so the last two
+% came out the other way about. trip line 436 writes
+% `\if$\expandafter\noexpand\dol\fi' with \dol a macro for an active $.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1
+\catcode`\~=13 \def~{y}
+\message{[A \if~\noexpand~ T\else F\fi]}
+\message{[B \ifcat\noexpand~\noexpand~ T\else F\fi]}
+\message{[C \if\noexpand~\noexpand~ T\else F\fi]}
+\message{[D \ifcat\noexpand~ A T\else F\fi]}
+\message{[E \if\string~\noexpand~ T\else F\fi]}
+\message{[F \ifcat\noexpand\undefinedone\noexpand\undefinedtwo T\else F\fi]}
+\message{[G \if\noexpand\undefinedone\noexpand~ T\else F\fi]}
+\message{[done]}
+\end
