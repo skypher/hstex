@@ -34326,8 +34326,12 @@ static int begin_display_math(struct hstex_engine *engine, char *error,
         engine, &line, line_shift_for(engine, engine->prev_graf),
         had_line);
     /* The display stands where the line after the paragraph so far would,
-       plus one: the reference counts the display as taking two. */
-    int32_t where = had_line ? engine->paragraph_lines + 2 : 2;
+       plus one: the reference counts the display as taking two.  WHICH LINE
+       THAT IS COMES FROM \prevgraf, which carries on past an earlier display
+       in the same paragraph rather than counting only the lines just broken.
+       See docs/DECISIONS.md, lines-carry-on-past-a-display. */
+    int32_t where = engine->prev_graf + 2;
+    (void)had_line;
     if (begin_group(engine, HSTEX_GROUP_MATH_SHIFT, error, error_capacity) != 0) {
         return -1;
     }

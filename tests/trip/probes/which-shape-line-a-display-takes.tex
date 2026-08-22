@@ -1,0 +1,23 @@
+% Which line of \parshape a display is set to: the one after the paragraph so
+% far, plus one -- and that count carries on past an EARLIER display in the
+% same paragraph rather than starting again from the lines just broken.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1
+\font\sy=cmsy10 \font\ex=cmex10 \font\rm=cmr10
+\textfont0=\rm \scriptfont0=\rm \scriptscriptfont0=\rm
+\textfont1=\rm \scriptfont1=\rm \scriptscriptfont1=\rm
+\textfont2=\sy \scriptfont2=\sy \scriptscriptfont2=\sy
+\textfont3=\ex \scriptfont3=\ex \scriptscriptfont3=\ex
+\rm \parindent=0pt \tolerance=10000 \hbadness=10000
+\def\shape{\parshape 10 1pt 11pt 2pt 12pt 3pt 13pt 4pt 14pt 5pt 15pt
+            6pt 16pt 7pt 17pt 8pt 18pt 9pt 19pt 10pt 20pt}
+\message{[A the first display of a paragraph]}
+\setbox0=\vbox{\shape\noindent A$$\message{[width \the\displaywidth, indent \the\displayindent]}$$
+\message{[B a second one, after the first has counted three]}
+A$$\message{[width \the\displaywidth, indent \the\displayindent]}$$
+\message{[C and a third]}
+A$$\message{[width \the\displaywidth, indent \the\displayindent]}$$ A\par}
+\message{[D a display that starts a paragraph]}
+\setbox0=\vbox{\shape\noindent$$\message{[width \the\displaywidth, indent \the\displayindent]}$$\par}
+\message{[done]}
+\end
