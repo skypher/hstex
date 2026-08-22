@@ -36574,6 +36574,46 @@ static int execute_equation_number(struct hstex_engine *engine, bool left,
     return 0;
 }
 
+/* AN OVERFULL EQUATION GETS A RULE. A display's equation is squeezed into
+   the room it has rather than packed afresh, but the reference still puts
+   \overfullrule at its right where the squeeze asks for more than the glue
+   can give up -- which is why the short display of such a line ends in `|'.
+   The equation's nodes stand at the end of the list store, so the rule joins
+   them there. See docs/DECISIONS.md, a-display-squeezed-to-fit. */
+static int add_overfull_rule(struct hstex_engine *engine,
+                             struct hstex_box *box, int32_t natural,
+                             const struct hstex_glue *total, char *error,
+                             size_t error_capacity)
+{
+    int64_t excess = (int64_t)natural - box->width;
+    int32_t rule_width = engine->dimen_parameters[HSTEX_DIMEN_OVERFULL_RULE];
+    if (engine->packing_quietly || box->node_count == 0U || rule_width <= 0 ||
+        excess <= 0 || total->shrink_order != 0U ||
+        excess - (int64_t)total->shrink <=
+            (int64_t)engine->dimen_parameters[HSTEX_DIMEN_HFUZZ]) {
+        return 0;
+    }
+    if ((size_t)box->node_start + box->node_count !=
+        engine->list_item_count) {
+        return 0;
+    }
+    struct hstex_node rule = {
+        .kind = HSTEX_NODE_RULE,
+        .width = rule_width,
+        .height = HSTEX_RUNNING_DIMEN,
+        .depth = HSTEX_RUNNING_DIMEN,
+    };
+    uint32_t identifier = 0U;
+    if (store_node(engine, &rule, &identifier, error, error_capacity) != 0 ||
+        reserve_list_items(engine, engine->list_item_count + 1U, error,
+                           error_capacity) != 0) {
+        return -1;
+    }
+    engine->list_items[engine->list_item_count++] = identifier;
+    box->node_count += 1U;
+    return 0;
+}
+
 /* Build the line the display occupies, with its number beside it when there
    is room. */
 /* Whether the number can stand beside the equation: the reference wants a
@@ -36650,6 +36690,10 @@ static int append_display_line(struct hstex_engine *engine,
             equation.glue = packing_glue_set(equation.width, room, &spare);
             equation.width = room;
             engine->badness = packing_badness(natural, room, &spare);
+            if (add_overfull_rule(engine, &equation, natural, &spare, error,
+                                  error_capacity) != 0) {
+                return -1;
+            }
             report_packing(engine, &equation, natural, &spare, false,
                            engine->list_items + equation.node_start,
                            equation.node_count);
@@ -36668,6 +36712,10 @@ static int append_display_line(struct hstex_engine *engine,
             equation.glue = packing_glue_set(equation.width, width, &spare);
             equation.width = width;
             engine->badness = packing_badness(natural, width, &spare);
+            if (add_overfull_rule(engine, &equation, natural, &spare, error,
+                                  error_capacity) != 0) {
+                return -1;
+            }
             report_packing(engine, &equation, natural, &spare, false,
                            engine->list_items + equation.node_start,
                            equation.node_count);

@@ -1,0 +1,20 @@
+% A display's equation is squeezed into the room it has rather than packed
+% afresh -- but it is a box like any other, so where the squeeze asks for
+% more than its glue can give up the reference puts \overfullrule at its
+% right, and the short display of the line ends in `|'.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\sy=cmsy10 \font\ex=cmex10 \font\rm=cmr10
+\textfont0=\rm \scriptfont0=\rm \scriptscriptfont0=\rm
+\textfont1=\rm \scriptfont1=\rm \scriptscriptfont1=\rm
+\textfont2=\sy \scriptfont2=\sy \scriptscriptfont2=\sy
+\textfont3=\ex \scriptfont3=\ex \scriptscriptfont3=\ex
+\rm \overfullrule=5pt \hsize=10pt \parindent=0pt \hbadness=10000 \hfuzz=0pt
+\message{[A an overfull display]}
+\setbox1=\vbox{\noindent$$\hbox to 40pt{}$$}\showbox1
+\message{[B one squeezed to make room for its number]}
+\setbox1=\vbox{\noindent$$\hbox to 40pt{}\eqno\hbox to 5pt{}$$}\showbox1
+\message{[C one that fits, which gets none]}
+\setbox1=\vbox{\noindent$$\hbox to 5pt{}$$}\showbox1
+\message{[done]}
+\end
