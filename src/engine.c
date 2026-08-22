@@ -1,5 +1,7 @@
 #include "hstex/engine.h"
 
+#include "hstex/filedb.h"
+
 #include "hstex/catcode.h"
 #include "internal.h"
 
@@ -4275,7 +4277,12 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
                           entry->generation == engine->file_generation)) {
         return entry->path == NULL ? NULL : strdup(entry->path);
     }
-    char *path = finder_ask(engine, filename);
+    /* What the installation's own lists say, where they say it plainly.
+       Anything the run itself has written is looked for on disk before
+       this is reached, and a name the lists cannot settle goes to the tool
+       as it always did. See src/filedb.c. */
+    const char *listed = hstex_file_db_lookup(hstex_file_db_shared(), filename);
+    char *path = listed != NULL ? strdup(listed) : finder_ask(engine, filename);
     if (entry != NULL) {
         free(entry->path);
         entry->path = path == NULL ? NULL : strdup(path);

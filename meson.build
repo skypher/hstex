@@ -61,6 +61,7 @@ core = static_library(
   files(
     'src/catcode.c',
     'src/engine.c',
+    'src/filedb.c',
     'src/format.c',
     'src/input.c',
     'src/lex.c',
@@ -129,6 +130,14 @@ source_test = executable(
 )
 test('source', source_test)
 
+filedb_test = executable(
+  'test_filedb',
+  'tests/test_filedb.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+)
+test('filedb', filedb_test)
+
 engine_test = executable(
   'test_engine',
   'tests/test_engine.c',
@@ -140,6 +149,7 @@ test('engine', engine_test)
 install_headers(
   'include/hstex/catcode.h',
   'include/hstex/engine.h',
+  'include/hstex/filedb.h',
   'include/hstex/input.h',
   'include/hstex/lex.h',
   'include/hstex/mouth.h',
