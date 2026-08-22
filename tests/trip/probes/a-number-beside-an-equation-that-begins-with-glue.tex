@@ -1,0 +1,21 @@
+% Where an equation number stands close beside the equation, the reference
+% shares out what room is left -- unless the equation begins with GLUE, in
+% which case it takes none of it.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \showboxbreadth=99 \showboxdepth=99
+\font\sy=cmsy10 \font\ex=cmex10 \font\rm=cmr10
+\textfont0=\rm \scriptfont0=\rm \scriptscriptfont0=\rm
+\textfont1=\rm \scriptfont1=\rm \scriptscriptfont1=\rm
+\textfont2=\sy \scriptfont2=\sy \scriptscriptfont2=\sy
+\textfont3=\ex \scriptfont3=\ex \scriptscriptfont3=\ex
+\hsize=100pt \parindent=0pt \predisplaypenalty=0 \postdisplaypenalty=0
+\abovedisplayskip=0pt \belowdisplayskip=0pt
+\abovedisplayshortskip=0pt \belowdisplayshortskip=0pt
+\message{[A an equation that begins with a box]}
+\setbox1=\vbox{\noindent$$\hbox to 40pt{}\eqno\hbox to 40pt{}$$}\showbox1
+\message{[B one that begins with glue]}
+\setbox1=\vbox{\noindent$$\hskip 5pt\hbox to 35pt{}\eqno\hbox to 40pt{}$$}\showbox1
+\message{[C the number on the left]}
+\setbox1=\vbox{\noindent$$\hskip 5pt\hbox to 35pt{}\leqno\hbox to 40pt{}$$}\showbox1
+\message{[done]}
+\end

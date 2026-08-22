@@ -36577,6 +36577,19 @@ static int append_display_line(struct hstex_engine *engine,
     int32_t d = (int32_t)(((int64_t)width - w + 1) / 2);
     if (e > 0 && d < 2 * e) {
         d = (int32_t)(((int64_t)width - w - e + 1) / 2);
+        /* AND WHERE THE EQUATION BEGINS WITH GLUE there is no room to take:
+           the reference gives the number all of it and leaves the equation
+           where the display's indentation puts it. See docs/DECISIONS.md,
+           a-number-beside-an-equation-that-begins-with-glue. */
+        if (equation.node_count != 0U &&
+            (size_t)equation.node_start < engine->list_item_count) {
+            uint32_t first_item = engine->list_items[equation.node_start];
+            if (first_item != 0U &&
+                (size_t)first_item <= engine->node_count &&
+                engine->nodes[first_item - 1U].kind == HSTEX_NODE_GLUE) {
+                d = 0;
+            }
+        }
     }
     *shift = indent + (left && e != 0 ? 0 : d);
     if (e == 0) {
