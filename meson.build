@@ -35,6 +35,20 @@ if get_option('b_pgo') == 'use'
   )
 endif
 
+# Under link-time optimization gcc inlines the hyphenation loops into the
+# paragraph builder, vectorizes their byte stores, and then reads a
+# sixteen-byte store as running past the 64-byte array the caller passes --
+# a length hstex_engine_hyphenate_word refuses before any of it runs. What
+# it is warning about is its own generated code seen imprecisely, and
+# -Werror makes it fatal, so the warning is off where -flto is on.
+if get_option('b_lto')
+  lto_quiet = cc.get_supported_arguments('-Wno-stringop-overflow')
+  add_project_arguments(lto_quiet, language: 'c')
+  # The pass that raises it runs when the link runs, so the link is where
+  # the answer has to be given too.
+  add_project_link_arguments(lto_quiet, language: 'c')
+endif
+
 configuration = configuration_data()
 configuration.set_quoted('HSTEX_VERSION', meson.project_version())
 configure_file(output: 'hstex_config.h', configuration: configuration)
