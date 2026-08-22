@@ -25029,8 +25029,15 @@ static void report_runaway_list(struct hstex_engine *engine, const char *what,
     char scratch[256];
     const size_t limit = (size_t)HSTEX_PRINT_LINE - 10U;
     /* Whatever stands in front of the part that ran away -- a definition
-       shows the parameter text it had matched before its `->'. */
+       shows the parameter text it had matched before its `->'. Each
+       parameter of that text sets the character the rest of the list is
+       written with, as it does anywhere a list is shown. */
+    shown_parameter_character = (uint8_t)'#';
     for (size_t index = 0U; lead != NULL && index < lead->count; ++index) {
+        if (hstex_token_is_parameter(lead->data[index])) {
+            shown_parameter_character =
+                hstex_token_parameter_character(lead->data[index]);
+        }
         if (append_token_description(engine, lead->data[index], &bytes, &count,
                                      &capacity, scratch,
                                      sizeof(scratch)) != 0) {
@@ -42008,9 +42015,11 @@ handle_token:
                              command_assigns(after->command);
             }
             if (!prefixable) {
+                /* The reference names the three prefixes TeX82 has and
+                   not the \protected eTeX adds. */
                 static const char *const help[] = {
                     "I'll pretend you didn't say \\long or \\outer or "
-                    "\\global or \\protected.", NULL};
+                    "\\global.", NULL};
                 char named[128];
                 describe_token(engine, *token, named, sizeof(named));
                 if (push_one(engine, *token, *location, error,

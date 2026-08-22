@@ -1,0 +1,29 @@
+% WHAT A RUNAWAY SHOWS OF A DEFINITION.
+%
+% `Runaway definition?' writes the parameter text the definition had
+% matched, then `->', then as much of the body as it had read. Each
+% parameter of that TEXT sets the character the rest of the list is written
+% with, as it does anywhere a list is shown -- so a definition whose
+% parameters are written with a caret pair shows them that way in the body
+% too:
+%
+%   Runaway definition?
+%   ^^C1^^C2->[^^C1|^^C2]
+%
+% This engine wrote `#' throughout. trip line 364 writes
+% \def\a^^C1{\d#1\d\l{#2}\l#1\par\a^^@^^@a and runs away in it.
+%
+% The words under `You can't use a prefix with ...' name the three prefixes
+% TeX82 has and not the \protected eTeX adds.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\^=7
+\catcode`\^^C=6
+\tracingonline=1
+\outer\def\bad{}
+\message{[A a runaway definition whose parameter character is a caret pair]}
+\def\m^^C1^^C2{[^^C1|^^C2]\bad}
+\message{[B one with the usual #]}
+\def\n#1#2{[#1|#2]\bad}
+\message{[C a prefix in front of something it cannot prefix]}
+\global\relax\global A
+\message{[done]}
+\end
