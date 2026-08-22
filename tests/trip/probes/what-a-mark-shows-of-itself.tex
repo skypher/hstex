@@ -29,8 +29,9 @@
 % The text a mark expands into is read back from a frame the reference
 % calls `<mark>', not `<inserted text>'.
 %
-% Still open here: the reference traces the `#' it reads back as a command
-% before refusing it, where HSTeX refuses it untraced.
+% And a parameter character with nothing to do is TRACED before it is
+% refused: `{macro parameter character #}' and then the fault. The trace
+% says what the main loop was given, whatever it then makes of it.
 \catcode`\{=1 \catcode`\}=2 \catcode`\#=6
 \tracingonline=1
 \output={\global\setbox9=\box255}

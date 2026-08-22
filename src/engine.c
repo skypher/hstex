@@ -41670,6 +41670,13 @@ handle_token:
            or an alignment preamble: the reference names it and ignores it.
            Measured in every mode, and for ## as well as #. */
         if (token_is_category(*token, HSTEX_CAT_PARAMETER)) {
+            /* Named first and refused after: the trace says what the main
+               loop was given, whatever it then makes of it. */
+            if (!engine->command_traced && !engine->pending_global &&
+                engine->pending_macro_flags == 0U &&
+                !engine->display_alignment && !engine->accent_pending) {
+                trace_command(engine, *token);
+            }
             report_illegal_case(engine, *token);
             continue;
         }
