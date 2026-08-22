@@ -206,9 +206,19 @@ into the arena per node. The struct is 60 bytes and a run of the corpus makes
 ten million of them; ten of those bytes are the `originals` a ligature is
 taken apart with, carried by every node whether or not it is a ligature.
 Sixty is also an unhappy stride, since no node begins where a cache line
-does. Shrinking the node -- the originals behind an index, the variants
-packed -- and filling it where it stands rather than building it and copying
-it in are the two things measurement points at; neither has been tried yet.
+does.
+
+What that size is worth has been measured before anything was restructured
+to change it, by making the record bigger and seeing what happens: padding
+it to 64, 96 and 128 bytes takes the same document from 0.30 processor
+seconds to 0.31, 0.35 and 0.37, so a node costs about a third of a per cent
+of the run per byte. Filling the node where it stands rather than building
+it and copying it in is therefore NOT the lever it looks like -- the copy is
+into a cold arena, and the cache miss it takes happens either way -- while
+shrinking the record to 44 bytes should be worth about five per cent. Sixty
+to 44 means the insert variant's `\splittopskip` behind an index, since it
+alone sets the union at 36 bytes and insertions are rare; `kind` and
+`box_kind` as bytes rather than enums; and the flags packed.
 
 The first round of tuning took the final pass from 72 seconds to 28: reading
 the format from a file rather than executing `latex.ltx` again at every run;
