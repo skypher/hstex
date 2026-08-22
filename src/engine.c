@@ -37308,14 +37308,15 @@ static int finish_math_group(struct hstex_engine *engine, char *error,
         return set_error(error, error_capacity,
                          "a script mark was left without a script");
     }
-    /* A sub-formula that fills a script or a radicand is NOT set when its
-       brace closes: the reference keeps the list and sets the whole formula
-       when the $ arrives, so whatever the setting reports -- an undefined
-       family, an overfull box -- is reported there and not here. Keeping a
-       style that no style can equal makes the setting happen when the field
-       is first asked for its box. See docs/DECISIONS.md,
+    /* A SUB-FORMULA IS NOT SET WHEN ITS BRACE CLOSES: the reference keeps
+       the list and sets the whole formula when the $ arrives, so whatever
+       the setting reports -- an undefined family, a character the font has
+       not got, an overfull box -- is reported there and not here, and a
+       formula that never gets set at all reports nothing. Keeping a style
+       that no style can equal makes the setting happen when the field is
+       first asked for its box. See docs/DECISIONS.md,
        when-a-sub-formula-is-set. */
-    bool deferred = outer->slot != (uint8_t)HSTEX_MATH_SLOT_NONE;
+    bool deferred = true;
     /* The list is kept as well as the box, because a fraction sets each of
        its sides in a style that is not known until \over is read. */
     uint32_t record = 0U;

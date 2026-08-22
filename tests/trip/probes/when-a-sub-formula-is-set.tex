@@ -1,0 +1,20 @@
+% When a sub-formula is set: not when its brace closes, but when the whole
+% formula is -- so what the setting reports, a character the family's font has
+% not got among it, is reported there. A formula that never gets set at all
+% reports nothing.
+\catcode`\{=1 \catcode`\}=2 \catcode`\$=3
+\tracingonline=1 \tracinglostchars=2 \tracingcommands=1
+\font\rip=trip
+\textfont0=\rip \scriptfont0=\rip \scriptscriptfont0=\rip
+\textfont1=\rip \scriptfont1=\rip \scriptscriptfont1=\rip
+\textfont2=\rip \scriptfont2=\rip \scriptscriptfont2=\rip
+\textfont3=\rip \scriptfont3=\rip \scriptscriptfont3=\rip
+\message{[A a group holding a character the font has not got]}
+\setbox0=\hbox{$\displaystyle{vq}\relax$}
+\message{[B one inside another]}
+\setbox0=\hbox{$\displaystyle{{v}{q}}\relax$}
+\message{[C a fraction with delimiters, whose sides are set with the whole]}
+\setbox0=\hbox{$\displaystyle{v\atopwithdelims..q}\relax$}
+\tracingcommands=0
+\message{[done]}
+\end
