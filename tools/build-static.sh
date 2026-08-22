@@ -30,14 +30,18 @@
 # tuned one, musl having no tuning to offer: mallocng reads no
 # environment and answers no mallopt, and the choice musl's own configure
 # does allow -- --with-malloc=oldmalloc -- measured slower here than the
-# default. mimalloc, linked in front of musl's, is worth a few per cent of
-# the engine test: 4.20s against musl's own 4.39s at the median of twelve
-# interleaved rounds, 3.45s against 4.16s at the best of them. The machine
-# was shared while that was taken -- load average 88 across 64 cores -- so
-# read it as an ordering rather than as a figure, and take a real one on a
-# quiet machine before publishing anything. The glibc build stayed at
-# least as fast as either by the median of the same rounds, which is the
-# heap tuning src/main.c does there and musl has no answer to.
+# default. mimalloc, linked in front of musl's, is worth about a quarter of
+# the engine test, and most of what musl costs: at the median of fifteen
+# interleaved rounds musl takes 0.64s where glibc takes 0.47s, and mimalloc
+# brings musl to 0.49s. The machine was shared while that was taken -- load
+# average 72 across 64 cores -- so take a real figure on a quiet one before
+# publishing it. What is left over glibc is the heap tuning src/main.c does
+# there and musl has no answer to.
+#
+# That the difference shows at all is recent. While the engine started a
+# child process for every file it looked for, the allocator was a few per
+# cent of a run four seconds long; src/filedb.c took the children away, and
+# what is left is short enough for the allocator to be a quarter of it.
 #
 # It is offered for the musl build alone. Overriding malloc in a static
 # glibc link pulls glibc's own malloc.o in beside it and the two collide,
