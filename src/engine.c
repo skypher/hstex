@@ -13027,7 +13027,14 @@ static void report_packing(struct hstex_engine *engine,
         (void)current_source_line(engine, &here);
         print_formatted(engine, ") detected at line %u", (unsigned)here);
     }
-    print_line(engine);
+    /* A VERTICAL LIST PACKED WHILE \output IS ACTIVE goes straight to the
+       box: the reference leaves out the line that otherwise stands between
+       what it says and what it shows. A horizontal one keeps it, because the
+       text of the list is drawn there. See docs/DECISIONS.md,
+       what-a-packing-fault-shows-while-output-is-active. */
+    if (!vertical || !engine->output_active) {
+        print_line(engine);
+    }
     /* Then the text of it, and then the box. An alignment's preamble is not
        a list HSTeX keeps, so there is nothing to show for it. */
     if (items == NULL) {

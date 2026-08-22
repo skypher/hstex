@@ -1,0 +1,17 @@
+% A box that does not come out right while \output is active: the reference
+% says so of the \output rather than of a line, and what it says is followed
+% by the box with no blank line between, and by no text of the list at all.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=3 \showboxdepth=2
+\hbadness=0 \vbadness=0 \hfuzz=0pt \vfuzz=0pt
+\font\rip=trip \rip
+\output={\setbox9=\hbox to 5pt{\hskip 20pt}\setbox9=\vbox to 5pt{\hrule height 20pt}%
+  \shipout\box255}
+\vsize=10pt \maxdepth=2pt
+\message{[A a box packed while \string\output is active]}
+\hrule height 4pt \penalty-10000
+\message{[B and one packed outside it]}
+\setbox9=\hbox to 5pt{\hskip 20pt}
+\setbox9=\vbox to 5pt{\hrule height 20pt}
+\message{[done]}
+\end
