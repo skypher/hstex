@@ -96,6 +96,47 @@
 % discretionary consumed the letter but where the unbroken development has
 % got to when the break is reached. Still open, and this is where to start.
 %
+% THE WORD, MEASURED. Instrumented, it is `111' -- three letters at nodes
+% 43, 108 and 173, ending at 175, with breaks wanted at letters 1 and 2 and
+% \lefthyphenmin and \righthyphenmin both 1. Taking the word's own base at
+% 43, letter 0 stands at 0, letter 1 at 65, letter 2 at 130, and the whole
+% run is 132 nodes. This engine suppresses the break at letter 1 -- a word
+% set again without a left boundary begins with its first two letters in one
+% run -- so ONE discretionary is drawn, and the reference draws one too.
+%
+% A RULE THAT LOOKED RIGHT AND IS NOT. Where a run ENDS was fixed by matching
+% the two branches from the back on letter boundaries; the obvious guess is
+% that where it BEGINS is the same question asked from the front -- match the
+% text set again in front of the break against what is already there, share
+% the common prefix, and begin the run where they part. On paper it accounts
+% for all three cases known:
+%
+%   - trip's break at letter 2: letter 1's 65 nodes are unchanged by the
+%     break, so all 65 are shared, the run begins at 130 and replaces 2, and
+%     the hyphen stands alone in front of the break.
+%   - the probe word's first break: letter 0 gains a right boundary at the
+%     end of a line, so the two part at once, nothing is shared, and the
+%     letter goes into the pre-break text.
+%   - the probe word's second break: as trip's.
+%
+% Written and measured, it does neither. trip's fifth discretionary does not
+% move, and the fourth -- `replacing 10', which was right -- becomes 9.
+%
+% WHY, AND THIS IS THE THING WORTH KNOWING. The prefix cannot be seen because
+% this engine never builds it. Setting letter 1 again together with the
+% hyphen gives THREE nodes here -- `1', `1 (ligature -)', `7 (ligature |)' --
+% where the letter's own material in the run is SIXTY-FIVE, the rest of them
+% put there by the font's ligature program running across the pair of letters
+% it stands between. Reconstituting the letter on its own does not produce
+% them, so there is no 65-node prefix to match and no way for the run to
+% begin at 130.
+%
+% So the difference is not in the bookkeeping around the reconstitution but
+% in the reconstitution itself: the reference develops the branch in front of
+% a break from the state the unbroken run is already in, and this engine sets
+% the letter again in isolation. That is the next thing to measure, and it is
+% a bigger change than either of the two made today.
+%
 % WHERE IT IS NOT: not the line width, which is nought for both (\hsize is
 % at its INITEX default through trip's first pass, and a wrong goal would
 % move every break's badness rather than this one's). Not the material
