@@ -53,6 +53,49 @@
 % glue_badness(393219, 524156) is 42 EXACTLY, which is what the reference
 % draws. One number explains both.
 %
+% AND THEN IT WAS SEEN. `\showboxbreadth' is a DISPLAY setting and changes
+% no typesetting at all, so raising it in a copy of trip.tex shows the rest
+% of that box without disturbing what is in it:
+%
+%   sed '69s/\showboxbreadth 55 /\showboxbreadth 9999 /' trip.tex
+%
+% and running both engines over the copy. The material differs. Both draw
+% FIVE discretionaries and the first four are identical -- replacing 7, 6, 1
+% and 10, each with the same texts. The fifth is not:
+%
+%   ref:    ....\kern-2.00002
+%           ....\discretionary replacing 2
+%           .....\rip -
+%           ....|\rip 5 (ligature |1)
+%           ....|\rip 7 (ligature |)
+%           ....\rip 1
+%           ....\rip 7 (ligature |)
+%
+%   hstex:  ....\kern-2.00002
+%           ....\discretionary replacing 67
+%           .....\rip 1
+%           .....\rip 1 (ligature -)
+%           .....\rip 7 (ligature |)
+%           ....|\rip 5 (ligature |1)
+%           ....|\rip 7 (ligature |)
+%           ....\rip 1                      <- and 66 more
+%
+% Same break, same post-break text, and the two runs END at the same node.
+% They differ over where the run BEGINS: the reference's starts 65 nodes
+% later and replaces 2 where this engine replaces 67 -- 67 - 2 = 65 exactly.
+% And the reference's pre-break is the hyphen ON ITS OWN where this engine
+% sets the letter in front of the break again together with it.
+%
+% THAT IS THE SAME FAULT AS what-a-word-hyphenates-to-when-the-hyphen-is-
+% not-there.tex, which was fixed for the case of TWO breaks in a word: the
+% second one's letter had been taken into the first one's run, so only the
+% hyphen was left to put in front of the break. Here there is ONE break and
+% no earlier discretionary to have taken anything, and the reference still
+% puts the hyphen in alone. So the rule `fresh = previous >= settled_item'
+% is not the whole of it: what decides it is not whether an earlier
+% discretionary consumed the letter but where the unbroken development has
+% got to when the break is reached. Still open, and this is where to start.
+%
 % WHERE IT IS NOT: not the line width, which is nought for both (\hsize is
 % at its INITEX default through trip's first pass, and a wrong goal would
 % move every break's badness rather than this one's). Not the material
