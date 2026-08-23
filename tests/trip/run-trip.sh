@@ -38,7 +38,9 @@ work=$(pwd)
 
 TRIP_TEX_SHA=15f15c2ca1470085299056ec89dea5f51e9fe9303ef25581b2f2eaf7809ae97b
 TRIP_PL_SHA=93b38cc794f0c4a462667e25ef34a83552cbcdd62a42b10f739a431166525a79
-base=https://mirrors.ctan.org/systems/knuth/dist/tex
+# `mirrors.ctan.org` can select a mirror that rejects GitHub-hosted runners
+# with HTTP 403.  CTAN's archive endpoint serves the same canonical files.
+base=https://www.ctan.org/tex-archive/systems/knuth/dist/tex
 
 fetch() {
     name=$1
