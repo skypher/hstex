@@ -22,7 +22,9 @@ case $output in
 *) output=$root/$output ;;
 esac
 
-for file in "$build/hstex" "$build/hstex-pdflatex" "$root/LICENSE"; do
+for file in "$build/hstex" "$build/hstex-pdflatex" "$root/LICENSE" \
+    "$root/NOTICE" "$root/THIRD_PARTY_NOTICES.md" \
+    "$root/packaging/debian/copyright"; do
     if [ ! -f "$file" ]; then
         echo "tools/package-release.sh: required file is missing: $file" >&2
         exit 1
@@ -63,6 +65,8 @@ mkdir -p "$prefix/bin" "$prefix/share/doc/hstex" "$prefix/share/man/man1"
 install -m 0755 "$build/hstex" "$prefix/bin/hstex"
 install -m 0755 "$build/hstex-pdflatex" "$prefix/bin/hstex-pdflatex"
 install -m 0644 "$root/LICENSE" "$prefix/share/doc/hstex/LICENSE"
+install -m 0644 "$root/NOTICE" "$root/THIRD_PARTY_NOTICES.md" \
+    "$prefix/share/doc/hstex/"
 install -m 0644 "$root/README.md" "$root/CLEANROOM.md" \
     "$root/docs/COMPATIBILITY.md" "$root/docs/RELEASING.md" \
     "$prefix/share/doc/hstex/"
@@ -75,6 +79,8 @@ tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
 debian_root=$stage/debian
 mkdir -p "$debian_root/DEBIAN" "$debian_root/usr"
 cp -a "$prefix/bin" "$prefix/share" "$debian_root/usr/"
+install -D -m 0644 "$root/packaging/debian/copyright" \
+    "$debian_root/usr/share/doc/hstex/copyright"
 sed "s/@VERSION@/$version/g" "$root/packaging/debian/control.in" \
     >"$debian_root/DEBIAN/control"
 dpkg-deb --build --root-owner-group "$debian_root" "$debian" >/dev/null

@@ -2,8 +2,8 @@
 
 ## Preconditions
 
-1. Choose and commit an explicit project license. The release packager refuses
-   to create redistributable assets without `LICENSE`.
+1. The source is Apache-2.0. Release assets carry `LICENSE`, `NOTICE`, and
+   `THIRD_PARTY_NOTICES.md`; the packager refuses to run if any is absent.
 2. Update the Meson project version and create an annotated matching tag,
    `vVERSION`.
 3. Run the full engine suite, the canonical TRIP gate, and the public corpus.

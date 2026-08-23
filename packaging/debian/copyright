@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: HSTeX
+Source: https://github.com/skypher/hstex
+
+Files: *
+Copyright: 2026 LP
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ use this file except in compliance with the License. A complete copy is
+ installed as /usr/share/doc/hstex/LICENSE.
