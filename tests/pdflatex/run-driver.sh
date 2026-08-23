@@ -10,17 +10,25 @@ source=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/smoke.tex
 work=$(mktemp -d "${TMPDIR:-/tmp}/hstex-pdflatex-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
-    "$driver" -output-directory="$work/first" -jobname=first "$source" \
-    >"$work/first.stdout" 2>&1
+run_driver() {
+    report=$1
+    shift
+    if ! HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+        "$driver" "$@" >"$report" 2>&1; then
+        cat "$report" >&2
+        return 1
+    fi
+}
+
+run_driver "$work/first.stdout" -output-directory="$work/first" \
+    -jobname=first "$source"
 
 test -s "$work/first/first.pdf"
 test -s "$work/first/first.log"
 test -s "$work/cache/formats"/*/pdflatex.hfmt
 
-HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
-    "$driver" -output-directory="$work/second" -jobname=second "$source" \
-    >"$work/second.stdout" 2>&1
+run_driver "$work/second.stdout" -output-directory="$work/second" \
+    -jobname=second "$source"
 
 test -s "$work/second/second.pdf"
 test -s "$work/second/second.log"
