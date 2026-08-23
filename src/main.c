@@ -329,11 +329,15 @@ static int make_format(const char *format_path, const char *format_file,
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
+    /* pdftexconfig.tex selects PDF output for the LaTeX format. A TeX82
+       INITEX format such as trip is built from its source alone, leaving the
+       output mode at the engine default. */
     static const char config_name[] = "pdftexconfig.tex";
     if (hstex_engine_push_file(&engine, format_path, error, sizeof(error)) !=
             0 ||
-        hstex_engine_push_input(&engine, config_name, error, sizeof(error)) !=
-            0) {
+        (extended &&
+         hstex_engine_push_input(&engine, config_name, error,
+                                 sizeof(error)) != 0)) {
         (void)fprintf(stderr, "hstex: %s\n", error);
         hstex_engine_destroy(&engine);
         return 1;

@@ -19549,15 +19549,18 @@ static int32_t dvi_rule_dimen(int32_t value, int32_t running)
     return value == HSTEX_RUNNING_DIMEN ? running : value;
 }
 
-/* The reference rounds a real to the nearest whole number, halves away from
-   zero, and holds it inside the range a dimension has. */
+/* The reference rounds a realized glue amount to the nearest whole number,
+   halves away from zero, and bounds its cumulative magnitude at one billion
+   scaled points. See docs/DECISIONS.md, large-glue-realization. */
+#define HSTEX_MAX_REALIZED_GLUE INT32_C(1000000000)
+
 static int32_t rounded_amount(double value)
 {
-    if (value > 2147483647.0) {
-        return 2147483647;
+    if (value > (double)HSTEX_MAX_REALIZED_GLUE) {
+        return HSTEX_MAX_REALIZED_GLUE;
     }
-    if (value < -2147483647.0) {
-        return -2147483647;
+    if (value < -(double)HSTEX_MAX_REALIZED_GLUE) {
+        return -HSTEX_MAX_REALIZED_GLUE;
     }
     return (int32_t)(value >= 0.0 ? (int64_t)(value + 0.5)
                                   : (int64_t)(value - 0.5));
@@ -19568,7 +19571,7 @@ static int32_t rounded_amount(double value)
    come to when it is set, and gives each node the difference: so two glue
    nodes of the same size can take up amounts that differ by one scaled
    point. This is the one place the reference works in floating point. See
-   docs/DECISIONS.md, the-page-description. */
+   docs/DECISIONS.md, large-glue-realization. */
 struct hstex_set_glue {
     int64_t passed;
     int32_t given;

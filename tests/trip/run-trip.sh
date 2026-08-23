@@ -9,6 +9,9 @@
 # is wrong on purpose, and the reference reports each fault and carries on.
 # What this script reports is how far HSTeX gets and whether the faults it
 # reports are the reference's, in the reference's words.
+# A passing second pass also has the same complete DVI payload. The DVI
+# preamble's producer timestamp is deliberately excluded: it records the
+# instant each engine was run, not the document semantics.
 #
 # Both passes are run: the first reads trip.tex from the top and ends at the
 # \dump on line 92, the second loads what that dumped and reads trip.tex
@@ -88,6 +91,7 @@ status2=$?
 set -e
 
 cd "$work"
+failed=0
 report() {
     pass=$1
     grep -E '^(! |> )' "oracle/$pass.log" >"oracle/$pass.faults" || true
@@ -98,11 +102,55 @@ report() {
     if [ -s "hstex/$pass.err" ]; then
         echo "hstex stopped: $(cat "hstex/$pass.err")"
     fi
-    diff "oracle/$pass.faults" "hstex/$pass.faults" || true
+    if ! diff -u "oracle/$pass.faults" "hstex/$pass.faults"; then
+        failed=1
+    fi
+}
+
+compare_dvi() {
+    oracle_dvi=oracle/trip.dvi
+    hstex_dvi=hstex/build/document-output/trip.dvi
+    if [ ! -f "$oracle_dvi" ] || [ ! -f "$hstex_dvi" ]; then
+        echo "missing final-pass DVI output"
+        failed=1
+        return
+    fi
+    oracle_bytes=$(wc -c <"$oracle_dvi")
+    hstex_bytes=$(wc -c <"$hstex_dvi")
+    if [ "$oracle_bytes" -ne "$hstex_bytes" ]; then
+        echo "DVI length differs: oracle $oracle_bytes, hstex $hstex_bytes"
+        failed=1
+        return
+    fi
+    differences=$(cmp -l "$oracle_dvi" "$hstex_dvi" || true)
+    if [ -z "$differences" ]; then
+        echo "final-pass DVI: exact match"
+        return
+    fi
+    # DVI bytes are one-indexed here. Bytes 28..42 are the 15 digits and
+    # separators in the conventional ` TeX output YYYY.MM.DD:HHMM` comment.
+    if printf '%s\n' "$differences" | awk '$1 < 28 || $1 > 42 { exit 1 }'; then
+        echo "final-pass DVI: payload match (preamble timestamp differs)"
+        return
+    fi
+    echo "final-pass DVI differs outside the preamble timestamp:"
+    printf '%s\n' "$differences"
+    failed=1
 }
 
 echo "trip.tex: $(wc -l <trip.tex) lines"
-[ "$status1" -eq 0 ] || echo "hstex pass one exited $status1"
-[ "$status2" -eq 0 ] || echo "hstex pass two exited $status2"
+if [ "$status1" -ne 0 ]; then
+    echo "hstex pass one exited $status1"
+    failed=1
+fi
+if [ "$status2" -ne 0 ]; then
+    echo "hstex pass two exited $status2"
+    failed=1
+fi
 report pass1
 report pass2
+compare_dvi
+if [ "$failed" -ne 0 ]; then
+    exit 1
+fi
+echo "TRIP PASS: both fault transcripts and the final-pass DVI payload match."
