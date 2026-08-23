@@ -32037,6 +32037,19 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 !blocked && here != 0U && letter >= 1U && breaks[letter] != 0U;
             if (wanted && letter == 1U && word.count > 2U && !meets_left) {
                 wanted = false;
+                /* THE RUN THOSE TWO LETTERS MAKE IS STILL A RUN, and the next
+                   break takes up past it. A break that cannot be taken leaves
+                   no discretionary behind, but it does leave the development
+                   standing at the letter after it -- so the next break's run
+                   begins there rather than at its own letter, it replaces
+                   only what stands from there, and the letter in front of it
+                   is already laid down, which leaves the hyphen on its own in
+                   front of the break. See
+                   tests/trip/probes/where-a-run-a-lost-break-made-reaches-to.tex. */
+                if (letter + 1U < word.count) {
+                    settled_item = word.positions[letter + 1U];
+                    settled_item_set = true;
+                }
             }
             size_t previous = wanted ? word.positions[letter - 1U] : 0U;
             bool adjacent = wanted && previous + 1U == index;

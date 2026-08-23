@@ -1,8 +1,12 @@
-% WHAT ONE BREAK IS WEIGHED AS, IN TRIP'S FIRST PASS.
+% WHAT ONE BREAK IS WEIGHED AS, IN TRIP'S FIRST PASS. -- FIXED.
 %
-% This is the last divergence in trip's first pass, and the whole of it. The
-% two engines agree line for line up to `@@27:' and then part company at the
-% breakpoint after `[]11-1':
+% The fault, and the fix, are at the bottom of this file. What is above it is
+% the account of the hunt, kept because most of it is what the next one of
+% these will need.
+%
+% This was the last divergence in trip's first pass, and the whole of it. The
+% two engines agreed line for line up to `@@27:' and then parted company at
+% the breakpoint after `[]11-1':
 %
 %   ref:    @\discretionary via @@0 b=42 p=88 d=9508
 %           @@28: line 1.1- t=9508 -> @@0
@@ -227,3 +231,27 @@
 \emergencystretch=0pt
 \message{[done]}
 \end
+
+% ============================================================================
+% FIXED, and it was none of the things above.
+%
+% A word set again WITHOUT A LEFT BOUNDARY begins with its first two letters
+% in one run, so a break between them cannot be taken. This engine knew that
+% and dropped the break. What it did not do was carry the run those two
+% letters make: the NEXT break in the word went on beginning its own run at
+% its own letter, sixty-five nodes early, replacing 67 nodes where the
+% reference replaces 2 and setting the letter in front of the break again
+% where the reference puts in the hyphen alone.
+%
+% A lost break leaves no discretionary behind, but it does leave the
+% development standing at the letter after it. Four lines where the break is
+% dropped now say so, and trip's first pass comes out clean: 55 differing
+% lines to 15, and every one of the 15 is the pdfTeX banner or the
+% end-of-run statistics. Every `@' line agrees.
+%
+% The badness followed from it exactly as the arithmetic above said it would.
+% The line was a pointful too wide, so it had to shrink where the reference
+% had to stretch, and decent came out where loose belonged.
+%
+% Locked by where-a-run-a-lost-break-made-reaches-to.tex, which draws 26
+% differing lines without the fix.

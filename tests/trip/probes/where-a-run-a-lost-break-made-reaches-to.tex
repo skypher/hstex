@@ -1,0 +1,51 @@
+% WHERE THE RUN A LOST BREAK MADE REACHES TO.
+%
+% A word set again without a left boundary begins with its first two letters
+% in ONE run, so a break between them cannot be taken and no discretionary is
+% drawn for it -- see where-a-rebuilt-run-begins.tex, which settles that much.
+% What that file does not ask is where the run those two letters make ENDS,
+% and the answer decides everything about the NEXT break in the word:
+%
+%   - the run it makes begins where that one left off, at the letter after
+%     the lost break, and not at its own letter;
+%   - so it replaces only what stands from there, not the whole rest of the
+%     word;
+%   - and the letter in front of it is already laid down, so what goes before
+%     the break is the hyphen ON ITS OWN.
+%
+% Measured against pdfTeX with trip's font, whose ligature program puts a
+% whole run of characters between every pair of letters. `\noboundary111'
+% with breaks wanted at both letters draws one discretionary, and it is the
+% SECOND break's:
+%
+%   ref:    \discretionary replacing 2
+%           .\rip -
+%           |\rip 5 (ligature |1)
+%           |\rip 7 (ligature |)
+%
+% This engine drew `replacing 67' with `1', `1 (ligature -)', `7 (ligature |)'
+% in front of the break, because it began the run at the lost break's own
+% letter -- sixty-five nodes early. That is what trip's first pass was
+% weighing when it made the break after `[]11-1' come out at b=2 where the
+% reference has b=42: the line was a pointful too wide, so it had to shrink
+% where the reference had to stretch, and decent came out where loose
+% belonged. See what-a-break-is-weighed-as-in-trips-first-pass.tex.
+%
+% [A] is the case itself. [B] is the same word WITH the boundary, where no
+% break is lost and both discretionaries stand. [C] is four letters, where
+% the run reaches past two lost breaks.
+\catcode`\{=1 \catcode`\}=2
+\tracingonline=1 \showboxbreadth=9999 \showboxdepth=9999
+\font\rip=trip \rip
+\hsize=1pt \parindent=0pt \pretolerance=-1 \tolerance=10000 \hbadness=10000
+\hyphenchar\rip=`-
+\lccode`1=`1 \patterns{111}
+\lefthyphenmin=1 \righthyphenmin=1
+\message{[A a lost break, and where the next one begins]}
+\setbox1=\vbox{\noindent\ \noboundary111 \par}\showbox1
+\message{[B the same word with the boundary, where nothing is lost]}
+\setbox1=\vbox{\noindent\ 111 \par}\showbox1
+\message{[C four letters, without the boundary]}
+\setbox1=\vbox{\noindent\ \noboundary1111 \par}\showbox1
+\message{[done]}
+\end
