@@ -15967,60 +15967,97 @@ static FILE *diagnostic_stream(struct hstex_engine *engine)
     return engine->message_stream == NULL ? stdout : engine->message_stream;
 }
 
+/* The bytes the reference writes for ONE character: the character itself, or
+   `^^' and one more, or `^^' and two lowercase hex digits for the upper half
+   an INITEX will not write as itself. */
+static size_t expand_printed_byte(const struct hstex_engine *engine, char byte,
+                                  char out[4])
+{
+    if (!engine->eight_bit_printing && (unsigned char)byte > 127U) {
+        static const char digits[] = "0123456789abcdef";
+        out[0] = '^';
+        out[1] = '^';
+        out[2] = digits[((unsigned char)byte >> 4) & 0xFU];
+        out[3] = digits[(unsigned char)byte & 0xFU];
+        return 4U;
+    }
+    if (character_needs_caret((uint8_t)byte)) {
+        out[0] = '^';
+        out[1] = '^';
+        out[2] = (char)((uint8_t)byte < 64U ? (uint8_t)byte + 64U
+                                            : (uint8_t)byte - 64U);
+        return 3U;
+    }
+    out[0] = byte;
+    return 1U;
+}
+
+/* One byte to the stream, with the line broken after the seventy-ninth
+   column. `honour_newline' says whether the \newlinechar still ends the line
+   here: the reference turns it OFF while it writes the several bytes that
+   one character comes out as, and leaves it ON where it replays bytes a line
+   has already come out as. */
+static void write_printed_byte(struct hstex_engine *engine, char byte,
+                               bool honour_newline)
+{
+    FILE *out = diagnostic_stream(engine);
+    int32_t newline =
+        engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER];
+    if (honour_newline && newline >= 0 && newline <= 255 &&
+        (unsigned char)byte == (unsigned char)newline) {
+        byte = '\n';
+    }
+    (void)fputc(byte, out);
+    if (byte == '\n') {
+        engine->message_column = 0;
+        return;
+    }
+    ++engine->message_column;
+    if (engine->message_column == HSTEX_PRINT_LINE) {
+        (void)fputc('\n', out);
+        engine->message_column = 0;
+    }
+}
+
 static void print_bytes(struct hstex_engine *engine, const char *text,
                         size_t length)
 {
-    FILE *out = diagnostic_stream(engine);
-    /* Every character the reference prints that is the \\newlinechar ends
+    /* Every character the reference prints that is the \newlinechar ends
        the line instead, whatever it was part of -- a message, a box's
-       contents, the line an error shows, or the engine's own `\\hbox('. See
-       docs/DECISIONS.md, the-newline-character. */
+       contents, the line an error shows, or the engine's own `\hbox('. It
+       is asked BEFORE the character is written out, and not again of the
+       bytes it is written as. See docs/DECISIONS.md, the-newline-character. */
     int32_t newline =
         engine->integer_parameters[HSTEX_INTEGER_NEW_LINE_CHARACTER];
     for (size_t index = 0U; index < length; ++index) {
         char byte = text[index];
         if (newline >= 0 && newline <= 255 &&
             (unsigned char)byte == (unsigned char)newline) {
-            byte = '\n';
-        } else if (!engine->eight_bit_printing &&
-                   (unsigned char)byte > 127U) {
-            /* INITEX writes the whole upper half in ^^ notation, with two
-               lowercase hex digits. A format built with eight-bit printing
-               on writes the byte itself. */
-            static const char digits[] = "0123456789abcdef";
-            char hex[4];
-            hex[0] = '^';
-            hex[1] = '^';
-            hex[2] = digits[((unsigned char)byte >> 4) & 0xFU];
-            hex[3] = digits[(unsigned char)byte & 0xFU];
-            for (size_t at = 0U; at < 4U; ++at) {
-                (void)fputc(hex[at], out);
-                ++engine->message_column;
-                if (engine->message_column == HSTEX_PRINT_LINE) {
-                    (void)fputc('\n', out);
-                    engine->message_column = 0;
-                }
-            }
-            continue;
-        } else if (character_needs_caret((uint8_t)byte)) {
-            /* What cannot be written as itself is written ^^ here, at the
-               one place everything printed goes through, since the
-               reference escapes it in a \message, a \show, a \write and a
-               box's contents alike. What the token list HOLDS is the
-               character itself; this is only how it is shown. */
-            print_bytes(engine, "^^", 2U);
-            byte = (char)((uint8_t)byte < 64U ? (uint8_t)byte + 64U
-                                              : (uint8_t)byte - 64U);
-        }
-        (void)fputc(byte, out);
-        if (byte == '\n') {
-            engine->message_column = 0;
+            write_printed_byte(engine, '\n', false);
             continue;
         }
-        ++engine->message_column;
-        if (engine->message_column == HSTEX_PRINT_LINE) {
-            (void)fputc('\n', out);
-            engine->message_column = 0;
+        char expanded[4];
+        size_t count = expand_printed_byte(engine, byte, expanded);
+        for (size_t at = 0U; at < count; ++at) {
+            write_printed_byte(engine, expanded[at], false);
+        }
+    }
+}
+
+/* THE LINE AN ERROR DRAWS IS REPLAYED, not printed. The reference works out
+   what the line comes out as, holds it, and then writes those characters one
+   at a time with the \newlinechar still in force -- so a `Y' that is the
+   \newlinechar ends the line even where it is the third byte of `^^Y'.
+   trip line 345 is `\newlinechar`Y ... \show^^Y': the `\show' writes `^^Y'
+   whole, and the line the error draws breaks at both of its `Y's. */
+static void print_context_bytes(struct hstex_engine *engine, const char *text,
+                                size_t length)
+{
+    for (size_t index = 0U; index < length; ++index) {
+        char expanded[4];
+        size_t count = expand_printed_byte(engine, text[index], expanded);
+        for (size_t at = 0U; at < count; ++at) {
+            write_printed_byte(engine, expanded[at], true);
         }
     }
 }
@@ -16216,7 +16253,7 @@ static void show_context_lines(struct hstex_engine *engine, const char *tag,
     if (trimmed != 0U) {
         print_text(engine, "...");
     }
-    print_bytes(engine, before + trimmed, before_length);
+    print_context_bytes(engine, before + trimmed, before_length);
     print_line(engine);
     for (size_t index = 0U; index < indent; ++index) {
         print_byte(engine, ' ');
@@ -16237,7 +16274,7 @@ static void show_context_lines(struct hstex_engine *engine, const char *tag,
         }
         after_length = bytes;
     }
-    print_bytes(engine, after, after_length);
+    print_context_bytes(engine, after, after_length);
     if (clipped) {
         print_text(engine, "...");
     }
@@ -16509,8 +16546,12 @@ static void show_read_line(struct hstex_engine *engine)
     }
     /* A stream whose line was never there shows the stream and nothing
        else. */
-    bool empty = mouth->data == NULL || mouth->line_number == 0U;
-    const char *line = empty ? "" : (const char *)mouth->data + mouth->line_start;
+    bool empty = mouth->data == NULL || mouth->line_buffer == NULL ||
+                 mouth->line_number == 0U;
+    /* The mouth's own copy of the line, not the file's bytes: collapsing
+       `^^' notation rewrites that copy, and what an error draws is what was
+       collapsed. See struct hstex_mouth. */
+    const char *line = empty ? "" : (const char *)mouth->line_buffer;
     size_t length = empty ? 0U : mouth->line_content_length;
     size_t cursor = empty ? 0U : mouth->line_cursor;
     if (cursor > length) {
@@ -16585,8 +16626,9 @@ static void show_error_context(struct hstex_engine *engine)
     /* A line that has been read to its end is still the line the error is
        on: the mouth keeps where it stood until it loads the next one, so
        what is shown is that line with the reading at its end. */
-    const char *line = (const char *)mouth->data + mouth->line_start;
-    size_t length = mouth->line_content_length;
+    const char *line =
+        mouth->line_buffer == NULL ? "" : (const char *)mouth->line_buffer;
+    size_t length = mouth->line_buffer == NULL ? 0U : mouth->line_content_length;
     size_t cursor = mouth->line_cursor;
     unsigned number = (unsigned)mouth->line_number;
     /* A FILE JUST OPENED IS ALREADY ON ITS FIRST LINE. The reference reads

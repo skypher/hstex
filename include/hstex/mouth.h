@@ -37,6 +37,17 @@ struct hstex_mouth {
     size_t length;
     size_t next_line_offset;
     size_t line_start;
+    /* THE LINE IS HELD AS A COPY, NOT AS A WINDOW ON THE FILE, because
+       collapsing `^^' notation rewrites it. The reference reduces `^^M' to
+       one character in its own buffer and shifts the rest of the line down
+       over the two bytes that go; everything downstream -- above all the
+       line an error draws -- then sees what was collapsed, not what the
+       file holds. A window on `data' could not be written to, so a line
+       that collapsed anything would draw its raw bytes instead: trip line
+       429 sets `q' to superscript and writes ^^M as `qq1qM', which the
+       reference draws as `^^M'. See tests/trip/probes. */
+    uint8_t *line_buffer;
+    size_t line_capacity;
     size_t line_content_length;
     size_t line_cursor;
     size_t line_raw_length;

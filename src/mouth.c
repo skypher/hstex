@@ -45,10 +45,61 @@ static uint8_t hexadecimal_value(uint8_t character)
 
 static uint8_t raw_character(const struct hstex_mouth *mouth, size_t index)
 {
-    if (index < mouth->line_content_length) {
-        return mouth->data[mouth->line_start + index];
+    if (index < mouth->line_raw_length) {
+        return mouth->line_buffer[index];
     }
     return mouth->end_line_byte;
+}
+
+static int reserve_line(struct hstex_mouth *mouth, size_t required, char *error,
+                        size_t error_capacity)
+{
+    if (required <= mouth->line_capacity) {
+        return 0;
+    }
+    size_t capacity = mouth->line_capacity == 0U ? 128U : mouth->line_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity, "input line scratch overflow");
+        }
+        capacity *= 2U;
+    }
+    uint8_t *allocation = realloc(mouth->line_buffer, capacity);
+    if (allocation == NULL) {
+        return set_error(error, error_capacity,
+                         "input line scratch allocation failed");
+    }
+    mouth->line_buffer = allocation;
+    mouth->line_capacity = capacity;
+    return 0;
+}
+
+/* WHAT A COLLAPSE DOES TO THE LINE. The reference writes the character the
+   notation stood for where the first `^' was and shifts what follows down
+   over the bytes that go, so the line an error draws afterwards shows the
+   character and not the notation it was written with. `gone' is two for
+   `^^X' and three for `^^xx'. */
+static void collapse_line(struct hstex_mouth *mouth, size_t index,
+                          uint8_t value, size_t gone)
+{
+    mouth->line_buffer[index] = value;
+    size_t tail = index + 1U + gone;
+    if (tail < mouth->line_raw_length) {
+        memmove(mouth->line_buffer + index + 1U, mouth->line_buffer + tail,
+                mouth->line_raw_length - tail);
+    }
+    mouth->line_raw_length -= gone;
+    /* What the line SHOWS stops short of the end-of-line character while
+       that is still what stands last. A collapse that ate it leaves the
+       whole of what is left to show -- which is what the reference does
+       when `buffer[limit]' is no longer the end-of-line character. */
+    mouth->line_content_length =
+        mouth->has_end_line_byte && mouth->line_raw_length != 0U &&
+                mouth->line_buffer[mouth->line_raw_length - 1U] ==
+                    mouth->end_line_byte
+            ? mouth->line_raw_length - 1U
+            : mouth->line_raw_length;
+    mouth->line_cursor = index + 1U;
 }
 
 static struct hstex_source_location raw_location(const struct hstex_mouth *mouth,
@@ -61,15 +112,17 @@ static struct hstex_source_location raw_location(const struct hstex_mouth *mouth
     return location;
 }
 
-static bool load_line(struct hstex_mouth *mouth, char *error,
-                      size_t error_capacity)
+/* -1 if the line could not be taken, 0 at the end of the input, 1 if a line
+   is now loaded. */
+static int load_line(struct hstex_mouth *mouth, char *error,
+                     size_t error_capacity)
 {
     if (mouth->next_line_offset >= mouth->length) {
-        return false;
+        return 0;
     }
     if (mouth->line_number == UINT32_MAX) {
-        (void)set_error(error, error_capacity, "input has more than 2^32-1 lines");
-        return false;
+        return set_error(error, error_capacity,
+                         "input has more than 2^32-1 lines");
     }
 
     size_t start = mouth->next_line_offset;
@@ -90,25 +143,47 @@ static bool load_line(struct hstex_mouth *mouth, char *error,
         --end;
     }
 
+    int32_t end_line_character = mouth->lexical_state->end_line_character;
+    bool has_end_line_byte = end_line_character >= 0 && end_line_character <= 255;
+    size_t content = end - start;
+    size_t raw = content + (has_end_line_byte ? 1U : 0U);
+    /* The end-of-line character is held IN the line, where the reference
+       holds it, so that `^^' notation may collapse across it. */
+    if (reserve_line(mouth, raw == 0U ? 1U : raw, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (content != 0U) {
+        memcpy(mouth->line_buffer, mouth->data + start, content);
+    }
+    if (has_end_line_byte) {
+        mouth->line_buffer[content] = (uint8_t)end_line_character;
+    }
+
     mouth->next_line_offset = next;
     mouth->line_start = start;
-    mouth->line_content_length = end - start;
+    mouth->line_content_length = content;
     mouth->line_cursor = 0U;
     ++mouth->line_number;
     mouth->state = HSTEX_MOUTH_NEW_LINE;
-    int32_t end_line_character = mouth->lexical_state->end_line_character;
-    mouth->has_end_line_byte = end_line_character >= 0 && end_line_character <= 255;
-    mouth->end_line_byte = mouth->has_end_line_byte
-                               ? (uint8_t)end_line_character
-                               : 0U;
-    mouth->line_raw_length = mouth->line_content_length +
-                             (mouth->has_end_line_byte ? 1U : 0U);
+    mouth->has_end_line_byte = has_end_line_byte;
+    mouth->end_line_byte = has_end_line_byte ? (uint8_t)end_line_character : 0U;
+    mouth->line_raw_length = raw;
     mouth->line_loaded = true;
-    return true;
+    return 1;
 }
 
+/* WHERE A COLLAPSE IS WRITTEN BACK. The reference reduces `^^' notation in
+   two places and they do not behave alike. Reading a control sequence's NAME
+   it rewrites the line -- it has to, the name being built from bytes that
+   must end up next to each other -- so `\catcode`\qq1qM' leaves `^^M'
+   standing where the notation was. Reading an ordinary character it only
+   steps over the notation and leaves the line alone, so `By ^^p' still says
+   `^^p' after the `0' has been read from it. An error draws the line either
+   way, which is how the difference shows. `rewrite' says which of the two
+   this reading is. */
 static bool read_logical_character(struct hstex_mouth *mouth,
-                                   struct logical_character *character)
+                                   struct logical_character *character,
+                                   bool rewrite)
 {
     if (mouth->line_cursor >= mouth->line_raw_length) {
         return false;
@@ -129,19 +204,28 @@ static bool read_logical_character(struct hstex_mouth *mouth,
         if (third >= UINT8_C(128)) {
             break;
         }
+        size_t gone = 2U;
         if (mouth->line_cursor + 2U < mouth->line_raw_length &&
             is_lower_hexadecimal(third)) {
             uint8_t fourth = raw_character(mouth, mouth->line_cursor + 2U);
             if (is_lower_hexadecimal(fourth)) {
                 current = (uint8_t)((hexadecimal_value(third) << 4U) |
                                     hexadecimal_value(fourth));
-                mouth->line_cursor += 3U;
-                continue;
+                gone = 3U;
             }
         }
-        current = third < UINT8_C(64) ? (uint8_t)(third + UINT8_C(64))
-                                      : (uint8_t)(third - UINT8_C(64));
-        mouth->line_cursor += 2U;
+        if (gone == 2U) {
+            current = third < UINT8_C(64) ? (uint8_t)(third + UINT8_C(64))
+                                          : (uint8_t)(third - UINT8_C(64));
+        }
+        if (rewrite) {
+            /* The line keeps what was collapsed, and the walk goes on from
+               just past it -- so `qq1qM' becomes `qM' and then the one
+               character that is, exactly as the reference reduces it. */
+            collapse_line(mouth, first_index, current, gone);
+        } else {
+            mouth->line_cursor += gone;
+        }
     }
     character->value = current;
     return true;
@@ -188,7 +272,7 @@ static enum hstex_mouth_result scan_control_sequence(
 {
     mouth->name_length = 0U;
     struct logical_character first;
-    if (!read_logical_character(mouth, &first)) {
+    if (!read_logical_character(mouth, &first, true)) {
         hstex_cs_id identifier = 0U;
         if (hstex_symbol_intern(&mouth->lexical_state->symbols,
                                 HSTEX_SYMBOL_REGULAR, NULL, 0U, &identifier,
@@ -209,7 +293,7 @@ static enum hstex_mouth_result scan_control_sequence(
         for (;;) {
             size_t saved_cursor = mouth->line_cursor;
             struct logical_character next;
-            if (!read_logical_character(mouth, &next)) {
+            if (!read_logical_character(mouth, &next, true)) {
                 break;
             }
             uint8_t next_category = hstex_catcode_get(
@@ -260,6 +344,7 @@ void hstex_mouth_destroy(struct hstex_mouth *mouth)
         return;
     }
     free(mouth->name_scratch);
+    free(mouth->line_buffer);
     memset(mouth, 0, sizeof(*mouth));
 }
 
@@ -277,11 +362,11 @@ enum hstex_mouth_result hstex_mouth_next(
 
     for (;;) {
         if (!mouth->line_loaded) {
-            if (!load_line(mouth, error, error_capacity)) {
-                if (mouth->line_number == UINT32_MAX &&
-                    mouth->next_line_offset < mouth->length) {
-                    return HSTEX_MOUTH_ERROR;
-                }
+            int loaded = load_line(mouth, error, error_capacity);
+            if (loaded < 0) {
+                return HSTEX_MOUTH_ERROR;
+            }
+            if (loaded == 0) {
                 return HSTEX_MOUTH_EOF;
             }
         }
@@ -291,7 +376,7 @@ enum hstex_mouth_result hstex_mouth_next(
         }
 
         struct logical_character character;
-        if (!read_logical_character(mouth, &character)) {
+        if (!read_logical_character(mouth, &character, false)) {
             mouth->line_loaded = false;
             continue;
         }

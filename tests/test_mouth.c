@@ -294,10 +294,67 @@ static int test_funny_space_and_invalid(void)
     return failed;
 }
 
+/* What the line HOLDS after a collapse, which is not the same question as
+   what was read from it. The reference reduces `^^' notation in the line
+   itself while it reads a control sequence's NAME, and only steps over the
+   notation while it reads an ordinary character -- so the line an error
+   draws afterwards shows the one and not the other. */
+static int expect_line(struct fixture *fixture, const char *expected)
+{
+    size_t length = strlen(expected);
+    if (fixture->mouth.line_content_length != length ||
+        fixture->mouth.line_buffer == NULL ||
+        memcmp(fixture->mouth.line_buffer, expected, length) != 0) {
+        (void)fprintf(stderr, "expected line \"%s\", got \"%.*s\"\n", expected,
+                      (int)fixture->mouth.line_content_length,
+                      fixture->mouth.line_buffer == NULL
+                          ? ""
+                          : (const char *)fixture->mouth.line_buffer);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_caret_rewrites_only_a_name(void)
+{
+    /* `qq!' is `^^!' with `q' for the superscript, and comes to `a'. */
+    static const uint8_t name[] = "\\qq!x";
+    struct fixture fixture;
+    if (fixture_init(&fixture, name, sizeof(name) - 1U) != 0) {
+        return 1;
+    }
+    (void)hstex_catcode_set(&fixture.lexical_state.catcodes, (uint32_t)'q',
+                            HSTEX_CAT_SUPERSCRIPT);
+    static const uint8_t ax[] = {'a', 'x'};
+    int failed = expect_control(&fixture, HSTEX_SYMBOL_REGULAR, ax, sizeof(ax)) ||
+                 /* The name was read FROM the line, so the line kept it. */
+                 expect_line(&fixture, "\\ax");
+    fixture_destroy(&fixture);
+    if (failed != 0) {
+        return 1;
+    }
+
+    static const uint8_t ordinary[] = "Bqq!x";
+    struct fixture second;
+    if (fixture_init(&second, ordinary, sizeof(ordinary) - 1U) != 0) {
+        return 1;
+    }
+    (void)hstex_catcode_set(&second.lexical_state.catcodes, (uint32_t)'q',
+                            HSTEX_CAT_SUPERSCRIPT);
+    failed = expect_character(&second, HSTEX_CAT_LETTER, (uint8_t)'B') ||
+             expect_character(&second, HSTEX_CAT_LETTER, (uint8_t)'a') ||
+             /* The same `a' was read, and the line is untouched. */
+             expect_line(&second, "Bqq!x") ||
+             expect_character(&second, HSTEX_CAT_LETTER, (uint8_t)'x');
+    fixture_destroy(&second);
+    return failed;
+}
+
 int main(void)
 {
     return test_state_machine() || test_controls_and_active() ||
            test_mutable_catcodes() || test_caret_and_line_endings() ||
+           test_caret_rewrites_only_a_name() ||
            test_suppressed_and_embedded_end_lines() ||
            test_funny_space_and_invalid();
 }
