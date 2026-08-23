@@ -4,6 +4,10 @@
 
 set -eu
 
+if [ "${HSTEX_TEST_PDFLATEX_DRIVER:-0}" != 1 ]; then
+    exit 77
+fi
+
 driver=$1
 engine=$2
 source=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/smoke.tex

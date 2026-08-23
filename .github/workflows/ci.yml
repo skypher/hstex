@@ -72,6 +72,14 @@ jobs:
         if: runner.os == 'Linux'
         run: meson test -C build --no-rebuild --print-errorlogs
 
+      - name: Test pdflatex driver
+        if: matrix.runner == 'ubuntu-24.04'
+        env:
+          HSTEX_TEST_PDFLATEX_DRIVER: '1'
+        run: >-
+          meson test -C build --no-rebuild --print-errorlogs
+          pdflatex_driver
+
       # The engine test reads real font metrics, which it finds through
       # kpsewhich: it needs a TeX installation, and the macOS images carry
       # none. The rest of the suite is self-contained and runs everywhere.

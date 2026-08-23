@@ -37,7 +37,7 @@ jobs:
 
       - name: Verify release binaries
         run: |
-          meson test -C build-release --print-errorlogs
+          HSTEX_TEST_PDFLATEX_DRIVER=1 meson test -C build-release --print-errorlogs
           tests/trip/run-trip.sh ./build-release/hstex
           tests/corpus/run-corpus.sh --strict ./build-release/hstex
           HSTEX_ENGINE="$GITHUB_WORKSPACE/build-release/hstex" \

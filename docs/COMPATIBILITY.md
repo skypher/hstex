@@ -80,3 +80,8 @@ The current supported semantic surface is the one exercised by the release
 tests and public corpus. The command-line driver is intentionally strict
 outside the table above so build systems do not mistake an ignored switch for
 pdflatex compatibility.
+
+The native-format smoke gate currently uses Ubuntu 24.04's TeX Live 2023
+installation. The Ubuntu 22.04 TeX Live 2021 `latex.ltx` enters a document
+transition while creating its format, so it is rejected rather than cached as
+a valid HSTeX native format.

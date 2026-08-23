@@ -38,9 +38,11 @@ work=$(pwd)
 
 TRIP_TEX_SHA=15f15c2ca1470085299056ec89dea5f51e9fe9303ef25581b2f2eaf7809ae97b
 TRIP_PL_SHA=93b38cc794f0c4a462667e25ef34a83552cbcdd62a42b10f739a431166525a79
-# `mirrors.ctan.org` can select a mirror that rejects GitHub-hosted runners
-# with HTTP 403.  CTAN's archive endpoint serves the same canonical files.
-base=https://www.ctan.org/tex-archive/systems/knuth/dist/tex
+# CTAN's redirector and archive endpoint can each reject a GitHub-hosted
+# runner with HTTP 403. Both direct mirrors below are checked against the
+# pinned digest, so availability decides only where the bytes are fetched.
+base_primary=https://ctan.math.illinois.edu/systems/knuth/dist/tex
+base_fallback=https://mirrors.ibiblio.org/CTAN/systems/knuth/dist/tex
 
 fetch() {
     name=$1
@@ -48,11 +50,20 @@ fetch() {
     if [ -f "$name" ] && printf '%s  %s\n' "$want" "$name" | sha256sum -c - >/dev/null 2>&1; then
         return 0
     fi
-    # Retried: the host is sometimes briefly unreachable, and what the
-    # file is remains settled by the digest checked below.
-    curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
-        --connect-timeout 20 -o "$name" "$base/$name"
-    printf '%s  %s\n' "$want" "$name" | sha256sum -c - >/dev/null
+    temporary=$name.fetch.$$
+    # Both hosts are direct CTAN mirrors. A selected mirror may refuse the
+    # runner, but a successful transfer is admitted only by the pinned hash.
+    for base in "$base_primary" "$base_fallback"; do
+        if curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
+            --connect-timeout 20 -o "$temporary" "$base/$name" &&
+            printf '%s  %s\n' "$want" "$temporary" |
+                sha256sum -c - >/dev/null; then
+            mv -f "$temporary" "$name"
+            return 0
+        fi
+    done
+    rm -f "$temporary"
+    return 1
 }
 
 fetch trip.tex "$TRIP_TEX_SHA"
