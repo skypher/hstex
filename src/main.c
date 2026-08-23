@@ -32,9 +32,10 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --run-latex LATEX_LTX DOCUMENT\n"
                   "       %s --make-format LATEX_LTX FORMAT\n"
                   "       %s --make-ini-format SOURCE FORMAT\n"
-                  "       %s --format FORMAT DOCUMENT\n",
+                  "       %s --format FORMAT DOCUMENT\n"
+                  "       %s --format-output FORMAT DOCUMENT DIRECTORY [JOBNAME]\n",
                   program, program, program, program, program, program, program,
-                  program, program, program);
+                  program, program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -363,7 +364,9 @@ static int make_format(const char *format_path, const char *format_file,
 }
 
 static int run_document_from_format(const char *format_file,
-                                    const char *document_path)
+                                    const char *document_path,
+                                    const char *output_directory,
+                                    const char *job_name)
 {
     char error[512] = {0};
     struct hstex_engine engine;
@@ -371,7 +374,6 @@ static int run_document_from_format(const char *format_file,
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
-    static const char output_directory[] = "build/document-output";
     if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
         hstex_engine_set_output_directory(&engine, output_directory, error,
                                           sizeof(error)) != 0 ||
@@ -385,6 +387,13 @@ static int run_document_from_format(const char *format_file,
     }
     if (hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) !=
         0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    if (job_name != NULL &&
+        hstex_engine_set_job_name(&engine, job_name, error, sizeof(error)) !=
+            0) {
         (void)fprintf(stderr, "hstex: %s\n", error);
         hstex_engine_destroy(&engine);
         return 1;
@@ -518,7 +527,15 @@ int main(int argument_count, char **arguments)
         return make_format(arguments[2], arguments[3], false);
     }
     if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
-        return run_document_from_format(arguments[2], arguments[3]);
+        return run_document_from_format(arguments[2], arguments[3],
+                                        "build/document-output", NULL);
+    }
+    if ((argument_count == 5 || argument_count == 6) &&
+        strcmp(arguments[1], "--format-output") == 0) {
+        return run_document_from_format(arguments[2], arguments[3],
+                                        arguments[4],
+                                        argument_count == 6 ? arguments[5]
+                                                            : NULL);
     }
 
     print_usage(stderr, arguments[0]);

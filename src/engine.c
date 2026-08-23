@@ -3548,6 +3548,21 @@ int hstex_engine_set_output_directory(struct hstex_engine *engine,
     return 0;
 }
 
+int hstex_engine_set_job_name(struct hstex_engine *engine, const char *name,
+                              char *error, size_t error_capacity)
+{
+    if (engine == NULL || name == NULL || name[0] == '\0') {
+        return set_error(error, error_capacity, "invalid job-name request");
+    }
+    char *copy = strdup(name);
+    if (copy == NULL) {
+        return set_error(error, error_capacity, "job-name allocation failed");
+    }
+    free(engine->job_name);
+    engine->job_name = copy;
+    return 0;
+}
+
 /* The reference says which file it is reading, in brackets that close when
    the file ends: `(name' where it opens and `)' where it runs out. The name
    is the one it was found under, which for a file in the current directory

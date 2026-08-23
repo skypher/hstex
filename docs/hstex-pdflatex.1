@@ -1,0 +1,62 @@
+.TH HSTEX-PDFLATEX 1
+.SH NAME
+hstex-pdflatex \- run a LaTeX document with the HSTeX engine
+.SH SYNOPSIS
+.B hstex-pdflatex
+.RI [ options ] " document.tex"
+.SH DESCRIPTION
+.B hstex-pdflatex
+is the compatibility front end for HSTeX. It uses the installed TeX Live or
+MacTeX tree for LaTeX package and font inputs, builds an HSTeX-native format,
+and runs the document from that format. It does not read pdfTeX format dumps.
+.SH OPTIONS
+.TP
+.BI -output-directory= dir
+Write output files below
+.IR dir .
+The long form is also accepted.
+.TP
+.BI -jobname= name
+Use
+.I name
+for output file names and for
+.BR \e jobname .
+The long form is also accepted.
+.TP
+.B -interaction=errorstopmode
+Select the current HSTeX interaction mode.
+.TP
+.BR -halt-on-error , " " -file-line-error , " " -no-shell-escape
+Supported compatibility options.
+.TP
+.B -output-format=pdf
+Select PDF output.
+.TP
+.BI --format-cache= dir
+Store native LaTeX formats below
+.IR dir .
+.TP
+.B --rebuild-format
+Rebuild the native LaTeX format even when a matching cache entry exists.
+.SH ENVIRONMENT
+.TP
+.B HSTEX_CACHE_DIR
+The default root of the native format cache.
+.TP
+.B HSTEX_ENGINE
+The HSTeX executable to invoke. This is useful for testing an unpacked build.
+.SH EXIT STATUS
+The command exits with 2 for an unsupported option or invalid invocation. An
+engine or input failure has a nonzero engine status.
+.SH FILES
+.TP
+.I $XDG_CACHE_HOME/hstex
+Default native format cache when
+.B XDG_CACHE_HOME
+is set.
+.TP
+.I ~/.cache/hstex
+Default native format cache otherwise.
+.SH SEE ALSO
+.IR hstex (1),
+.IR kpsewhich (1)

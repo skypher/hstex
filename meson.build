@@ -82,6 +82,20 @@ hstex = executable(
   install: true,
 )
 
+hstex_pdflatex = executable(
+  'hstex-pdflatex',
+  'src/pdflatex.c',
+  include_directories: generated_include,
+  install: true,
+)
+
+pdflatex_driver_test = find_program('tests/pdflatex/run-driver.sh')
+test(
+  'pdflatex_driver',
+  pdflatex_driver_test,
+  args: [hstex_pdflatex.full_path(), hstex.full_path()],
+)
+
 scan_test = executable(
   'test_scan',
   'tests/test_scan.c',
@@ -158,4 +172,17 @@ install_headers(
   'include/hstex/symbol.h',
   'include/hstex/token.h',
   subdir: 'hstex',
+)
+
+install_data(
+  'README.md',
+  'CLEANROOM.md',
+  'docs/COMPATIBILITY.md',
+  'docs/RELEASING.md',
+  install_dir: get_option('datadir') / 'doc' / meson.project_name(),
+)
+
+install_data(
+  'docs/hstex-pdflatex.1',
+  install_dir: get_option('mandir') / 'man1',
 )

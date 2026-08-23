@@ -118,31 +118,35 @@ if [ -f "$build/build.ninja" ]; then
 else
   meson setup "$build" "${configure[@]}" >/dev/null
 fi
-meson compile -C "$build" hstex
+meson compile -C "$build" hstex hstex-pdflatex
 
-binary="$build/hstex"
+binaries=("$build/hstex" "$build/hstex-pdflatex")
 
 # What was asked for is the absence of a dependency, so it is the binary
 # that has to say so, not the flags that went in. A static link has no
 # interpreter to name and no library to need.
-if readelf -lW "$binary" | grep -q INTERP; then
-  echo "tools/build-static.sh: $binary still asks for an interpreter" >&2
-  exit 1
-fi
-if readelf -dW "$binary" 2>/dev/null | grep -q NEEDED; then
-  echo "tools/build-static.sh: $binary still needs a shared library" >&2
-  exit 1
-fi
+for binary in "${binaries[@]}"; do
+  if readelf -lW "$binary" | grep -q INTERP; then
+    echo "tools/build-static.sh: $binary still asks for an interpreter" >&2
+    exit 1
+  fi
+  if readelf -dW "$binary" 2>/dev/null | grep -q NEEDED; then
+    echo "tools/build-static.sh: $binary still needs a shared library" >&2
+    exit 1
+  fi
+done
 
 # The same again for the allocator: whether it was linked in is a
 # question for the binary, which says so when asked to be verbose.
 if [ "$mimalloc" -eq 1 ]; then
-  if ! MIMALLOC_VERBOSE=1 "$binary" --version 2>&1 >/dev/null |
+  if ! MIMALLOC_VERBOSE=1 "$build/hstex" --version 2>&1 >/dev/null |
       grep -q '^mimalloc:'; then
-    echo "tools/build-static.sh: $binary is not serving malloc from mimalloc" >&2
+    echo "tools/build-static.sh: $build/hstex is not serving malloc from mimalloc" >&2
     exit 1
   fi
   libc="$libc+mimalloc"
 fi
 
-echo "built $binary ($libc, $(du -h "$binary" | cut -f1), $("$binary" --version))"
+for binary in "${binaries[@]}"; do
+  echo "built $binary ($libc, $(du -h "$binary" | cut -f1), $("$binary" --version))"
+done

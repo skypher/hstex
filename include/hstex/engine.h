@@ -2433,6 +2433,10 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
 int hstex_engine_set_output_directory(struct hstex_engine *engine,
                                       const char *path, char *error,
                                       size_t error_capacity);
+/* Set the name from which output files and \jobname are derived.  This is a
+   front-end choice, made only after a format has begun a document job. */
+int hstex_engine_set_job_name(struct hstex_engine *engine, const char *name,
+                              char *error, size_t error_capacity);
 int hstex_engine_hyphenate_word(struct hstex_engine *engine,
                                 int32_t language, const uint8_t *word,
                                 size_t length, uint8_t *break_before,

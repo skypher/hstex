@@ -1,0 +1,72 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+  attestations: write
+
+jobs:
+  linux-x86-64:
+    name: Linux x86-64 release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate tag and install tools
+        run: |
+          version=$(sed -n "s/  version: '\(.*\)',/\1/p" meson.build)
+          test "$GITHUB_REF_NAME" = "v$version"
+          test -f LICENSE
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl musl-tools ninja-build \
+            python3-venv texlive-latex-base texlive-fonts-recommended
+          python3 -m venv "$HOME/meson"
+          "$HOME/meson/bin/pip" install --quiet --upgrade meson
+          echo "$HOME/meson/bin" >> "$GITHUB_PATH"
+          echo "HSTEX_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build static release binaries
+        run: tools/build-static.sh --musl build-release
+
+      - name: Verify release binaries
+        run: |
+          meson test -C build-release --print-errorlogs
+          tests/trip/run-trip.sh ./build-release/hstex
+          tests/corpus/run-corpus.sh --strict ./build-release/hstex
+          HSTEX_ENGINE="$GITHUB_WORKSPACE/build-release/hstex" \
+            ./build-release/hstex-pdflatex --version
+
+      - name: Build release assets
+        run: tools/package-release.sh build-release dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          file: dist/hstex-${{ env.HSTEX_VERSION }}-linux-x86_64.tar.gz
+          output-file: dist/hstex-${{ env.HSTEX_VERSION }}-linux-x86_64.spdx.json
+          artifact-name: hstex-${{ env.HSTEX_VERSION }}-linux-x86_64-sbom
+
+      - name: Attach release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.deb \
+            dist/SHA256SUMS dist/*.spdx.json
+
+      - name: Attest release archive and SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/hstex-${{ env.HSTEX_VERSION }}-linux-x86_64.tar.gz
+          sbom-path: dist/hstex-${{ env.HSTEX_VERSION }}-linux-x86_64.spdx.json

@@ -1,0 +1,11 @@
+Package: hstex
+Version: @VERSION@
+Section: tex
+Priority: optional
+Architecture: amd64
+Depends: texlive-latex-base
+Maintainer: HSTeX maintainers <maintainers@hstex.invalid>
+Description: clean-room, low-latency pdfTeX-compatible engine
+ HSTeX supplies a native typesetting engine and a pdflatex-compatible
+ command-line overlay. It reuses the locally installed TeX Live package and
+ font trees through the public kpsewhich interface.

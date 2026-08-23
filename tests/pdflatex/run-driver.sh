@@ -1,0 +1,30 @@
+#!/bin/sh
+# Exercise the installed-facing driver, including its native format cache and
+# conventional output-directory/job-name behavior.
+
+set -eu
+
+driver=$1
+engine=$2
+source=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/smoke.tex
+work=$(mktemp -d "${TMPDIR:-/tmp}/hstex-pdflatex-test.XXXXXX")
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+    "$driver" -output-directory="$work/first" -jobname=first "$source" \
+    >"$work/first.stdout" 2>&1
+
+test -s "$work/first/first.pdf"
+test -s "$work/first/first.log"
+test -s "$work/cache/formats"/*/pdflatex.hfmt
+
+HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+    "$driver" -output-directory="$work/second" -jobname=second "$source" \
+    >"$work/second.stdout" 2>&1
+
+test -s "$work/second/second.pdf"
+test -s "$work/second/second.log"
+if grep -q 'building native format' "$work/second.stdout"; then
+    echo "driver rebuilt an unchanged native format" >&2
+    exit 1
+fi
