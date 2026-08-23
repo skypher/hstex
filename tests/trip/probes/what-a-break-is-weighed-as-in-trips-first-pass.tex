@@ -24,12 +24,43 @@
 % `@\par via' that follow them, are the ones that would have been reached
 % through a class it never made. One badness is the whole fault.
 %
-% HOW MUCH IT MATTERS, WHICH IS LESS THAN IT LOOKS. Every substantive
-% difference in that pass is a `@' line -- the exploration trace and nothing
-% else. The `\showbox0' trip draws afterwards agrees box for box, the
-% eighteen diagnostics agree in the reference's own words, and the second
-% pass reads the same format. So the two engines CHOOSE the same breaks and
-% set the same material; they differ over what they considered on the way.
+% HOW MUCH IT MATTERS -- AND THE ANSWER `LESS THAN IT LOOKS' WAS WRONG.
+% It was recorded here that the `\showbox0' trip draws afterwards agrees box
+% for box, and therefore that the two engines set the same material and
+% differ only over what they considered on the way. THAT DOES NOT FOLLOW.
+% trip line 69 sets `\showboxbreadth 55', and the paragraph in question has
+% 182 nodes: the display stops at `....etc.' after about 55 items of that
+% hbox, and the discretionary whose weighing diverges is node 112 -- well
+% past the cut. The two displays are identical AS FAR AS THEY GO and say
+% nothing whatever about the rest. The eighteen diagnostics do still agree,
+% and the second pass does still read the same format, so the divergence is
+% bounded; but it is NOT established to be trace-only, and it should not be
+% assumed to be.
+%
+% WHAT THE BADNESS IS WORTH, MEASURED. Instrumenting the trial line shows
+% every other component of it is nought -- no background, no entry width
+% from a previous break, no kerns -- so the width is the material plus the
+% discretionary's pre-break text. This engine makes that 65531 against a
+% goal of 0, so the line must SHRINK: decent, b=2. The reference's fitness
+% class says it stretches, since a shrinking line can only come out tight or
+% decent and never loose, and `line 1.1-' is loose.
+%
+% The size of the difference falls out of two breaks through the same
+% discretionary. The reference weighs one of them at b=6396, which pins its
+% width to -524288 exactly; this engine has -65538 there, so the difference
+% is -458750 sp, or 7pt less two scaled points. Carrying that same figure to
+% the break `via @@0' -- where this engine has 65531 -- gives -393219, and
+% glue_badness(393219, 524156) is 42 EXACTLY, which is what the reference
+% draws. One number explains both.
+%
+% WHERE IT IS NOT: not the line width, which is nought for both (\hsize is
+% at its INITEX default through trip's first pass, and a wrong goal would
+% move every break's badness rather than this one's). Not the material
+% before node 33, since the two breaks that pin the figure start at 0 and at
+% 33 and show the SAME difference. Not the first 55 items, which the box
+% display does cover and which agree. What is left is nodes 56 to 112 and
+% the pre-break text of the discretionary at 112 -- which this engine builds
+% as `1', `1', `7', every one of them nought wide.
 %
 % WHAT IT IS NOT. Each of these was written down and found to agree exactly,
 % in trip's own font, at line widths where the badness comes out finite:
@@ -79,7 +110,10 @@
 % language 255 and for 256.
 %
 % (The reproduction above is a recipe rather than a file: trip.tex is fetched
-% and pinned, never vendored, so nothing here may carry its lines.)
+% and pinned, never vendored, so nothing here may carry its lines. NOTE: that
+% recipe has since DRIFTED and no longer draws this fault -- under it the two
+% engines now differ at a penalty of 89 rather than 88, which is a different
+% discretionary. It needs deriving again before it is trusted.)
 %
 % WHAT IS DRAWN HERE is the set that agrees, kept so that the next attempt
 % starts past it rather than at the diff again.
