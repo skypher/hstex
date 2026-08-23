@@ -1,0 +1,19 @@
+% Where the blank line above an error comes from, and where it does not. A
+% trace goes to the LOG alone while \tracingonline is not positive, so the
+% terminal is left standing wherever the last thing written to it left it.
+% The error's print_nl asks about every stream the selector names, finds the
+% terminal mid-line, and breaks -- and the break lands in the log as well.
+%
+% [A] \message leaves the terminal mid-line, the traces are log-only, and the
+%     error draws a blank line above itself.
+% [B] \batchmode takes the terminal away for the WHOLE RUN, so there is
+%     nothing to find mid-line and the error draws no blank line, though
+%     everything else about the two is the same.
+%
+% Measured against pdfTeX: both halves agree line for line.
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\nonstopmode\tracingonline=0 \tracingcommands=1
+\message{[A the terminal is left mid-line]}\count1=\relax
+\batchmode
+\message{[B the terminal is not there at all]}\count2=\relax
+\end

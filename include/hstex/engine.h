@@ -2247,6 +2247,22 @@ struct hstex_engine {
        distance from what is already there; see docs/DECISIONS.md,
        the-print-line. */
     int32_t message_column;
+    /* THE COLUMN A TERMINAL WOULD STAND AT, beside the one the log does.
+       Nothing here writes to a terminal -- the message stream stands for the
+       log and is always written -- but the reference's print_nl asks about
+       BOTH before it decides whether to break the line, and a diagnostic
+       written while \tracingonline is not positive goes to the log alone
+       and leaves the terminal where it was. That is what puts a blank line
+       in front of an error that follows a trace: the log is at column
+       nought and the terminal is not, so print_nl breaks anyway and the
+       break lands in the log. See docs/DECISIONS.md, where-a-diagnostic-goes. */
+    int32_t terminal_column;
+    /* Whether the terminal is deselected just now. The reference keeps one
+       selector; each thing that takes the terminal away saves what it was,
+       changes it, and puts it back. A diagnostic does that while
+       \tracingonline is not positive, and so does a \write to a NEGATIVE
+       stream, which the reference sends to the log alone. */
+    bool selector_log_only;
     struct hstex_math_builder *math_stack;
     size_t math_depth;
     size_t math_capacity;

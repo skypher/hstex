@@ -168,6 +168,11 @@ static void show_list_at_top(struct hstex_engine *engine,
                              const uint32_t *items, size_t count);
 /* The diagnostic printer, wanted by the packer above it. */
 static void print_fresh_line(struct hstex_engine *engine);
+/* The reference's selector, saved and put back around anything the terminal
+   must not see; see where these are defined. */
+static bool begin_diagnostic(struct hstex_engine *engine);
+static void end_diagnostic(struct hstex_engine *engine, bool saved,
+                           bool blank_line);
 static void print_text(struct hstex_engine *engine, const char *text);
 static void show_scaled(struct hstex_engine *engine, int32_t value);
 static int64_t insertion_size(int32_t size, int32_t factor);
@@ -9441,12 +9446,13 @@ static void trace_macro_expansion(struct hstex_engine *engine,
         free(bytes);
         return;
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_line(engine);
     print_fresh_line(engine);
     print_bytes(engine, (const char *)named, named_count);
     print_bytes(engine, (const char *)bytes + after_prefix,
                 count - after_prefix);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     free(named);
     free(bytes);
 }
@@ -9482,11 +9488,12 @@ static void trace_token_parameter(struct hstex_engine *engine, size_t which)
             return;
         }
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_escaped_name(engine, name);
     print_text(engine, "->");
     print_bytes(engine, (const char *)bytes, count);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     free(bytes);
 }
 
@@ -9515,10 +9522,11 @@ static void trace_macro_argument(struct hstex_engine *engine, unsigned number,
             return;
         }
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_formatted(engine, "%c%u<-", (char)written, number);
     print_bytes(engine, (const char *)bytes, bytes_count);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     free(bytes);
 }
 
@@ -15992,6 +16000,23 @@ static size_t expand_printed_byte(const struct hstex_engine *engine, char byte,
     return 1U;
 }
 
+/* Whether what is being written still reaches the terminal. The reference
+   asks this of its selector; here it is asked of how deep in a diagnostic
+   the printer stands. The log is named either way. */
+static bool selector_has_terminal(const struct hstex_engine *engine)
+{
+    /* \batchmode takes the terminal away for the WHOLE RUN, not for one
+       diagnostic: the reference sets its selector to the log alone as soon
+       as the mode is entered and leaves it there. trip is read in three
+       modes and the difference shows in each -- an error after a trace
+       draws a blank line under \nonstopmode and \scrollmode and none
+       under \batchmode. */
+    if (engine->interaction_mode == HSTEX_INTERACTION_BATCH) {
+        return false;
+    }
+    return !engine->selector_log_only;
+}
+
 /* One byte to the stream, with the line broken after the seventy-ninth
    column. `honour_newline' says whether the \newlinechar still ends the line
    here: the reference turns it OFF while it writes the several bytes that
@@ -16008,14 +16033,28 @@ static void write_printed_byte(struct hstex_engine *engine, char byte,
         byte = '\n';
     }
     (void)fputc(byte, out);
+    /* The log is always written; the terminal is only counted, and only
+       while the selector still names it. Each breaks its own line at the
+       seventy-ninth column, which is how the two drift apart once a
+       diagnostic has held one of them still. */
+    bool terminal = selector_has_terminal(engine);
     if (byte == '\n') {
         engine->message_column = 0;
+        if (terminal) {
+            engine->terminal_column = 0;
+        }
         return;
     }
     ++engine->message_column;
     if (engine->message_column == HSTEX_PRINT_LINE) {
         (void)fputc('\n', out);
         engine->message_column = 0;
+    }
+    if (terminal) {
+        ++engine->terminal_column;
+        if (engine->terminal_column == HSTEX_PRINT_LINE) {
+            engine->terminal_column = 0;
+        }
     }
 }
 
@@ -16098,12 +16137,58 @@ static void print_line(struct hstex_engine *engine)
     print_byte(engine, '\n');
 }
 
-/* print_nl: what follows starts a line of its own. */
+/* print_nl: what follows starts a line of its own. The reference asks this
+   of EVERY stream its selector names -- so a terminal left mid-line by
+   something written before a diagnostic began still calls for the break,
+   and the break is written to the log as well. */
 static void print_fresh_line(struct hstex_engine *engine)
 {
-    if (engine->message_column > 0) {
+    if (engine->message_column > 0 ||
+        (selector_has_terminal(engine) && engine->terminal_column > 0)) {
         print_byte(engine, '\n');
     }
+}
+
+/* Take the terminal away for what follows and hand back what the selector
+   was, so that the caller can put it back. The reference does exactly this
+   with a local `old_setting'. */
+static bool begin_log_only(struct hstex_engine *engine, bool log_only)
+{
+    bool saved = engine->selector_log_only;
+    if (log_only) {
+        engine->selector_log_only = true;
+    }
+    return saved;
+}
+
+static void end_log_only(struct hstex_engine *engine, bool saved)
+{
+    engine->selector_log_only = saved;
+}
+
+/* The reference's begin_diagnostic: while \tracingonline is not positive
+   what follows goes to the log alone, and the run is marked as having said
+   something. end_diagnostic closes the line, writes a blank one after it
+   when asked, and only THEN puts the selector back -- so the line it closes
+   is closed in the log alone and the terminal keeps its column. */
+static bool begin_diagnostic(struct hstex_engine *engine)
+{
+    bool log_only =
+        engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] <= 0;
+    if (log_only && !engine->selector_log_only && engine->history < 1) {
+        engine->history = 1;
+    }
+    return begin_log_only(engine, log_only);
+}
+
+static void end_diagnostic(struct hstex_engine *engine, bool saved,
+                           bool blank_line)
+{
+    print_fresh_line(engine);
+    if (blank_line) {
+        print_line(engine);
+    }
+    end_log_only(engine, saved);
 }
 
 /* A recoverable error. The reference does not stop for one of these: it says
@@ -18286,6 +18371,7 @@ static bool math_field_is_wanted(struct hstex_engine *engine);
 static void trace_words(struct hstex_engine *engine, const char *words)
 {
     const char *mode = mode_name(engine);
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_byte(engine, '{');
     if (mode != engine->traced_mode) {
@@ -18295,7 +18381,7 @@ static void trace_words(struct hstex_engine *engine, const char *words)
     }
     print_text(engine, words);
     print_byte(engine, '}');
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     engine->traced_character = false;
     (void)fflush(diagnostic_stream(engine));
 }
@@ -18425,6 +18511,7 @@ static void trace_restore(struct hstex_engine *engine,
        first, a restore is written where the last thing left off --
        `[C exactly at the boundary]{restoring \toks3=...' and
        `(./ra.tex{restoring \count5=8}'. */
+    bool saved_selector = begin_diagnostic(engine);
     print_text(engine, retaining ? "{retaining " : "{restoring ");
     switch (save->kind) {
     case HSTEX_SAVE_MEANING: {
@@ -18608,7 +18695,7 @@ static void trace_restore(struct hstex_engine *engine,
         break;
     }
     print_byte(engine, '}');
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -18679,6 +18766,10 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
         describe_token(engine, token, named, sizeof(named));
     }
     const char *mode = mode_name(engine);
+    /* A trace goes to the log alone unless \tracingonline says otherwise,
+       which is what leaves the terminal standing mid-line and puts a blank
+       line in front of an error that follows. */
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_byte(engine, '{');
     if (mode != engine->traced_mode) {
@@ -18688,7 +18779,7 @@ static void trace_command(struct hstex_engine *engine, hstex_token token)
     }
     print_text(engine, named);
     print_byte(engine, '}');
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -18997,12 +19088,10 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     }
     /* The reference writes a diagnostic to the log whatever \tracingonline
        says, and to the terminal as well only when it is positive. The
-       message stream here stands for the log, so it is always written. See
-       docs/DECISIONS.md, where-a-diagnostic-goes. */
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_ONLINE] <= 0 &&
-        engine->history < 1) {
-        engine->history = 1;
-    }
+       message stream here stands for the log, so it is always written --
+       but the terminal's column is still kept, since print_nl asks about
+       it. See docs/DECISIONS.md, where-a-diagnostic-goes. */
+    bool saved_selector = begin_diagnostic(engine);
     struct hstex_box box = engine->boxes[(size_t)index];
     /* The diagnostic starts a line of its own; see docs/DECISIONS.md,
        the-print-line. */
@@ -19010,8 +19099,7 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     print_formatted(engine, "> \\box%d=", index);
     if (box.kind == HSTEX_BOX_VOID) {
         print_text(engine, "void");
-        print_line(engine);
-        print_line(engine);
+        end_diagnostic(engine, saved_selector, true);
         print_text(engine, "! OK");
         tex_show_end(engine);
         (void)fflush(diagnostic_stream(engine));
@@ -19019,10 +19107,11 @@ static int execute_show_box(struct hstex_engine *engine, char *error,
     }
     show_box_under_limits(engine, &box);
     /* The reference ends the list with a newline whatever column it stands
-       at, and then leaves a blank line, so a last line that exactly filled
-       the width is followed by two rather than one. */
+       at -- show_box's own, not the diagnostic's -- and end_diagnostic then
+       leaves a blank line, so a last line that exactly filled the width is
+       followed by two rather than one. */
     print_line(engine);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, true);
     print_text(engine, "! OK");
     tex_show_end(engine);
     (void)fflush(diagnostic_stream(engine));
@@ -23232,9 +23321,15 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
     }
     if (tracing_shipout) {
         print_byte(engine, ']');
+        /* THE COUNTS GO TO THE TERMINAL AND THE BOX DOES NOT. The reference
+           closes `[0.0.0.0.11]' with the terminal still named -- and with no
+           line ending it -- and only then begins the diagnostic the box is
+           shown under. So the newline that box draws belongs to the log
+           alone, and the terminal is left standing mid-line: that is what an
+           error later in the page finds when it asks whether to break. */
+        bool saved_selector = begin_diagnostic(engine);
         show_box_under_limits(engine, box);
-        print_line(engine);
-        print_line(engine);
+        end_diagnostic(engine, saved_selector, true);
         (void)fflush(diagnostic_stream(engine));
     }
     /* A PAGE THAT WILL NOT FIT IN A PAGE DESCRIPTION IS NOT WRITTEN. The
@@ -23362,13 +23457,14 @@ static void trace_page_split(struct hstex_engine *engine, uint32_t number,
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PAGES] <= 0) {
         return;
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_formatted(engine, "%% split%u to ", (unsigned int)number);
     print_page_amount(engine, allowed, "");
     print_byte(engine, ',');
     print_page_amount(engine, reached, "");
     print_formatted(engine, " p=%d", (int)penalty);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -23378,13 +23474,14 @@ static void trace_page_goal(struct hstex_engine *engine)
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PAGES] <= 0) {
         return;
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_text(engine, "%% goal height=");
     print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_GOAL], "");
     print_text(engine, ", max depth=");
     print_page_amount(engine, engine->dimen_parameters[HSTEX_DIMEN_MAX_DEPTH],
                       "");
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -23399,6 +23496,7 @@ static void trace_page_cost(struct hstex_engine *engine, int32_t penalty,
         return;
     }
     static const char *const orders[4] = {"", "fil", "fill", "filll"};
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_text(engine, "% t=");
     print_page_amount(engine, engine->page_dimens[HSTEX_PAGE_TOTAL], "");
@@ -23432,7 +23530,7 @@ static void trace_page_cost(struct hstex_engine *engine, int32_t penalty,
     if (best) {
         print_byte(engine, '#');
     }
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -25464,12 +25562,14 @@ static int open_write_stream(struct hstex_engine *engine, int32_t stream,
     engine->write_streams[(size_t)stream] = file;
     free(engine->write_stream_paths[(size_t)stream]);
     engine->write_stream_paths[(size_t)stream] = strdup(path);
-    /* The reference notes an opened stream in its log; see
-       docs/DECISIONS.md, the-print-line. */
+    /* The reference notes an opened stream IN ITS LOG, and only there: the
+       note is a diagnostic, so the terminal keeps its column across it and
+       the blank line under it is end_diagnostic's. See docs/DECISIONS.md,
+       the-print-line. */
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_formatted(engine, "\\openout%d = `%s'.", stream, name);
-    print_line(engine);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, true);
     free(path);
     free(name);
     return 0;
@@ -26566,13 +26666,14 @@ static int expand_write_text(struct hstex_engine *engine,
             }
         }
         if (made) {
+            bool saved_selector = begin_diagnostic(engine);
             print_fresh_line(engine);
             print_escaped_name(engine, "write");
             print_text(engine, "->");
             if (shown_count != 0U) {
                 print_bytes(engine, (const char *)shown, shown_count);
             }
-            print_line(engine);
+            end_diagnostic(engine, saved_selector, false);
             (void)fflush(diagnostic_stream(engine));
         }
         free(shown);
@@ -28851,6 +28952,7 @@ static void char_warning(struct hstex_engine *engine,
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_LOST_CHARS] <= 0) {
         return;
     }
+    bool saved_selector = begin_diagnostic(engine);
     print_fresh_line(engine);
     print_text(engine, "Missing character: There is no ");
     if (character_needs_caret(code)) {
@@ -28860,7 +28962,7 @@ static void char_warning(struct hstex_engine *engine,
         print_byte(engine, (char)code);
     }
     print_formatted(engine, " in font %s!", font->name);
-    print_line(engine);
+    end_diagnostic(engine, saved_selector, false);
     (void)fflush(diagnostic_stream(engine));
 }
 
@@ -32518,8 +32620,12 @@ static int break_paragraph(struct hstex_engine *engine,
     int found = 0;
     /* \tracingparagraphs writes the passes out as the reference does; see
        docs/DECISIONS.md, tracing-paragraphs. */
+    /* The whole of the line-break trace is one diagnostic, opened before the
+       first pass names itself and closed after the last line is drawn. */
+    bool saved_selector = false;
     if (engine->integer_parameters[HSTEX_INTEGER_TRACING_PARAGRAPHS] > 0) {
         state.trace.active = true;
+        saved_selector = begin_diagnostic(engine);
     }
     int32_t emergency =
         engine->dimen_parameters[HSTEX_DIMEN_EMERGENCY_STRETCH];
@@ -32541,6 +32647,7 @@ static int break_paragraph(struct hstex_engine *engine,
         if (hyphenate_paragraph(engine, items, count, &hyphenated,
                                 &hyphenated_count, error, error_capacity) != 0) {
             free(state.totals);
+            end_log_only(engine, saved_selector);
             return -1;
         }
         if (hyphenated_count != count) {
@@ -32551,6 +32658,7 @@ static int break_paragraph(struct hstex_engine *engine,
             if (measure_break_totals(engine, &state, items, count, error,
                                      error_capacity) != 0) {
                 free(hyphenated);
+                end_log_only(engine, saved_selector);
                 return -1;
             }
         }
@@ -32596,7 +32704,7 @@ static int break_paragraph(struct hstex_engine *engine,
     release_lost_characters(engine, SIZE_MAX);
     if (state.trace.active) {
         trace_newline(engine, &state.trace);
-        print_line(engine);
+        end_diagnostic(engine, saved_selector, true);
         (void)fflush(diagnostic_stream(engine));
     }
     if (status == 0) {
@@ -40528,10 +40636,15 @@ static int write_stream_bytes(struct hstex_engine *engine, int32_t stream,
         return 0;
     }
     /* A stream that was never opened writes where the diagnostics go, on a
-       line of its own; see docs/DECISIONS.md, the-print-line. */
+       line of its own; see docs/DECISIONS.md, the-print-line. A NEGATIVE
+       stream number goes to the log alone, so the terminal keeps its column
+       across it -- which is what the reference does by dropping its selector
+       to the log for the write and putting it back after. */
+    bool saved_selector = begin_log_only(engine, stream < 0);
     print_fresh_line(engine);
     print_bytes(engine, (const char *)bytes, byte_count);
     print_line(engine);
+    end_log_only(engine, saved_selector);
     if (fflush(diagnostic_stream(engine)) != 0) {
         return set_error(error, error_capacity, "write stream failed");
     }

@@ -13742,9 +13742,50 @@ static int test_pdf_file_size(void)
     return result;
 }
 
+/* WHERE THE BLANK LINE ABOVE AN ERROR COMES FROM. A trace goes to the log
+   alone while \tracingonline is not positive, so the terminal is left
+   standing wherever the last thing written to it left it; the error's
+   print_nl asks about every stream the selector names, finds the terminal
+   mid-line, and breaks -- and the break lands in the log too. \batchmode
+   takes the terminal away for the whole run, so the same error draws no
+   blank line. Measured against pdfTeX line for line; see
+   tests/trip/probes/what-a-blank-line-above-an-error-comes-from.tex. */
+static int test_a_blank_line_above_an_error(void)
+{
+    static const char *const source[] = {
+        "\\nonstopmode\\tracingonline=0 \\tracingcommands=1 "
+        "\\message{[A]}\\count1=\\relax"
+        "\\batchmode\\message{[B]}\\count2=\\relax",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "{vertical mode: \\message}\n[A]\n{\\count}\n\n! Mi"
+        "ssing number, treated as zero.\n<to be read again>"
+        " \n                   \\relax \nl.1 ...acingcomman"
+        "ds=1 \\message{[A]}\\count1=\\relax\n             "
+        "                                     \\batchmode"
+        "\\message{[B]}\\co...\nA number should have been h"
+        "ere; I inserted `0'.\n(If you can't figure out why"
+        " I needed to see a number,\nlook up `weird error' "
+        "in the index to The TeXbook.)\n\n{\\relax}\n{\\bat"
+        "chmode}\n\n{\\message}\n[B]\n{\\count}\n! Missing "
+        "number, treated as zero.\n<to be read again> \n   "
+        "                \\relax \nl.1 ...\\relax\\batchmod"
+        "e\\message{[B]}\\count2=\\relax\n                 "
+        "                                 \nA number should"
+        " have been here; I inserted `0'.\n(If you can't fi"
+        "gure out why I needed to see a number,\nlook up `w"
+        "eird error' in the index to The TeXbook.)\n\n{\\re"
+        "lax}\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 int main(void)
 {
-    if (run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
+    if (test_a_blank_line_above_an_error() != 0 ||
+        run_snippet("\\def\\a{Alpha}\\a%", "Alpha") != 0 ||
         run_snippet("\\def\\pair#1#2{[#1/#2]}\\pair A{BC}%",
                     "[A/BC]") != 0 ||
         run_snippet("\\def\\grab#1,#2;{<#2:#1>}\\grab {a,b},c;%",
