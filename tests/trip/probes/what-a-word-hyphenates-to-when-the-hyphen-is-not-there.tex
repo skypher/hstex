@@ -24,30 +24,47 @@
 %     warnings agree, and so does what goes in front of the break: both
 %     engines now draw `\trip 5 (ligature |1)' and `\trip 7 (ligature |)'
 %     there, where this one used to draw only the first.
-%   - The discretionary's REPLACE COUNT still differs, in [A] and [B]
-%     alike: 70 against 5, and 2 against 67. STILL OPEN, and now measured.
-%     The count is `stop - start' where `stop' is `whole - tail' capped at
-%     the next break. Instrumented, this engine computes, for the two
-%     discretionaries of this word:
+%   - The discretionary's REPLACE COUNT differed, in [A] and [B] alike: 70
+%     against 5, and 2 against 67. FIXED, and the fix was three things.
 %
-%       whole=72 start=0 tail=7 stop=5   -> 5
-%       whole=72 start=5 tail=0 stop=72  -> 67
+%     WHERE THE BRANCHES FALL BACK INTO STEP. The reference develops the
+%     text after the break beside the text already there until both stand at
+%     the same LETTER, and shares the rest. This engine matched the two from
+%     their ENDS, which cannot find that place here: trip's program makes a
+%     run so repetitive -- `5 7 6 7 kern' over and over -- that the last
+%     seven nodes of the after-text match the last seven of the run although
+%     neither is near the same letter, and SEVEN different cuts match just as
+%     well. Measured, every cut from nought to six matches backwards; only
+%     one of them, two, has the letters adding up on both sides AND falls
+%     where a letter begins rather than in the middle of what the font put
+%     between two of them. The cut is now looked for from the front on those
+%     two conditions.
 %
-%     The reference's 70 and 2 want, for the same 72 nodes, a first run of
-%     70 from a start of nought -- which is tail=2, not 7 -- and a second
-%     starting at 70 rather than at 5. So TWO things differ: how many nodes
-%     at the end of the word this engine thinks BOTH branches can share
-%     (`tail', the "fall back into step" rule), and where the second break's
-%     run begins.
+%     WHERE THE NEXT RUN BEGINS. The reference lays the discretionaries end
+%     to end over the word's nodes: the first replaces seventy, the second
+%     takes up at the seventy-first and replaces the last two, and 70 + 2 is
+%     the whole run of 72. This engine began each run at its own letter
+%     instead -- node 5 for the second, where the reference has 70 -- so the
+%     two overlapped, which is what the old cap at `where the next break
+%     begins' was there to paper over. The run now begins where the last one
+%     settled, and the cap is gone.
 %
-%     Ruled out: the cap at the next break (`A run stops where the next
-%     break begins'). Taking it out gives 72 and 67, which overlap, so it is
-%     not the cap that is wrong -- something before it is. The ligature nodes on either side of it
-%     agree exactly -- both engines draw `\trip 5 (ligature |1)' and
-%     `\trip 7 (ligature |)' -- so the two agree about what the word is made
-%     of and disagree about how much of it the discretionary puts back.
+%     WHAT IS LEFT TO SET AGAIN. A letter an earlier discretionary has
+%     already taken into its run is gone, so the second break's pre-break
+%     text is the hyphen standing on its own -- `\trip -' -- and nothing at
+%     all where the font has not got the character. This engine set the
+%     letter again together with the hyphen at every break.
 %
-% So the second fault is not about the hyphen at all. It is about what a
+%     Also fixed by the same rule: ligature-cascade-resync.tex and
+%     ligature-cascade-two-breaks.tex, which drew the same fault and now
+%     agree with the reference. A sweep of all 286 probes shows no other
+%     change in either direction.
+%
+%     NOT COVERED BY `meson test': every probe that reaches this path needs
+%     trip.tfm, which the unit tests have not got. tests/trip/run-trip.sh
+%     builds one and this file is the check.
+%
+% So the second fault was not about the hyphen at all. It was about what a
 % discretionary made while a LIGATURE is being reconstituted replaces.
 %
 % WHY IT IS THE TRIP FONT AND NOT THE HYPHENCHAR. With cmr10 the two agree
@@ -70,10 +87,11 @@
 % badness -- see what-a-break-is-weighed-as-in-trips-first-pass.tex -- and
 % bisecting it says it needs `\righthyphenmin0', a language change part way
 % through the paragraph, and \lccode`1 set so that `1' is a letter at all.
-% This file is what is left when those are cut away too. It is NOT known to
-% be the same fault: trip's own pass draws the same material either way and
-% differs only in the trace, while this draws different discretionaries. It
-% is recorded because it is small, certain, and in the same machinery.
+% This file is what is left when those are cut away too. It turned out NOT to
+% be the same fault, as was suspected: fixing everything above leaves trip's
+% first pass weighing that break at b=2 where the reference has b=42, exactly
+% as before. The badness is still open; this was a real fault standing beside
+% it in the same machinery.
 \catcode`\{=1 \catcode`\}=2
 \tracingonline=1 \tracinglostchars=2 \showboxbreadth=99 \showboxdepth=99
 \font\trip=trip \trip

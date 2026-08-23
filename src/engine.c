@@ -31673,21 +31673,6 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
     return status;
 }
 
-/* A NODE THE BOUNDARY TOOK PART IN IS NOT ONE THE TWO BRANCHES CAN SHARE:
-   the reference develops the two branches of a break character by character,
-   and a node the boundary helped make stands for no character at all, so the
-   branches never fall back into step on it. See docs/DECISIONS.md,
-   what-follows-a-break-in-a-word. */
-static bool boundary_took_part(const struct hstex_engine *engine,
-                               uint32_t identifier)
-{
-    if (identifier == 0U || (size_t)identifier > engine->node_count) {
-        return false;
-    }
-    const struct hstex_node *node = &engine->nodes[identifier - 1U];
-    return node->kind == HSTEX_NODE_LIGATURE &&
-           node->value.character.boundary != 0U;
-}
 
 /* WHETHER A WORD SET AGAIN MEETS THE BOUNDARY BEYOND ITS RIGHT END. The
    reference looks at what the word was made of the first time: only where a
@@ -31728,6 +31713,27 @@ static bool word_meets_left_boundary(const struct hstex_engine *engine,
     const struct hstex_node *node = &engine->nodes[first - 1U];
     return node->kind == HSTEX_NODE_LIGATURE &&
            (node->value.character.boundary & 2U) != 0U;
+}
+
+/* HOW MANY OF A WORD'S LETTERS ONE NODE STANDS FOR. A character is one, a
+   ligature is however many letters it was made from, and a kern -- or a
+   character the font's own ligature program put between two letters, which
+   is made from none -- is none at all. Used to tell where a letter BEGINS in
+   a run, which is what the two branches of a break fall back into step on. */
+static size_t letters_of_node(const struct hstex_engine *engine,
+                              uint32_t identifier)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0U;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    if (node->kind == HSTEX_NODE_CHARACTER) {
+        return 1U;
+    }
+    if (node->kind == HSTEX_NODE_LIGATURE) {
+        return node->value.character.original_count;
+    }
+    return 0U;
 }
 
 /* Two nodes stand for the same thing when they would be set the same way. */
@@ -32008,6 +32014,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
            both branches of a break until they fall back into step, and
            whatever hyphen points it passed on the way are gone. */
         size_t settled_to = 0U;
+        /* WHERE THE LAST SPANNED BREAK'S RUN ENDED, as an item index. The
+           next break's run begins there and not at its own letter: the
+           reference lays the discretionaries end to end over the word's
+           nodes, so what one replaces the next takes up from. */
+        size_t settled_item = 0U;
+        bool settled_item_set = false;
         /* Where this word's own output begins, which is where the trace has
            to have reached before what hyphenating it noticed may be let out;
            see release_lost_characters. */
@@ -32102,8 +32114,18 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     --first;
                 }
                 size_t count_before = 0U;
-                for (size_t item = first; item < letter; ++item) {
-                    taken[count_before++] = word.letters[item];
+                /* THE LETTER IN FRONT OF THE BREAK IS ONLY SET AGAIN WHILE IT
+                   IS STILL THE ENGINE'S TO SET. One an earlier discretionary
+                   has already taken into its own run is gone, and what is
+                   left in front of this break is the hyphen standing on its
+                   own -- or nothing at all, where the font has not got it.
+                   The reference draws trip's second break as `\trip -' and
+                   not as the letter and the hyphen together. */
+                bool fresh = !settled_item_set || previous >= settled_item;
+                if (fresh) {
+                    for (size_t item = first; item < letter; ++item) {
+                        taken[count_before++] = word.letters[item];
+                    }
                 }
                 /* A HYPHEN THE FONT HAS NOT GOT IS NAMED HERE TOO. This
                    path puts the hyphen in as a character code and sets the
@@ -32147,36 +32169,78 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 const uint32_t *unbroken = items + base;
                 /* The run replaces what stood in front of the word too. */
                 size_t start = previous - base - (seeded ? 1U : 0U);
-                size_t tail = 0U;
-                while (tail < made_after && tail + start < whole &&
-                       !boundary_took_part(engine,
-                                           unbroken[whole - 1U - tail]) &&
-                       set_the_same_way(engine,
-                                        ahead[made_after - 1U - tail],
-                                        unbroken[whole - 1U - tail])) {
-                    ++tail;
+                if (settled_item_set && settled_item > base &&
+                    settled_item - base > start) {
+                    start = settled_item - base;
                 }
-                size_t stop = whole - tail;
-                /* A run stops where the next break begins: two
-                   discretionaries cannot replace the same nodes. */
-                for (size_t next = letter + 1U; next < word.count; ++next) {
-                    if (breaks[next] != 0U) {
-                        size_t reaches = word.positions[next - 1U] - base;
-                        if (reaches < stop) {
-                            stop = reaches;
-                        }
+                /* WHERE THE TWO BRANCHES FALL BACK INTO STEP. The reference
+                   develops the text after the break beside the text that was
+                   already there until both stand at the same LETTER of the
+                   word, and shares everything from there on.
+
+                   Matching the two from their ENDS cannot find that place.
+                   trip's ligature program makes a run so repetitive --
+                   `5 7 6 7 kern' over and over -- that the last seven nodes
+                   of the after-text match the last seven of the run although
+                   the two are nowhere near the same letter, and seven other
+                   cuts match just as well. So the cut is looked for from the
+                   front: the letters on each side must add up, and it must
+                   fall where a letter BEGINS rather than in the middle of
+                   what the font's program put between two of them. Measured:
+                   the reference shares two nodes here, where matching
+                   backwards would share seven. See
+                   tests/trip/probes/what-a-word-hyphenates-to-when-the-hyphen-is-not-there.tex. */
+                size_t lead = 0U;
+                for (size_t at = start; at + base < index && at < whole; ++at) {
+                    lead += letters_of_node(engine, unbroken[at]);
+                }
+                size_t tail = 0U;
+                size_t reach = made_after;
+                if (reach > whole - start) {
+                    reach = whole - start;
+                }
+                for (size_t candidate = reach; candidate > 0U; --candidate) {
+                    size_t major_stop = whole - candidate;
+                    size_t minor_stop = made_after - candidate;
+                    if (letters_of_node(engine, unbroken[major_stop]) == 0U ||
+                        letters_of_node(engine, ahead[minor_stop]) == 0U) {
+                        continue;
+                    }
+                    bool same = true;
+                    for (size_t at = 0U; same && at < candidate; ++at) {
+                        same = set_the_same_way(engine, ahead[minor_stop + at],
+                                                unbroken[major_stop + at]);
+                    }
+                    if (!same) {
+                        continue;
+                    }
+                    size_t major = 0U;
+                    for (size_t at = start; at < major_stop; ++at) {
+                        major += letters_of_node(engine, unbroken[at]);
+                    }
+                    size_t minor = 0U;
+                    for (size_t at = 0U; at < minor_stop; ++at) {
+                        minor += letters_of_node(engine, ahead[at]);
+                    }
+                    if (major == lead + minor) {
+                        tail = candidate;
                         break;
                     }
                 }
+                size_t stop = whole - tail;
+                /* Two discretionaries cannot replace the same nodes. They no
+                   longer can: each run begins where the last one settled,
+                   and ends where its own branches fell back into step. The
+                   cap on the next break's LETTER that used to stand here cut
+                   the first run down to where the second letter began --
+                   five nodes of seventy -- which is not where the reference
+                   ends it. */
                 if (stop < start) {
                     stop = start;
-                }
-                tail = whole - stop;
-                /* Where the next break cuts the run short before the text
-                   after this one has rejoined, there is nothing of that text
-                   left to keep. */
-                if (tail > made_after) {
-                    tail = made_after;
+                    tail = whole - stop;
+                    if (tail > made_after) {
+                        tail = made_after;
+                    }
                 }
                 struct hstex_node disc = {.kind = HSTEX_NODE_DISCRETIONARY};
                 uint32_t run = 0U;
@@ -32206,9 +32270,11 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 settled->value.disc.replace_count = (uint8_t)(stop - start);
                 free(ahead);
                 free(behind);
-                /* The nodes from the one in front of the break onwards have
-                   been written out already; they belong after it. */
-                size_t back = previous - (seeded ? 1U : 0U);
+                /* The nodes from where this run begins onwards have been
+                   written out already; they belong after it. */
+                size_t back = base + start;
+                settled_item = base + stop;
+                settled_item_set = true;
                 written -= index - back;
                 if (reserve_hyphenated_items(&result, &capacity,
                                              written + 1U + (index - back),
