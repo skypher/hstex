@@ -1558,10 +1558,12 @@ static int test_document_job_transition(void)
 static int test_file_streams(void)
 {
     char stream_path[64];
-    if (open_snippet("", stream_path) != 0 || unlink(stream_path) != 0) {
+    char empty_path[64];
+    if (open_snippet("", stream_path) != 0 || unlink(stream_path) != 0 ||
+        open_snippet("", empty_path) != 0) {
         return 1;
     }
-    char source[1024];
+    char source[2048];
     int length = snprintf(
         source, sizeof(source),
         "\\chardef\\stream=3 \\immediate\\openout\\stream=%s "
@@ -1576,13 +1578,25 @@ static int test_file_streams(void)
         "\\endlinechar=-1 \\readline\\stream to \\otheractual "
         "\\endlinechar=13 "
         "\\ifx\\otheractual\\otherexpected T\\else F\\fi "
+        "\\closein\\stream "
+        "\\openin\\stream=\"%s\" "
+        "\\endlinechar=-1 \\read\\stream to \\emptyactual "
+        "\\def\\emptyexpected{}"
+        "\\ifx\\emptyactual\\emptyexpected T\\else F\\fi "
+        "\\closein\\stream "
+        "\\openin\\stream=\"%s\" "
+        "\\endlinechar=13 \\read\\stream to \\paractual "
+        "\\def\\parexpected{\\par}"
+        "\\ifx\\paractual\\parexpected T\\else F\\fi "
         "\\closein\\stream%%",
-        stream_path, stream_path, stream_path);
+        stream_path, stream_path, stream_path, empty_path, empty_path);
     if (length < 0 || (size_t)length >= sizeof(source)) {
+        (void)unlink(empty_path);
         return 1;
     }
-    int status = run_snippet(source, "TT");
+    int status = run_snippet(source, "TTTT");
     (void)unlink(stream_path);
+    (void)unlink(empty_path);
     return status;
 }
 

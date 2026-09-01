@@ -443,6 +443,13 @@ the middle of a read. HSTeX therefore uses standard input for terminal and
 unopened streams, exposes an injectable terminal stream for deterministic
 embedding tests, and leaves ownership of that stream with its caller.
 
+A separate pdfTeX 1.40.25 probe opens an empty file and reads after setting
+`\endlinechar=-1`, then repeats with the default value 13. The first target
+macro is empty; the second contains `\par`. HSTeX therefore feeds the
+synthetic line at file end through the ordinary mouth with the current
+`\endlinechar`, rather than inserting `\par` unconditionally. Babel's INI
+reader relies on the empty form after its final newline.
+
 ## Token-list expansion after `\expandafter`
 
 A controlled pdfTeX 1.40.25 probe defines `\a` as `A` and stores `\a` in a

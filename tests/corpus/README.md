@@ -9,7 +9,7 @@ Run it:
 ```sh
 tests/corpus/run-corpus.sh              # report the state of the corpus
 tests/corpus/run-corpus.sh --strict     # exit nonzero if anything disagrees
-tests/corpus/run-corpus.sh --stress     # run adversarial/interactive inputs
+tests/corpus/run-corpus.sh --stress --strict  # gate adversarial/interactive inputs
 ```
 
 The documents are listed in `documents.tsv` and fetched from CTAN on first
@@ -18,11 +18,11 @@ They are test input, not engine source, so they are fetched rather than
 vendored; the comparison run uses only the reference engine's observable
 outputs. See `SOURCE_POLICY.md`.
 
-The release corpus contains documents HSTeX currently matches and is run with
-`--strict` in CI. `stress-documents.tsv` contains hostile inputs that expose
-named compatibility work. It uses `build/corpus-stress`, reports every
-disagreement without failing by default, and can be made a gate with
-`--stress --strict` as those findings are fixed.
+The release corpus contains ordinary documents HSTeX currently matches.
+`stress-documents.tsv` contains hostile inputs that have exposed named
+compatibility work. It uses `build/corpus-stress` and reports every
+disagreement without failing by default; CI runs both manifests with
+`--strict`.
 
 ## The documents
 
@@ -53,7 +53,7 @@ None is engine source, and none is read for anything but its own text.
 | Document | Format | What it targets | Current result |
 |---|---|---|---|
 | `clsguide-historic` | LaTeX | A 35-page class/package writer guide and nested `tabular` | All comparison gates agree across 35 pages |
-| `anc-test.ltx` | LaTeX | Fifteen pages of Ancient Greek transliteration, accents, and expected hyphen breaks | Page and box counts match; HSTeX emits 15 faults to the reference's 2 |
+| `anc-test.ltx` | LaTeX | Fifteen pages of Ancient Greek transliteration, accents, and expected hyphen breaks | All comparison gates agree across 15 pages, including the two expected Babel faults |
 | `encguide` | LaTeX | Font encodings, unusual alphabets, large tables, and error recovery | All comparison gates agree across 29 pages |
 | `grfguide` | LaTeX | Color, graphics, file creation, EPS inclusion, and driver errors | All comparison gates agree across 17 pages, including EPS conversion fallback and expected driver errors |
 | `testpage` | LaTeX | Interactive `\typein`, printer geometry, and a two-sided branch | All comparison gates agree on the scripted one-page branch |
@@ -61,8 +61,9 @@ None is engine source, and none is read for anything but its own text.
 
 The stress suite feeds both engines the same answer profile defined by the
 runner. This makes interactive behavior reproducible in CI without editing
-the fetched documents. Expected document disagreements are findings; fetch,
-format-build, or harness failures still fail the command.
+the fetched documents. A new disagreement can be inspected without
+`--strict`; the CI invocation treats any disagreement, fetch failure,
+format-build failure, or harness failure as a failed gate.
 
 ## What is compared
 

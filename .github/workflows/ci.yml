@@ -114,7 +114,7 @@ jobs:
 
       - name: Run adversarial document stress corpus
         if: matrix.runner == 'ubuntu-24.04'
-        run: tests/corpus/run-corpus.sh --stress ./build/hstex
+        run: tests/corpus/run-corpus.sh --stress --strict ./build/hstex
 
   clang:
     # The other compiler the engine is expected to build clean under.

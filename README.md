@@ -16,8 +16,8 @@ already supported.
 | Engine | Independent C17 implementation; no pdfTeX fallback |
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
-| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 5/6 currently agree and the suite runs non-strictly in CI |
-| Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and the strict public corpus |
+| Adversarial corpus | All six pinned stress cases agree across 98 pages; CI runs the suite strictly |
+| Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and both strict document corpora |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract |
 | First release target | Linux x86-64 |
 
@@ -91,15 +91,15 @@ tests/corpus/run-corpus.sh --strict ./build/hstex
 ```
 
 The adversarial suite deliberately includes hostile and interactive documents.
-It records remaining findings without failing CI:
+CI treats any semantic disagreement as a failed gate:
 
 ```sh
-tests/corpus/run-corpus.sh --stress ./build/hstex
+tests/corpus/run-corpus.sh --stress --strict ./build/hstex
 ```
 
-Use `--stress --strict` when checking whether every tracked incompatibility
-has been closed. Corpus identity, licenses, stdin profiles, and comparison
-details are documented in
+CI runs the adversarial suite with `--strict`; omitting it is useful while
+adding a newly pinned finding. Corpus identity, licenses, stdin profiles, and
+comparison details are documented in
 [`tests/corpus/README.md`](tests/corpus/README.md).
 
 ## Implemented surface
@@ -130,8 +130,7 @@ and PDF object assignment remains deterministic. See
 ## Current limits
 
 - The supported semantic surface is the one exercised by the release tests
-  and strict corpus. The stress manifest records adversarial coverage and
-  remaining gaps.
+  and the two strict corpora. The stress manifest records adversarial coverage.
 - The first release target is Linux x86-64. CI also compiles selected Linux
   Arm, macOS, FreeBSD, and NetBSD configurations.
 - Image inclusion is outside the current strict corpus surface.

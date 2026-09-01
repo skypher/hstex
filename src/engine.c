@@ -47346,9 +47346,9 @@ static int append_read_line(struct hstex_engine *engine, hstex_cs_id target,
                             int32_t *balance, char *error,
                             size_t error_capacity)
 {
-    /* AN EMPTY LINE IS STILL A LINE, and what \endlinechar makes of one in
-       the state a line begins in is a \par -- the same as an empty line in a
-       file. The mouth reads lines out of a buffer and a buffer with nothing
+    /* AN EMPTY LINE IS STILL A LINE. A valid \endlinechar makes it a \par
+       when that character has end-of-line catcode; a negative value makes it
+       empty. The mouth reads lines out of a buffer and a buffer with nothing
        in it holds no line at all, so a terminator goes behind the line for it
        to find. */
     uint8_t *buffer = malloc(length + 1U);
@@ -47570,9 +47570,9 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
         if (ended) {
             /* THE FILE HAS NO MORE LINES. Where braces are still open the
                reference says so; then, either way, the end of the file
-               stands for an EMPTY LINE, which is a \par -- and that goes on
-               after the fault is reported, so what the fault shows does not
-               have it. */
+               stands for an empty logical line under the current
+               \endlinechar. That line goes on after the fault is reported,
+               so what the fault shows does not have it. */
             free(line);
             if (balance > 0) {
                 static const char *const help[] = {
@@ -47596,17 +47596,9 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
                 engine->reading_base = held_base;
                 hstex_mouth_destroy(&blank);
             }
-            static const uint8_t name[] = "par";
-            hstex_cs_id identifier = 0U;
-            if (hstex_symbol_intern(&engine->lexical_state.symbols,
-                                    HSTEX_SYMBOL_REGULAR, name,
-                                    sizeof(name) - 1U, &identifier, error,
-                                    error_capacity) != 0 ||
-                vector_push(&replacement,
-                            hstex_token_control_sequence(identifier), error,
-                            error_capacity) != 0) {
-                status = -1;
-            }
+            engine->reading_stream = stream;
+            status = append_read_line(engine, target, &replacement, NULL, 0U,
+                                      &balance, error, error_capacity);
             break;
         }
         engine->reading_stream = stream;
