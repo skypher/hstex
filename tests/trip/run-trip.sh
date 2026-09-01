@@ -25,6 +25,22 @@
 
 set -e
 
+usage() {
+    printf '%s\n' 'Usage: tests/trip/run-trip.sh [path-to-hstex]'
+    printf '%s\n' 'Fetch the digest-pinned Trip inputs and compare HSTeX with pdfTeX.'
+}
+
+case ${1:-} in
+-h|--help)
+    usage
+    exit 0
+    ;;
+esac
+if [ "$#" -gt 1 ]; then
+    usage >&2
+    exit 2
+fi
+
 engine=${1:-./build/hstex}
 case $engine in
 /*) ;;
@@ -38,11 +54,13 @@ work=$(pwd)
 
 TRIP_TEX_SHA=15f15c2ca1470085299056ec89dea5f51e9fe9303ef25581b2f2eaf7809ae97b
 TRIP_PL_SHA=93b38cc794f0c4a462667e25ef34a83552cbcdd62a42b10f739a431166525a79
-# CTAN's redirector and archive endpoint can each reject a GitHub-hosted
-# runner with HTTP 403. Both direct mirrors below are checked against the
-# pinned digest, so availability decides only where the bytes are fetched.
-base_primary=https://ctan.math.illinois.edu/systems/knuth/dist/tex
-base_fallback=https://mirrors.ibiblio.org/CTAN/systems/knuth/dist/tex
+# Availability decides only where the bytes are fetched: every candidate is
+# a CTAN endpoint, and a transfer is admitted only by the pinned digest.
+trip_bases='https://mirrors.mit.edu/CTAN/systems/knuth/dist/tex
+https://ctan.math.washington.edu/tex-archive/systems/knuth/dist/tex
+https://mirrors.ctan.org/systems/knuth/dist/tex
+https://ctan.math.illinois.edu/systems/knuth/dist/tex
+https://mirrors.ibiblio.org/CTAN/systems/knuth/dist/tex'
 
 fetch() {
     name=$1
@@ -51,9 +69,7 @@ fetch() {
         return 0
     fi
     temporary=$name.fetch.$$
-    # Both hosts are direct CTAN mirrors. A selected mirror may refuse the
-    # runner, but a successful transfer is admitted only by the pinned hash.
-    for base in "$base_primary" "$base_fallback"; do
+    for base in $trip_bases; do
         if curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
             --connect-timeout 20 -o "$temporary" "$base/$name" &&
             printf '%s  %s\n' "$want" "$temporary" |

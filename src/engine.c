@@ -21629,6 +21629,11 @@ static int pdf_font_buffer_text(struct hstex_pdf_font_buffer *buffer,
 static int pdf_font_buffer_formatted(struct hstex_pdf_font_buffer *buffer,
                                      char *error, size_t error_capacity,
                                      const char *format, ...)
+    HSTEX_PRINTF_FORMAT(4, 5);
+
+static int pdf_font_buffer_formatted(struct hstex_pdf_font_buffer *buffer,
+                                     char *error, size_t error_capacity,
+                                     const char *format, ...)
 {
     va_list arguments;
     va_start(arguments, format);
@@ -25646,6 +25651,11 @@ static enum hstex_pdf_cmap_kind pdf_font_cmap_kind(
     }
     return HSTEX_PDF_CMAP_CUSTOM;
 }
+
+static int pdf_cmap_text(struct hstex_pdf_font_buffer *buffer,
+                         const char *format, char *error,
+                         size_t error_capacity, ...)
+    HSTEX_PRINTF_FORMAT(2, 5);
 
 static int pdf_cmap_text(struct hstex_pdf_font_buffer *buffer,
                          const char *format, char *error,
