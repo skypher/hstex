@@ -15,6 +15,10 @@ cc = meson.get_compiler('c')
 zlib = dependency('zlib')
 threads = dependency('threads')
 core_dependencies = [zlib, threads]
+libdeflate_dep = dependency('libdeflate', required: get_option('libdeflate'))
+if libdeflate_dep.found()
+  core_dependencies += [libdeflate_dep]
+endif
 warning_args = cc.get_supported_arguments(
   '-Wconversion',
   '-Wshadow',
@@ -54,6 +58,7 @@ endif
 
 configuration = configuration_data()
 configuration.set_quoted('HSTEX_VERSION', meson.project_version())
+configuration.set10('HSTEX_HAVE_LIBDEFLATE', libdeflate_dep.found())
 configure_file(output: 'hstex_config.h', configuration: configuration)
 
 public_include = include_directories('include')

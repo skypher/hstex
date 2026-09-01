@@ -1,0 +1,6 @@
+option(
+  'libdeflate',
+  type: 'feature',
+  value: 'auto',
+  description: 'Use libdeflate for whole-buffer PDF stream compression',
+)

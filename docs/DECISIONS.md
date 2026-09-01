@@ -424,6 +424,58 @@ ratio in HSTeX's favor. The preceding HSTeX sum was 2,838.7 ms, so the
 bounded formatter reduced that diagnostic by 6.3%. This is broad-impact
 evidence, not the full-corpus headline benchmark.
 
+An aggregate `testmath` clock profile after that change attributed 13.58% of
+total CPU time, inclusively, to zlib's `compress2`/`deflate` path at the
+document's default `\pdfcompresslevel=9`. PDF emission already supplies each
+complete uncompressed stream as a contiguous buffer. When Meson finds
+libdeflate, HSTeX now compresses that buffer with libdeflate's zlib-format
+encoder and reuses the compressor between streams at the same level. The
+existing zlib path remains the fallback when libdeflate is unavailable,
+explicitly disabled, or cannot allocate a compressor. Ubuntu 24.04 CI installs
+libdeflate, while the Clang job configures `-Dlibdeflate=disabled` to exercise
+both build paths.
+
+The GCC release suite passed with each backend. With libdeflate 1.19 and zlib
+1.3, the strict release and stress corpora remained 14/14 and 6/6. The matched
+warm-cache `testmath` timing compared baseline commit `1a1e411` with the final
+candidate. Both were GCC 13.3.0 C17 release builds using
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. One warm-up preceded eleven alternating baseline/candidate pairs,
+each in a fresh output directory. Baseline times in milliseconds were
+388.462, 378.477, 377.165, 379.766, 382.634, 385.420, 391.692, 382.090,
+388.203, 376.529, and 379.160; candidate times were 377.782, 379.886,
+362.039, 363.821, 368.705, 372.411, 370.484, 368.672, 374.183, 365.129,
+and 371.857. The medians were 382.090 ms and 370.484 ms, a 3.0% reduction;
+the median paired reduction was 3.5%, and the candidate was faster in ten of
+eleven pairs. Median user CPU time fell from 0.32 s to 0.31 s, median system
+CPU time remained 0.05 s, and peak RSS was 28,672 KiB for every measured run.
+Load averages were 36.30/36.51/35.96 before and 36.26/36.49/35.96 after.
+
+The baseline and candidate executable SHA-256 values were
+`76281a3c2859a412e2c85f7560c47d2393951c622523c4115d2472ea10b31235`
+and
+`0516ddedf2b1283eedad7e849234e4762ca96bb0af57c83d63f97e32b5b13d42`.
+Their native-format SHA-256 values were
+`d19d99d5c1d73815d531bf811e5112fc97af942fb1fce35e063b5fb13c7072c1`
+and
+`afe3368069e3fc75dfb7b283f0dff95413492717b4d4111a4deefbc73df2111f`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`
+and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Different valid compression encodings changed the PDF SHA-256 from
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`
+to
+`beafce8089fdb36a2c4af7b20bed022aefff0e8a34cbbd6aa5b82e72a8a9994d`
+and reduced its size from 453,320 to 451,257 bytes; the decompressed semantic
+corpus gates agree.
+
+A separate run of the existing per-document timing mode summed to 4,304.3 ms
+for the reference and 3,033.6 ms for HSTeX, a 1.419x aggregate ratio in
+HSTeX's favor. This and the matched `testmath` result are diagnostic evidence,
+not the full-corpus headline benchmark.
+
 ## PDF font Unicode maps
 
 A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the

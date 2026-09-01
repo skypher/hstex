@@ -30,7 +30,8 @@ Building HSTeX requires:
 
 - a C17 compiler;
 - Meson 1.3 or newer and Ninja;
-- zlib development headers; and
+- zlib development headers;
+- optional libdeflate development headers for faster PDF stream compression; and
 - TeX Live or MacTeX for LaTeX inputs, fonts, metrics, encodings, maps,
   `kpsewhich`, and reference comparisons.
 
@@ -47,6 +48,9 @@ meson test -C build --no-rebuild --print-errorlogs
 ```
 
 Meson enables C17, warnings as errors, and a debug-optimized build by default.
+It uses libdeflate when the library is available and otherwise retains the
+zlib implementation. Pass `-Dlibdeflate=disabled` to exercise the fallback or
+`-Dlibdeflate=enabled` to require the faster backend.
 
 ## Use
 

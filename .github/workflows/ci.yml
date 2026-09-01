@@ -54,9 +54,9 @@ jobs:
           "$HOME/meson/bin/pip" install --quiet --upgrade meson
           echo "$HOME/meson/bin" >> "$GITHUB_PATH"
 
-      - name: Install corpus comparison tools
+      - name: Install corpus comparison and fast-compression tools
         if: matrix.runner == 'ubuntu-24.04'
-        run: sudo apt-get install -y mupdf-tools poppler-utils
+        run: sudo apt-get install -y libdeflate-dev mupdf-tools poppler-utils
 
       - name: Install build tools
         if: runner.os == 'macOS'
@@ -136,7 +136,7 @@ jobs:
       - name: Configure
         env:
           CC: clang
-        run: meson setup build
+        run: meson setup build -Dlibdeflate=disabled
 
       - name: Build
         run: meson compile -C build

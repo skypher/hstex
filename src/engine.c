@@ -3,6 +3,7 @@
 #include "hstex/filedb.h"
 
 #include "hstex/catcode.h"
+#include "hstex_config.h"
 #include "internal.h"
 #include "pk.h"
 #include "type1.h"
@@ -29,6 +30,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
+#if HSTEX_HAVE_LIBDEFLATE
+#include <libdeflate.h>
+#endif
 
 enum {
     HSTEX_INITIAL_MEANING_CAPACITY = 64,
@@ -3607,6 +3611,9 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     finder_stop(engine);
     free(engine->pdf_out_buffer);
     free(engine->pdf_current_object);
+#if HSTEX_HAVE_LIBDEFLATE
+    libdeflate_free_compressor(engine->pdf_compressor);
+#endif
     for (size_t index = 0U; index < engine->pdf_packed_object_count; ++index) {
         free(engine->pdf_packed_objects[index].content);
     }
@@ -21388,17 +21395,49 @@ static int pdf_reserve_offsets(struct hstex_engine *engine, size_t number,
     return 0;
 }
 
-static int pdf_compress_bytes(const uint8_t *source, size_t source_length,
+static int pdf_compress_bytes(struct hstex_engine *engine,
+                              const uint8_t *source, size_t source_length,
                               int level, uint8_t **compressed,
                               size_t *compressed_length, char *error,
                               size_t error_capacity)
 {
-    if (source_length > (size_t)ULONG_MAX) {
-        return set_error(error, error_capacity, "PDF stream is too large");
-    }
     static const uint8_t empty = 0U;
     if (source == NULL) {
         source = &empty;
+    }
+#if HSTEX_HAVE_LIBDEFLATE
+    if (engine->pdf_compressor == NULL ||
+        engine->pdf_compressor_level != level) {
+        libdeflate_free_compressor(engine->pdf_compressor);
+        engine->pdf_compressor = libdeflate_alloc_compressor(level);
+        engine->pdf_compressor_level =
+            engine->pdf_compressor == NULL ? 0 : level;
+    }
+    if (engine->pdf_compressor != NULL) {
+        struct libdeflate_compressor *compressor = engine->pdf_compressor;
+        size_t bound =
+            libdeflate_zlib_compress_bound(compressor, source_length);
+        uint8_t *bytes = malloc(bound == 0U ? 1U : bound);
+        if (bytes == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF stream allocation failed");
+        }
+        size_t count = libdeflate_zlib_compress(
+            compressor, source, source_length, bytes, bound);
+        if (count == 0U) {
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "PDF stream compression failed");
+        }
+        *compressed = bytes;
+        *compressed_length = count;
+        return 0;
+    }
+#else
+    (void)engine;
+#endif
+    if (source_length > (size_t)ULONG_MAX) {
+        return set_error(error, error_capacity, "PDF stream is too large");
     }
     uLong bound = compressBound((uLong)source_length);
     uint8_t *bytes = malloc((size_t)bound == 0U ? 1U : (size_t)bound);
@@ -21435,7 +21474,7 @@ static int pdf_write_stream_object(struct hstex_engine *engine, size_t number,
     size_t written_length = content_length;
     const uint8_t *written_content = content;
     if (level > 0 &&
-        pdf_compress_bytes(content, content_length, level, &compressed,
+        pdf_compress_bytes(engine, content, content_length, level, &compressed,
                            &written_length, error, error_capacity) != 0) {
         return -1;
     }
@@ -27748,7 +27787,7 @@ static int pdf_write_type3_glyph(struct hstex_engine *engine,
 {
     const struct hstex_pk_glyph *glyph = &entry->pk_font->glyphs[code];
     char width[64];
-    int32_t box[4];
+    int32_t box[4] = {0};
     if (pdf_type3_width_text(font, code, entry->pk_resolution, width, error,
                              error_capacity) != 0 ||
         pdf_type3_glyph_box(glyph, box, error, error_capacity) != 0) {

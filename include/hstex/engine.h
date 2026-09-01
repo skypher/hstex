@@ -1949,6 +1949,11 @@ struct hstex_engine {
        the-pdf-file. */
     FILE *pdf_file;
     size_t pdf_written;
+    /* A whole-buffer compressor is reusable between independent PDF streams.
+       Kept opaque so the public engine context does not expose an optional
+       compression library's declarations. */
+    void *pdf_compressor;
+    int pdf_compressor_level;
     /* Where each object was written, by number; zero until it is. */
     size_t *pdf_offsets;
     /* For an object carried by an object stream, which stream and which
