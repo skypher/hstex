@@ -35,6 +35,221 @@ static void decrypt_bytes(const uint8_t *cipher, size_t count, uint16_t key,
     }
 }
 
+static void write_little_endian_u32(uint8_t *bytes, size_t value)
+{
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8U);
+    bytes[2] = (uint8_t)(value >> 16U);
+    bytes[3] = (uint8_t)(value >> 24U);
+}
+
+static uint8_t *make_pfb(const uint8_t *program, size_t length1,
+                         size_t length2, size_t *font_count)
+{
+    static const char trailer[] =
+        "00000000000000000000000000000000\ncleartomark\n";
+    if (length1 > UINT32_MAX || length2 > UINT32_MAX ||
+        sizeof(trailer) - 1U > UINT32_MAX ||
+        length1 > SIZE_MAX - length2 - (sizeof(trailer) - 1U) - 20U) {
+        return NULL;
+    }
+    size_t count = length1 + length2 + sizeof(trailer) - 1U + 20U;
+    uint8_t *font = malloc(count);
+    if (font == NULL) {
+        return NULL;
+    }
+    size_t at = 0U;
+    font[at++] = 0x80U;
+    font[at++] = 1U;
+    write_little_endian_u32(font + at, length1);
+    at += 4U;
+    memcpy(font + at, program, length1);
+    at += length1;
+    font[at++] = 0x80U;
+    font[at++] = 2U;
+    write_little_endian_u32(font + at, length2);
+    at += 4U;
+    memcpy(font + at, program + length1, length2);
+    at += length2;
+    font[at++] = 0x80U;
+    font[at++] = 1U;
+    write_little_endian_u32(font + at, sizeof(trailer) - 1U);
+    at += 4U;
+    memcpy(font + at, trailer, sizeof(trailer) - 1U);
+    at += sizeof(trailer) - 1U;
+    font[at++] = 0x80U;
+    font[at++] = 3U;
+    *font_count = at;
+    return font;
+}
+
+static uint8_t hexadecimal_digit(unsigned int value)
+{
+    return (uint8_t)(value < 10U ? (unsigned int)'0' + value
+                                 : (unsigned int)'A' + value - 10U);
+}
+
+static uint8_t *make_pfa(const uint8_t *program, size_t length1,
+                         size_t length2, size_t *font_count)
+{
+    static const char trailer[] =
+        "00000000000000000000000000000000\ncleartomark\n";
+    size_t line_breaks = length2 / 32U + 1U;
+    if (length2 > (SIZE_MAX - length1 - line_breaks -
+                   (sizeof(trailer) - 1U)) /
+                      2U) {
+        return NULL;
+    }
+    size_t capacity = length1 + length2 * 2U + line_breaks +
+                      sizeof(trailer) - 1U;
+    uint8_t *font = malloc(capacity);
+    if (font == NULL) {
+        return NULL;
+    }
+    memcpy(font, program, length1);
+    size_t at = length1;
+    for (size_t index = 0U; index < length2; ++index) {
+        uint8_t byte = program[length1 + index];
+        font[at++] = hexadecimal_digit((unsigned int)(byte >> 4U));
+        font[at++] = hexadecimal_digit((unsigned int)(byte & 15U));
+        if ((index + 1U) % 32U == 0U) {
+            font[at++] = (uint8_t)'\n';
+        }
+    }
+    if (at == length1 || font[at - 1U] != (uint8_t)'\n') {
+        font[at++] = (uint8_t)'\n';
+    }
+    memcpy(font + at, trailer, sizeof(trailer) - 1U);
+    at += sizeof(trailer) - 1U;
+    *font_count = at;
+    return font;
+}
+
+static uint8_t *make_binary_pfa(const uint8_t *program, size_t length1,
+                                size_t length2, size_t *font_count)
+{
+    static const char trailer[] =
+        "00000000000000000000000000000000\ncleartomark\n";
+    if (length1 > SIZE_MAX - length2 - (sizeof(trailer) - 1U)) {
+        return NULL;
+    }
+    size_t count = length1 + length2 + sizeof(trailer) - 1U;
+    uint8_t *font = malloc(count);
+    if (font == NULL) {
+        return NULL;
+    }
+    memcpy(font, program, length1 + length2);
+    memcpy(font + length1 + length2, trailer, sizeof(trailer) - 1U);
+    *font_count = count;
+    return font;
+}
+
+static int test_disassembler(int container)
+{
+    static const char disassembly[] =
+        "%!PS-AdobeFont-1.0: HSTeXDisassemblyTest 1.0\n"
+        "/FontName /HSTeXDisassemblyTest def\n"
+        "/FontBBox {0 -200 900 800} readonly def\n"
+        "currentfile eexec\n"
+        "dup\n"
+        "/Private 4 dict dup begin\n"
+        "/RD{string currentfile exch readstring pop}executeonly def\n"
+        "/ND{noaccess def}executeonly def\n"
+        "/NP{noaccess put}executeonly def\n"
+        "/lenIV 4 def\n"
+        "/Subrs 1 array\n"
+        "dup 0 {\n"
+        "\t0 100 hstem\n"
+        "\treturn\n"
+        "\t} NP\n"
+        "/CharStrings 2 dict dup begin\n"
+        "/.notdef {\n"
+        "\t0 500 hsbw\n"
+        "\tendchar\n"
+        "\t} ND\n"
+        "/A {\n"
+        "\t0 600 hsbw\n"
+        "\t50 600 hstem\n"
+        "\tendchar\n"
+        "\t} ND\n"
+        "end end\n"
+        "readonly put\n"
+        "put\n"
+        "dup/FontName get exch definefont pop\n"
+        "mark currentfile closefile\n"
+        "cleartomark\n";
+    uint8_t *program = NULL;
+    size_t program_count = 0U;
+    size_t length1 = 0U;
+    size_t length2 = 0U;
+    char error[256] = {0};
+    if (hstex_type1_assemble((const uint8_t *)disassembly,
+                             sizeof(disassembly) - 1U, &program,
+                             &program_count, &length1, &length2, error,
+                             sizeof(error)) != 0) {
+        (void)fprintf(stderr,
+                      "test_type1: disassembler fixture assembly failed: %s\n",
+                      error);
+        return 1;
+    }
+    size_t font_count = 0U;
+    uint8_t *font = container == 0
+                        ? make_pfb(program, length1, length2, &font_count)
+                        : container == 1
+                              ? make_pfa(program, length1, length2,
+                                         &font_count)
+                              : make_binary_pfa(program, length1, length2,
+                                                &font_count);
+    const char *kind = container == 0 ? "PFB"
+                       : container == 1 ? "hexadecimal PFA"
+                                        : "binary PFA";
+    if (font == NULL) {
+        free(program);
+        return 1;
+    }
+    uint8_t *decoded = NULL;
+    size_t decoded_count = 0U;
+    int status = hstex_type1_disassemble(
+        font, font_count, &decoded, &decoded_count, error, sizeof(error));
+    if (status != 0) {
+        (void)fprintf(stderr, "test_type1: %s disassembly failed: %s\n", kind,
+                      error);
+        status = 1;
+    } else if (decoded_count != sizeof(disassembly) - 1U ||
+               memcmp(decoded, disassembly, sizeof(disassembly) - 1U) != 0) {
+        (void)fprintf(stderr,
+                      "test_type1: %s disassembly differs (%zu/%zu bytes)\n",
+                      kind, decoded_count, sizeof(disassembly) - 1U);
+        status = 1;
+    }
+    uint8_t *round_trip = NULL;
+    size_t round_trip_count = 0U;
+    size_t round_length1 = 0U;
+    size_t round_length2 = 0U;
+    if (status == 0 &&
+        hstex_type1_assemble(decoded, decoded_count, &round_trip,
+                             &round_trip_count, &round_length1,
+                             &round_length2, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr,
+                      "test_type1: disassembly reassembly failed: %s\n",
+                      error);
+        status = 1;
+    }
+    if (status == 0 &&
+        (round_trip_count != program_count || round_length1 != length1 ||
+         round_length2 != length2 ||
+         memcmp(round_trip, program, program_count) != 0)) {
+        (void)fprintf(stderr,
+                      "test_type1: %s round trip differs\n", kind);
+        status = 1;
+    }
+    free(round_trip);
+    free(decoded);
+    free(font);
+    free(program);
+    return status;
+}
+
 static int check_entry(const uint8_t *private, size_t private_count,
                        const char *header, const uint8_t *wanted,
                        size_t wanted_count, bool encrypted)
@@ -282,13 +497,16 @@ static int test_len_iv_mode(const char *value, bool encrypted)
 int main(int argc, char **argv)
 {
     int arguments = hstex_test_arguments(
-        argc, argv, "Run the HSTeX Type 1 assembler tests.");
+        argc, argv, "Run the HSTeX Type 1 codec tests.");
     if (arguments >= 0) {
         return arguments;
     }
     return test_specification_vectors() != 0 || test_unknown_operator() != 0 ||
                    test_len_iv_mode("0", true) != 0 ||
-                   test_len_iv_mode("-1", false) != 0
+                   test_len_iv_mode("-1", false) != 0 ||
+                   test_disassembler(0) != 0 ||
+                   test_disassembler(1) != 0 ||
+                   test_disassembler(2) != 0
                ? 1
                : 0;
 }

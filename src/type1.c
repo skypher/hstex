@@ -2,6 +2,7 @@
 
 #include "internal.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -79,7 +80,7 @@ static int type1_buffer_append(struct type1_buffer *buffer, const void *bytes,
 {
     if (count > SIZE_MAX - buffer->count) {
         return type1_error(error, error_capacity,
-                           "Type 1 assembly buffer overflow");
+                           "Type 1 buffer overflow");
     }
     size_t wanted = buffer->count + count;
     if (wanted > buffer->capacity) {
@@ -94,7 +95,7 @@ static int type1_buffer_append(struct type1_buffer *buffer, const void *bytes,
         uint8_t *grown = realloc(buffer->bytes, capacity);
         if (grown == NULL) {
             return type1_error(error, error_capacity,
-                               "Type 1 assembly allocation failed");
+                               "Type 1 buffer allocation failed");
         }
         buffer->bytes = grown;
         buffer->capacity = capacity;
@@ -117,7 +118,7 @@ static int type1_buffer_zeroes(struct type1_buffer *buffer, size_t count,
 {
     if (count > SIZE_MAX - buffer->count) {
         return type1_error(error, error_capacity,
-                           "Type 1 assembly buffer overflow");
+                           "Type 1 buffer overflow");
     }
     size_t wanted = buffer->count + count;
     if (wanted > buffer->capacity) {
@@ -132,7 +133,7 @@ static int type1_buffer_zeroes(struct type1_buffer *buffer, size_t count,
         uint8_t *grown = realloc(buffer->bytes, capacity);
         if (grown == NULL) {
             return type1_error(error, error_capacity,
-                               "Type 1 assembly allocation failed");
+                               "Type 1 buffer allocation failed");
         }
         buffer->bytes = grown;
         buffer->capacity = capacity;
@@ -352,6 +353,805 @@ static void type1_encrypt(uint8_t *bytes, size_t count, uint16_t key)
                                (uint32_t)TYPE1_C1 +
                            (uint32_t)TYPE1_C2);
     }
+}
+
+static const uint8_t *type1_text_line_after(const uint8_t *start,
+                                            const uint8_t *finish,
+                                            const uint8_t **content_finish)
+{
+    const uint8_t *at = start;
+    while (at < finish && *at != (uint8_t)'\r' &&
+           *at != (uint8_t)'\n') {
+        ++at;
+    }
+    *content_finish = at;
+    if (at < finish && *at == (uint8_t)'\r') {
+        ++at;
+        if (at < finish && *at == (uint8_t)'\n') {
+            ++at;
+        }
+    } else if (at < finish) {
+        ++at;
+    }
+    return at;
+}
+
+static bool type1_zero_line(const uint8_t *start, const uint8_t *finish)
+{
+    if (start == finish || *start != (uint8_t)'0') {
+        return false;
+    }
+    for (const uint8_t *at = start; at < finish; ++at) {
+        if (*at != (uint8_t)'0') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int type1_append_normalized_text(struct type1_buffer *output,
+                                        const uint8_t *start,
+                                        const uint8_t *finish,
+                                        bool omit_zero_lines, char *error,
+                                        size_t error_capacity)
+{
+    const uint8_t *line = start;
+    while (line < finish) {
+        const uint8_t *content_finish = NULL;
+        const uint8_t *after =
+            type1_text_line_after(line, finish, &content_finish);
+        if (!omit_zero_lines || !type1_zero_line(line, content_finish)) {
+            if (type1_buffer_append(output, line,
+                                    (size_t)(content_finish - line), error,
+                                    error_capacity) != 0) {
+                return -1;
+            }
+            if (after > content_finish &&
+                type1_buffer_byte(output, (uint8_t)'\n', error,
+                                  error_capacity) != 0) {
+                return -1;
+            }
+        }
+        line = after;
+    }
+    return 0;
+}
+
+static const struct type1_operator *type1_operator_by_code(uint8_t first,
+                                                            uint8_t second,
+                                                            size_t length)
+{
+    for (size_t index = 0U;
+         index < sizeof(type1_operators) / sizeof(type1_operators[0]);
+         ++index) {
+        const struct type1_operator *operator = &type1_operators[index];
+        if (operator->first == first && operator->second == second &&
+            operator->length == length) {
+            return operator;
+        }
+    }
+    return NULL;
+}
+
+static int type1_disassembly_token(struct type1_buffer *output,
+                                   const char *token, bool *line_start,
+                                   char *error, size_t error_capacity)
+{
+    uint8_t separator = *line_start ? (uint8_t)'\t' : (uint8_t)' ';
+    if (type1_buffer_byte(output, separator, error, error_capacity) != 0 ||
+        type1_buffer_append(output, token, strlen(token), error,
+                            error_capacity) != 0) {
+        return -1;
+    }
+    *line_start = false;
+    return 0;
+}
+
+static int type1_disassemble_charstring(const uint8_t *cipher,
+                                        size_t cipher_count, int32_t len_iv,
+                                        struct type1_buffer *output,
+                                        char *error, size_t error_capacity)
+{
+    if (len_iv < -1 ||
+        (len_iv >= 0 && (size_t)len_iv > cipher_count)) {
+        return type1_error(error, error_capacity,
+                           "invalid Type 1 charstring prefix");
+    }
+    uint8_t *plain = malloc(cipher_count == 0U ? 1U : cipher_count);
+    if (plain == NULL) {
+        return type1_error(error, error_capacity,
+                           "Type 1 charstring allocation failed");
+    }
+    if (cipher_count != 0U) {
+        memcpy(plain, cipher, cipher_count);
+    }
+    size_t at = 0U;
+    if (len_iv >= 0) {
+        uint16_t state = (uint16_t)TYPE1_CHARSTRING_KEY;
+        for (size_t index = 0U; index < cipher_count; ++index) {
+            uint8_t byte = plain[index];
+            plain[index] =
+                (uint8_t)(byte ^ (uint8_t)(state >> 8U));
+            state = (uint16_t)(((uint32_t)byte + (uint32_t)state) *
+                                   (uint32_t)TYPE1_C1 +
+                               (uint32_t)TYPE1_C2);
+        }
+        at = (size_t)len_iv;
+    }
+    bool line_start = true;
+    int status = 0;
+    while (status == 0 && at < cipher_count) {
+        uint8_t first = plain[at++];
+        if (first >= 32U) {
+            int32_t value = 0;
+            if (first <= 246U) {
+                value = (int32_t)first - 139;
+            } else if (first <= 250U) {
+                if (at == cipher_count) {
+                    status = type1_error(
+                        error, error_capacity,
+                        "truncated Type 1 positive integer");
+                    break;
+                }
+                value = ((int32_t)first - 247) * 256 + 108 +
+                        (int32_t)plain[at++];
+            } else if (first <= 254U) {
+                if (at == cipher_count) {
+                    status = type1_error(
+                        error, error_capacity,
+                        "truncated Type 1 negative integer");
+                    break;
+                }
+                value = -(((int32_t)first - 251) * 256) - 108 -
+                        (int32_t)plain[at++];
+            } else {
+                if (cipher_count - at < 4U) {
+                    status = type1_error(error, error_capacity,
+                                         "truncated Type 1 integer");
+                    break;
+                }
+                uint32_t encoded = (uint32_t)plain[at] << 24U |
+                                   (uint32_t)plain[at + 1U] << 16U |
+                                   (uint32_t)plain[at + 2U] << 8U |
+                                   (uint32_t)plain[at + 3U];
+                value = encoded <= (uint32_t)INT32_MAX
+                            ? (int32_t)encoded
+                            : -1 - (int32_t)(UINT32_MAX - encoded);
+                at += 4U;
+            }
+            char number[32];
+            int length = snprintf(number, sizeof(number), "%" PRId32,
+                                  value);
+            if (length < 0 || (size_t)length >= sizeof(number)) {
+                status = type1_error(error, error_capacity,
+                                     "Type 1 integer formatting failed");
+            } else {
+                status = type1_disassembly_token(
+                    output, number, &line_start, error, error_capacity);
+            }
+            continue;
+        }
+        uint8_t second = 0U;
+        size_t operator_length = 1U;
+        if (first == 12U) {
+            if (at == cipher_count) {
+                status = type1_error(error, error_capacity,
+                                     "truncated Type 1 escape operator");
+                break;
+            }
+            second = plain[at++];
+            operator_length = 2U;
+        }
+        const struct type1_operator *operator =
+            type1_operator_by_code(first, second, operator_length);
+        if (operator == NULL) {
+            status = operator_length == 1U
+                         ? type1_error(error, error_capacity,
+                                       "unsupported Type 1 operator %u",
+                                       (unsigned int)first)
+                         : type1_error(
+                               error, error_capacity,
+                               "unsupported Type 1 escape operator %u",
+                               (unsigned int)second);
+            break;
+        }
+        status = type1_disassembly_token(output, operator->name, &line_start,
+                                         error, error_capacity);
+        if (status == 0) {
+            status = type1_buffer_byte(output, (uint8_t)'\n', error,
+                                       error_capacity);
+            line_start = true;
+        }
+    }
+    free(plain);
+    return status;
+}
+
+static int type1_parse_size(const uint8_t *start, const uint8_t *finish,
+                            size_t *value)
+{
+    if (start == finish || *start < (uint8_t)'0' ||
+        *start > (uint8_t)'9') {
+        return -1;
+    }
+    size_t parsed = 0U;
+    for (const uint8_t *at = start; at < finish; ++at) {
+        if (*at < (uint8_t)'0' || *at > (uint8_t)'9') {
+            return -1;
+        }
+        size_t digit = (size_t)(*at - (uint8_t)'0');
+        if (parsed > (SIZE_MAX - digit) / 10U) {
+            return -1;
+        }
+        parsed = parsed * 10U + digit;
+    }
+    *value = parsed;
+    return 0;
+}
+
+static bool type1_disassembly_entry(const uint8_t *start,
+                                    const uint8_t *finish,
+                                    const char *charstring_start,
+                                    size_t charstring_start_length,
+                                    size_t *prefix_length,
+                                    size_t *charstring_length,
+                                    const uint8_t **charstring)
+{
+    if (charstring_start_length == 0U) {
+        return false;
+    }
+    const uint8_t *at = start;
+    while (at < finish && type1_horizontal_space(*at)) {
+        ++at;
+    }
+    while (at < finish && !type1_horizontal_space(*at) &&
+           *at != (uint8_t)'\n') {
+        ++at;
+    }
+    if (at == finish || !type1_horizontal_space(*at)) {
+        return false;
+    }
+    const uint8_t *first_space = at;
+    at = type1_skip_horizontal(at, finish);
+    const uint8_t *digits = at;
+    while (at < finish && *at >= (uint8_t)'0' &&
+           *at <= (uint8_t)'9') {
+        ++at;
+    }
+    if (at == digits) {
+        return false;
+    }
+    if (at < finish && type1_horizontal_space(*at)) {
+        const uint8_t *next = type1_skip_horizontal(at, finish);
+        if (next < finish && *next >= (uint8_t)'0' &&
+            *next <= (uint8_t)'9') {
+            first_space = at;
+            digits = next;
+            at = next;
+            while (at < finish && *at >= (uint8_t)'0' &&
+                   *at <= (uint8_t)'9') {
+                ++at;
+            }
+        }
+    }
+    if (at == finish || *at != (uint8_t)' ' ||
+        (size_t)(finish - (at + 1)) < charstring_start_length + 1U ||
+        memcmp(at + 1, charstring_start, charstring_start_length) != 0 ||
+        at[1U + charstring_start_length] != (uint8_t)' ' ||
+        type1_parse_size(digits, at, charstring_length) != 0) {
+        return false;
+    }
+    const uint8_t *data = at + charstring_start_length + 2U;
+    if (*charstring_length > (size_t)(finish - data)) {
+        return false;
+    }
+    *prefix_length = (size_t)(first_space - start);
+    *charstring = data;
+    return true;
+}
+
+static void type1_disassembly_settings(const uint8_t *start,
+                                       const uint8_t *finish, int32_t *len_iv,
+                                       char *charstring_start,
+                                       size_t *charstring_start_length)
+{
+    const uint8_t *len = type1_find(start, finish, "/lenIV ");
+    if (len != NULL) {
+        len += strlen("/lenIV ");
+        const uint8_t *number_finish = len;
+        while (number_finish < finish &&
+               !type1_horizontal_space(*number_finish)) {
+            ++number_finish;
+        }
+        int32_t parsed = 0;
+        if (type1_parse_integer(len, number_finish, &parsed) == 0) {
+            *len_iv = parsed;
+        }
+    }
+    const uint8_t *reader =
+        type1_find(start, finish, "string currentfile");
+    if (reader == NULL || type1_find(start, finish, "readstring") == NULL) {
+        return;
+    }
+    const uint8_t *name = reader;
+    while (name > start && name[-1] != (uint8_t)'/') {
+        --name;
+    }
+    if (name == start) {
+        return;
+    }
+    const uint8_t *name_finish = name;
+    while (name_finish < reader &&
+           !type1_horizontal_space(*name_finish) &&
+           *name_finish != (uint8_t)'{') {
+        ++name_finish;
+    }
+    size_t length = (size_t)(name_finish - name);
+    if (length == 0U || length >= 64U) {
+        return;
+    }
+    memcpy(charstring_start, name, length);
+    charstring_start[length] = '\0';
+    *charstring_start_length = length;
+}
+
+static const uint8_t *type1_inline_charstrings(const uint8_t *start,
+                                                const uint8_t *finish)
+{
+    const uint8_t *header = type1_find(start, finish, "/CharStrings ");
+    if (header == NULL) {
+        return NULL;
+    }
+    const uint8_t *begin = type1_find(header, finish, "dict dup begin");
+    if (begin == NULL) {
+        return NULL;
+    }
+    begin += strlen("dict dup begin");
+    while (begin < finish && type1_space(*begin)) {
+        ++begin;
+    }
+    return begin < finish && *begin == (uint8_t)'/' ? begin : NULL;
+}
+
+static int type1_disassemble_private(const uint8_t *start,
+                                     const uint8_t *finish,
+                                     struct type1_buffer *output, char *error,
+                                     size_t error_capacity)
+{
+    int32_t len_iv = 4;
+    char charstring_start[64] = {0};
+    size_t charstring_start_length = 0U;
+    const uint8_t *at = start;
+    while (at < finish) {
+        size_t prefix_length = 0U;
+        size_t charstring_length = 0U;
+        const uint8_t *charstring = NULL;
+        if (type1_disassembly_entry(
+                at, finish, charstring_start, charstring_start_length,
+                &prefix_length, &charstring_length, &charstring)) {
+            if (type1_buffer_append(output, at, prefix_length, error,
+                                    error_capacity) != 0 ||
+                type1_buffer_append(output, " {\n", 3U, error,
+                                    error_capacity) != 0 ||
+                type1_disassemble_charstring(
+                    charstring, charstring_length, len_iv, output, error,
+                    error_capacity) != 0 ||
+                type1_buffer_append(output, "\t}", 2U, error,
+                                    error_capacity) != 0) {
+                return -1;
+            }
+            at = charstring + charstring_length;
+            const uint8_t *content_finish = NULL;
+            const uint8_t *after =
+                type1_text_line_after(at, finish, &content_finish);
+            if (type1_buffer_append(output, at,
+                                    (size_t)(content_finish - at), error,
+                                    error_capacity) != 0 ||
+                (after > content_finish &&
+                 type1_buffer_byte(output, (uint8_t)'\n', error,
+                                   error_capacity) != 0)) {
+                return -1;
+            }
+            at = after;
+            continue;
+        }
+        const uint8_t *content_finish = NULL;
+        const uint8_t *after =
+            type1_text_line_after(at, finish, &content_finish);
+        const uint8_t *inline_entry =
+            type1_inline_charstrings(at, content_finish);
+        if (inline_entry != NULL) {
+            if (type1_buffer_append(output, at,
+                                    (size_t)(inline_entry - at), error,
+                                    error_capacity) != 0 ||
+                type1_buffer_byte(output, (uint8_t)'\n', error,
+                                  error_capacity) != 0) {
+                return -1;
+            }
+            at = inline_entry;
+            continue;
+        }
+        type1_disassembly_settings(at, content_finish, &len_iv,
+                                   charstring_start,
+                                   &charstring_start_length);
+        if (type1_buffer_append(output, at,
+                                (size_t)(content_finish - at), error,
+                                error_capacity) != 0 ||
+            (after > content_finish &&
+             type1_buffer_byte(output, (uint8_t)'\n', error,
+                               error_capacity) != 0)) {
+            return -1;
+        }
+        at = after;
+    }
+    return 0;
+}
+
+static bool type1_private_close_line(const uint8_t *start,
+                                     const uint8_t *finish)
+{
+    return type1_find(start, finish, "currentfile closefile") != NULL;
+}
+
+static int type1_decrypt_eexec(const uint8_t *cipher, size_t cipher_count,
+                               struct type1_buffer *plain,
+                               size_t *cipher_consumed, char *error,
+                               size_t error_capacity)
+{
+    uint16_t state = (uint16_t)TYPE1_EEXEC_KEY;
+    size_t line_start = 0U;
+    for (size_t index = 0U; index < cipher_count; ++index) {
+        uint8_t byte = cipher[index];
+        uint8_t decrypted =
+            (uint8_t)(byte ^ (uint8_t)(state >> 8U));
+        state = (uint16_t)(((uint32_t)byte + (uint32_t)state) *
+                               (uint32_t)TYPE1_C1 +
+                           (uint32_t)TYPE1_C2);
+        if (index < 4U) {
+            continue;
+        }
+        if (type1_buffer_byte(plain, decrypted, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (decrypted != (uint8_t)'\r' &&
+            decrypted != (uint8_t)'\n') {
+            continue;
+        }
+        const uint8_t *line = plain->bytes + line_start;
+        const uint8_t *line_finish = plain->bytes + plain->count - 1U;
+        if (type1_private_close_line(line, line_finish)) {
+            *cipher_consumed = index + 1U;
+            if (decrypted == (uint8_t)'\r' && index + 1U < cipher_count) {
+                uint8_t next_cipher = cipher[index + 1U];
+                uint8_t next_plain =
+                    (uint8_t)(next_cipher ^ (uint8_t)(state >> 8U));
+                if (next_plain == (uint8_t)'\n' &&
+                    type1_buffer_byte(plain, next_plain, error,
+                                      error_capacity) != 0) {
+                    return -1;
+                }
+                if (next_plain == (uint8_t)'\n') {
+                    ++*cipher_consumed;
+                }
+            }
+            return 0;
+        }
+        line_start = plain->count;
+    }
+    if (cipher_count < 4U) {
+        return type1_error(error, error_capacity,
+                           "truncated Type 1 eexec prefix");
+    }
+    if (line_start < plain->count &&
+        type1_private_close_line(plain->bytes + line_start,
+                                 plain->bytes + plain->count)) {
+        *cipher_consumed = cipher_count;
+        return 0;
+    }
+    return type1_error(error, error_capacity,
+                       "Type 1 eexec section has no private-section end");
+}
+
+static uint32_t type1_little_endian_u32(const uint8_t *bytes)
+{
+    return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8U |
+           (uint32_t)bytes[2] << 16U | (uint32_t)bytes[3] << 24U;
+}
+
+static int type1_disassemble_pfb(const uint8_t *font, size_t font_length,
+                                 struct type1_buffer *output, char *error,
+                                 size_t error_capacity)
+{
+    struct type1_buffer public = {0};
+    struct type1_buffer cipher = {0};
+    struct type1_buffer trailer = {0};
+    bool binary_seen = false;
+    bool trailer_seen = false;
+    bool done = false;
+    size_t at = 0U;
+    int status = 0;
+    while (status == 0 && at < font_length) {
+        if (font_length - at < 2U || font[at] != 0x80U) {
+            status = type1_error(error, error_capacity,
+                                 "invalid Type 1 PFB segment marker");
+            break;
+        }
+        uint8_t kind = font[at + 1U];
+        at += 2U;
+        if (kind == 3U) {
+            done = true;
+            if (at != font_length) {
+                status = type1_error(error, error_capacity,
+                                     "data follows Type 1 PFB end marker");
+            }
+            break;
+        }
+        if ((kind != 1U && kind != 2U) || font_length - at < 4U) {
+            status = type1_error(error, error_capacity,
+                                 "invalid Type 1 PFB segment header");
+            break;
+        }
+        size_t count = (size_t)type1_little_endian_u32(font + at);
+        at += 4U;
+        if (count > font_length - at) {
+            status = type1_error(error, error_capacity,
+                                 "truncated Type 1 PFB segment");
+            break;
+        }
+        if (kind == 2U) {
+            if (trailer_seen) {
+                status = type1_error(
+                    error, error_capacity,
+                    "Type 1 PFB binary segment follows its trailer");
+            } else {
+                binary_seen = true;
+                status = type1_buffer_append(&cipher, font + at, count,
+                                             error, error_capacity);
+            }
+        } else if (binary_seen) {
+            trailer_seen = true;
+            status = type1_buffer_append(&trailer, font + at, count, error,
+                                         error_capacity);
+        } else {
+            status = type1_buffer_append(&public, font + at, count, error,
+                                         error_capacity);
+        }
+        at += count;
+    }
+    if (status == 0 && !done) {
+        status = type1_error(error, error_capacity,
+                             "Type 1 PFB has no end marker");
+    }
+    if (status == 0 && !binary_seen) {
+        status = type1_error(error, error_capacity,
+                             "Type 1 PFB has no binary eexec segment");
+    }
+    if (status == 0 && public.count == 0U) {
+        status = type1_error(error, error_capacity,
+                             "Type 1 PFB has no public segment");
+    }
+    if (status == 0) {
+        status = type1_append_normalized_text(
+            output, public.bytes, public.bytes + public.count, false, error,
+            error_capacity);
+    }
+    struct type1_buffer plain = {0};
+    size_t cipher_consumed = 0U;
+    if (status == 0) {
+        status = type1_decrypt_eexec(cipher.bytes, cipher.count, &plain,
+                                    &cipher_consumed, error,
+                                    error_capacity);
+    }
+    if (status == 0) {
+        status = type1_disassemble_private(
+            plain.bytes, plain.bytes + plain.count, output, error,
+            error_capacity);
+    }
+    struct type1_buffer tail = {0};
+    if (status == 0 && cipher_consumed < cipher.count) {
+        status = type1_buffer_append(
+            &tail, cipher.bytes + cipher_consumed,
+            cipher.count - cipher_consumed, error, error_capacity);
+    }
+    if (status == 0) {
+        status = type1_buffer_append(&tail, trailer.bytes, trailer.count,
+                                     error, error_capacity);
+    }
+    if (status == 0 && tail.count != 0U) {
+        status = type1_append_normalized_text(
+            output, tail.bytes, tail.bytes + tail.count, true, error,
+            error_capacity);
+    }
+    free(public.bytes);
+    free(cipher.bytes);
+    free(trailer.bytes);
+    free(plain.bytes);
+    free(tail.bytes);
+    return status;
+}
+
+static int type1_hex_value(uint8_t byte)
+{
+    if (byte >= (uint8_t)'0' && byte <= (uint8_t)'9') {
+        return (int)(byte - (uint8_t)'0');
+    }
+    if (byte >= (uint8_t)'A' && byte <= (uint8_t)'F') {
+        return (int)(byte - (uint8_t)'A') + 10;
+    }
+    if (byte >= (uint8_t)'a' && byte <= (uint8_t)'f') {
+        return (int)(byte - (uint8_t)'a') + 10;
+    }
+    return -1;
+}
+
+static bool type1_four_hex_digits(const uint8_t *at, const uint8_t *finish)
+{
+    return (size_t)(finish - at) >= 4U && type1_hex_value(at[0]) >= 0 &&
+           type1_hex_value(at[1]) >= 0 && type1_hex_value(at[2]) >= 0 &&
+           type1_hex_value(at[3]) >= 0;
+}
+
+static int type1_decode_hex_lines(const uint8_t *start,
+                                  const uint8_t *finish,
+                                  struct type1_buffer *cipher,
+                                  const uint8_t **trailer, char *error,
+                                  size_t error_capacity)
+{
+    int high = -1;
+    const uint8_t *line = start;
+    *trailer = finish;
+    while (line < finish) {
+        const uint8_t *content_finish = NULL;
+        const uint8_t *after =
+            type1_text_line_after(line, finish, &content_finish);
+        if (type1_zero_line(line, content_finish)) {
+            *trailer = after;
+            if (high >= 0) {
+                return type1_error(error, error_capacity,
+                                   "odd Type 1 PFA hexadecimal digit");
+            }
+            return 0;
+        }
+        for (const uint8_t *at = line; at < content_finish; ++at) {
+            if (type1_horizontal_space(*at)) {
+                continue;
+            }
+            int value = type1_hex_value(*at);
+            if (value < 0) {
+                return type1_error(error, error_capacity,
+                                   "invalid Type 1 PFA hexadecimal data");
+            }
+            if (high < 0) {
+                high = value;
+            } else {
+                uint8_t byte = (uint8_t)((unsigned int)high << 4U |
+                                         (unsigned int)value);
+                if (type1_buffer_byte(cipher, byte, error,
+                                      error_capacity) != 0) {
+                    return -1;
+                }
+                high = -1;
+            }
+        }
+        line = after;
+    }
+    return high < 0
+               ? 0
+               : type1_error(error, error_capacity,
+                             "odd Type 1 PFA hexadecimal digit");
+}
+
+static int type1_disassemble_pfa(const uint8_t *font, size_t font_length,
+                                 struct type1_buffer *output, char *error,
+                                 size_t error_capacity)
+{
+    const uint8_t *finish = font + font_length;
+    const uint8_t *marker =
+        type1_find(font, finish, "currentfile eexec");
+    if (marker == NULL) {
+        return type1_error(error, error_capacity,
+                           "Type 1 PFA has no eexec section");
+    }
+    const uint8_t *word_finish = marker + strlen("currentfile eexec");
+    if (word_finish == finish || !type1_space(*word_finish)) {
+        return type1_error(error, error_capacity,
+                           "invalid Type 1 PFA eexec boundary");
+    }
+    const uint8_t *content_finish = NULL;
+    const uint8_t *after_marker =
+        type1_text_line_after(marker, finish, &content_finish);
+    const uint8_t *payload = word_finish;
+    while (payload < content_finish && type1_horizontal_space(*payload)) {
+        ++payload;
+    }
+    const uint8_t *public_finish = NULL;
+    if (payload < content_finish) {
+        public_finish = payload;
+    } else {
+        public_finish = after_marker;
+        payload = after_marker;
+        while (payload < finish && type1_space(*payload)) {
+            ++payload;
+        }
+    }
+    int status = type1_append_normalized_text(
+        output, font, public_finish, false, error, error_capacity);
+    bool hexadecimal = type1_four_hex_digits(payload, finish);
+    struct type1_buffer cipher = {0};
+    const uint8_t *trailer = finish;
+    if (status == 0 && hexadecimal) {
+        status = type1_decode_hex_lines(payload, finish, &cipher, &trailer,
+                                        error, error_capacity);
+    }
+    struct type1_buffer plain = {0};
+    size_t cipher_consumed = 0U;
+    if (status == 0 && hexadecimal) {
+        status = type1_decrypt_eexec(cipher.bytes, cipher.count, &plain,
+                                    &cipher_consumed, error,
+                                    error_capacity);
+    } else if (status == 0) {
+        status = type1_decrypt_eexec(
+            payload, (size_t)(finish - payload), &plain, &cipher_consumed,
+            error, error_capacity);
+        trailer = payload + cipher_consumed;
+    }
+    if (status == 0) {
+        status = type1_disassemble_private(
+            plain.bytes, plain.bytes + plain.count, output, error,
+            error_capacity);
+    }
+    if (status == 0 && hexadecimal && cipher_consumed < cipher.count) {
+        status = type1_append_normalized_text(
+            output, cipher.bytes + cipher_consumed,
+            cipher.bytes + cipher.count, true, error, error_capacity);
+    }
+    if (status == 0) {
+        status = type1_append_normalized_text(output, trailer, finish, true,
+                                              error, error_capacity);
+    }
+    free(cipher.bytes);
+    free(plain.bytes);
+    return status;
+}
+
+int hstex_type1_disassemble(const uint8_t *font, size_t font_length,
+                            uint8_t **disassembly,
+                            size_t *disassembly_length, char *error,
+                            size_t error_capacity)
+{
+    if (disassembly == NULL || disassembly_length == NULL) {
+        return type1_error(error, error_capacity,
+                           "invalid Type 1 disassembly destination");
+    }
+    *disassembly = NULL;
+    *disassembly_length = 0U;
+    if (font == NULL || font_length == 0U) {
+        return type1_error(error, error_capacity,
+                           "invalid Type 1 font program");
+    }
+    struct type1_buffer output = {0};
+    int status = font[0] == 0x80U
+                     ? type1_disassemble_pfb(font, font_length, &output,
+                                             error, error_capacity)
+                     : font[0] == (uint8_t)'%'
+                           ? type1_disassemble_pfa(
+                                 font, font_length, &output, error,
+                                 error_capacity)
+                           : type1_error(
+                                 error, error_capacity,
+                                 "Type 1 font has no PFB or PFA marker");
+    if (status == 0 &&
+        type1_buffer_byte(&output, 0U, error, error_capacity) != 0) {
+        status = -1;
+    }
+    if (status != 0) {
+        free(output.bytes);
+        return -1;
+    }
+    --output.count;
+    *disassembly = output.bytes;
+    *disassembly_length = output.count;
+    return 0;
 }
 
 static int type1_encode_charstring(const uint8_t *start,

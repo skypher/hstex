@@ -143,11 +143,18 @@ encoding vectors, map files, and the microtype behavior exercised by the
 strict corpus. Image inclusion is outside the current strict compatibility
 surface.
 
+When a Type 1 font is first reached, the engine reads its PFB or PFA program
+directly. The reader validates PFB segments or PFA hexadecimal/binary eexec
+data, decrypts eexec and charstrings, and produces the engine's canonical
+textual representation without a utility process. PFB and PFA line endings
+are normalized at their text boundaries; binary lengths remain authoritative.
+
 At document close, Type 1 subset programs are prepared independently by a
 bounded worker batch, after the physical-font set and each font's glyph set
 are immutable. Object allocation and serialization remain in sorted order.
 The subset's textual charstrings are encoded and both Type 1 cipher layers
-are applied inside HSTeX; assembly does not launch an external process.
+are applied inside HSTeX. Neither Type 1 disassembly nor assembly launches an
+external process.
 On Linux the worker count defaults to the process's available processors; a
 platform without an available processor-count interface defaults to one.
 The count is capped at eight and at the number of physical fonts;

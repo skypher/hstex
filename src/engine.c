@@ -4830,76 +4830,6 @@ static int read_whole_path(const char *path, uint8_t **bytes, size_t *count,
     return 0;
 }
 
-/* Run one public Type 1 utility with anonymous input and output files. Pipes
-   can deadlock when both the disassembly and the font exceed their kernel
-   buffers, whereas these files let the child consume and produce freely. */
-static int run_font_filter(const char *program, char *const arguments[],
-                           const uint8_t *input, size_t input_length,
-                           uint8_t **output, size_t *output_length, char *error,
-                           size_t error_capacity)
-{
-    FILE *in = tmpfile();
-    FILE *out = tmpfile();
-    if (in == NULL || out == NULL ||
-        (input_length != 0U &&
-         fwrite(input, 1U, input_length, in) != input_length) ||
-        fflush(in) != 0 || fseek(in, 0L, SEEK_SET) != 0) {
-        if (in != NULL) {
-            (void)fclose(in);
-        }
-        if (out != NULL) {
-            (void)fclose(out);
-        }
-        return set_error(error, error_capacity,
-                         "Type 1 utility input allocation failed");
-    }
-    posix_spawn_file_actions_t actions;
-    if (posix_spawn_file_actions_init(&actions) != 0) {
-        (void)fclose(in);
-        (void)fclose(out);
-        return set_error(error, error_capacity,
-                         "cannot start Type 1 utility");
-    }
-    pid_t child = 0;
-    int spawned =
-        posix_spawn_file_actions_adddup2(&actions, fileno(in), STDIN_FILENO) !=
-                    0 ||
-                posix_spawn_file_actions_adddup2(&actions, fileno(out),
-                                                 STDOUT_FILENO) != 0
-            ? -1
-            : posix_spawnp(&child, program, &actions, NULL, arguments,
-                           environ);
-    (void)posix_spawn_file_actions_destroy(&actions);
-    int child_status = 0;
-    while (spawned == 0 && waitpid(child, &child_status, 0) < 0 &&
-           errno == EINTR) {
-    }
-    (void)fclose(in);
-    if (spawned != 0 || !WIFEXITED(child_status) ||
-        WEXITSTATUS(child_status) != 0 || fflush(out) != 0 ||
-        fseek(out, 0L, SEEK_END) != 0) {
-        (void)fclose(out);
-        return set_error(error, error_capacity, "%s failed", program);
-    }
-    long length = ftell(out);
-    if (length < 0L || fseek(out, 0L, SEEK_SET) != 0) {
-        (void)fclose(out);
-        return set_error(error, error_capacity, "%s output failed", program);
-    }
-    uint8_t *content = malloc(length == 0L ? 1U : (size_t)length + 1U);
-    if (content == NULL ||
-        fread(content, 1U, (size_t)length, out) != (size_t)length) {
-        free(content);
-        (void)fclose(out);
-        return set_error(error, error_capacity, "%s output failed", program);
-    }
-    (void)fclose(out);
-    content[(size_t)length] = 0U;
-    *output = content;
-    *output_length = (size_t)length;
-    return 0;
-}
-
 static bool filename_has_extension(const char *filename)
 {
     const char *slash = strrchr(filename, '/');
@@ -22688,12 +22618,18 @@ static struct hstex_pdf_physical_font *pdf_physical_font_entry(
                         file);
         return NULL;
     }
-    char program[] = "t1disasm";
-    char *arguments[] = {program, path, NULL};
+    uint8_t *font_program = NULL;
+    size_t font_program_length = 0U;
     uint8_t *disassembly = NULL;
     size_t length = 0U;
-    int status = run_font_filter(program, arguments, NULL, 0U, &disassembly,
-                                 &length, error, error_capacity);
+    int status = read_whole_path(path, &font_program, &font_program_length,
+                                 error, error_capacity);
+    if (status == 0) {
+        status = hstex_type1_disassemble(
+            font_program, font_program_length, &disassembly, &length, error,
+            error_capacity);
+    }
+    free(font_program);
     free(path);
     if (status != 0) {
         return NULL;
@@ -23072,9 +23008,9 @@ static int pdf_type1_copy_lines(struct hstex_pdf_font_buffer *buffer,
             ++line;
             --length;
         }
-        /* t1disasm exposes the historical AMS OtherSubrs padding, while
-           pdfTeX's Type 1 writer emits these three empty procedures with
-           one fewer leading blank. */
+        /* The canonical editable form exposes the AMS OtherSubrs padding,
+           while the reference PDF writer emits these three empty procedures
+           with one fewer leading blank. */
         if (!public_part && length >= 5U &&
             memcmp(line, "[  {}", 5U) == 0) {
             if (pdf_font_buffer_text(buffer, "[ {}", error,
@@ -23596,9 +23532,9 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     const char *charstrings_header_end = strchr(charstrings, '\n');
     const char *charstrings_finish = strstr(charstrings, "\nend end");
     if (charstrings_finish == NULL) {
-        /* t1disasm preserves both conventional spellings of the two
-           dictionaries' closing operators.  Latin Modern puts them on one
-           line, while Euler and RSFS put one `end` on each line. */
+        /* The decoded program preserves both conventional spellings of the
+           two dictionaries' closing operators. Latin Modern puts them on
+           one line, while Euler and RSFS put one `end` on each line. */
         charstrings_finish = strstr(charstrings, "\nend\nend\n");
     }
     if (charstrings_finish == NULL) {

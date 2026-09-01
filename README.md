@@ -117,7 +117,7 @@ The engine currently includes:
   compression, and Type 1 subsetting;
 - public file metadata primitives and TeX Live's restricted shell-command
   profile, with allowlisted programs executed without a command shell;
-- TFM, Type 1, PK, encoding, and map-file handling;
+- TFM, in-process PFB/PFA Type 1, PK, encoding, and map-file handling;
 - versioned native format caches with explicit invalidation keys; and
 - scalar and runtime-dispatched AVX2 lexical scanning with identical semantic
   fallbacks.

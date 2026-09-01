@@ -208,6 +208,58 @@ A separate `t1asm` 1.41 run with `/lenIV -1` emitted the five encoded bytes of
 the `.notdef` fixture directly, without prefix bytes or charstring encryption;
 HSTeX treats that value as the same explicit unencrypted mode.
 
+The input-side codec follows the same Adobe cipher and charstring sections.
+For the PFB/PFA container boundary and canonical editable spelling, source
+study used LCDF t1utils tag `v1.41`, commit
+`e16fda51c46ee40c0d63af4b18a65e3070a99c87`: `process_pfb` and `process_pfa`
+in `t1lib.c`; `decrypt_charstring`, `eexec_line`,
+`disasm_output_binary`, and `disasm_output_ascii` in `t1disasm.c`; and
+`set_lenIV` and `set_cs_start` in `t1asmhelp.h`. Those files are under the
+MIT-derived Click License. They were used as an auditable behavioral source;
+HSTeX uses its own bounded buffers, segment state, operator table, error
+model, and C17 API, and incorporates no source or data from them.
+
+HSTeX validates every PFB marker, kind, little-endian segment length, ordering
+transition, and end marker. For PFA it distinguishes hexadecimal and binary
+eexec by the first four payload bytes, accepts hexadecimal whitespace and
+line wrapping, and rejects malformed or odd-length data. Both paths decrypt
+the four-byte eexec prefix, locate the private-section close, discover the
+font's charstring reader and `lenIV`, decode signed integer and operator forms,
+normalize CR, LF, and CRLF at text boundaries, and omit the conventional
+all-zero trailer lines. Unit vectors round-trip PFB, hexadecimal PFA, and
+binary PFA containers back to identical assembled programs.
+
+The differential audit used t1utils 1.41-4build3 and every one of the 348 PFB
+fonts in the installed TeX Live 2023 Type 1 tree. HSTeX and `t1disasm` 1.41
+produced byte-identical editable output for all 348, with no rejected font or
+unknown operator. Converting each font to PFA with `t1ascii` 1.41 and repeating
+the comparison produced another 348/348 byte-identical results. A process
+trace over `testmath` then showed no `t1disasm` or `t1asm` execution, while the
+PDF retained SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+
+The targeted warm-cache `testmath` timing compared baseline commit `403bf47`
+with the in-process reader candidate. Both were GCC 13.3.0 C17 release builds
+using `-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. One warm-up preceded eleven alternating baseline/candidate pairs,
+each in a fresh output directory. Baseline times in milliseconds were
+1007.115, 988.159, 996.903, 1006.978, 1016.263, 1004.195, 1009.465, 997.117,
+1009.470, 989.773, and 1009.758; candidate times were 913.945, 915.581,
+911.799, 931.684, 962.859, 928.195, 915.712, 902.216, 907.550, 924.237, and
+917.025. The medians were 1006.978 ms and 915.712 ms, a 9.1% reduction; the
+median paired reduction was 8.5%. Median user CPU time fell from 0.90 s to
+0.85 s and median system CPU time from 0.10 s to 0.06 s. Peak RSS was 28,672
+KiB for every measured run. Load averages were 39.96/40.99/40.61 before and
+40.18/40.98/40.62 after. The baseline and candidate executable SHA-256 values
+were `81f1bbbbe0c9c617b7fbacfca3dfe5407276f263b671ef994f524209c42189a0`
+and `bf6ddc831a1c17c51a412820d09ab45bf450046e204635715518baa68daee602`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f` and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Every measured PDF had the digest above. This is a targeted result, not the
+full-corpus headline benchmark.
+
 The targeted warm-cache `testmath` comparison used the pre-change commit
 `a20f489` and the candidate built with GCC 13.3.0 as C17 release binaries with
 `-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
