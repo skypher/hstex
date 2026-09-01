@@ -12,6 +12,7 @@ project(
 )
 
 cc = meson.get_compiler('c')
+zlib = dependency('zlib')
 warning_args = cc.get_supported_arguments(
   '-Wconversion',
   '-Wshadow',
@@ -71,6 +72,7 @@ core = static_library(
     'src/symbol.c',
   ),
   include_directories: [public_include, generated_include],
+  dependencies: zlib,
   install: false,
 )
 
@@ -79,6 +81,7 @@ hstex = executable(
   'src/main.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
   install: true,
 )
 
@@ -101,6 +104,7 @@ scan_test = executable(
   'tests/test_scan.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('scan', scan_test)
 
@@ -109,6 +113,7 @@ input_test = executable(
   'tests/test_input.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('input', input_test)
 
@@ -117,6 +122,7 @@ catcode_test = executable(
   'tests/test_catcode.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('catcode', catcode_test)
 
@@ -125,6 +131,7 @@ symbol_test = executable(
   'tests/test_symbol.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('symbol', symbol_test)
 
@@ -133,6 +140,7 @@ mouth_test = executable(
   'tests/test_mouth.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('mouth', mouth_test)
 
@@ -141,6 +149,7 @@ source_test = executable(
   'tests/test_source.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('source', source_test)
 
@@ -149,6 +158,7 @@ filedb_test = executable(
   'tests/test_filedb.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('filedb', filedb_test)
 
@@ -157,6 +167,7 @@ engine_test = executable(
   'tests/test_engine.c',
   include_directories: [public_include, generated_include],
   link_with: core,
+  dependencies: zlib,
 )
 test('engine', engine_test)
 

@@ -114,6 +114,7 @@ enum hstex_command {
     HSTEX_COMMAND_FI,
     HSTEX_COMMAND_INPUT,
     HSTEX_COMMAND_PDF_FILE_SIZE,
+    HSTEX_COMMAND_PDF_MD5_SUM,
     HSTEX_COMMAND_PDF_STRING_COMPARE,
     HSTEX_COMMAND_END,
     HSTEX_COMMAND_END_INPUT,
@@ -128,6 +129,8 @@ enum hstex_command {
     HSTEX_COMMAND_DIM_EXPR,
     HSTEX_COMMAND_GLUE_EXPR,
     HSTEX_COMMAND_MU_EXPR,
+    HSTEX_COMMAND_GLUE_COMPONENT_DIMEN,
+    HSTEX_COMMAND_GLUE_COMPONENT_ORDER,
     HSTEX_COMMAND_IMMEDIATE,
     HSTEX_COMMAND_OPEN_OUT,
     HSTEX_COMMAND_WRITE,
@@ -206,7 +209,12 @@ enum hstex_command {
     HSTEX_COMMAND_ENGINE_STATE_INTEGER,
     HSTEX_COMMAND_PAGE_INTEGER,
     HSTEX_COMMAND_PAGE_DIMEN,
+    HSTEX_COMMAND_E_TEX_REVISION,
     HSTEX_COMMAND_PDF_TEX_REVISION,
+    HSTEX_COMMAND_PDF_CREATION_DATE,
+    HSTEX_COMMAND_PDF_PAGE_REF,
+    HSTEX_COMMAND_PDF_UNIFORM_DEVIATE,
+    HSTEX_COMMAND_PDF_SET_RANDOM_SEED,
     HSTEX_COMMAND_PDF_MATCH,
     HSTEX_COMMAND_PDF_LAST_MATCH,
     HSTEX_COMMAND_PDF_ESCAPE_STRING,
@@ -214,6 +222,8 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_ESCAPE_HEX,
     HSTEX_COMMAND_PDF_UNESCAPE_HEX,
     HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE,
+    HSTEX_COMMAND_PDF_FONT_ATTRIBUTE,
+    HSTEX_COMMAND_PDF_NO_BUILTIN_TO_UNICODE,
     HSTEX_COMMAND_COPY,
     HSTEX_COMMAND_SHIFT_BOX,
     HSTEX_COMMAND_BOX_DIMEN,
@@ -297,6 +307,7 @@ enum hstex_command {
     HSTEX_COMMAND_MARK_TEXT,
     HSTEX_COMMAND_INSERT,
     HSTEX_COMMAND_VADJUST,
+    HSTEX_COMMAND_PDF_TRAILER_ID,
     /* What stands at the end of an alignment entry. It has no name a
        document can write; it exists so that a lookahead reaching the end of
        an entry sees a token there, as the reference's does. */
@@ -406,6 +417,13 @@ enum hstex_last_item {
     HSTEX_LAST_NODE_TYPE,
 };
 
+/* Which component the e-TeX glue inspectors select.  The dimensional and
+   order primitives share these subtypes. */
+enum hstex_glue_component {
+    HSTEX_GLUE_COMPONENT_STRETCH = 0,
+    HSTEX_GLUE_COMPONENT_SHRINK,
+};
+
 /* Which counter \pdflastobj and its siblings report. */
 enum hstex_pdf_last {
     HSTEX_PDF_LAST_OBJECT = 0,
@@ -415,15 +433,25 @@ enum hstex_pdf_last {
     HSTEX_PDF_LAST_IMAGE,
 };
 
-/* A PDF object the document has built. Nothing is written yet: the page
-   builder and the output backend do not exist, so these are recorded for
-   them; see docs/DECISIONS.md, pdf-objects. */
+/* A PDF object the document has built. Immediate objects that cannot enter
+   an object stream are written at once; the others wait for the file
+   trailer. See docs/DECISIONS.md, PDF objects. */
 struct hstex_pdf_object {
     int32_t number;
     bool reserved;
     bool stream;
+    bool written;
     char *attributes;
+    size_t attribute_length;
     char *content;
+    size_t content_length;
+};
+
+/* One ordinary PDF object waiting in the current PDF object stream. */
+struct hstex_pdf_packed_object {
+    size_t number;
+    uint8_t *content;
+    size_t content_length;
 };
 
 /* A \pdfliteral, kept in the order it was written. */
@@ -432,11 +460,20 @@ struct hstex_pdf_literal {
     char *content;
 };
 
+/* One delayed literal after expansion in the current page's whatsit order.
+   The PDF coordinate pass consumes these in the same order afterwards. */
+struct hstex_pdf_shipout_literal {
+    uint8_t *content;
+    size_t length;
+};
+
 enum hstex_pdf_literal_mode {
     HSTEX_PDF_LITERAL_SET = 0,
     HSTEX_PDF_LITERAL_DIRECT,
     HSTEX_PDF_LITERAL_PAGE,
-    HSTEX_PDF_LITERAL_SHIPOUT,
+    /* Orthogonal to the placement above: preserve the token list until the
+       containing box is shipped and expand it then. */
+    HSTEX_PDF_LITERAL_SHIPOUT = 1 << 2,
 };
 
 /* Which question \ifhbox, \ifvbox and \ifvoid ask about a box register. */
@@ -502,6 +539,7 @@ struct hstex_match_group {
    same way; see docs/DECISIONS.md, pdftex-identification. */
 #define HSTEX_PDFTEX_VERSION 140
 #define HSTEX_PDFTEX_REVISION "25"
+#define HSTEX_ETEX_REVISION ".6"
 
 /* Page-builder state. It belongs to the page rather than to a group, so it is
    not saved or restored by grouping. */
@@ -686,6 +724,8 @@ enum hstex_token_parameter {
     HSTEX_TOKEN_ERROR_HELP,
     /* Inserted when a file or a \scantokens pseudo-file runs out. */
     HSTEX_TOKEN_EVERY_EOF,
+    HSTEX_TOKEN_PDF_PAGE_ATTR,
+    HSTEX_TOKEN_PDF_PAGE_RESOURCES,
     HSTEX_TOKEN_PARAMETER_COUNT,
 };
 
@@ -860,6 +900,10 @@ struct hstex_extensible {
 
 struct hstex_font {
     char *name;
+    /* Extra entries supplied by \pdffontattr, and whether the document has
+       taken responsibility for this font's ToUnicode resource. */
+    char *pdf_attribute;
+    bool pdf_no_builtin_to_unicode;
     /* The character the program treats as standing beyond each end of a
        word, and where the program for the left boundary begins. Both come
        out of the lig/kern table's own first and last instructions; -1 where
@@ -904,6 +948,40 @@ struct hstex_pdf_font {
     uint32_t first;
     uint32_t last;
     uint8_t used[32];
+    /* Map-file data is resolved once the font has actually reached a page. */
+    size_t encoding_place;
+    size_t physical_place;
+    size_t to_unicode;
+};
+
+/* One PostScript encoding shared by all mapped TeX fonts that name it. */
+struct hstex_pdf_encoding {
+    char *file;
+    char *label;
+    char *glyphs[256];
+    uint8_t used[32];
+    size_t object;
+};
+
+/* One embedded Type 1 program. Several TeX encodings and sizes can point at
+   the same physical program and therefore share its subset and descriptor. */
+struct hstex_pdf_physical_font {
+    char *file;
+    char *postscript_name;
+    char *disassembly;
+    size_t disassembly_length;
+    char *builtin_glyphs[256];
+    char **glyphs;
+    size_t glyph_count;
+    size_t glyph_capacity;
+    uint32_t measure_identifier;
+    uint8_t *program;
+    size_t program_length;
+    size_t length1;
+    size_t length2;
+    size_t file_object;
+    size_t descriptor_object;
+    char subset_tag[7];
 };
 
 struct hstex_dvi_move {
@@ -1367,11 +1445,18 @@ struct hstex_pdf_action {
     uint32_t file;
     uint32_t name;
     uint32_t text;
+    /* A structured goto has a second destination, in the structure
+       destination namespace. Its name is a token list when it was named;
+       `structure_number' holds it otherwise. */
+    uint32_t structure_name;
     int32_t number;
+    int32_t structure_number;
     /* Whether a number was given rather than a name, and whether it was a
        page number rather than an object number. */
     bool numbered;
     bool paged;
+    bool structured;
+    bool structure_named;
     /* Whether the link said what window the file is to open in, and which
        it said. */
     bool windowed;
@@ -1400,6 +1485,7 @@ struct hstex_pdf_dest {
     int32_t number;
     size_t object;
     bool named;
+    bool structured;
     bool placed;
 };
 
@@ -1407,7 +1493,9 @@ struct hstex_pdf_dest {
    points measured the way the page is written. */
 struct hstex_pdf_placement {
     size_t object;
+    size_t structure;
     bool named;
+    bool structured;
     uint8_t kind;
     int32_t zoom;
     int32_t left;
@@ -1596,6 +1684,10 @@ struct hstex_node {
             uint32_t tokens;
             uint32_t detail;
             int32_t number;
+            /* A structured PDF destination uses this object in place of
+               the page object at the head of its destination array. Zero
+               denotes an ordinary destination. */
+            int32_t structure;
         } whatsit;
         int32_t penalty;
     } value;
@@ -1753,6 +1845,10 @@ struct hstex_engine {
     struct hstex_pdf_literal *pdf_literals;
     size_t pdf_literal_count;
     size_t pdf_literal_capacity;
+    struct hstex_pdf_shipout_literal *pdf_shipout_literals;
+    size_t pdf_shipout_literal_count;
+    size_t pdf_shipout_literal_capacity;
+    size_t pdf_shipout_literal_cursor;
     struct hstex_pdf_record *pdf_records;
     size_t pdf_record_count;
     size_t pdf_record_capacity;
@@ -1771,6 +1867,22 @@ struct hstex_engine {
     FILE *read_streams[16];
     char *output_directory;
     char *job_name;
+    /* An explicitly supplied \pdftrailerid seed.  A set, empty seed omits
+       the ID; an unset seed selects pdfTeX's creation-date/output-name
+       default. */
+    uint8_t *pdf_trailer_id_seed;
+    size_t pdf_trailer_id_seed_length;
+    bool pdf_trailer_id_set;
+    /* The process-start timestamp exposed by \pdfcreationdate.  It is kept
+       separately from \year, \month, \day and \time because pdfTeX's
+       reproducible-build input changes the PDF date without changing those
+       TeX registers. */
+    char pdf_creation_date[32];
+    /* pdfTeX's MetaPost-derived pseudo-random stream.  The seed is exposed
+       read-only, while the 55 fractions and cursor advance independently. */
+    int32_t pdf_random_seed;
+    int32_t pdf_randoms[55];
+    uint8_t pdf_random_index;
     /* The page description being written, when \pdfoutput asks for one; see
        docs/DECISIONS.md, the-page-description. */
     FILE *dvi_file;
@@ -1804,7 +1916,22 @@ struct hstex_engine {
     size_t pdf_written;
     /* Where each object was written, by number; zero until it is. */
     size_t *pdf_offsets;
+    /* For an object carried by an object stream, which stream and which
+       zero-based entry of it carries the object. */
+    size_t *pdf_object_streams;
+    uint8_t *pdf_object_stream_indices;
     size_t pdf_offset_capacity;
+    /* Ordinary objects are assembled here before they are either written
+       directly or placed in the current 100-object PDF object stream. */
+    uint8_t *pdf_current_object;
+    size_t pdf_current_object_count;
+    size_t pdf_current_object_capacity;
+    size_t pdf_current_object_number;
+    bool pdf_current_object_active;
+    bool pdf_current_object_direct;
+    struct hstex_pdf_packed_object pdf_packed_objects[100];
+    size_t pdf_packed_object_count;
+    size_t pdf_packed_object_number;
     /* What the page being shipped is to carry, and the link it is in the
        middle of. */
     struct hstex_pdf_annotation *pdf_annots;
@@ -1870,6 +1997,22 @@ struct hstex_engine {
     struct hstex_pdf_font *pdf_fonts;
     size_t pdf_font_count;
     size_t pdf_font_capacity;
+    struct hstex_pdf_encoding *pdf_encodings;
+    size_t pdf_encoding_count;
+    size_t pdf_encoding_capacity;
+    struct hstex_pdf_physical_font *pdf_physical_fonts;
+    size_t pdf_physical_font_count;
+    size_t pdf_physical_font_capacity;
+    char *pdf_font_map;
+    size_t pdf_font_map_length;
+    size_t pdf_t1_cmap;
+    size_t pdf_ot1_cmap;
+    size_t pdf_t1_cmap_encoding;
+    size_t pdf_ot1_cmap_encoding;
+    bool pdf_t1_cmap_written;
+    bool pdf_ot1_cmap_written;
+    uint8_t *pdf_cmap_font_checked;
+    size_t pdf_cmap_font_checked_capacity;
     uint32_t *pdf_page_fonts;
     size_t pdf_page_font_count;
     size_t pdf_page_font_capacity;

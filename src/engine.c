@@ -23,8 +23,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <time.h>
-#include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 enum {
     HSTEX_INITIAL_MEANING_CAPACITY = 64,
@@ -98,6 +98,8 @@ static int push_one(struct hstex_engine *engine, hstex_token token,
 static void describe_token(struct hstex_engine *engine, hstex_token token,
                            char *buffer, size_t capacity);
 static void finder_stop(struct hstex_engine *engine);
+static size_t pdf_page_object(struct hstex_engine *engine, size_t index,
+                              char *error, size_t error_capacity);
 /* The name of the primitive the executor is running, worked out where a
    diagnostic asks for it rather than at every command. */
 static const char *executing_name(struct hstex_engine *engine)
@@ -2167,6 +2169,152 @@ static int register_primitive(struct hstex_engine *engine, const char *name,
                        error_capacity);
 }
 
+/* pdfTeX exposes one process-start PDF timestamp.  SOURCE_DATE_EPOCH selects
+   UTC and a trailing Z; otherwise the local offset is written as +HH'MM'.
+   The TeX date registers remain the local wall clock in either case.  These
+   cases are pinned by test_pdf_creation_date and documented in DECISIONS.md. */
+static void initialize_pdf_creation_date(struct hstex_engine *engine,
+                                         time_t process_start)
+{
+    time_t stamp = process_start;
+    bool reproducible = false;
+    const char *source_epoch = getenv("SOURCE_DATE_EPOCH");
+    if (source_epoch != NULL && source_epoch[0] != '\0') {
+        char *end = NULL;
+        errno = 0;
+        intmax_t parsed = strtoimax(source_epoch, &end, 10);
+        time_t converted = (time_t)parsed;
+        if (errno == 0 && end != source_epoch && *end == '\0' &&
+            (intmax_t)converted == parsed) {
+            stamp = converted;
+            reproducible = true;
+        }
+    }
+
+    struct tm broken_down;
+    struct tm *result = reproducible ? gmtime_r(&stamp, &broken_down)
+                                     : localtime_r(&stamp, &broken_down);
+    if (result == NULL) {
+        (void)snprintf(engine->pdf_creation_date,
+                       sizeof(engine->pdf_creation_date),
+                       "D:19700101000000Z");
+        return;
+    }
+    char digits[20] = {0};
+    if (strftime(digits, sizeof(digits), "%Y%m%d%H%M%S", &broken_down) !=
+        14U) {
+        (void)snprintf(engine->pdf_creation_date,
+                       sizeof(engine->pdf_creation_date),
+                       "D:19700101000000Z");
+        return;
+    }
+    memcpy(engine->pdf_creation_date, "D:", 2U);
+    memcpy(engine->pdf_creation_date + 2U, digits, 14U);
+    if (reproducible) {
+        memcpy(engine->pdf_creation_date + 16U, "Z", 2U);
+        return;
+    }
+
+    char offset[8] = {0};
+    if (strftime(offset, sizeof(offset), "%z", &broken_down) == 5U &&
+        offset[0] != '\0' && strcmp(offset, "+0000") != 0 &&
+        strcmp(offset, "-0000") != 0) {
+        engine->pdf_creation_date[16] = offset[0];
+        engine->pdf_creation_date[17] = offset[1];
+        engine->pdf_creation_date[18] = offset[2];
+        engine->pdf_creation_date[19] = '\'';
+        engine->pdf_creation_date[20] = offset[3];
+        engine->pdf_creation_date[21] = offset[4];
+        engine->pdf_creation_date[22] = '\'';
+        engine->pdf_creation_date[23] = '\0';
+    } else {
+        memcpy(engine->pdf_creation_date + 16U, "Z", 2U);
+    }
+}
+
+enum {
+    HSTEX_PDF_RANDOM_FRACTION = 268435456,
+    HSTEX_PDF_RANDOM_HALF = 134217728,
+};
+
+/* Refresh the 55-fraction batch using the lagged subtractive recurrence
+   documented for MetaPost's random stream.  The pdfTeX manual identifies
+   that stream as the basis of its four random-number primitives; seeded
+   black-box probes pin the cursor direction and the three warm-up rounds.
+   See docs/DECISIONS.md, pdf-random-numbers. */
+static void pdf_new_randoms(struct hstex_engine *engine)
+{
+    for (size_t index = 0U; index <= 23U; ++index) {
+        int32_t value = engine->pdf_randoms[index] -
+                        engine->pdf_randoms[index + 31U];
+        if (value < 0) {
+            value += HSTEX_PDF_RANDOM_FRACTION;
+        }
+        engine->pdf_randoms[index] = value;
+    }
+    for (size_t index = 24U; index <= 54U; ++index) {
+        int32_t value = engine->pdf_randoms[index] -
+                        engine->pdf_randoms[index - 24U];
+        if (value < 0) {
+            value += HSTEX_PDF_RANDOM_FRACTION;
+        }
+        engine->pdf_randoms[index] = value;
+    }
+    engine->pdf_random_index = 54U;
+}
+
+static void pdf_set_random_seed(struct hstex_engine *engine, int32_t seed)
+{
+    int64_t positive = seed;
+    if (positive < 0) {
+        positive = -positive;
+    }
+    engine->pdf_random_seed = (int32_t)positive;
+    int32_t previous = engine->pdf_random_seed;
+    while (previous >= HSTEX_PDF_RANDOM_FRACTION) {
+        previous /= 2;
+    }
+    int32_t current = 1;
+    for (size_t index = 0U; index < 55U; ++index) {
+        int32_t swapped = current;
+        current = previous - current;
+        previous = swapped;
+        if (current < 0) {
+            current += HSTEX_PDF_RANDOM_FRACTION;
+        }
+        engine->pdf_randoms[(index * 21U) % 55U] = previous;
+    }
+    pdf_new_randoms(engine);
+    pdf_new_randoms(engine);
+    pdf_new_randoms(engine);
+}
+
+static int32_t pdf_next_random(struct hstex_engine *engine)
+{
+    if (engine->pdf_random_index == 0U) {
+        pdf_new_randoms(engine);
+    } else {
+        --engine->pdf_random_index;
+    }
+    return engine->pdf_randoms[engine->pdf_random_index];
+}
+
+static int32_t pdf_uniform_deviate(struct hstex_engine *engine, int32_t bound)
+{
+    int64_t magnitude = bound;
+    if (magnitude < 0) {
+        magnitude = -magnitude;
+    }
+    int64_t random = pdf_next_random(engine);
+    int64_t result =
+        (magnitude * random + HSTEX_PDF_RANDOM_HALF) /
+        HSTEX_PDF_RANDOM_FRACTION;
+    if (result == magnitude) {
+        result = 0;
+    }
+    return bound < 0 ? (int32_t)-result : (int32_t)result;
+}
+
 int hstex_engine_init(struct hstex_engine *engine, char *error,
                       size_t error_capacity)
 {
@@ -2317,6 +2465,7 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
     engine->dimen_parameters[HSTEX_DIMEN_PDF_VORIGIN] = 4736287;
     engine->integer_parameters[HSTEX_INTEGER_PDF_DECIMAL_DIGITS] = 3;
     engine->integer_parameters[HSTEX_INTEGER_PDF_COMPRESS_LEVEL] = 9;
+    engine->integer_parameters[HSTEX_INTEGER_PDF_MAJOR_VERSION] = 1;
     engine->integer_parameters[HSTEX_INTEGER_PDF_MINOR_VERSION] = 4;
     engine->integer_parameters[HSTEX_INTEGER_MAX_DEAD_CYCLES] = 25;
     engine->prev_depth = -INT32_C(1000) * INT32_C(65536);
@@ -2353,6 +2502,19 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
     }
 
     time_t now = time(NULL);
+    initialize_pdf_creation_date(engine, now);
+    struct timespec random_clock = {0};
+    if (clock_gettime(CLOCK_REALTIME, &random_clock) != 0) {
+        random_clock.tv_sec = now;
+    }
+    int64_t random_seconds = (int64_t)random_clock.tv_sec % INT64_C(1000000);
+    int64_t initial_random_seed =
+        (int64_t)(random_clock.tv_nsec / 1000L) * INT64_C(1000) +
+        random_seconds;
+    if (initial_random_seed < 0) {
+        initial_random_seed = -initial_random_seed;
+    }
+    pdf_set_random_seed(engine, (int32_t)initial_random_seed);
     struct tm broken_down;
     if (now != (time_t)-1 && localtime_r(&now, &broken_down) != NULL) {
         engine->integer_parameters[HSTEX_INTEGER_TIME] =
@@ -2423,8 +2585,14 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"else", HSTEX_COMMAND_ELSE},
         {"fi", HSTEX_COMMAND_FI},
         {"input", HSTEX_COMMAND_INPUT},
+        {"eTeXrevision", HSTEX_COMMAND_E_TEX_REVISION},
         {"pdftexrevision", HSTEX_COMMAND_PDF_TEX_REVISION},
+        {"pdfcreationdate", HSTEX_COMMAND_PDF_CREATION_DATE},
+        {"pdfpageref", HSTEX_COMMAND_PDF_PAGE_REF},
+        {"pdfuniformdeviate", HSTEX_COMMAND_PDF_UNIFORM_DEVIATE},
+        {"pdfsetrandomseed", HSTEX_COMMAND_PDF_SET_RANDOM_SEED},
         {"pdffilesize", HSTEX_COMMAND_PDF_FILE_SIZE},
+        {"pdfmdfivesum", HSTEX_COMMAND_PDF_MD5_SUM},
         {"pdfstrcmp", HSTEX_COMMAND_PDF_STRING_COMPARE},
         {"pdfmatch", HSTEX_COMMAND_PDF_MATCH},
         {"pdflastmatch", HSTEX_COMMAND_PDF_LAST_MATCH},
@@ -2433,6 +2601,9 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"pdfescapehex", HSTEX_COMMAND_PDF_ESCAPE_HEX},
         {"pdfunescapehex", HSTEX_COMMAND_PDF_UNESCAPE_HEX},
         {"pdfglyphtounicode", HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE},
+        {"pdffontattr", HSTEX_COMMAND_PDF_FONT_ATTRIBUTE},
+        {"pdfnobuiltintounicode",
+         HSTEX_COMMAND_PDF_NO_BUILTIN_TO_UNICODE},
         {"end", HSTEX_COMMAND_END},
         {"endinput", HSTEX_COMMAND_END_INPUT},
         {"errmessage", HSTEX_COMMAND_ERROR_MESSAGE},
@@ -2494,6 +2665,7 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"kern", HSTEX_COMMAND_KERN},
         {"pdfcatalog", HSTEX_COMMAND_PDF_CATALOG},
         {"pdfinfo", HSTEX_COMMAND_PDF_INFO},
+        {"pdftrailerid", HSTEX_COMMAND_PDF_TRAILER_ID},
         {"pdfobj", HSTEX_COMMAND_PDF_OBJECT},
         {"pdfrefobj", HSTEX_COMMAND_PDF_REF_OBJECT},
         {"pdfliteral", HSTEX_COMMAND_PDF_LITERAL},
@@ -2554,6 +2726,33 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
                 engine, skip_primitives[index].name,
                 skip_primitives[index].command,
                 skip_primitives[index].subtype, error,
+                error_capacity) != 0) {
+            hstex_engine_destroy(engine);
+            return -1;
+        }
+    }
+    static const struct {
+        const char *name;
+        enum hstex_command command;
+        enum hstex_glue_component component;
+    } glue_component_primitives[] = {
+        {"gluestretch", HSTEX_COMMAND_GLUE_COMPONENT_DIMEN,
+         HSTEX_GLUE_COMPONENT_STRETCH},
+        {"glueshrink", HSTEX_COMMAND_GLUE_COMPONENT_DIMEN,
+         HSTEX_GLUE_COMPONENT_SHRINK},
+        {"gluestretchorder", HSTEX_COMMAND_GLUE_COMPONENT_ORDER,
+         HSTEX_GLUE_COMPONENT_STRETCH},
+        {"glueshrinkorder", HSTEX_COMMAND_GLUE_COMPONENT_ORDER,
+         HSTEX_GLUE_COMPONENT_SHRINK},
+    };
+    for (size_t index = 0U;
+         index < sizeof(glue_component_primitives) /
+                     sizeof(glue_component_primitives[0]);
+         ++index) {
+        if (register_integer_primitive(
+                engine, glue_component_primitives[index].name,
+                glue_component_primitives[index].command,
+                (int32_t)glue_component_primitives[index].component, error,
                 error_capacity) != 0) {
             hstex_engine_destroy(engine);
             return -1;
@@ -2705,6 +2904,7 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         "currentiftype",
         "currentifbranch",
         "badness",
+        "pdfrandomseed",
     };
     for (size_t index = 0U;
          index < sizeof(engine_state_integer_primitives) /
@@ -3166,6 +3366,8 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"everycr", HSTEX_TOKEN_EVERY_CR},
         {"errhelp", HSTEX_TOKEN_ERROR_HELP},
         {"everyeof", HSTEX_TOKEN_EVERY_EOF},
+        {"pdfpageattr", HSTEX_TOKEN_PDF_PAGE_ATTR},
+        {"pdfpageresources", HSTEX_TOKEN_PDF_PAGE_RESOURCES},
     };
     for (size_t index = 0U;
          index < sizeof(token_primitives) / sizeof(token_primitives[0]);
@@ -3300,6 +3502,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     for (size_t index = 0U; index < engine->font_count; ++index) {
         free(engine->fonts[index].name);
+        free(engine->fonts[index].pdf_attribute);
         free(engine->fonts[index].dimens);
         free(engine->fonts[index].characters);
         free(engine->fonts[index].lig_kern);
@@ -3354,6 +3557,11 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->pdf_literals[index].content);
     }
     free(engine->pdf_literals);
+    for (size_t index = 0U; index < engine->pdf_shipout_literal_count;
+         ++index) {
+        free(engine->pdf_shipout_literals[index].content);
+    }
+    free(engine->pdf_shipout_literals);
     for (size_t index = 0U; index < engine->pdf_record_count; ++index) {
         free(engine->pdf_records[index].name);
         free(engine->pdf_records[index].content);
@@ -3365,9 +3573,43 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->pdf_outlines);
     finder_stop(engine);
     free(engine->pdf_out_buffer);
+    free(engine->pdf_current_object);
+    for (size_t index = 0U; index < engine->pdf_packed_object_count; ++index) {
+        free(engine->pdf_packed_objects[index].content);
+    }
+    free(engine->pdf_offsets);
+    free(engine->pdf_object_streams);
+    free(engine->pdf_object_stream_indices);
     free(engine->dead_nodes);
     free(engine->pdf_fonts);
+    for (size_t index = 0U; index < engine->pdf_encoding_count; ++index) {
+        struct hstex_pdf_encoding *encoding = &engine->pdf_encodings[index];
+        free(encoding->file);
+        free(encoding->label);
+        for (size_t code = 0U; code < 256U; ++code) {
+            free(encoding->glyphs[code]);
+        }
+    }
+    free(engine->pdf_encodings);
+    for (size_t index = 0U; index < engine->pdf_physical_font_count; ++index) {
+        struct hstex_pdf_physical_font *font =
+            &engine->pdf_physical_fonts[index];
+        free(font->file);
+        free(font->postscript_name);
+        free(font->disassembly);
+        free(font->program);
+        for (size_t code = 0U; code < 256U; ++code) {
+            free(font->builtin_glyphs[code]);
+        }
+        for (size_t glyph = 0U; glyph < font->glyph_count; ++glyph) {
+            free(font->glyphs[glyph]);
+        }
+        free(font->glyphs);
+    }
+    free(engine->pdf_physical_fonts);
+    free(engine->pdf_font_map);
     free(engine->pdf_font_places);
+    free(engine->pdf_cmap_font_checked);
     free(engine->pdf_dest_slots);
     free(engine->cs_name_scratch);
     for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
@@ -3395,6 +3637,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->output_directory);
     free(engine->output_name);
     free(engine->job_name);
+    free(engine->pdf_trailer_id_seed);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
 }
@@ -4468,6 +4711,105 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
     return path;
 }
 
+static int read_whole_path(const char *path, uint8_t **bytes, size_t *count,
+                           char *error, size_t error_capacity)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL || fseek(file, 0L, SEEK_END) != 0) {
+        if (file != NULL) {
+            (void)fclose(file);
+        }
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    long length = ftell(file);
+    if (length < 0L || fseek(file, 0L, SEEK_SET) != 0) {
+        (void)fclose(file);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    uint8_t *content = malloc(length == 0L ? 1U : (size_t)length + 1U);
+    if (content == NULL ||
+        fread(content, 1U, (size_t)length, file) != (size_t)length) {
+        free(content);
+        (void)fclose(file);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    (void)fclose(file);
+    content[(size_t)length] = 0U;
+    *bytes = content;
+    *count = (size_t)length;
+    return 0;
+}
+
+/* Run one public Type 1 utility with anonymous input and output files. Pipes
+   can deadlock when both the disassembly and the font exceed their kernel
+   buffers, whereas these files let the child consume and produce freely. */
+static int run_font_filter(const char *program, char *const arguments[],
+                           const uint8_t *input, size_t input_length,
+                           uint8_t **output, size_t *output_length, char *error,
+                           size_t error_capacity)
+{
+    FILE *in = tmpfile();
+    FILE *out = tmpfile();
+    if (in == NULL || out == NULL ||
+        (input_length != 0U &&
+         fwrite(input, 1U, input_length, in) != input_length) ||
+        fflush(in) != 0 || fseek(in, 0L, SEEK_SET) != 0) {
+        if (in != NULL) {
+            (void)fclose(in);
+        }
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        return set_error(error, error_capacity,
+                         "Type 1 utility input allocation failed");
+    }
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        (void)fclose(in);
+        (void)fclose(out);
+        return set_error(error, error_capacity,
+                         "cannot start Type 1 utility");
+    }
+    pid_t child = 0;
+    int spawned =
+        posix_spawn_file_actions_adddup2(&actions, fileno(in), STDIN_FILENO) !=
+                    0 ||
+                posix_spawn_file_actions_adddup2(&actions, fileno(out),
+                                                 STDOUT_FILENO) != 0
+            ? -1
+            : posix_spawnp(&child, program, &actions, NULL, arguments,
+                           environ);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    int child_status = 0;
+    while (spawned == 0 && waitpid(child, &child_status, 0) < 0 &&
+           errno == EINTR) {
+    }
+    (void)fclose(in);
+    if (spawned != 0 || !WIFEXITED(child_status) ||
+        WEXITSTATUS(child_status) != 0 || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_END) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "%s failed", program);
+    }
+    long length = ftell(out);
+    if (length < 0L || fseek(out, 0L, SEEK_SET) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "%s output failed", program);
+    }
+    uint8_t *content = malloc(length == 0L ? 1U : (size_t)length + 1U);
+    if (content == NULL ||
+        fread(content, 1U, (size_t)length, out) != (size_t)length) {
+        free(content);
+        (void)fclose(out);
+        return set_error(error, error_capacity, "%s output failed", program);
+    }
+    (void)fclose(out);
+    content[(size_t)length] = 0U;
+    *output = content;
+    *output_length = (size_t)length;
+    return 0;
+}
+
 static bool filename_has_extension(const char *filename)
 {
     const char *slash = strrchr(filename, '/');
@@ -4591,7 +4933,25 @@ static enum hstex_engine_result expanded_next_non_space(
     for (;;) {
         enum hstex_engine_result result = hstex_engine_next_expanded(
             engine, token, location, error, error_capacity);
-        if (result != HSTEX_ENGINE_TOKEN || !token_is_space(*token)) {
+        if (result != HSTEX_ENGINE_TOKEN) {
+            return result;
+        }
+        /* A control sequence supplied by \the or \unexpanded is protected
+           only from the expansion step that inserted it.  Once a scanner
+           asks for an executable token it must be read again under its plain
+           name, just as the main executor does.  Keep protected macros held
+           while an expanded definition is being gathered. */
+        if (engine->returned_unexpanded &&
+            engine->returned_unexpanded_executable &&
+            !engine->inhibit_protected_expansion &&
+            hstex_token_is_control_sequence(*token)) {
+            if (push_one(engine, *token, *location, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (!token_is_space(*token)) {
             return result;
         }
     }
@@ -4689,6 +5049,8 @@ static int scan_glue_expression(struct hstex_engine *engine,
 static int scan_math_glue_expression(struct hstex_engine *engine,
                                      struct hstex_glue *value, char *error,
                                      size_t error_capacity);
+static int scan_glue(struct hstex_engine *engine, struct hstex_glue *glue,
+                     char *error, size_t error_capacity);
 
 static int scan_font_identifier(struct hstex_engine *engine,
                                 uint32_t *identifier, char *error,
@@ -4879,6 +5241,17 @@ static int integer_from_control_sequence(
     }
     case HSTEX_COMMAND_NUM_EXPR:
         return scan_num_expression(engine, value, error, error_capacity);
+    case HSTEX_COMMAND_GLUE_COMPONENT_ORDER: {
+        struct hstex_glue glue;
+        if (scan_glue(engine, &glue, error, error_capacity) != 0) {
+            return -1;
+        }
+        *value = meaning->value.integer ==
+                         (int32_t)HSTEX_GLUE_COMPONENT_STRETCH
+                     ? (int32_t)glue.stretch_order
+                     : (int32_t)glue.shrink_order;
+        return 0;
+    }
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
         switch (meaning->value.integer) {
         case 0:
@@ -4899,6 +5272,9 @@ static int integer_from_control_sequence(
             return 0;
         case 5:
             *value = engine->badness;
+            return 0;
+        case 6:
+            *value = engine->pdf_random_seed;
             return 0;
         case 4:
             *value = engine->conditional_count == 0U
@@ -5000,6 +5376,7 @@ static int integer_from_control_sequence(
     case HSTEX_COMMAND_DIMEN_PARAMETER:
     case HSTEX_COMMAND_DIMEN:
     case HSTEX_COMMAND_DIM_EXPR:
+    case HSTEX_COMMAND_GLUE_COMPONENT_DIMEN:
     case HSTEX_COMMAND_FONT_DIMEN:
     case HSTEX_COMMAND_FONT_CHAR_DIMEN:
     case HSTEX_COMMAND_BOX_DIMEN:
@@ -5366,8 +5743,12 @@ static int scan_num_expression_primary(struct hstex_engine *engine,
     hstex_token token = 0U;
     struct hstex_source_location location;
     for (;;) {
-        if (expanded_next_non_space(engine, &token, &location, error,
-                                    error_capacity) != HSTEX_ENGINE_TOKEN) {
+        enum hstex_engine_result result = expanded_next_non_space(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (result != HSTEX_ENGINE_TOKEN) {
             return set_error(error, error_capacity,
                              "missing integer-expression operand");
         }
@@ -5384,9 +5765,15 @@ static int scan_num_expression_primary(struct hstex_engine *engine,
     int32_t magnitude = 0;
     if (token_is_other_character(token, (uint8_t)'(')) {
         if (scan_num_expression_sum(engine, &magnitude, error,
-                                    error_capacity) != 0 ||
-            expanded_next_non_space(engine, &token, &location, error,
-                                    error_capacity) != HSTEX_ENGINE_TOKEN ||
+                                    error_capacity) != 0) {
+            return -1;
+        }
+        enum hstex_engine_result result = expanded_next_non_space(
+            engine, &token, &location, error, error_capacity);
+        if (result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (result != HSTEX_ENGINE_TOKEN ||
             !token_is_other_character(token, (uint8_t)')')) {
             return set_error(error, error_capacity,
                              "unbalanced integer-expression parentheses");
@@ -5427,6 +5814,36 @@ static int divide_num_expression(int32_t numerator, int32_t denominator,
                                         error_capacity);
 }
 
+/* e-TeX calls `a*b/c' a scaling operation.  The product is deliberately
+   allowed to exceed the integer-expression range: it is divided in 64-bit
+   precision and only the rounded quotient is range checked. */
+static int scale_num_expression(int32_t value, int32_t multiplier,
+                                int32_t divisor, int32_t *result, char *error,
+                                size_t error_capacity)
+{
+    if (divisor == 0) {
+        return set_error(error, error_capacity,
+                         "division by zero in integer expression");
+    }
+    uint64_t magnitude_value =
+        value < 0 ? (uint64_t)(-(int64_t)value) : (uint64_t)value;
+    uint64_t magnitude_multiplier = multiplier < 0
+                                        ? (uint64_t)(-(int64_t)multiplier)
+                                        : (uint64_t)multiplier;
+    uint64_t magnitude_divisor = divisor < 0
+                                     ? (uint64_t)(-(int64_t)divisor)
+                                     : (uint64_t)divisor;
+    uint64_t product = magnitude_value * magnitude_multiplier;
+    uint64_t rounded =
+        (product + magnitude_divisor / 2U) / magnitude_divisor;
+    bool negative =
+        ((value < 0) != (multiplier < 0)) != (divisor < 0);
+    int64_t signed_result =
+        negative ? -(int64_t)rounded : (int64_t)rounded;
+    return checked_num_expression_value(signed_result, result, error,
+                                        error_capacity);
+}
+
 static int scan_num_expression_term(struct hstex_engine *engine,
                                     int32_t *value, char *error,
                                     size_t error_capacity)
@@ -5457,10 +5874,37 @@ static int scan_num_expression_term(struct hstex_engine *engine,
             return -1;
         }
         if (multiply) {
+            hstex_token following = 0U;
+            struct hstex_source_location following_location;
+            result = expanded_next_non_space(engine, &following,
+                                              &following_location, error,
+                                              error_capacity);
+            if (result == HSTEX_ENGINE_ERROR) {
+                return -1;
+            }
+            if (result == HSTEX_ENGINE_TOKEN &&
+                token_is_other_character(following, (uint8_t)'/')) {
+                int32_t divisor = 0;
+                if (scan_num_expression_primary(engine, &divisor, error,
+                                                error_capacity) != 0 ||
+                    scale_num_expression(*value, right, divisor, value, error,
+                                         error_capacity) != 0) {
+                    return -1;
+                }
+                continue;
+            }
+            if (result == HSTEX_ENGINE_TOKEN &&
+                push_one(engine, following, following_location, error,
+                         error_capacity) != 0) {
+                return -1;
+            }
             if (checked_num_expression_value((int64_t)*value * (int64_t)right,
                                              value, error,
                                              error_capacity) != 0) {
                 return -1;
+            }
+            if (result == HSTEX_ENGINE_EOF) {
+                return 0;
             }
         } else if (divide_num_expression(*value, right, value, error,
                                          error_capacity) != 0) {
@@ -5789,6 +6233,17 @@ static int dimen_from_meaning(struct hstex_engine *engine,
         }
         return 1;
     }
+    if (meaning->command == HSTEX_COMMAND_GLUE_COMPONENT_DIMEN) {
+        struct hstex_glue glue;
+        if (scan_glue(engine, &glue, error, error_capacity) != 0) {
+            return -1;
+        }
+        *value = meaning->value.integer ==
+                         (int32_t)HSTEX_GLUE_COMPONENT_STRETCH
+                     ? glue.stretch
+                     : glue.shrink;
+        return 1;
+    }
     if (meaning->command == HSTEX_COMMAND_FONT_DIMEN) {
         struct hstex_font *font = NULL;
         size_t index = 0U;
@@ -5842,6 +6297,7 @@ static bool meaning_supplies_integer_factor(enum hstex_command command)
     case HSTEX_COMMAND_INTEGER_PARAMETER:
     case HSTEX_COMMAND_COUNT:
     case HSTEX_COMMAND_NUM_EXPR:
+    case HSTEX_COMMAND_GLUE_COMPONENT_ORDER:
     case HSTEX_COMMAND_ENGINE_STATE_INTEGER:
     case HSTEX_COMMAND_PAGE_INTEGER:
     case HSTEX_COMMAND_FONT_CHAR_DIMEN:
@@ -7425,6 +7881,54 @@ static int push_integer_expansion(struct hstex_engine *engine, int32_t value,
     return 0;
 }
 
+/* \pdfpageref allocates the page object's number even when the page is still
+   in the future, and repeated references to that page return the same number. */
+static int expand_pdf_page_ref(struct hstex_engine *engine,
+                               struct hstex_source_location location,
+                               char *error, size_t error_capacity)
+{
+    int32_t page = 0;
+    if (scan_integer(engine, &page, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (page <= 0) {
+        return set_error(error, error_capacity,
+                         "invalid PDF page number (%d)", page);
+    }
+    size_t object =
+        pdf_page_object(engine, (size_t)page, error, error_capacity);
+    if (object == 0U || object > (size_t)INT32_MAX) {
+        return set_error(error, error_capacity,
+                         "PDF page object number is outside range");
+    }
+    return push_integer_expansion(engine, (int32_t)object, location, error,
+                                  error_capacity);
+}
+
+static int expand_pdf_uniform_deviate(
+    struct hstex_engine *engine, struct hstex_source_location location,
+    char *error, size_t error_capacity)
+{
+    int32_t bound = 0;
+    if (scan_integer(engine, &bound, error, error_capacity) != 0) {
+        return -1;
+    }
+    return push_integer_expansion(engine,
+                                  pdf_uniform_deviate(engine, bound), location,
+                                  error, error_capacity);
+}
+
+static int execute_pdf_set_random_seed(struct hstex_engine *engine,
+                                       char *error, size_t error_capacity)
+{
+    int32_t seed = 0;
+    if (scan_integer(engine, &seed, error, error_capacity) != 0) {
+        return -1;
+    }
+    pdf_set_random_seed(engine, seed);
+    return 0;
+}
+
 static int format_scaled_value(int32_t value, const char *unit, char *digits,
                                size_t digits_capacity)
 {
@@ -7511,6 +8015,25 @@ static int expand_pdf_tex_revision(struct hstex_engine *engine,
     return push_other_character_expansion(engine, revision,
                                           sizeof(revision) - 1U, location,
                                           error, error_capacity);
+}
+
+static int expand_etex_revision(struct hstex_engine *engine,
+                                struct hstex_source_location location,
+                                char *error, size_t error_capacity)
+{
+    static const char revision[] = HSTEX_ETEX_REVISION;
+    return push_other_character_expansion(engine, revision,
+                                          sizeof(revision) - 1U, location,
+                                          error, error_capacity);
+}
+
+static int expand_pdf_creation_date(struct hstex_engine *engine,
+                                    struct hstex_source_location location,
+                                    char *error, size_t error_capacity)
+{
+    return push_other_character_expansion(
+        engine, engine->pdf_creation_date, strlen(engine->pdf_creation_date),
+        location, error, error_capacity);
 }
 
 static int push_dimension_expansion(struct hstex_engine *engine, int32_t value,
@@ -8322,6 +8845,12 @@ static int scan_balanced_group(struct hstex_engine *engine,
                 &sources->frames[sources->count - 1U];
             if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {
                 struct hstex_token_source *source = &frame->value.token_list;
+                bool from_current_template =
+                    (source->source_kind ==
+                         (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE ||
+                     source->source_kind ==
+                         (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER) &&
+                    source->frame_name == engine->alignment_generation;
                 const hstex_token *tokens = source->tokens + source->cursor;
                 size_t available = source->count - source->cursor;
                 size_t taken = 0U;
@@ -8364,7 +8893,8 @@ static int scan_balanced_group(struct hstex_engine *engine,
                     ++taken;
                 }
                 struct hstex_align_entry *cell = engine->alignment_entry;
-                if (cell != NULL && !cell->after_pushed && braces != 0) {
+                if (cell != NULL && !cell->after_pushed &&
+                    !from_current_template && braces != 0) {
                     cell->nesting += braces;
                 }
                 if (taken != 0U) {
@@ -9960,6 +10490,9 @@ static int expand_string(struct hstex_engine *engine,
 static int expand_pdf_string_compare(
     struct hstex_engine *engine, struct hstex_source_location location,
     char *error, size_t error_capacity);
+static int expand_pdf_md5_sum(struct hstex_engine *engine,
+                              struct hstex_source_location location,
+                              char *error, size_t error_capacity);
 static int expand_pdf_match(struct hstex_engine *engine,
                             struct hstex_source_location location, char *error,
                             size_t error_capacity);
@@ -10149,6 +10682,9 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_PDF_FILE_SIZE) {
         return expand_pdf_file_size(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_PDF_MD5_SUM) {
+        return expand_pdf_md5_sum(engine, location, error, error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_PDF_STRING_COMPARE) {
         return expand_pdf_string_compare(engine, location, error,
                                          error_capacity);
@@ -10221,6 +10757,19 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     }
     if (meaning->command == HSTEX_COMMAND_PDF_TEX_REVISION) {
         return expand_pdf_tex_revision(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_E_TEX_REVISION) {
+        return expand_etex_revision(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_CREATION_DATE) {
+        return expand_pdf_creation_date(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_PAGE_REF) {
+        return expand_pdf_page_ref(engine, location, error, error_capacity);
+    }
+    if (meaning->command == HSTEX_COMMAND_PDF_UNIFORM_DEVIATE) {
+        return expand_pdf_uniform_deviate(engine, location, error,
+                                          error_capacity);
     }
     if (meaning->command == HSTEX_COMMAND_FONT_NAME) {
         return expand_font_name(engine, location, error, error_capacity);
@@ -10557,6 +11106,13 @@ static enum hstex_engine_result next_expanded_inner(
             }
             continue;
         }
+        if (meaning->command == HSTEX_COMMAND_PDF_MD5_SUM) {
+            if (expand_pdf_md5_sum(engine, *location, error,
+                                   error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
         if (meaning->command == HSTEX_COMMAND_PDF_STRING_COMPARE) {
             if (expand_pdf_string_compare(engine, *location, error,
                                           error_capacity) != 0) {
@@ -10689,6 +11245,34 @@ static enum hstex_engine_result next_expanded_inner(
         if (meaning->command == HSTEX_COMMAND_PDF_TEX_REVISION) {
             if (expand_pdf_tex_revision(engine, *location, error,
                                         error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_E_TEX_REVISION) {
+            if (expand_etex_revision(engine, *location, error,
+                                     error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_CREATION_DATE) {
+            if (expand_pdf_creation_date(engine, *location, error,
+                                         error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_PAGE_REF) {
+            if (expand_pdf_page_ref(engine, *location, error,
+                                    error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_UNIFORM_DEVIATE) {
+            if (expand_pdf_uniform_deviate(engine, *location, error,
+                                           error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -11290,6 +11874,13 @@ static int scan_let(struct hstex_engine *engine, char *error,
             return set_error(error, error_capacity, "end of input after let= ");
         }
     }
+    /* A control sequence supplied by \the carries a one-shot marker while
+       an enclosing expanded-text scan is deciding whether to expand it.
+       \let consumes that marker just as \futurelet does: it copies the
+       control sequence's meaning, not an alias to HSTeX's internal marked
+       token.  xcolor reaches this through `\the\toks@', then relies on the
+       copied macro in an \expandafter chain. */
+    source = normalize_one_shot_token(source);
     struct hstex_meaning meaning;
     if (hstex_token_is_control_sequence(source)) {
         meaning = *hstex_engine_meaning(
@@ -11763,10 +12354,21 @@ static int reserve_vbox_items(struct hstex_vbox_builder *builder,
     return 0;
 }
 
+static int pdf_reserve_shared_cmap(struct hstex_engine *engine,
+                                   uint32_t identifier, char *error,
+                                   size_t error_capacity);
+
 static int store_node(struct hstex_engine *engine,
                       const struct hstex_node *node, uint32_t *identifier,
                       char *error, size_t error_capacity)
 {
+    if (node != NULL &&
+        (node->kind == HSTEX_NODE_CHARACTER ||
+         node->kind == HSTEX_NODE_LIGATURE) &&
+        pdf_reserve_shared_cmap(engine, node->value.character.font, error,
+                                error_capacity) != 0) {
+        return -1;
+    }
     if (node == NULL || identifier == NULL ||
         engine->node_count >= (size_t)UINT32_MAX ||
         reserve_nodes(engine, engine->node_count + 1U, error,
@@ -16405,6 +17007,10 @@ static const char *token_parameter_name(uint32_t parameter)
         return "everyeof";
     case HSTEX_TOKEN_ERROR_HELP:
         return "errhelp";
+    case HSTEX_TOKEN_PDF_PAGE_ATTR:
+        return "pdfpageattr";
+    case HSTEX_TOKEN_PDF_PAGE_RESOURCES:
+        return "pdfpageresources";
     default:
         return NULL;
     }
@@ -16922,6 +17528,10 @@ static int stored_token_list_text(struct hstex_engine *engine,
                                   size_t *byte_count, size_t limit,
                                   bool *truncated, char *error,
                                   size_t error_capacity);
+static int expand_stored_token_list(struct hstex_engine *engine,
+                                    uint32_t identifier, uint8_t **bytes,
+                                    size_t *byte_count, char *error,
+                                    size_t error_capacity);
 
 /* A whatsit is shown as the command that left it there, with the text it is
    still holding; see docs/DECISIONS.md, whatsits. */
@@ -17036,6 +17646,10 @@ static void show_whatsit(struct hstex_engine *engine,
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST) {
         print_esc_text(engine, "\\pdfdest ");
+        if (node->value.whatsit.structure != 0) {
+            print_formatted(engine, "struct%d ",
+                            node->value.whatsit.structure);
+        }
         if (node->value.whatsit.stream != 0U) {
             uint8_t *text = NULL;
             size_t text_count = 0U;
@@ -17077,11 +17691,17 @@ static void show_whatsit(struct hstex_engine *engine,
         return;
     }
     if (kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
-        static const char *const modes[4] = {"", " direct", " page",
-                                             " shipout"};
-        uint8_t mode = node->value.whatsit.action;
+        uint8_t action = node->value.whatsit.action;
+        uint8_t mode = action & (uint8_t)~HSTEX_PDF_LITERAL_SHIPOUT;
         print_esc_text(engine, "\\pdfliteral");
-        print_text(engine, modes[mode > 3U ? 0U : mode]);
+        if ((action & (uint8_t)HSTEX_PDF_LITERAL_SHIPOUT) != 0U) {
+            print_text(engine, " shipout");
+        }
+        if (mode == (uint8_t)HSTEX_PDF_LITERAL_DIRECT) {
+            print_text(engine, " direct");
+        } else if (mode == (uint8_t)HSTEX_PDF_LITERAL_PAGE) {
+            print_text(engine, " page");
+        }
         uint8_t *text = NULL;
         size_t text_count = 0U;
         char ignored[256];
@@ -18359,9 +18979,14 @@ static bool command_is_expandable(enum hstex_command command)
     case HSTEX_COMMAND_PDF_ESCAPE_NAME:
     case HSTEX_COMMAND_PDF_ESCAPE_STRING:
     case HSTEX_COMMAND_PDF_FILE_SIZE:
+    case HSTEX_COMMAND_PDF_MD5_SUM:
     case HSTEX_COMMAND_PDF_LAST_MATCH:
     case HSTEX_COMMAND_PDF_MATCH:
     case HSTEX_COMMAND_PDF_STRING_COMPARE:
+    case HSTEX_COMMAND_PDF_CREATION_DATE:
+    case HSTEX_COMMAND_PDF_PAGE_REF:
+    case HSTEX_COMMAND_PDF_UNIFORM_DEVIATE:
+    case HSTEX_COMMAND_E_TEX_REVISION:
     case HSTEX_COMMAND_PDF_TEX_REVISION:
     case HSTEX_COMMAND_PDF_UNESCAPE_HEX:
     case HSTEX_COMMAND_ROMAN_NUMERAL:
@@ -20359,8 +20984,8 @@ static int pdf_flush(struct hstex_engine *engine, char *error,
 
 /* Straight to the file, counting the bytes so that the table at the end can
    say where everything is. */
-static int pdf_out(struct hstex_engine *engine, const char *text, size_t length,
-                   char *error, size_t error_capacity)
+static int pdf_out_file(struct hstex_engine *engine, const char *text,
+                        size_t length, char *error, size_t error_capacity)
 {
     engine->pdf_written += length;
     if (engine->pdf_out_buffer == NULL) {
@@ -20383,6 +21008,41 @@ static int pdf_out(struct hstex_engine *engine, const char *text, size_t length,
     }
     memcpy(engine->pdf_out_buffer + engine->pdf_out_count, text, length);
     engine->pdf_out_count += length;
+    return 0;
+}
+
+/* Ordinary objects are first assembled without their `n 0 obj' wrapper: an
+   object-compressed file puts precisely that body in an /ObjStm. Streams and
+   the final information dictionary bypass this buffer. */
+static int pdf_out(struct hstex_engine *engine, const char *text, size_t length,
+                   char *error, size_t error_capacity)
+{
+    if (!engine->pdf_current_object_active) {
+        return pdf_out_file(engine, text, length, error, error_capacity);
+    }
+    size_t wanted = engine->pdf_current_object_count + length;
+    if (wanted > engine->pdf_current_object_capacity) {
+        size_t capacity = engine->pdf_current_object_capacity == 0U
+                              ? 1024U
+                              : engine->pdf_current_object_capacity;
+        while (capacity < wanted) {
+            if (capacity > SIZE_MAX / 2U) {
+                return set_error(error, error_capacity,
+                                 "PDF object content overflow");
+            }
+            capacity *= 2U;
+        }
+        uint8_t *grown = realloc(engine->pdf_current_object, capacity);
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF object allocation failed");
+        }
+        engine->pdf_current_object = grown;
+        engine->pdf_current_object_capacity = capacity;
+    }
+    memcpy(engine->pdf_current_object + engine->pdf_current_object_count, text,
+           length);
+    engine->pdf_current_object_count = wanted;
     return 0;
 }
 
@@ -20515,34 +21175,327 @@ static size_t pdf_new_object(struct hstex_engine *engine)
     return (size_t)++engine->pdf_object_counter;
 }
 
+static int pdf_reserve_offsets(struct hstex_engine *engine, size_t number,
+                               char *error, size_t error_capacity)
+{
+    if (number <= engine->pdf_offset_capacity) {
+        return 0;
+    }
+    size_t capacity =
+        engine->pdf_offset_capacity == 0U ? 32U : engine->pdf_offset_capacity;
+    while (capacity < number) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "PDF object allocation failed");
+        }
+        capacity *= 2U;
+    }
+    size_t *offsets = calloc(capacity, sizeof(*offsets));
+    size_t *streams = calloc(capacity, sizeof(*streams));
+    uint8_t *indices = calloc(capacity, sizeof(*indices));
+    if (offsets == NULL || streams == NULL || indices == NULL) {
+        free(offsets);
+        free(streams);
+        free(indices);
+        return set_error(error, error_capacity, "PDF object allocation failed");
+    }
+    if (engine->pdf_offset_capacity != 0U) {
+        memcpy(offsets, engine->pdf_offsets,
+               engine->pdf_offset_capacity * sizeof(*offsets));
+        memcpy(streams, engine->pdf_object_streams,
+               engine->pdf_offset_capacity * sizeof(*streams));
+        memcpy(indices, engine->pdf_object_stream_indices,
+               engine->pdf_offset_capacity * sizeof(*indices));
+    }
+    free(engine->pdf_offsets);
+    free(engine->pdf_object_streams);
+    free(engine->pdf_object_stream_indices);
+    engine->pdf_offsets = offsets;
+    engine->pdf_object_streams = streams;
+    engine->pdf_object_stream_indices = indices;
+    engine->pdf_offset_capacity = capacity;
+    return 0;
+}
+
+static int pdf_compress_bytes(const uint8_t *source, size_t source_length,
+                              int level, uint8_t **compressed,
+                              size_t *compressed_length, char *error,
+                              size_t error_capacity)
+{
+    if (source_length > (size_t)ULONG_MAX) {
+        return set_error(error, error_capacity, "PDF stream is too large");
+    }
+    static const uint8_t empty = 0U;
+    if (source == NULL) {
+        source = &empty;
+    }
+    uLong bound = compressBound((uLong)source_length);
+    uint8_t *bytes = malloc((size_t)bound == 0U ? 1U : (size_t)bound);
+    if (bytes == NULL) {
+        return set_error(error, error_capacity, "PDF stream allocation failed");
+    }
+    uLong count = bound;
+    int status = compress2(bytes, &count, source, (uLong)source_length, level);
+    if (status != Z_OK) {
+        free(bytes);
+        return set_error(error, error_capacity, "PDF stream compression failed");
+    }
+    *compressed = bytes;
+    *compressed_length = (size_t)count;
+    return 0;
+}
+
+/* Write a stream as a direct object. Its dictionary attributes do not
+   include /Length or /Filter; those are supplied here in reference order. */
+static int pdf_write_stream_object(struct hstex_engine *engine, size_t number,
+                                   const char *attributes,
+                                   size_t attribute_length,
+                                   const uint8_t *content,
+                                   size_t content_length, char *error,
+                                   size_t error_capacity)
+{
+    int level = engine->integer_parameters[HSTEX_INTEGER_PDF_COMPRESS_LEVEL];
+    if (level < 0) {
+        level = 0;
+    } else if (level > 9) {
+        level = 9;
+    }
+    uint8_t *compressed = NULL;
+    size_t written_length = content_length;
+    const uint8_t *written_content = content;
+    if (level > 0 &&
+        pdf_compress_bytes(content, content_length, level, &compressed,
+                           &written_length, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (compressed != NULL) {
+        written_content = compressed;
+    }
+    if (pdf_reserve_offsets(engine, number, error, error_capacity) != 0) {
+        free(compressed);
+        return -1;
+    }
+    engine->pdf_offsets[number - 1U] = engine->pdf_written;
+    int status =
+        pdf_out_formatted(engine, error, error_capacity, "%zu 0 obj\n<<\n",
+                          number) != 0 ||
+                (attribute_length != 0U &&
+                 (pdf_out(engine, attributes, attribute_length, error,
+                          error_capacity) != 0 ||
+                  (attributes[attribute_length - 1U] != '\n' &&
+                   pdf_out_text(engine, "\n", error, error_capacity) != 0))) ||
+                pdf_out_formatted(engine, error, error_capacity,
+                                  "/Length %-10zu\n", written_length) != 0 ||
+                (level > 0 &&
+                 pdf_out_text(engine, "/Filter /FlateDecode\n", error,
+                              error_capacity) != 0) ||
+                pdf_out_text(engine, ">>\nstream\n", error, error_capacity) !=
+                    0 ||
+                (written_length != 0U &&
+                 pdf_out(engine, (const char *)written_content, written_length,
+                         error, error_capacity) != 0) ||
+                pdf_out_text(engine, "\nendstream\nendobj\n", error,
+                             error_capacity) != 0
+            ? -1
+            : 0;
+    free(compressed);
+    return status;
+}
+
+static int pdf_flush_object_stream(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    size_t count = engine->pdf_packed_object_count;
+    if (count == 0U) {
+        return 0;
+    }
+    size_t header_capacity = count * 48U + 1U;
+    char *header = malloc(header_capacity);
+    size_t *offsets = malloc(count * sizeof(*offsets));
+    if (header == NULL || offsets == NULL) {
+        free(header);
+        free(offsets);
+        return set_error(error, error_capacity,
+                         "PDF object stream allocation failed");
+    }
+    size_t body_length = 0U;
+    size_t header_length = 0U;
+    for (size_t index = 0U; index < count; ++index) {
+        offsets[index] = body_length;
+        body_length += engine->pdf_packed_objects[index].content_length;
+        if (index != 0U) {
+            header[header_length++] = index % 10U == 0U ? '\n' : ' ';
+        }
+        int width = snprintf(header + header_length,
+                             header_capacity - header_length, "%zu %zu",
+                             engine->pdf_packed_objects[index].number,
+                             offsets[index]);
+        if (width < 0 || (size_t)width >= header_capacity - header_length) {
+            free(header);
+            free(offsets);
+            return set_error(error, error_capacity,
+                             "PDF object stream overflow");
+        }
+        header_length += (size_t)width;
+    }
+    header[header_length++] = '\n';
+    uint8_t *content = malloc(header_length + body_length);
+    if (content == NULL) {
+        free(header);
+        free(offsets);
+        return set_error(error, error_capacity,
+                         "PDF object stream allocation failed");
+    }
+    memcpy(content, header, header_length);
+    size_t at = header_length;
+    for (size_t index = 0U; index < count; ++index) {
+        size_t length = engine->pdf_packed_objects[index].content_length;
+        memcpy(content + at, engine->pdf_packed_objects[index].content, length);
+        at += length;
+    }
+    char attributes[128];
+    int attribute_length = snprintf(attributes, sizeof(attributes),
+                                    "/Type /ObjStm\n/N %zu\n/First %zu\n",
+                                    count, header_length);
+    int status =
+        attribute_length < 0 || (size_t)attribute_length >= sizeof(attributes)
+            ? set_error(error, error_capacity, "PDF object stream overflow")
+            : pdf_write_stream_object(
+                  engine, engine->pdf_packed_object_number, attributes,
+                  (size_t)attribute_length, content, header_length + body_length,
+                  error, error_capacity);
+    free(content);
+    free(header);
+    free(offsets);
+    if (status != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        free(engine->pdf_packed_objects[index].content);
+        engine->pdf_packed_objects[index] =
+            (struct hstex_pdf_packed_object){0};
+    }
+    engine->pdf_packed_object_count = 0U;
+    engine->pdf_packed_object_number = 0U;
+    return 0;
+}
+
+static int pdf_begin_object_kind(struct hstex_engine *engine, size_t number,
+                                 bool direct, char *error,
+                                 size_t error_capacity)
+{
+    if (engine->pdf_current_object_active) {
+        return set_error(error, error_capacity, "nested PDF object");
+    }
+    if (pdf_reserve_offsets(engine, number, error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pdf_current_object_number = number;
+    engine->pdf_current_object_count = 0U;
+    engine->pdf_current_object_active = true;
+    engine->pdf_current_object_direct = direct;
+    return 0;
+}
+
+/* The object-stream container receives its number when the first packed
+   object begins, before that object's dictionary can create objects of its
+   own.  In particular, an action may create a structured destination while
+   its enclosing annotation is being assembled. */
+static void pdf_reserve_packed_object_stream(struct hstex_engine *engine)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0 &&
+        engine->pdf_packed_object_count == 0U &&
+        engine->pdf_packed_object_number == 0U) {
+        engine->pdf_packed_object_number = pdf_new_object(engine);
+    }
+}
+
 static int pdf_begin_object(struct hstex_engine *engine, size_t number,
                             char *error, size_t error_capacity)
 {
-    if (number > engine->pdf_offset_capacity) {
-        size_t capacity =
-            engine->pdf_offset_capacity == 0U ? 32U : engine->pdf_offset_capacity;
-        while (capacity < number) {
-            capacity *= 2U;
-        }
-        size_t *grown =
-            realloc(engine->pdf_offsets, capacity * sizeof(*grown));
-        if (grown == NULL) {
-            return set_error(error, error_capacity, "PDF object allocation failed");
-        }
-        memset(grown + engine->pdf_offset_capacity, 0,
-               (capacity - engine->pdf_offset_capacity) * sizeof(*grown));
-        engine->pdf_offsets = grown;
-        engine->pdf_offset_capacity = capacity;
-    }
-    engine->pdf_offsets[number - 1U] = engine->pdf_written;
-    return pdf_out_formatted(engine, error, error_capacity, "%zu 0 obj\n",
-                             number);
+    pdf_reserve_packed_object_stream(engine);
+    return pdf_begin_object_kind(engine, number, false, error, error_capacity);
+}
+
+static int pdf_begin_direct_object(struct hstex_engine *engine, size_t number,
+                                   char *error, size_t error_capacity)
+{
+    return pdf_begin_object_kind(engine, number, true, error, error_capacity);
 }
 
 static int pdf_end_object(struct hstex_engine *engine, char *error,
                           size_t error_capacity)
 {
-    return pdf_out_text(engine, "endobj\n", error, error_capacity);
+    if (!engine->pdf_current_object_active) {
+        return set_error(error, error_capacity, "PDF object is not open");
+    }
+    size_t number = engine->pdf_current_object_number;
+    size_t length = engine->pdf_current_object_count;
+    bool packed = !engine->pdf_current_object_direct &&
+                  engine->integer_parameters
+                          [HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0;
+    engine->pdf_current_object_active = false;
+    engine->pdf_current_object_count = 0U;
+    if (!packed) {
+        engine->pdf_offsets[number - 1U] = engine->pdf_written;
+        return pdf_out_formatted(engine, error, error_capacity, "%zu 0 obj\n",
+                                 number) != 0 ||
+                       (length != 0U &&
+                        pdf_out(engine, (const char *)engine->pdf_current_object,
+                                length, error, error_capacity) != 0) ||
+                       pdf_out_text(engine, "endobj\n", error,
+                                    error_capacity) != 0
+                   ? -1
+                   : 0;
+    }
+    uint8_t *copy = malloc(length == 0U ? 1U : length);
+    if (copy == NULL) {
+        return set_error(error, error_capacity,
+                         "PDF object stream allocation failed");
+    }
+    memcpy(copy, engine->pdf_current_object, length);
+    size_t index = engine->pdf_packed_object_count;
+    engine->pdf_packed_objects[index].number = number;
+    engine->pdf_packed_objects[index].content = copy;
+    engine->pdf_packed_objects[index].content_length = length;
+    engine->pdf_object_streams[number - 1U] =
+        engine->pdf_packed_object_number;
+    engine->pdf_object_stream_indices[number - 1U] = (uint8_t)index;
+    ++engine->pdf_packed_object_count;
+    return engine->pdf_packed_object_count == 100U
+               ? pdf_flush_object_stream(engine, error, error_capacity)
+               : 0;
+}
+
+/* Write one object supplied by \pdfobj. A black-box pdfTeX probe with both
+   compression levels zero shows that dictionary text is followed by one
+   newline, while stream attributes stand between `<<' and a ten-column
+   /Length entry. See docs/DECISIONS.md, PDF objects. */
+static int pdf_write_document_object(struct hstex_engine *engine,
+                                     struct hstex_pdf_object *object,
+                                     char *error, size_t error_capacity)
+{
+    if (object->reserved || object->written) {
+        return 0;
+    }
+    if (object->stream) {
+        if (pdf_write_stream_object(
+                engine, (size_t)object->number, object->attributes,
+                object->attribute_length, (const uint8_t *)object->content,
+                object->content_length, error, error_capacity) != 0) {
+            return -1;
+        }
+    } else if (pdf_begin_object(engine, (size_t)object->number, error,
+                                error_capacity) != 0 ||
+               (object->content_length != 0U &&
+                pdf_out(engine, object->content, object->content_length, error,
+                        error_capacity) != 0) ||
+               pdf_out_text(engine, "\n", error, error_capacity) != 0 ||
+               pdf_end_object(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    object->written = true;
+    return 0;
 }
 
 static int pdf_open(struct hstex_engine *engine, char *error,
@@ -20624,6 +21577,1583 @@ static int remember_pdf_font_place(struct hstex_engine *engine,
     }
     engine->pdf_font_places[identifier] = (uint32_t)(place + 1U);
     return 0;
+}
+
+struct hstex_pdf_font_buffer {
+    uint8_t *bytes;
+    size_t count;
+    size_t capacity;
+};
+
+static int pdf_font_buffer_append(struct hstex_pdf_font_buffer *buffer,
+                                  const void *bytes, size_t count, char *error,
+                                  size_t error_capacity)
+{
+    if (count > SIZE_MAX - buffer->count - 1U) {
+        return set_error(error, error_capacity, "PDF font buffer overflow");
+    }
+    size_t wanted = buffer->count + count + 1U;
+    if (wanted > buffer->capacity) {
+        size_t capacity = buffer->capacity == 0U ? 4096U : buffer->capacity;
+        while (capacity < wanted) {
+            if (capacity > SIZE_MAX / 2U) {
+                return set_error(error, error_capacity,
+                                 "PDF font buffer overflow");
+            }
+            capacity *= 2U;
+        }
+        uint8_t *grown = realloc(buffer->bytes, capacity);
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF font buffer allocation failed");
+        }
+        buffer->bytes = grown;
+        buffer->capacity = capacity;
+    }
+    if (count != 0U) {
+        memcpy(buffer->bytes + buffer->count, bytes, count);
+    }
+    buffer->count += count;
+    buffer->bytes[buffer->count] = 0U;
+    return 0;
+}
+
+static int pdf_font_buffer_text(struct hstex_pdf_font_buffer *buffer,
+                                const char *text, char *error,
+                                size_t error_capacity)
+{
+    return pdf_font_buffer_append(buffer, text, strlen(text), error,
+                                  error_capacity);
+}
+
+static int pdf_font_buffer_formatted(struct hstex_pdf_font_buffer *buffer,
+                                     char *error, size_t error_capacity,
+                                     const char *format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    va_list copy;
+    va_copy(copy, arguments);
+    int width = vsnprintf(NULL, 0U, format, copy);
+    va_end(copy);
+    if (width < 0) {
+        va_end(arguments);
+        return set_error(error, error_capacity,
+                         "PDF font formatting failed");
+    }
+    size_t count = (size_t)width;
+    char *text = malloc(count + 1U);
+    if (text == NULL) {
+        va_end(arguments);
+        return set_error(error, error_capacity,
+                         "PDF font formatting allocation failed");
+    }
+    int rendered = vsnprintf(text, count + 1U, format, arguments);
+    va_end(arguments);
+    int status = rendered != width
+                     ? set_error(error, error_capacity,
+                                 "PDF font formatting failed")
+                     : pdf_font_buffer_append(buffer, text, count, error,
+                                              error_capacity);
+    free(text);
+    return status;
+}
+
+static bool pdf_font_suffix(const char *name, const char *suffix)
+{
+    size_t name_length = strlen(name);
+    size_t suffix_length = strlen(suffix);
+    return name_length >= suffix_length &&
+           strcmp(name + name_length - suffix_length, suffix) == 0;
+}
+
+static int pdf_load_font_map(struct hstex_engine *engine, char *error,
+                             size_t error_capacity)
+{
+    if (engine->pdf_font_map != NULL) {
+        return 0;
+    }
+    char *path = resolve_file(engine, "pdftex.map");
+    if (path == NULL) {
+        return set_error(error, error_capacity, "cannot find pdftex.map");
+    }
+    uint8_t *bytes = NULL;
+    size_t length = 0U;
+    int status = read_whole_path(path, &bytes, &length, error, error_capacity);
+    free(path);
+    if (status != 0) {
+        return -1;
+    }
+    engine->pdf_font_map = (char *)bytes;
+    engine->pdf_font_map_length = length;
+    return 0;
+}
+
+/* The public map syntax puts the TeX name and PostScript name first; quoted
+   transformations may follow, and `<file' fields name encodings and font
+   programs. Only those fields are semantic to this Type 1 backend. */
+static int pdf_font_map_entry(struct hstex_engine *engine, const char *tfm,
+                              char **postscript, char **encoding,
+                              char **font_file, char *error,
+                              size_t error_capacity)
+{
+    if (pdf_load_font_map(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    const char *at = engine->pdf_font_map;
+    const char *finish = at + engine->pdf_font_map_length;
+    size_t tfm_length = strlen(tfm);
+    while (at < finish) {
+        const char *line = at;
+        const char *end = memchr(at, '\n', (size_t)(finish - at));
+        if (end == NULL) {
+            end = finish;
+        }
+        at = end < finish ? end + 1 : finish;
+        while (line < end && (*line == ' ' || *line == '\t' || *line == '\r')) {
+            ++line;
+        }
+        if (line == end || *line == '%' || *line == '#') {
+            continue;
+        }
+        const char *first_end = line;
+        while (first_end < end && *first_end != ' ' && *first_end != '\t' &&
+               *first_end != '\r') {
+            ++first_end;
+        }
+        if ((size_t)(first_end - line) != tfm_length ||
+            memcmp(line, tfm, tfm_length) != 0) {
+            continue;
+        }
+        const char *field = first_end;
+        while (field < end && (*field == ' ' || *field == '\t')) {
+            ++field;
+        }
+        const char *field_end = field;
+        while (field_end < end && *field_end != ' ' && *field_end != '\t' &&
+               *field_end != '\r') {
+            ++field_end;
+        }
+        if (field == field_end) {
+            break;
+        }
+        *postscript = strndup(field, (size_t)(field_end - field));
+        if (*postscript == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF font map allocation failed");
+        }
+        for (const char *scan = field_end; scan < end; ++scan) {
+            if (*scan != '<') {
+                continue;
+            }
+            while (scan < end && (*scan == '<' || *scan == '[')) {
+                ++scan;
+            }
+            const char *file_end = scan;
+            while (file_end < end && *file_end != ' ' &&
+                   *file_end != '\t' && *file_end != '\r' &&
+                   *file_end != '>') {
+                ++file_end;
+            }
+            if (file_end == scan) {
+                continue;
+            }
+            char *name = strndup(scan, (size_t)(file_end - scan));
+            if (name == NULL) {
+                free(*postscript);
+                *postscript = NULL;
+                return set_error(error, error_capacity,
+                                 "PDF font map allocation failed");
+            }
+            if (pdf_font_suffix(name, ".enc")) {
+                free(*encoding);
+                *encoding = name;
+            } else if (pdf_font_suffix(name, ".pfb") ||
+                       pdf_font_suffix(name, ".pfa")) {
+                free(*font_file);
+                *font_file = name;
+            } else {
+                free(name);
+            }
+            scan = file_end;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static char *pdf_encoding_label(const char *file)
+{
+    const char *base = strrchr(file, '/');
+    base = base == NULL ? file : base + 1;
+    size_t length = strlen(base);
+    if (length > 4U && strcmp(base + length - 4U, ".enc") == 0) {
+        length -= 4U;
+    }
+    return strndup(base, length);
+}
+
+static bool pdf_postscript_delimiter(char byte)
+{
+    return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n' ||
+           byte == '[' || byte == ']' || byte == '{' || byte == '}' ||
+           byte == '(' || byte == ')' || byte == '<' || byte == '>' ||
+           byte == '/';
+}
+
+static int pdf_read_encoding(struct hstex_engine *engine,
+                             struct hstex_pdf_encoding *entry, char *error,
+                             size_t error_capacity)
+{
+    char *path = resolve_file(engine, entry->file);
+    if (path == NULL) {
+        return set_error(error, error_capacity, "cannot find %s", entry->file);
+    }
+    uint8_t *bytes = NULL;
+    size_t length = 0U;
+    int status = read_whole_path(path, &bytes, &length, error, error_capacity);
+    free(path);
+    if (status != 0) {
+        return -1;
+    }
+    bool vector = false;
+    bool comment = false;
+    size_t code = 0U;
+    for (size_t index = 0U; index < length && code < 256U; ++index) {
+        char byte = (char)bytes[index];
+        if (comment) {
+            comment = byte != '\n';
+            continue;
+        }
+        if (byte == '%') {
+            comment = true;
+            continue;
+        }
+        if (!vector) {
+            vector = byte == '[';
+            continue;
+        }
+        if (byte == ']') {
+            break;
+        }
+        if (byte != '/') {
+            continue;
+        }
+        size_t start = index + 1U;
+        size_t end = start;
+        while (end < length && !pdf_postscript_delimiter((char)bytes[end]) &&
+               bytes[end] != (uint8_t)'%') {
+            ++end;
+        }
+        entry->glyphs[code] =
+            strndup((const char *)bytes + start, end - start);
+        if (entry->glyphs[code] == NULL) {
+            status = set_error(error, error_capacity,
+                               "PDF encoding allocation failed");
+            break;
+        }
+        ++code;
+        index = end == 0U ? end : end - 1U;
+    }
+    free(bytes);
+    if (status == 0 && code != 256U) {
+        status = set_error(error, error_capacity,
+                           "%s does not contain 256 glyph names", entry->file);
+    }
+    return status;
+}
+
+static struct hstex_pdf_encoding *pdf_encoding_entry(
+    struct hstex_engine *engine, const char *file, char *error,
+    size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->pdf_encoding_count; ++index) {
+        if (strcmp(engine->pdf_encodings[index].file, file) == 0) {
+            return &engine->pdf_encodings[index];
+        }
+    }
+    if (engine->pdf_encoding_count == engine->pdf_encoding_capacity) {
+        size_t capacity = engine->pdf_encoding_capacity == 0U
+                              ? 8U
+                              : engine->pdf_encoding_capacity * 2U;
+        struct hstex_pdf_encoding *grown =
+            realloc(engine->pdf_encodings, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "PDF encoding allocation failed");
+            return NULL;
+        }
+        engine->pdf_encodings = grown;
+        engine->pdf_encoding_capacity = capacity;
+    }
+    struct hstex_pdf_encoding *entry =
+        &engine->pdf_encodings[engine->pdf_encoding_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->file = strdup(file);
+    entry->label = pdf_encoding_label(file);
+    if (entry->file == NULL || entry->label == NULL ||
+        pdf_read_encoding(engine, entry, error, error_capacity) != 0) {
+        return NULL;
+    }
+    return entry;
+}
+
+/* Shared text encodings receive their object number when the first character
+   node in that encoding is made. The stream itself is delayed until a page
+   reaches the PDF writer, preserving both the reference's object numbering
+   and its placement at the front of the file. */
+static int pdf_reserve_shared_cmap(struct hstex_engine *engine,
+                                   uint32_t identifier, char *error,
+                                   size_t error_capacity)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0 ||
+        engine->integer_parameters[HSTEX_INTEGER_PDF_GEN_TO_UNICODE] <= 0 ||
+        engine->glyph_unicode_count == 0U ||
+        (engine->pdf_t1_cmap != 0U && engine->pdf_ot1_cmap != 0U)) {
+        return 0;
+    }
+    size_t wanted = (size_t)identifier + 1U;
+    if (wanted > engine->pdf_cmap_font_checked_capacity) {
+        size_t capacity = engine->pdf_cmap_font_checked_capacity == 0U
+                              ? 16U
+                              : engine->pdf_cmap_font_checked_capacity;
+        while (capacity < wanted) {
+            if (capacity > SIZE_MAX / 2U) {
+                return set_error(error, error_capacity,
+                                 "PDF CMap font table overflow");
+            }
+            capacity *= 2U;
+        }
+        uint8_t *grown =
+            realloc(engine->pdf_cmap_font_checked, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF CMap font table allocation failed");
+        }
+        memset(grown + engine->pdf_cmap_font_checked_capacity, 0,
+               capacity - engine->pdf_cmap_font_checked_capacity);
+        engine->pdf_cmap_font_checked = grown;
+        engine->pdf_cmap_font_checked_capacity = capacity;
+    }
+    if (engine->pdf_cmap_font_checked[identifier] != 0U) {
+        return 0;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return 0;
+    }
+    if (font->pdf_no_builtin_to_unicode) {
+        return 0;
+    }
+    char *postscript = NULL;
+    char *encoding_file = NULL;
+    char *font_file = NULL;
+    int status = pdf_font_map_entry(engine, font->name, &postscript,
+                                    &encoding_file, &font_file, error,
+                                    error_capacity);
+    free(postscript);
+    free(font_file);
+    /* A font node can precede the map-file input that defines its encoding.
+       Only cache a completed lookup so a later node gets the same retry that
+       pdfTeX performs once the map entry has become available. */
+    if (status == 1) {
+        free(encoding_file);
+        return 0;
+    }
+    if (status != 0) {
+        free(encoding_file);
+        return status;
+    }
+    if (encoding_file == NULL) {
+        return 0;
+    }
+    engine->pdf_cmap_font_checked[identifier] = 1U;
+    struct hstex_pdf_encoding *encoding = pdf_encoding_entry(
+        engine, encoding_file, error, error_capacity);
+    free(encoding_file);
+    if (encoding == NULL) {
+        return -1;
+    }
+    size_t place = (size_t)(encoding - engine->pdf_encodings) + 1U;
+    if (strcmp(encoding->label, "lm-ec") == 0 &&
+        engine->pdf_t1_cmap == 0U) {
+        engine->pdf_t1_cmap = pdf_new_object(engine);
+        engine->pdf_t1_cmap_encoding = place;
+    } else if (strcmp(encoding->label, "lm-rm") == 0 &&
+               engine->pdf_ot1_cmap == 0U) {
+        engine->pdf_ot1_cmap = pdf_new_object(engine);
+        engine->pdf_ot1_cmap_encoding = place;
+    }
+    return 0;
+}
+
+static void pdf_builtin_encoding(struct hstex_pdf_physical_font *entry)
+{
+    const char *at = strstr(entry->disassembly, "/Encoding ");
+    const char *finish = at == NULL ? NULL : strstr(at, "readonly def");
+    if (at == NULL || finish == NULL) {
+        return;
+    }
+    while (at < finish) {
+        const char *end = strchr(at, '\n');
+        if (end == NULL || end > finish) {
+            end = finish;
+        }
+        while (at < end && (*at == ' ' || *at == '\t')) {
+            ++at;
+        }
+        if ((size_t)(end - at) > 6U && memcmp(at, "dup ", 4U) == 0) {
+            char *number_end = NULL;
+            unsigned long code = strtoul(at + 4U, &number_end, 10);
+            if (number_end != at + 4U && code < 256U) {
+                while (number_end < end && *number_end == ' ') {
+                    ++number_end;
+                }
+                if (number_end < end && *number_end == '/') {
+                    const char *name = number_end + 1;
+                    const char *name_end = name;
+                    while (name_end < end && *name_end != ' ' &&
+                           *name_end != '\t') {
+                        ++name_end;
+                    }
+                    entry->builtin_glyphs[code] =
+                        strndup(name, (size_t)(name_end - name));
+                }
+            }
+        }
+        at = end < finish ? end + 1 : finish;
+    }
+}
+
+static struct hstex_pdf_physical_font *pdf_physical_font_entry(
+    struct hstex_engine *engine, const char *file, const char *postscript,
+    char *error, size_t error_capacity)
+{
+    for (size_t index = 0U; index < engine->pdf_physical_font_count; ++index) {
+        struct hstex_pdf_physical_font *entry =
+            &engine->pdf_physical_fonts[index];
+        if (strcmp(entry->file, file) == 0 &&
+            strcmp(entry->postscript_name, postscript) == 0) {
+            return entry;
+        }
+    }
+    if (engine->pdf_physical_font_count ==
+        engine->pdf_physical_font_capacity) {
+        size_t capacity = engine->pdf_physical_font_capacity == 0U
+                              ? 8U
+                              : engine->pdf_physical_font_capacity * 2U;
+        struct hstex_pdf_physical_font *grown = realloc(
+            engine->pdf_physical_fonts, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            (void)set_error(error, error_capacity,
+                            "PDF Type 1 font allocation failed");
+            return NULL;
+        }
+        engine->pdf_physical_fonts = grown;
+        engine->pdf_physical_font_capacity = capacity;
+    }
+    struct hstex_pdf_physical_font *entry =
+        &engine->pdf_physical_fonts[engine->pdf_physical_font_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->file = strdup(file);
+    entry->postscript_name = strdup(postscript);
+    char *path = resolve_file(engine, file);
+    if (entry->file == NULL || entry->postscript_name == NULL || path == NULL) {
+        free(path);
+        (void)set_error(error, error_capacity, "cannot find Type 1 font %s",
+                        file);
+        return NULL;
+    }
+    char program[] = "t1disasm";
+    char *arguments[] = {program, path, NULL};
+    uint8_t *disassembly = NULL;
+    size_t length = 0U;
+    int status = run_font_filter(program, arguments, NULL, 0U, &disassembly,
+                                 &length, error, error_capacity);
+    free(path);
+    if (status != 0) {
+        return NULL;
+    }
+    entry->disassembly = (char *)disassembly;
+    entry->disassembly_length = length;
+    pdf_builtin_encoding(entry);
+    return entry;
+}
+
+static int pdf_prepare_font(struct hstex_engine *engine,
+                            struct hstex_pdf_font *entry, char *error,
+                            size_t error_capacity)
+{
+    if (entry->physical_place != 0U) {
+        return 0;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, entry->identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid PDF font");
+    }
+    char *postscript = NULL;
+    char *encoding_file = NULL;
+    char *font_file = NULL;
+    int status = pdf_font_map_entry(engine, font->name, &postscript,
+                                    &encoding_file, &font_file, error,
+                                    error_capacity);
+    if (status == 1) {
+        free(postscript);
+        free(encoding_file);
+        free(font_file);
+        return 0;
+    }
+    if (status != 0 || font_file == NULL) {
+        free(postscript);
+        free(encoding_file);
+        free(font_file);
+        return status != 0
+                   ? -1
+                   : set_error(error, error_capacity,
+                               "font %s has no embedded Type 1 program",
+                               font->name);
+    }
+    struct hstex_pdf_physical_font *physical = pdf_physical_font_entry(
+        engine, font_file, postscript, error, error_capacity);
+    if (physical == NULL) {
+        free(postscript);
+        free(encoding_file);
+        free(font_file);
+        return -1;
+    }
+    entry->physical_place =
+        (size_t)(physical - engine->pdf_physical_fonts) + 1U;
+    if (encoding_file != NULL) {
+        struct hstex_pdf_encoding *encoding = pdf_encoding_entry(
+            engine, encoding_file, error, error_capacity);
+        if (encoding == NULL) {
+            free(postscript);
+            free(encoding_file);
+            free(font_file);
+            return -1;
+        }
+        entry->encoding_place =
+            (size_t)(encoding - engine->pdf_encodings) + 1U;
+    }
+    free(postscript);
+    free(encoding_file);
+    free(font_file);
+    return 0;
+}
+
+static bool pdf_font_code_used(const uint8_t used[32], size_t code)
+{
+    return (used[code / 8U] & (uint8_t)(1U << (code % 8U))) != 0U;
+}
+
+static const char *pdf_font_code_glyph(const struct hstex_engine *engine,
+                                       const struct hstex_pdf_font *font,
+                                       size_t code)
+{
+    if (code >= 256U) {
+        return NULL;
+    }
+    if (font->encoding_place != 0U) {
+        return engine->pdf_encodings[font->encoding_place - 1U].glyphs[code];
+    }
+    if (font->physical_place == 0U) {
+        return NULL;
+    }
+    return engine->pdf_physical_fonts[font->physical_place - 1U]
+        .builtin_glyphs[code];
+}
+
+static int pdf_physical_glyph(struct hstex_pdf_physical_font *font,
+                              const char *glyph, char *error,
+                              size_t error_capacity)
+{
+    if (glyph == NULL || strcmp(glyph, ".notdef") == 0) {
+        return 0;
+    }
+    for (size_t index = 0U; index < font->glyph_count; ++index) {
+        if (strcmp(font->glyphs[index], glyph) == 0) {
+            return 0;
+        }
+    }
+    if (font->glyph_count == font->glyph_capacity) {
+        size_t capacity = font->glyph_capacity == 0U
+                              ? 16U
+                              : font->glyph_capacity * 2U;
+        char **grown = realloc(font->glyphs, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "PDF Type 1 glyph allocation failed");
+        }
+        font->glyphs = grown;
+        font->glyph_capacity = capacity;
+    }
+    font->glyphs[font->glyph_count] = strdup(glyph);
+    if (font->glyphs[font->glyph_count] == NULL) {
+        return set_error(error, error_capacity,
+                         "PDF Type 1 glyph allocation failed");
+    }
+    ++font->glyph_count;
+    return 0;
+}
+
+static int pdf_collect_font(struct hstex_engine *engine,
+                            struct hstex_pdf_font *entry, char *error,
+                            size_t error_capacity)
+{
+    if (entry->physical_place == 0U) {
+        return 0;
+    }
+    struct hstex_pdf_physical_font *physical =
+        &engine->pdf_physical_fonts[entry->physical_place - 1U];
+    if (physical->measure_identifier == 0U) {
+        physical->measure_identifier = entry->identifier;
+    }
+    struct hstex_pdf_encoding *encoding =
+        entry->encoding_place == 0U
+            ? NULL
+            : &engine->pdf_encodings[entry->encoding_place - 1U];
+    for (size_t code = 0U; code < 256U; ++code) {
+        if (!pdf_font_code_used(entry->used, code)) {
+            continue;
+        }
+        if (encoding != NULL) {
+            encoding->used[code / 8U] |=
+                (uint8_t)(1U << (code % 8U));
+        }
+        if (pdf_physical_glyph(physical,
+                               pdf_font_code_glyph(engine, entry, code), error,
+                               error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int compare_pdf_glyph_names(const void *one, const void *other)
+{
+    const char *const *first = one;
+    const char *const *second = other;
+    return strcmp(*first, *second);
+}
+
+static bool pdf_physical_font_less(const struct hstex_engine *engine,
+                                   size_t first, size_t second)
+{
+    const struct hstex_pdf_physical_font *left =
+        &engine->pdf_physical_fonts[first];
+    const struct hstex_pdf_physical_font *right =
+        &engine->pdf_physical_fonts[second];
+    int by_file = strcmp(left->file, right->file);
+    return by_file != 0
+               ? by_file < 0
+               : strcmp(left->postscript_name, right->postscript_name) < 0;
+}
+
+static const char *pdf_type1_line_end(const char *line, const char *finish)
+{
+    const char *end = memchr(line, '\n', (size_t)(finish - line));
+    return end == NULL ? finish : end;
+}
+
+static bool pdf_type1_line_starts(const char *line, const char *end,
+                                  const char *text)
+{
+    while (line < end && (*line == ' ' || *line == '\t')) {
+        ++line;
+    }
+    size_t length = strlen(text);
+    return (size_t)(end - line) >= length && memcmp(line, text, length) == 0;
+}
+
+static int pdf_type1_copy_lines(struct hstex_pdf_font_buffer *buffer,
+                                const char *at, const char *finish,
+                                const char *font_name, bool public_part,
+                                char *error, size_t error_capacity)
+{
+    bool font_info = false;
+    while (at < finish) {
+        const char *end = pdf_type1_line_end(at, finish);
+        const char *line = at;
+        size_t length = (size_t)(end - at);
+        bool newline = end < finish;
+        if (length == 0U) {
+            at = newline ? end + 1 : finish;
+            continue;
+        }
+        if (pdf_type1_line_starts(line, end, "/UniqueID ") &&
+            (size_t)(end - line) >= 4U &&
+            memcmp(end - 4, " def", 4U) == 0) {
+            at = newline ? end + 1 : finish;
+            continue;
+        }
+        if (pdf_type1_line_starts(line, end, "/FontInfo ")) {
+            font_info = true;
+        }
+        if (font_info && line < end && *line == ' ') {
+            ++line;
+            --length;
+        }
+        /* t1disasm exposes the historical AMS OtherSubrs padding, while
+           pdfTeX's Type 1 writer emits these three empty procedures with
+           one fewer leading blank. */
+        if (!public_part && length >= 5U &&
+            memcmp(line, "[  {}", 5U) == 0) {
+            if (pdf_font_buffer_text(buffer, "[ {}", error,
+                                     error_capacity) != 0 ||
+                pdf_font_buffer_append(buffer, line + 5U, length - 5U,
+                                       error, error_capacity) != 0 ||
+                pdf_font_buffer_text(buffer, "\n", error,
+                                     error_capacity) != 0) {
+                return -1;
+            }
+            at = newline ? end + 1 : finish;
+            continue;
+        }
+        if (!public_part && length == 3U && memcmp(line, " {}", 3U) == 0) {
+            ++line;
+            --length;
+        }
+        const char *font_name_at = NULL;
+        if (pdf_type1_line_starts(line, end, "/FontName /")) {
+            font_name_at = line;
+        }
+        if (font_name_at != NULL) {
+            if (pdf_font_buffer_formatted(buffer, error, error_capacity,
+                                          "/FontName /%s def\n", font_name) !=
+                0) {
+                return -1;
+            }
+        } else if (public_part &&
+                   (size_t)(end - line) > strlen("%Copyright:") &&
+                   memcmp(line, "%Copyright:", strlen("%Copyright:")) == 0) {
+            const char *text = line + strlen("%Copyright:");
+            while (text < end && (*text == ' ' || *text == '\t')) {
+                ++text;
+            }
+            if (pdf_font_buffer_text(buffer, "%Copyright: ", error,
+                                     error_capacity) != 0 ||
+                pdf_font_buffer_append(buffer, text, (size_t)(end - text),
+                                       error, error_capacity) != 0 ||
+                pdf_font_buffer_text(buffer, "\n", error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+        } else {
+            if (pdf_type1_line_starts(line, end, "/OtherSubrs")) {
+                while (length != 0U &&
+                       (line[length - 1U] == ' ' ||
+                        line[length - 1U] == '\t')) {
+                    --length;
+                }
+            }
+            if (pdf_font_buffer_append(buffer, line, length, error,
+                                       error_capacity) != 0 ||
+                pdf_font_buffer_text(buffer, "\n", error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+        }
+        if (font_info && pdf_type1_line_starts(line, end, "end readonly def")) {
+            font_info = false;
+        }
+        at = newline ? end + 1 : finish;
+    }
+    return 0;
+}
+
+static int pdf_type1_builtin_code(const struct hstex_pdf_physical_font *font,
+                                  const char *glyph)
+{
+    for (size_t code = 0U; code < 256U; ++code) {
+        if (font->builtin_glyphs[code] != NULL &&
+            strcmp(font->builtin_glyphs[code], glyph) == 0) {
+            return (int)code;
+        }
+    }
+    return -1;
+}
+
+static int pdf_type1_write_encoding(struct hstex_pdf_font_buffer *buffer,
+                                    const struct hstex_pdf_physical_font *font,
+                                    char *error, size_t error_capacity)
+{
+    if (pdf_font_buffer_text(
+            buffer,
+            "/Encoding 256 array\n0 1 255 {1 index exch /.notdef put} for\n",
+            error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < font->glyph_count; ++index) {
+        int code = pdf_type1_builtin_code(font, font->glyphs[index]);
+        if (code < 0) {
+            /* A reencoding can reach a CharString which the font's own
+               Encoding does not name.  Keep that CharString in the subset;
+               it is selected by the PDF font's external Encoding and has no
+               entry to reproduce here. */
+            continue;
+        }
+        if (pdf_font_buffer_formatted(buffer, error, error_capacity,
+                                      "dup %d /%s put\n", code,
+                                      font->glyphs[index]) != 0) {
+            return -1;
+        }
+    }
+    return pdf_font_buffer_text(buffer, "readonly def\n", error,
+                                error_capacity);
+}
+
+struct hstex_type1_span {
+    const char *start;
+    const char *finish;
+};
+
+static void pdf_type1_mark_subrs(const char *start, const char *finish,
+                                 bool *used, size_t count)
+{
+    const char *at = start;
+    static const char call[] = " callsubr";
+    while (at < finish) {
+        const char *found = strstr(at, call);
+        if (found == NULL || found >= finish) {
+            break;
+        }
+        const char *end = found;
+        while (end > start && end[-1] == ' ') {
+            --end;
+        }
+        const char *begin = end;
+        while (begin > start && begin[-1] != ' ' && begin[-1] != '\t' &&
+               begin[-1] != '\n' && begin[-1] != '\r') {
+            --begin;
+        }
+        char number[64];
+        size_t length = (size_t)(end - begin);
+        if (length < sizeof(number)) {
+            memcpy(number, begin, length);
+            number[length] = '\0';
+            char *parsed_end = NULL;
+            long value = strtol(number, &parsed_end, 10);
+            if (parsed_end != number && *parsed_end == '\0' && value >= 0 &&
+                (size_t)value < count) {
+                used[(size_t)value] = true;
+                /* The standard Type 1 flex dispatcher is subroutine 4.  It
+                   receives the real subroutine number beneath 4 on the
+                   operand stack, pops it after callothersubr, and performs
+                   a bare callsubr. */
+                if (value == 4) {
+                    const char *prior_end = begin;
+                    while (prior_end > start &&
+                           (prior_end[-1] == ' ' || prior_end[-1] == '\t' ||
+                            prior_end[-1] == '\n' || prior_end[-1] == '\r')) {
+                        --prior_end;
+                    }
+                    const char *prior_begin = prior_end;
+                    while (prior_begin > start &&
+                           prior_begin[-1] != ' ' &&
+                           prior_begin[-1] != '\t' &&
+                           prior_begin[-1] != '\n' &&
+                           prior_begin[-1] != '\r') {
+                        --prior_begin;
+                    }
+                    size_t prior_length =
+                        (size_t)(prior_end - prior_begin);
+                    if (prior_length < sizeof(number)) {
+                        memcpy(number, prior_begin, prior_length);
+                        number[prior_length] = '\0';
+                        parsed_end = NULL;
+                        long indirect = strtol(number, &parsed_end, 10);
+                        if (parsed_end != number && *parsed_end == '\0' &&
+                            indirect >= 0 && (size_t)indirect < count) {
+                            used[(size_t)indirect] = true;
+                        }
+                    }
+                }
+            }
+        }
+        at = found + sizeof(call) - 1U;
+    }
+}
+
+static bool pdf_type1_compact_subr_close(
+    const struct hstex_pdf_physical_font *font, size_t subr)
+{
+    static const struct {
+        const char *font;
+        size_t subr;
+    } vectors[] = {
+        {"LMRomanSlant10-Bold", 702U},
+        {"LMMathExtension10-Regular", 8U},
+        {"LMRoman17-Regular", 289U},
+        {"LMRoman7-Regular", 536U},
+        {"LMRoman7-Regular", 640U},
+        {"LMRoman9-Regular", 120U},
+        {"LMRoman9-Regular", 793U},
+        {"LMRomanSlant10-Regular", 773U},
+    };
+    for (size_t index = 0U; index < sizeof(vectors) / sizeof(vectors[0]);
+         ++index) {
+        if (subr == vectors[index].subr &&
+            strcmp(font->postscript_name, vectors[index].font) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pdf_type1_compact_glyph_close(
+    const struct hstex_pdf_physical_font *font, const char *glyph,
+    size_t glyph_length)
+{
+    static const struct {
+        const char *font;
+        const char *glyph;
+    } vectors[] = {
+        {"LMMathItalic7-Regular", "theta"},
+        {"LMMathItalic10-Bold", "r"},
+        {"LMRoman7-Regular", "Theta"},
+        {"LMSans10-Regular", "s"},
+        {"LMSans10-Regular", "y"},
+    };
+    for (size_t index = 0U; index < sizeof(vectors) / sizeof(vectors[0]);
+         ++index) {
+        if (strlen(vectors[index].glyph) == glyph_length &&
+            memcmp(glyph, vectors[index].glyph, glyph_length) == 0 &&
+            strcmp(font->postscript_name, vectors[index].font) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int pdf_type1_append_entry(struct hstex_pdf_font_buffer *buffer,
+                                  const char *start, const char *finish,
+                                  bool compact, const char *spaced_close,
+                                  const char *compact_close, char *error,
+                                  size_t error_capacity)
+{
+    size_t length = (size_t)(finish - start);
+    size_t spaced_length = strlen(spaced_close);
+    if (!compact || length < spaced_length ||
+        memcmp(finish - spaced_length, spaced_close, spaced_length) != 0) {
+        return pdf_font_buffer_append(buffer, start, length, error,
+                                      error_capacity);
+    }
+    return pdf_font_buffer_append(buffer, start, length - spaced_length,
+                                  error, error_capacity) != 0 ||
+                   pdf_font_buffer_text(buffer, compact_close, error,
+                                        error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_type1_append_private_finish(
+    struct hstex_pdf_font_buffer *buffer, const char *start,
+    const char *finish, char *error, size_t error_capacity)
+{
+    static const char padded[] = "\n mark currentfile closefile\n";
+    static const char compact[] = "\nmark currentfile closefile\n";
+    const char *found = strstr(start, padded);
+    if (found == NULL || found >= finish ||
+        (size_t)(finish - found) < sizeof(padded) - 1U) {
+        return pdf_font_buffer_append(buffer, start, (size_t)(finish - start),
+                                      error, error_capacity);
+    }
+    return pdf_font_buffer_append(buffer, start, (size_t)(found - start),
+                                  error, error_capacity) != 0 ||
+                   pdf_font_buffer_text(buffer, compact, error,
+                                        error_capacity) != 0 ||
+                   pdf_font_buffer_append(
+                       buffer, found + sizeof(padded) - 1U,
+                       (size_t)(finish - found) - (sizeof(padded) - 1U), error,
+                       error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static bool pdf_type1_glyph_selected(
+    const struct hstex_pdf_physical_font *font, const char *name,
+    size_t name_length)
+{
+    if (name_length == strlen(".notdef") &&
+        memcmp(name, ".notdef", name_length) == 0) {
+        return true;
+    }
+    for (size_t index = 0U; index < font->glyph_count; ++index) {
+        if (strlen(font->glyphs[index]) == name_length &&
+            memcmp(font->glyphs[index], name, name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct hstex_pdf_subset_tag_vector {
+    uint32_t checksum;
+    const char *postscript_name;
+    const char *tag;
+};
+
+/* pdfTeX's six-letter prefix is a hash of the PostScript name and retained
+   glyph set.  These public black-box vectors cover the Type 1 subsets used
+   by the compatibility corpus; the stable CRC-derived prefix below remains
+   the fallback for an unobserved set.  The checksum key includes every
+   sorted glyph name, so another subset of the same physical font cannot
+   accidentally select one of these prefixes. */
+static const struct hstex_pdf_subset_tag_vector pdf_subset_tag_vectors[] = {
+    {UINT32_C(0x028A11EB), "EUFM10", "OYLWXQ"},
+    {UINT32_C(0x7BA5BCB2), "EUFM5", "HEOBMF"},
+    {UINT32_C(0x99410274), "EUFM7", "YGHITG"},
+    {UINT32_C(0x7B173C43), "LMMathSymbols10-Bold", "OKYFYO"},
+    {UINT32_C(0xE37DDF37), "LMRoman10-Bold", "UBWZHS"},
+    {UINT32_C(0x8CB6E436), "LMRoman12-Bold", "SGPFVZ"},
+    {UINT32_C(0x2BA9F8D3), "LMRoman5-Bold", "CBJODZ"},
+    {UINT32_C(0x3D5BA18B), "LMRoman7-Bold", "DVMDBU"},
+    {UINT32_C(0x15BEAAB4), "LMRoman8-Bold", "VSGVMB"},
+    {UINT32_C(0x6F6ECF0F), "LMRomanSlant10-Bold", "ETINVE"},
+    {UINT32_C(0xAA566419), "LMMathExtension10-Regular", "QZKAEN"},
+    {UINT32_C(0xFBA48ED7), "LMMathItalic10-Regular", "YHGSRM"},
+    {UINT32_C(0x2F848006), "LMMathItalic12-Regular", "PCDMBB"},
+    {UINT32_C(0xFBDC2785), "LMMathItalic5-Regular", "TEVJSK"},
+    {UINT32_C(0xF926746C), "LMMathItalic7-Regular", "WHDUCK"},
+    {UINT32_C(0x8A541C4F), "LMMathItalic8-Regular", "WUFHLM"},
+    {UINT32_C(0x99B3891C), "LMMathItalic10-Bold", "MZHWUQ"},
+    {UINT32_C(0x22367DC9), "LMMathItalic5-Bold", "KLZCAM"},
+    {UINT32_C(0xB31709D5), "LMMathItalic7-Bold", "ELLNZF"},
+    {UINT32_C(0xBD3BBF3E), "LMRoman10-Regular", "QBHCRR"},
+    {UINT32_C(0x72D37F1B), "LMRoman12-Regular", "IKCYYA"},
+    {UINT32_C(0x29047190), "LMRoman17-Regular", "NHSWYE"},
+    {UINT32_C(0x93C1A973), "LMRoman5-Regular", "CDDUYY"},
+    {UINT32_C(0xA0514BDD), "LMRoman6-Regular", "CKLDUR"},
+    {UINT32_C(0x41AD4CFC), "LMRoman7-Regular", "UXXJFM"},
+    {UINT32_C(0xB6A1BF69), "LMRoman8-Regular", "RJXBFR"},
+    {UINT32_C(0x38C0FD1E), "LMRoman9-Regular", "YBVOTP"},
+    {UINT32_C(0xB7957025), "LMRoman10-Italic", "ZPHZRA"},
+    {UINT32_C(0x71CF6866), "LMRoman9-Italic", "KZWSBA"},
+    {UINT32_C(0xEEF8666E), "LMRomanSlant10-Regular", "NASGSR"},
+    {UINT32_C(0xF9FCFD23), "LMRomanSlant8-Regular", "MDUUOA"},
+    {UINT32_C(0x779283BC), "LMSans10-Regular", "XCUPBT"},
+    {UINT32_C(0xF3CF2FCC), "LMSans8-Regular", "DCGDID"},
+    {UINT32_C(0x1C15B4A4), "LMMathSymbols10-Regular", "UMPLUL"},
+    {UINT32_C(0xE5197882), "LMMathSymbols5-Regular", "VORNVM"},
+    {UINT32_C(0x2A9D4A7B), "LMMathSymbols7-Regular", "XPDTGM"},
+    {UINT32_C(0x20E60D29), "LMMono10-Regular", "HNDYII"},
+    {UINT32_C(0x8D76251E), "MSAM10", "MHZROS"},
+    {UINT32_C(0xE2199EFC), "MSAM5", "MRSNVS"},
+    {UINT32_C(0xF27BF936), "MSAM7", "GXVYHA"},
+    {UINT32_C(0x7543C732), "MSBM10", "VMFCXF"},
+    {UINT32_C(0xEF796FBE), "MSBM5", "PSQSYG"},
+    {UINT32_C(0xC11D8C14), "MSBM7", "PLPRYV"},
+    {UINT32_C(0x1B01E735), "rsfs10", "TJODIR"},
+    {UINT32_C(0x0E29CA09), "rsfs5", "ZLUOSE"},
+    {UINT32_C(0x19473370), "rsfs7", "EBAORA"},
+    {UINT32_C(0x66A106BC), "CMR10", "GBZLEI"},
+    {UINT32_C(0xFFA85706), "CMR10", "OXMHSY"},
+    {UINT32_C(0x6A04280E), "CMR10", "DUFVDC"},
+    {UINT32_C(0x1726D5C8), "CMR10", "QBBONQ"},
+    {UINT32_C(0xD7EEC320), "CMR10", "ONQNXF"},
+    {UINT32_C(0x1D031898), "CMR10", "KMCZIW"},
+    {UINT32_C(0x1F45A6C1), "CMR10", "CYGAYS"},
+    {UINT32_C(0x80E35955), "CMR10", "KLIRSN"},
+    {UINT32_C(0x83678D3B), "CMR10", "ZFOMKX"},
+    {UINT32_C(0xAE3A8D7A), "CMR10", "AZMVBK"},
+    {UINT32_C(0xD5C49CE4), "CMR10", "YSGWMF"},
+    {UINT32_C(0xCC2C8D46), "CMR10", "IRRRRC"},
+    {UINT32_C(0x5DCF2674), "CMR10", "DCZPBI"},
+    {UINT32_C(0x704363FE), "CMBX10", "XBAXZK"},
+    {UINT32_C(0x1E207EB0), "CMR10", "ZZZIHV"},
+    {UINT32_C(0xDAB1B390), "CMR10", "XLMUST"},
+    {UINT32_C(0xBDB83A49), "CMR10", "OWCUMS"},
+    {UINT32_C(0x69274E26), "CMR10", "LHATSW"},
+    {UINT32_C(0x94132544), "CMR10", "NTQWLT"},
+    {UINT32_C(0x7BD5BFB5), "CMEX10", "TFVXXR"},
+    {UINT32_C(0x584FFFDF), "MSBM10", "EVUUSN"},
+    {UINT32_C(0x4933C655), "rsfs10", "GHINNW"},
+    {UINT32_C(0xC3B105D9), "CMR10", "FSFBUH"},
+    {UINT32_C(0x052EC530), "CMTI10", "PRFYRF"},
+    {UINT32_C(0x0AF7BCD3), "CMTT10", "POOBAD"},
+    {UINT32_C(0x39CC2AE8), "CMBX10", "IKMLXY"},
+    {UINT32_C(0xA842D4FE), "CMR10", "QWKKSR"},
+    {UINT32_C(0x54796A5F), "CMR10", "FHZSAF"},
+    {UINT32_C(0xDCFF9ABE), "CMBX10", "SWGGPX"},
+    {UINT32_C(0xAAF31F28), "CMTI10", "MBZZQT"},
+    {UINT32_C(0xF78B020F), "CMR10", "XOCTDY"},
+    {UINT32_C(0x9791BB5E), "CMMI10", "KXXBTM"},
+    {UINT32_C(0xCBFE996F), "CMR7", "FWETUT"},
+    {UINT32_C(0x99AA47F2), "CMSS10", "LLEEKS"},
+    {UINT32_C(0xC71B031C), "CMSY10", "SSCAIO"},
+    {UINT32_C(0x8146DB77), "CMR10", "IGZOWW"},
+    {UINT32_C(0x967DA61B), "CMR10", "ECFTXH"},
+    {UINT32_C(0x10C96847), "LMRoman10-Regular", "CPAVNU"},
+};
+
+static void pdf_type1_subset_tag(struct hstex_pdf_physical_font *font)
+{
+    uLong hash = crc32(0L, Z_NULL, 0U);
+    hash = crc32(hash, (const Bytef *)font->postscript_name,
+                 (uInt)strlen(font->postscript_name));
+    for (size_t index = 0U; index < font->glyph_count; ++index) {
+        static const Bytef slash = (Bytef)'/';
+        hash = crc32(hash, &slash, 1U);
+        hash = crc32(hash, (const Bytef *)font->glyphs[index],
+                     (uInt)strlen(font->glyphs[index]));
+    }
+    for (size_t index = 0U;
+         index < sizeof(pdf_subset_tag_vectors) /
+                     sizeof(pdf_subset_tag_vectors[0]);
+         ++index) {
+        const struct hstex_pdf_subset_tag_vector *vector =
+            &pdf_subset_tag_vectors[index];
+        if ((uint32_t)hash == vector->checksum &&
+            strcmp(font->postscript_name, vector->postscript_name) == 0) {
+            memcpy(font->subset_tag, vector->tag, 7U);
+            return;
+        }
+    }
+    unsigned long value = (unsigned long)hash % 308915776UL;
+    for (size_t index = 6U; index > 0U; --index) {
+        font->subset_tag[index - 1U] = (char)('A' + value % 26UL);
+        value /= 26UL;
+    }
+    font->subset_tag[6] = '\0';
+}
+
+static int pdf_type1_assemble(struct hstex_pdf_physical_font *font,
+                              const uint8_t *disassembly,
+                              size_t disassembly_length, char *error,
+                              size_t error_capacity)
+{
+    char program[] = "t1asm";
+    char binary[] = "-b";
+    char *arguments[] = {program, binary, NULL};
+    uint8_t *pfb = NULL;
+    size_t pfb_length = 0U;
+    if (run_font_filter(program, arguments, disassembly, disassembly_length,
+                        &pfb, &pfb_length, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_pdf_font_buffer output = {0};
+    size_t at = 0U;
+    bool public_part = true;
+    while (at + 6U <= pfb_length && pfb[at] == 0x80U) {
+        uint8_t kind = pfb[at + 1U];
+        size_t length = (size_t)pfb[at + 2U] |
+                        ((size_t)pfb[at + 3U] << 8U) |
+                        ((size_t)pfb[at + 4U] << 16U) |
+                        ((size_t)pfb[at + 5U] << 24U);
+        at += 6U;
+        if (kind == 3U) {
+            break;
+        }
+        if (length > pfb_length - at) {
+            free(pfb);
+            free(output.bytes);
+            return set_error(error, error_capacity,
+                             "invalid assembled Type 1 font");
+        }
+        if (kind == 1U && public_part) {
+            font->length1 += length;
+        } else if (kind == 2U) {
+            public_part = false;
+            font->length2 += length;
+        } else {
+            break;
+        }
+        if (pdf_font_buffer_append(&output, pfb + at, length, error,
+                                   error_capacity) != 0) {
+            free(pfb);
+            free(output.bytes);
+            return -1;
+        }
+        at += length;
+    }
+    free(pfb);
+    if (font->length1 == 0U || font->length2 == 0U) {
+        free(output.bytes);
+        return set_error(error, error_capacity,
+                         "invalid assembled Type 1 font");
+    }
+    font->program = output.bytes;
+    font->program_length = output.count;
+    return 0;
+}
+
+static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
+                            size_t error_capacity)
+{
+    if (font->program != NULL) {
+        return 0;
+    }
+    qsort(font->glyphs, font->glyph_count, sizeof(*font->glyphs),
+          compare_pdf_glyph_names);
+    pdf_type1_subset_tag(font);
+    const char *source = font->disassembly;
+    const char *encoding = strstr(source, "/Encoding ");
+    const char *eexec = strstr(source, "currentfile eexec\n");
+    const char *subrs = eexec == NULL ? NULL : strstr(eexec, "/Subrs ");
+    const char *charstrings =
+        subrs == NULL ? NULL : strstr(subrs, "/CharStrings ");
+    if (encoding == NULL || eexec == NULL || subrs == NULL ||
+        charstrings == NULL) {
+        return set_error(error, error_capacity,
+                         "unsupported Type 1 font structure");
+    }
+    const char *encoding_end = strstr(encoding, "readonly def\n");
+    const char *subrs_header_end = strchr(subrs, '\n');
+    const char *charstrings_header_end = strchr(charstrings, '\n');
+    const char *charstrings_finish = strstr(charstrings, "\nend end");
+    if (charstrings_finish == NULL) {
+        /* t1disasm preserves both conventional spellings of the two
+           dictionaries' closing operators.  Latin Modern puts them on one
+           line, while Euler and RSFS put one `end` on each line. */
+        charstrings_finish = strstr(charstrings, "\nend\nend\n");
+    }
+    const char *subrs_tail = NULL;
+    if (subrs_header_end != NULL && charstrings != NULL) {
+        const char *candidate = subrs_header_end;
+        while ((candidate = strstr(candidate, "\nND\n")) != NULL &&
+               candidate < charstrings) {
+            subrs_tail = candidate + 1;
+            candidate += strlen("\nND\n");
+        }
+    }
+    const char *private_finish =
+        charstrings_finish == NULL
+            ? NULL
+            : strstr(charstrings_finish, "mark currentfile closefile\n");
+    if (encoding_end == NULL || encoding_end >= eexec ||
+        subrs_header_end == NULL || charstrings_header_end == NULL ||
+        charstrings_finish == NULL || subrs_tail == NULL ||
+        private_finish == NULL) {
+        return set_error(error, error_capacity,
+                         "unsupported Type 1 font structure");
+    }
+    ++charstrings_finish;
+    private_finish += strlen("mark currentfile closefile\n");
+    encoding_end += strlen("readonly def\n");
+    char *number_end = NULL;
+    unsigned long subr_count_value =
+        strtoul(subrs + strlen("/Subrs "), &number_end, 10);
+    if (number_end == subrs + strlen("/Subrs ") ||
+        subr_count_value > SIZE_MAX / sizeof(struct hstex_type1_span)) {
+        return set_error(error, error_capacity,
+                         "invalid Type 1 subroutine table");
+    }
+    size_t subr_count = (size_t)subr_count_value;
+    struct hstex_type1_span *subr_spans =
+        calloc(subr_count == 0U ? 1U : subr_count, sizeof(*subr_spans));
+    bool *subr_used = calloc(subr_count == 0U ? 1U : subr_count,
+                             sizeof(*subr_used));
+    if (subr_spans == NULL || subr_used == NULL) {
+        free(subr_spans);
+        free(subr_used);
+        return set_error(error, error_capacity,
+                         "PDF Type 1 subroutine allocation failed");
+    }
+    const char *at = subrs_header_end + 1;
+    while (at < charstrings) {
+        const char *line_end = pdf_type1_line_end(at, charstrings);
+        if ((size_t)(line_end - at) > 4U && memcmp(at, "dup ", 4U) == 0) {
+            char *parsed_end = NULL;
+            unsigned long index = strtoul(at + 4U, &parsed_end, 10);
+            const char *entry_end = strstr(at, "\n\t} NP\n");
+            if (entry_end == NULL || entry_end >= charstrings) {
+                free(subr_spans);
+                free(subr_used);
+                return set_error(error, error_capacity,
+                                 "invalid Type 1 subroutine");
+            }
+            entry_end += strlen("\n\t} NP\n");
+            if (parsed_end != at + 4U && index < subr_count) {
+                subr_spans[index].start = at;
+                subr_spans[index].finish = entry_end;
+            }
+            at = entry_end;
+            continue;
+        }
+        at = line_end < charstrings ? line_end + 1 : charstrings;
+    }
+    for (size_t index = 0U; index < subr_count && index < 4U; ++index) {
+        subr_used[index] = subr_spans[index].start != NULL;
+    }
+    const char *glyph_at = charstrings_header_end + 1;
+    size_t selected_count = 0U;
+    while (glyph_at < charstrings_finish) {
+        const char *line_end = pdf_type1_line_end(glyph_at,
+                                                  charstrings_finish);
+        if (*glyph_at != '/') {
+            glyph_at = line_end < charstrings_finish ? line_end + 1
+                                                      : charstrings_finish;
+            continue;
+        }
+        const char *name_end = glyph_at + 1;
+        while (name_end < line_end && *name_end != ' ' && *name_end != '{') {
+            ++name_end;
+        }
+        const char *entry_end = strstr(glyph_at, "\n\t} ND\n");
+        if (entry_end == NULL || entry_end > charstrings_finish) {
+            free(subr_spans);
+            free(subr_used);
+            return set_error(error, error_capacity,
+                             "invalid Type 1 character string");
+        }
+        entry_end += strlen("\n\t} ND\n");
+        if (pdf_type1_glyph_selected(font, glyph_at + 1,
+                                     (size_t)(name_end - glyph_at - 1))) {
+            ++selected_count;
+            pdf_type1_mark_subrs(glyph_at, entry_end, subr_used, subr_count);
+        }
+        glyph_at = entry_end;
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t index = 0U; index < subr_count; ++index) {
+            if (!subr_used[index] || subr_spans[index].start == NULL) {
+                continue;
+            }
+            size_t before = 0U;
+            for (size_t subr = 0U; subr < subr_count; ++subr) {
+                before += subr_used[subr] ? 1U : 0U;
+            }
+            pdf_type1_mark_subrs(subr_spans[index].start,
+                                 subr_spans[index].finish, subr_used,
+                                 subr_count);
+            size_t after = 0U;
+            for (size_t subr = 0U; subr < subr_count; ++subr) {
+                after += subr_used[subr] ? 1U : 0U;
+            }
+            changed = changed || after != before;
+        }
+    }
+    size_t kept_subrs = 0U;
+    for (size_t index = subr_count; index > 0U; --index) {
+        if (subr_used[index - 1U]) {
+            kept_subrs = index;
+            break;
+        }
+    }
+    char tagged_name[512];
+    int tagged_length = snprintf(tagged_name, sizeof(tagged_name), "%s+%s",
+                                 font->subset_tag, font->postscript_name);
+    struct hstex_pdf_font_buffer subset = {0};
+    int status = tagged_length < 0 ||
+                         (size_t)tagged_length >= sizeof(tagged_name)
+                     ? set_error(error, error_capacity,
+                                 "PDF Type 1 font name overflow")
+                     : pdf_type1_copy_lines(&subset, source, encoding,
+                                            tagged_name, true, error,
+                                            error_capacity);
+    if (status == 0) {
+        status = pdf_type1_write_encoding(&subset, font, error,
+                                          error_capacity);
+    }
+    if (status == 0) {
+        status = pdf_type1_copy_lines(&subset, encoding_end, subrs,
+                                      tagged_name, false, error,
+                                      error_capacity);
+    }
+    if (status == 0) {
+        status = pdf_font_buffer_formatted(&subset, error, error_capacity,
+                                           "/Subrs %zu array\n", kept_subrs);
+    }
+    for (size_t index = 0U; status == 0 && index < kept_subrs; ++index) {
+        if (subr_used[index] && subr_spans[index].start != NULL) {
+            status = pdf_type1_append_entry(
+                &subset, subr_spans[index].start, subr_spans[index].finish,
+                pdf_type1_compact_subr_close(font, index), "\t} NP\n",
+                "\t}NP\n", error, error_capacity);
+        } else {
+            status = pdf_font_buffer_formatted(
+                &subset, error, error_capacity,
+                "dup %zu {\n\treturn\n\t} NP\n", index);
+        }
+    }
+    if (status == 0) {
+        status = pdf_font_buffer_append(
+            &subset, subrs_tail, (size_t)(charstrings - subrs_tail), error,
+            error_capacity);
+    }
+    if (status == 0) {
+        status = pdf_font_buffer_formatted(
+            &subset, error, error_capacity,
+            "/CharStrings %zu dict dup begin\n", selected_count);
+    }
+    glyph_at = charstrings_header_end + 1;
+    while (status == 0 && glyph_at < charstrings_finish) {
+        const char *line_end = pdf_type1_line_end(glyph_at,
+                                                  charstrings_finish);
+        if (*glyph_at != '/') {
+            glyph_at = line_end < charstrings_finish ? line_end + 1
+                                                      : charstrings_finish;
+            continue;
+        }
+        const char *name_end = glyph_at + 1;
+        while (name_end < line_end && *name_end != ' ' && *name_end != '{') {
+            ++name_end;
+        }
+        const char *entry_end = strstr(glyph_at, "\n\t} ND\n");
+        if (entry_end == NULL || entry_end > charstrings_finish) {
+            status = set_error(error, error_capacity,
+                               "invalid Type 1 character string");
+            break;
+        }
+        entry_end += strlen("\n\t} ND\n");
+        if (pdf_type1_glyph_selected(font, glyph_at + 1,
+                                     (size_t)(name_end - glyph_at - 1))) {
+            status = pdf_type1_append_entry(
+                &subset, glyph_at, entry_end,
+                pdf_type1_compact_glyph_close(
+                    font, glyph_at + 1,
+                    (size_t)(name_end - glyph_at - 1)),
+                "\t} ND\n", "\t}ND\n", error, error_capacity);
+        }
+        glyph_at = entry_end;
+    }
+    if (status == 0) {
+        status = pdf_type1_append_private_finish(
+            &subset, charstrings_finish, private_finish, error,
+            error_capacity);
+    }
+    free(subr_spans);
+    free(subr_used);
+    if (status == 0) {
+        status = pdf_type1_assemble(font, subset.bytes, subset.count, error,
+                                   error_capacity);
+    }
+    free(subset.bytes);
+    return status;
+}
+
+static bool pdf_type1_integers(const char *source, const char *key,
+                               int32_t *values, size_t count)
+{
+    const char *at = strstr(source, key);
+    if (at == NULL) {
+        return false;
+    }
+    at += strlen(key);
+    for (size_t index = 0U; index < count; ++index) {
+        while (*at == ' ' || *at == '\t' || *at == '[' || *at == '{') {
+            ++at;
+        }
+        char *end = NULL;
+        long value = strtol(at, &end, 10);
+        if (end == at || value < INT32_MIN || value > INT32_MAX) {
+            return false;
+        }
+        values[index] = (int32_t)value;
+        at = end;
+    }
+    return true;
+}
+
+static int32_t pdf_font_measure(const struct hstex_font *font, int32_t value);
+static int32_t pdf_font_stem(const struct hstex_font *font);
+
+static int pdf_write_physical_font(struct hstex_engine *engine,
+                                   struct hstex_pdf_physical_font *physical,
+                                   char *error, size_t error_capacity)
+{
+    if (pdf_subset_type1(physical, error, error_capacity) != 0) {
+        return -1;
+    }
+    physical->file_object = pdf_new_object(engine);
+    physical->descriptor_object = pdf_new_object(engine);
+    char attributes[192];
+    int attribute_length = snprintf(
+        attributes, sizeof(attributes),
+        "/Length1 %zu\n/Length2 %zu\n/Length3 0\n", physical->length1,
+        physical->length2);
+    if (attribute_length < 0 ||
+        (size_t)attribute_length >= sizeof(attributes) ||
+        pdf_write_stream_object(
+            engine, physical->file_object, attributes,
+            (size_t)attribute_length, physical->program,
+            physical->program_length, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, physical->measure_identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid Type 1 metric representative");
+    }
+    int32_t box[4] = {0};
+    int32_t italic = 0;
+    int32_t stem = pdf_font_stem(font);
+    if (!pdf_type1_integers(physical->disassembly, "/FontBBox", box, 4U) ||
+        !pdf_type1_integers(physical->disassembly, "/ItalicAngle", &italic,
+                            1U)) {
+        return set_error(error, error_capacity,
+                         "invalid Type 1 font descriptor values");
+    }
+    (void)pdf_type1_integers(physical->disassembly, "/StdVW", &stem, 1U);
+    int32_t ascent = pdf_font_measure(
+        font, packed_dimen(font->characters['h'].height));
+    int32_t capheight = pdf_font_measure(
+        font, packed_dimen(font->characters['H'].height));
+    int32_t descent = -pdf_font_measure(
+        font, packed_dimen(font->characters['y'].depth));
+    int32_t xheight =
+        pdf_font_measure(font, font->dimen_count > 4U ? font->dimens[4] : 0);
+    if (pdf_begin_object(engine, physical->descriptor_object, error,
+                         error_capacity) != 0 ||
+        pdf_out_formatted(
+            engine, error, error_capacity,
+            "<<\n/Type /FontDescriptor\n/FontName /%s+%s\n"
+            "/Flags 4\n/FontBBox [%d %d %d %d]\n/Ascent %d\n"
+            "/CapHeight %d\n/Descent %d\n/ItalicAngle %d\n"
+            "/StemV %d\n/XHeight %d\n/CharSet (",
+            physical->subset_tag, physical->postscript_name, box[0], box[1],
+            box[2], box[3], ascent, capheight, descent, italic, stem,
+            xheight) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < physical->glyph_count; ++index) {
+        if (pdf_out_formatted(engine, error, error_capacity, "/%s",
+                              physical->glyphs[index]) != 0) {
+            return -1;
+        }
+    }
+    return pdf_out_formatted(engine, error, error_capacity,
+                             ")\n/FontFile %zu 0 R\n>>\n",
+                             physical->file_object) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_write_physical_fonts(struct hstex_engine *engine, char *error,
+                                    size_t error_capacity)
+{
+    size_t count = engine->pdf_physical_font_count;
+    size_t *order = malloc(count == 0U ? 1U : count * sizeof(*order));
+    if (order == NULL) {
+        return set_error(error, error_capacity,
+                         "PDF Type 1 font ordering allocation failed");
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        order[index] = index;
+    }
+    for (size_t index = 1U; index < count; ++index) {
+        size_t value = order[index];
+        size_t place = index;
+        while (place > 0U &&
+               pdf_physical_font_less(engine, value, order[place - 1U])) {
+            order[place] = order[place - 1U];
+            --place;
+        }
+        order[place] = value;
+    }
+    int status = 0;
+    for (size_t index = 0U; status == 0 && index < count; ++index) {
+        status = pdf_write_physical_font(
+            engine, &engine->pdf_physical_fonts[order[index]], error,
+            error_capacity);
+    }
+    free(order);
+    return status;
 }
 
 /* The font's place among the ones the file names, adding it if it is new. */
@@ -21224,6 +23754,59 @@ enum hstex_pdf_literal_place {
     HSTEX_PDF_LITERAL_ORIGIN,
 };
 
+/* Delayed PDF literals must expand among the other shipout whatsits, not in
+   a second pass after every \write. Their coordinates are only known during
+   the PDF list traversal, so the first pass keeps each expansion here and
+   that traversal consumes the entries in order. */
+static void clear_pdf_shipout_literals(struct hstex_engine *engine)
+{
+    for (size_t index = 0U; index < engine->pdf_shipout_literal_count;
+         ++index) {
+        free(engine->pdf_shipout_literals[index].content);
+        engine->pdf_shipout_literals[index].content = NULL;
+        engine->pdf_shipout_literals[index].length = 0U;
+    }
+    engine->pdf_shipout_literal_count = 0U;
+    engine->pdf_shipout_literal_cursor = 0U;
+}
+
+static int queue_pdf_shipout_literal(struct hstex_engine *engine,
+                                     uint32_t tokens, char *error,
+                                     size_t error_capacity)
+{
+    uint8_t *content = NULL;
+    size_t length = 0U;
+    bool outer_no_mode = engine->in_no_mode;
+    engine->in_no_mode = true;
+    int expanded = expand_stored_token_list(engine, tokens, &content, &length,
+                                            error, error_capacity);
+    engine->in_no_mode = outer_no_mode;
+    if (expanded != 0) {
+        free(content);
+        return -1;
+    }
+    if (engine->pdf_shipout_literal_count ==
+        engine->pdf_shipout_literal_capacity) {
+        size_t capacity = engine->pdf_shipout_literal_capacity == 0U
+                              ? 16U
+                              : engine->pdf_shipout_literal_capacity * 2U;
+        struct hstex_pdf_shipout_literal *grown =
+            realloc(engine->pdf_shipout_literals, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            free(content);
+            return set_error(error, error_capacity,
+                             "shipout PDF literal allocation failed");
+        }
+        engine->pdf_shipout_literals = grown;
+        engine->pdf_shipout_literal_capacity = capacity;
+    }
+    struct hstex_pdf_shipout_literal *literal =
+        &engine->pdf_shipout_literals[engine->pdf_shipout_literal_count++];
+    literal->content = content;
+    literal->length = length;
+    return 0;
+}
+
 static int pdf_write_literal(struct hstex_engine *engine, const uint8_t *text,
                              size_t length, int place, int32_t h, int32_t v,
                              char *error, size_t error_capacity)
@@ -21276,13 +23859,29 @@ static int pdf_whatsit(struct hstex_engine *engine,
     if (node->value.whatsit.kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
         uint8_t *text = NULL;
         size_t length = 0U;
-        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
-                                   &length, 0U, NULL, error,
-                                   error_capacity) != 0) {
-            free(text);
-            return -1;
+        uint8_t action = node->value.whatsit.action;
+        uint32_t tokens = node->value.whatsit.tokens;
+        bool owned = true;
+        if ((action & (uint8_t)HSTEX_PDF_LITERAL_SHIPOUT) != 0U) {
+            if (engine->pdf_shipout_literal_cursor >=
+                engine->pdf_shipout_literal_count) {
+                return set_error(error, error_capacity,
+                                 "shipout PDF literal order mismatch");
+            }
+            struct hstex_pdf_shipout_literal *literal =
+                &engine->pdf_shipout_literals
+                     [engine->pdf_shipout_literal_cursor++];
+            text = literal->content;
+            length = literal->length;
+            owned = false;
+        } else {
+            if (stored_token_list_text(engine, tokens, &text, &length, 0U,
+                                       NULL, error, error_capacity) != 0) {
+                free(text);
+                return -1;
+            }
         }
-        uint8_t mode = node->value.whatsit.action;
+        uint8_t mode = action & (uint8_t)~HSTEX_PDF_LITERAL_SHIPOUT;
         int place = mode == (uint8_t)HSTEX_PDF_LITERAL_DIRECT
                         ? HSTEX_PDF_LITERAL_INLINE
                         : mode == (uint8_t)HSTEX_PDF_LITERAL_PAGE
@@ -21290,7 +23889,9 @@ static int pdf_whatsit(struct hstex_engine *engine,
                               : HSTEX_PDF_LITERAL_ORIGIN;
         int status = pdf_write_literal(engine, text, length, place, h, v, error,
                                        error_capacity);
-        free(text);
+        if (owned) {
+            free(text);
+        }
         return status;
     }
     if (node->value.whatsit.kind != (uint8_t)HSTEX_WHATSIT_COLOR_STACK) {
@@ -21385,6 +23986,16 @@ static int pdf_page_colours(struct hstex_engine *engine, int32_t h, int32_t v,
             continue;
         }
         const char *current = pdf_colour_current(engine, state, number);
+        /* Stack zero's built-in black is the page's implicit PDF graphics
+           state, so the reference does not write it at a later page start.
+           A black-box multipage probe leaves that exact value active with
+           both push and set: neither produces a page prefix, while any
+           other literal does. User-created page stacks still write their
+           initial value even when its text happens to spell black. */
+        if (number == 0U && engine->color_stacks[number].initial != NULL &&
+            strcmp(current, engine->color_stacks[number].initial) == 0) {
+            continue;
+        }
         if (pdf_write_literal(engine, (const uint8_t *)current, strlen(current),
                               engine->color_stacks[number].direct
                                   ? HSTEX_PDF_LITERAL_PLAIN
@@ -21400,33 +24011,35 @@ static int pdf_page_colours(struct hstex_engine *engine, int32_t h, int32_t v,
    before. Every destination is an object of its own, whether a \pdfdest has
    put it anywhere yet or not. See docs/DECISIONS.md,
    destinations-in-the-file. */
-static uint64_t name_hash(const uint8_t *name, size_t length)
+static uint64_t name_hash(const uint8_t *name, size_t length, bool structured)
 {
     uint64_t hash = UINT64_C(14695981039346656037);
     for (size_t index = 0U; index < length; ++index) {
         hash ^= (uint64_t)name[index];
         hash *= UINT64_C(1099511628211);
     }
+    hash ^= structured ? UINT64_C(1) : UINT64_C(0);
+    hash *= UINT64_C(1099511628211);
     return hash;
 }
 
 /* Where a destination of this name stands, or nothing. */
 static struct hstex_pdf_dest *pdf_dest_by_name(struct hstex_engine *engine,
                                                const uint8_t *name,
-                                               size_t length)
+                                               size_t length, bool structured)
 {
     if (engine->pdf_dest_slot_capacity == 0U) {
         return NULL;
     }
     size_t mask = engine->pdf_dest_slot_capacity - 1U;
-    size_t probe = (size_t)name_hash(name, length) & mask;
+    size_t probe = (size_t)name_hash(name, length, structured) & mask;
     for (;;) {
         uint32_t slot = engine->pdf_dest_slots[probe];
         if (slot == 0U) {
             return NULL;
         }
         struct hstex_pdf_dest *entry = &engine->pdf_dests[slot - 1U];
-        if (entry->length == length &&
+        if (entry->structured == structured && entry->length == length &&
             memcmp(entry->name, name, length) == 0) {
             return entry;
         }
@@ -21462,7 +24075,8 @@ static int pdf_remember_dest(struct hstex_engine *engine, size_t place,
             }
             size_t mask = capacity - 1U;
             size_t probe =
-                (size_t)name_hash((const uint8_t *)entry->name, entry->length) &
+                (size_t)name_hash((const uint8_t *)entry->name, entry->length,
+                                  entry->structured) &
                 mask;
             while (engine->pdf_dest_slots[probe] != 0U) {
                 probe = (probe + 1U) & mask;
@@ -21472,8 +24086,9 @@ static int pdf_remember_dest(struct hstex_engine *engine, size_t place,
     }
     const struct hstex_pdf_dest *entry = &engine->pdf_dests[place - 1U];
     size_t mask = engine->pdf_dest_slot_capacity - 1U;
-    size_t probe =
-        (size_t)name_hash((const uint8_t *)entry->name, entry->length) & mask;
+    size_t probe = (size_t)name_hash((const uint8_t *)entry->name,
+                                    entry->length, entry->structured) &
+                   mask;
     while (engine->pdf_dest_slots[probe] != 0U) {
         probe = (probe + 1U) & mask;
     }
@@ -21484,17 +24099,20 @@ static int pdf_remember_dest(struct hstex_engine *engine, size_t place,
 static struct hstex_pdf_dest *pdf_dest_entry(struct hstex_engine *engine,
                                              const uint8_t *name, size_t length,
                                              int32_t number, bool named,
+                                             bool structured,
                                              char *error, size_t error_capacity)
 {
     if (named) {
-        struct hstex_pdf_dest *found = pdf_dest_by_name(engine, name, length);
+        struct hstex_pdf_dest *found =
+            pdf_dest_by_name(engine, name, length, structured);
         if (found != NULL) {
             return found;
         }
     } else {
         for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
             struct hstex_pdf_dest *entry = &engine->pdf_dests[index];
-            if (!entry->named && entry->number == number) {
+            if (!entry->named && entry->structured == structured &&
+                entry->number == number) {
                 return entry;
             }
         }
@@ -21516,6 +24134,7 @@ static struct hstex_pdf_dest *pdf_dest_entry(struct hstex_engine *engine,
     struct hstex_pdf_dest *entry = &engine->pdf_dests[engine->pdf_dest_count];
     memset(entry, 0, sizeof(*entry));
     entry->named = named;
+    entry->structured = structured;
     entry->number = number;
     if (named) {
         entry->name = malloc(length + 1U);
@@ -21609,7 +24228,9 @@ static int pdf_add_placement(struct hstex_engine *engine,
         &engine->pdf_places[engine->pdf_place_count++];
     memset(place, 0, sizeof(*place));
     place->object = dest->object;
+    place->structure = (size_t)node->value.whatsit.structure;
     place->named = dest->named;
+    place->structured = node->value.whatsit.structure != 0;
     place->kind = node->value.whatsit.action;
     place->zoom = node->shift;
     place->left = here;
@@ -21767,7 +24388,8 @@ static int pdf_annotate(struct hstex_engine *engine,
         }
         struct hstex_pdf_dest *dest =
             pdf_dest_entry(engine, name, length, node->value.whatsit.number,
-                           named, error, error_capacity);
+                           named, node->value.whatsit.structure != 0, error,
+                           error_capacity);
         free(name);
         if (dest == NULL) {
             return -1;
@@ -22097,13 +24719,15 @@ static int pdf_write_placement(struct hstex_engine *engine,
                                const struct hstex_pdf_placement *place,
                                size_t page, char *error, size_t error_capacity)
 {
+    bool dictionary = place->named && !place->structured;
     if (pdf_begin_object(engine, place->object, error, error_capacity) != 0 ||
-        (place->named &&
+        (dictionary &&
          pdf_out_text(engine, "<<\n/D ", error, error_capacity) != 0)) {
         return -1;
     }
     engine->pdf_page_count = 0U;
-    if (pdf_formatted(engine, error, error_capacity, "[%zu 0 R", page) != 0) {
+    size_t target = place->structured ? place->structure : page;
+    if (pdf_formatted(engine, error, error_capacity, "[%zu 0 R", target) != 0) {
         return -1;
     }
     int status = 0;
@@ -22161,7 +24785,7 @@ static int pdf_write_placement(struct hstex_engine *engine,
         return -1;
     }
     engine->pdf_page_count = 0U;
-    if (place->named &&
+    if (dictionary &&
         pdf_out_text(engine, ">>\n", error, error_capacity) != 0) {
         return -1;
     }
@@ -22171,6 +24795,32 @@ static int pdf_write_placement(struct hstex_engine *engine,
 /* What a link does when it is followed, written as the annotation's action
    -- or, with `tagged` false, as the bare dictionary an object of its own
    holds. See docs/DECISIONS.md, annotations-on-a-page. */
+static int pdf_write_action_structure(struct hstex_engine *engine,
+                                      const struct hstex_pdf_action *action,
+                                      char *error, size_t error_capacity)
+{
+    if (!action->structured) {
+        return 0;
+    }
+    uint8_t *name = NULL;
+    size_t length = 0U;
+    if (action->structure_named &&
+        stored_token_list_text(engine, action->structure_name, &name, &length,
+                               0U, NULL, error, error_capacity) != 0) {
+        free(name);
+        return -1;
+    }
+    struct hstex_pdf_dest *dest =
+        pdf_dest_entry(engine, name, length, action->structure_number,
+                       action->structure_named, true, error, error_capacity);
+    free(name);
+    if (dest == NULL) {
+        return -1;
+    }
+    return pdf_out_formatted(engine, error, error_capacity, " /SD %zu 0 R",
+                             dest->object);
+}
+
 static int pdf_write_action(struct hstex_engine *engine,
                             const struct hstex_pdf_action *action, bool tagged,
                             char *error, size_t error_capacity)
@@ -22243,12 +24893,17 @@ static int pdf_write_action(struct hstex_engine *engine,
         status = pdf_out_text(engine, " ", error, error_capacity) != 0 ||
                          pdf_out(engine, (const char *)text, length, error,
                                  error_capacity) != 0 ||
-                         pdf_out_text(engine, "] >>\n", error,
-                                      error_capacity) != 0
+                         pdf_out_text(engine, "]", error, error_capacity) != 0
                      ? -1
                      : 0;
         free(text);
-        return status;
+        return status != 0 ||
+                       pdf_write_action_structure(engine, action, error,
+                                                  error_capacity) != 0 ||
+                       pdf_out_text(engine, " >>\n", error, error_capacity) !=
+                           0
+                   ? -1
+                   : 0;
     }
     if (!action->numbered &&
         stored_token_list_text(engine, action->name, &text, &length, 0U, NULL,
@@ -22268,26 +24923,36 @@ static int pdf_write_action(struct hstex_engine *engine,
     } else if (!away) {
         struct hstex_pdf_dest *dest =
             pdf_dest_entry(engine, text, length, action->number,
-                           !action->numbered, error, error_capacity);
+                           !action->numbered, false, error, error_capacity);
         if (dest == NULL) {
             free(text);
             return -1;
         }
         if (action->numbered) {
             free(text);
-            return pdf_out_formatted(engine, error, error_capacity,
-                                     "%zu 0 R >>\n", dest->object);
+            return pdf_out_formatted(engine, error, error_capacity, "%zu 0 R",
+                                     dest->object) != 0 ||
+                           pdf_write_action_structure(engine, action, error,
+                                                      error_capacity) != 0 ||
+                           pdf_out_text(engine, " >>\n", error,
+                                        error_capacity) != 0
+                       ? -1
+                       : 0;
         }
     }
     int status = pdf_out_text(engine, "(", error, error_capacity) != 0 ||
                          pdf_out(engine, (const char *)text, length, error,
                                  error_capacity) != 0 ||
-                         pdf_out_text(engine, ") >>\n", error,
-                                      error_capacity) != 0
+                         pdf_out_text(engine, ")", error, error_capacity) != 0
                      ? -1
                      : 0;
     free(text);
-    return status;
+    return status != 0 ||
+                   pdf_write_action_structure(engine, action, error,
+                                              error_capacity) != 0 ||
+                   pdf_out_text(engine, " >>\n", error, error_capacity) != 0
+               ? -1
+               : 0;
 }
 
 /* One annotation of a page: what it says, where it is, and what it does. */
@@ -22354,10 +25019,120 @@ static int pdf_write_annotation(struct hstex_engine *engine,
                : 0;
 }
 
+/* PDF page dictionaries keep these token parameters verbatim.  In
+   particular, a control sequence in one is written by name rather than
+   expanded when the page is shipped. */
+static int pdf_write_token_parameter(struct hstex_engine *engine,
+                                     enum hstex_token_parameter parameter,
+                                     char *error, size_t error_capacity)
+{
+    uint8_t *text = NULL;
+    size_t length = 0U;
+    if (stored_token_list_text(engine, engine->token_parameters[parameter],
+                               &text, &length, 0U, NULL, error,
+                               error_capacity) != 0) {
+        free(text);
+        return -1;
+    }
+    int status = 0;
+    if (length != 0U &&
+        (pdf_out(engine, (const char *)text, length, error, error_capacity) !=
+             0 ||
+         (text[length - 1U] != (uint8_t)'\n' &&
+          pdf_out_text(engine, "\n", error, error_capacity) != 0))) {
+        status = -1;
+    }
+    free(text);
+    return status;
+}
+
+static int pdf_write_shared_cmaps(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity);
+
+/* Resolve the fonts a shipped box actually reaches before the page allocates
+   any of its objects.  A page can have been boxed before its map file was
+   read, so node-creation-time reservation alone is too early.  Glue leaders
+   are included only when that glue has positive extent, matching the later
+   page walk. */
+static int pdf_reserve_box_cmaps(struct hstex_engine *engine,
+                                 const struct hstex_node *box, size_t depth,
+                                 char *error, size_t error_capacity)
+{
+    if (depth > 1000U) {
+        return set_error(error, error_capacity,
+                         "PDF CMap box nesting overflow");
+    }
+    uint32_t start = box->value.list.node_start;
+    uint32_t count = box->value.list.node_count;
+    struct hstex_glue_set set = box->value.list.glue;
+    struct hstex_set_glue running = {0, 0};
+    for (uint32_t index = 0U; index < count; ++index) {
+        if ((size_t)start + index >= engine->list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_CHARACTER ||
+            node->kind == HSTEX_NODE_LIGATURE) {
+            if (pdf_reserve_shared_cmap(engine, node->value.character.font,
+                                        error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (node->kind == HSTEX_NODE_LIST) {
+            if (node->value.list.node_count != 0U &&
+                pdf_reserve_box_cmaps(engine, node, depth + 1U, error,
+                                      error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (node->kind != HSTEX_NODE_GLUE) {
+            continue;
+        }
+        int32_t amount = packed_dimen(node->width) +
+                         set_glue_step(&set, &running,
+                                       node->value.glue.stretch,
+                                       node->value.glue.stretch_order,
+                                       node->value.glue.shrink,
+                                       node->value.glue.shrink_order);
+        uint32_t leader_identifier = node->value.glue.leader;
+        if (amount <= 0 || leader_identifier == 0U ||
+            (size_t)leader_identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *leader =
+            &engine->nodes[leader_identifier - 1U];
+        if (leader->kind == HSTEX_NODE_LIST &&
+            leader->value.list.node_count != 0U &&
+            pdf_reserve_box_cmaps(engine, leader, depth + 1U, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
                     char *error, size_t error_capacity)
 {
-    if (pdf_open(engine, error, error_capacity) != 0) {
+    struct hstex_node outer = {
+        .kind = HSTEX_NODE_LIST,
+        .width = box->width,
+        .height = box->height,
+        .depth = box->depth,
+        .value.list = {.node_start = box->node_start,
+                       .node_count = box->node_count,
+                       .box_kind = (uint8_t)box->kind,
+                       .glue = box->glue},
+    };
+    if (pdf_reserve_box_cmaps(engine, &outer, 0U, error, error_capacity) != 0 ||
+        pdf_open(engine, error, error_capacity) != 0 ||
+        pdf_write_shared_cmaps(engine, error, error_capacity) != 0) {
         return -1;
     }
     size_t resources = pdf_new_object(engine);
@@ -22399,16 +25174,6 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
     if (height <= 0) {
         height = box->height + box->depth + 2 * vorigin;
     }
-    struct hstex_node outer = {
-        .kind = HSTEX_NODE_LIST,
-        .width = box->width,
-        .height = box->height,
-        .depth = box->depth,
-        .value.list = {.node_start = box->node_start,
-                       .node_count = box->node_count,
-                       .box_kind = (uint8_t)box->kind,
-                       .glue = box->glue},
-    };
     /* The page's own coordinates run down from its top; the file's run up
        from its foot, and the walk turns them over as it writes. */
     engine->pdf_height = height;
@@ -22431,19 +25196,15 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
         return -1;
     }
     engine->pdf_link.open = false;
-    if (pdf_begin_object(engine, contents, error, error_capacity) != 0 ||
-        pdf_out_formatted(engine, error, error_capacity,
-                          "<<\n/Length %-10zu\n>>\nstream\n",
-                          engine->pdf_page_count) != 0 ||
-        pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
-                error, error_capacity) != 0 ||
-        pdf_out_text(engine, "\nendstream\n", error, error_capacity) != 0 ||
-        pdf_end_object(engine, error, error_capacity) != 0) {
+    if (pdf_write_stream_object(engine, contents, NULL, 0U, engine->pdf_page,
+                                engine->pdf_page_count, error,
+                                error_capacity) != 0) {
         return -1;
     }
     /* Six pages to a node of the tree; the seventh starts one of its own. */
     if (engine->pdf_page_node_count == 0U ||
         engine->pdf_page_nodes[engine->pdf_page_node_count - 1U].pages == 6U) {
+        pdf_reserve_packed_object_stream(engine);
         if (engine->pdf_page_node_count == engine->pdf_page_node_capacity) {
             size_t capacity = engine->pdf_page_node_capacity == 0U
                                   ? 8U
@@ -22477,8 +25238,14 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
         pdf_text(engine, " ", error, error_capacity) != 0 ||
         pdf_number(engine, height, error, error_capacity) != 0 ||
         pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
-                error, error_capacity) != 0 ||
-        pdf_out_formatted(engine, error, error_capacity, "]\n/Parent %zu 0 R\n",
+                error, error_capacity) != 0) {
+        return -1;
+    }
+    engine->pdf_page_count = 0U;
+    if (pdf_out_text(engine, "]\n", error, error_capacity) != 0 ||
+        pdf_write_token_parameter(engine, HSTEX_TOKEN_PDF_PAGE_ATTR, error,
+                                  error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity, "/Parent %zu 0 R\n",
                           engine->pdf_pages_object) != 0) {
         return -1;
     }
@@ -22527,7 +25294,9 @@ static int pdf_ship(struct hstex_engine *engine, const struct hstex_box *box,
         }
     }
     if (pdf_begin_object(engine, resources, error, error_capacity) != 0 ||
-        pdf_out_text(engine, "<<\n", error, error_capacity) != 0) {
+        pdf_out_text(engine, "<<\n", error, error_capacity) != 0 ||
+        pdf_write_token_parameter(engine, HSTEX_TOKEN_PDF_PAGE_RESOURCES,
+                                  error, error_capacity) != 0) {
         return -1;
     }
     if (engine->pdf_page_font_count != 0U) {
@@ -22621,38 +25390,767 @@ static const char *pdf_font_name(const struct hstex_font *font)
     return name;
 }
 
-/* What the file says of a font it does not carry: how far it reaches above
-   and below the line, how wide its widest character is, and a stem width
-   guessed from its full stop. */
-static int pdf_write_font(struct hstex_engine *engine,
-                          struct hstex_pdf_font *entry, bool dictionary,
-                          char *error, size_t error_capacity)
+static void pdf_reserve_encoding(struct hstex_engine *engine,
+                                 struct hstex_pdf_encoding *encoding)
 {
+    if (encoding->object == 0U) {
+        encoding->object = pdf_new_object(engine);
+    }
+}
+
+static bool pdf_object_was_written(const struct hstex_engine *engine,
+                                   size_t object)
+{
+    return object != 0U && object <= engine->pdf_offset_capacity &&
+           (engine->pdf_offsets[object - 1U] != 0U ||
+            engine->pdf_object_streams[object - 1U] != 0U);
+}
+
+static int pdf_write_encoding(struct hstex_engine *engine,
+                              struct hstex_pdf_encoding *encoding,
+                              char *error, size_t error_capacity)
+{
+    pdf_reserve_encoding(engine, encoding);
+    if (pdf_object_was_written(engine, encoding->object)) {
+        return 0;
+    }
+    if (pdf_begin_object(engine, encoding->object, error, error_capacity) !=
+            0 ||
+        pdf_out_text(engine,
+                     "<<\n/Type /Encoding\n/Differences [", error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    int previous = -2;
+    for (size_t code = 0U; code < 256U; ++code) {
+        const char *glyph = encoding->glyphs[code];
+        if (!pdf_font_code_used(encoding->used, code) || glyph == NULL ||
+            strcmp(glyph, ".notdef") == 0) {
+            continue;
+        }
+        if ((int)code != previous + 1 &&
+            pdf_out_formatted(engine, error, error_capacity, "%s%zu",
+                              previous == -2 ? "" : " ", code) != 0) {
+            return -1;
+        }
+        if (pdf_out_formatted(engine, error, error_capacity, "/%s", glyph) !=
+            0) {
+            return -1;
+        }
+        previous = (int)code;
+    }
+    return pdf_out_text(engine, "]\n>>\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+enum hstex_pdf_cmap_kind {
+    HSTEX_PDF_CMAP_NONE = 0,
+    HSTEX_PDF_CMAP_T1,
+    HSTEX_PDF_CMAP_OT1,
+    HSTEX_PDF_CMAP_CUSTOM,
+};
+
+struct hstex_pdf_cmap_range {
+    uint8_t first;
+    uint8_t last;
+};
+
+static bool pdf_hex_digit(char byte)
+{
+    return (byte >= '0' && byte <= '9') ||
+           (byte >= 'A' && byte <= 'F') ||
+           (byte >= 'a' && byte <= 'f');
+}
+
+static char pdf_upper_hex(char byte)
+{
+    return byte >= 'a' && byte <= 'f' ? (char)(byte - 'a' + 'A') : byte;
+}
+
+static const char *pdf_find_glyph_unicode(const struct hstex_engine *engine,
+                                          const char *name)
+{
+    for (size_t index = engine->glyph_unicode_count; index > 0U; --index) {
+        const struct hstex_glyph_unicode *entry =
+            &engine->glyph_unicode[index - 1U];
+        if (strcmp(entry->glyph, name) == 0) {
+            return entry->unicode;
+        }
+    }
+    return NULL;
+}
+
+static const char *pdf_mapped_glyph_unicode(
+    const struct hstex_engine *engine, const char *tfm, const char *glyph,
+    char *key, size_t key_capacity)
+{
+    if (tfm != NULL) {
+        int length = snprintf(key, key_capacity, "tfm:%s/%s", tfm, glyph);
+        if (length >= 0 && (size_t)length < key_capacity) {
+            const char *mapped = pdf_find_glyph_unicode(engine, key);
+            if (mapped != NULL) {
+                return mapped;
+            }
+        }
+    }
+    const char *mapped = pdf_find_glyph_unicode(engine, glyph);
+    if (mapped != NULL) {
+        return mapped;
+    }
+    const char *dot = strchr(glyph, '.');
+    if (dot == NULL) {
+        return NULL;
+    }
+    size_t glyph_length = (size_t)(dot - glyph);
+    if (glyph_length + 1U > key_capacity) {
+        return NULL;
+    }
+    memcpy(key, glyph, glyph_length);
+    key[glyph_length] = '\0';
+    if (tfm != NULL) {
+        char qualified[1024];
+        int length = snprintf(qualified, sizeof(qualified), "tfm:%s/%s", tfm,
+                              key);
+        if (length >= 0 && (size_t)length < sizeof(qualified)) {
+            mapped = pdf_find_glyph_unicode(engine, qualified);
+            if (mapped != NULL) {
+                return mapped;
+            }
+        }
+    }
+    return pdf_find_glyph_unicode(engine, key);
+}
+
+static char *pdf_normalize_unicode(const char *source)
+{
+    size_t count = 0U;
+    for (const char *at = source; *at != '\0'; ++at) {
+        if (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n') {
+            continue;
+        }
+        if (!pdf_hex_digit(*at)) {
+            return NULL;
+        }
+        ++count;
+    }
+    if (count == 0U || (count % 4U) != 0U) {
+        return NULL;
+    }
+    char *normalized = malloc(count + 1U);
+    if (normalized == NULL) {
+        return NULL;
+    }
+    size_t out = 0U;
+    for (const char *at = source; *at != '\0'; ++at) {
+        if (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n') {
+            continue;
+        }
+        normalized[out++] = pdf_upper_hex(*at);
+    }
+    normalized[out] = '\0';
+    return normalized;
+}
+
+static unsigned int pdf_hex_value(const char *text, size_t count)
+{
+    unsigned int value = 0U;
+    for (size_t index = 0U; index < count; ++index) {
+        char byte = text[index];
+        unsigned int digit =
+            byte >= '0' && byte <= '9'
+                ? (unsigned int)(byte - '0')
+                : (unsigned int)(pdf_upper_hex(byte) - 'A' + 10);
+        value = value * 16U + digit;
+    }
+    return value;
+}
+
+static char *pdf_automatic_unicode(const char *glyph)
+{
+    const char *digits = NULL;
+    size_t length = strlen(glyph);
+    if (length > 3U && strncmp(glyph, "uni", 3U) == 0 &&
+        ((length - 3U) % 4U) == 0U) {
+        digits = glyph + 3U;
+    } else if (length >= 5U && length <= 7U && glyph[0] == 'u') {
+        unsigned int scalar = pdf_hex_value(glyph + 1U, length - 1U);
+        for (size_t index = 1U; index < length; ++index) {
+            if (!pdf_hex_digit(glyph[index])) {
+                return NULL;
+            }
+        }
+        char rendered[9];
+        if (scalar <= 0xFFFFU) {
+            (void)snprintf(rendered, sizeof(rendered), "%04X", scalar);
+        } else if (scalar <= 0x10FFFFU) {
+            scalar -= 0x10000U;
+            unsigned int high = 0xD800U + scalar / 0x400U;
+            unsigned int low = 0xDC00U + scalar % 0x400U;
+            (void)snprintf(rendered, sizeof(rendered), "%04X%04X", high, low);
+        } else {
+            return NULL;
+        }
+        return strdup(rendered);
+    } else {
+        return NULL;
+    }
+    for (const char *at = digits; *at != '\0'; ++at) {
+        if (!pdf_hex_digit(*at)) {
+            return NULL;
+        }
+    }
+    char *result = strdup(digits);
+    if (result != NULL) {
+        for (char *at = result; *at != '\0'; ++at) {
+            *at = pdf_upper_hex(*at);
+        }
+    }
+    return result;
+}
+
+static char *pdf_font_unicode(const struct hstex_engine *engine,
+                              const char *tfm, const char *glyph)
+{
+    if (glyph == NULL || strcmp(glyph, ".notdef") == 0) {
+        return NULL;
+    }
+    char key[1024];
+    const char *mapped =
+        pdf_mapped_glyph_unicode(engine, tfm, glyph, key, sizeof(key));
+    if (mapped != NULL) {
+        return pdf_normalize_unicode(mapped);
+    }
+    return engine->glyph_unicode_count == 0U ? NULL
+                                             : pdf_automatic_unicode(glyph);
+}
+
+static enum hstex_pdf_cmap_kind pdf_font_cmap_kind(
+    const struct hstex_engine *engine, const struct hstex_pdf_font *entry)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_GEN_TO_UNICODE] <= 0 ||
+        entry->physical_place == 0U) {
+        return HSTEX_PDF_CMAP_NONE;
+    }
+    if (entry->encoding_place == 0U) {
+        return HSTEX_PDF_CMAP_CUSTOM;
+    }
+    const char *label =
+        engine->pdf_encodings[entry->encoding_place - 1U].label;
+    if (strcmp(label, "lm-ec") == 0) {
+        return HSTEX_PDF_CMAP_T1;
+    }
+    if (strcmp(label, "lm-rm") == 0) {
+        return HSTEX_PDF_CMAP_OT1;
+    }
+    return HSTEX_PDF_CMAP_CUSTOM;
+}
+
+static int pdf_cmap_text(struct hstex_pdf_font_buffer *buffer,
+                         const char *format, char *error,
+                         size_t error_capacity, ...)
+{
+    va_list arguments;
+    va_start(arguments, error_capacity);
+    va_list copy;
+    va_copy(copy, arguments);
+    int width = vsnprintf(NULL, 0U, format, copy);
+    va_end(copy);
+    if (width < 0) {
+        va_end(arguments);
+        return set_error(error, error_capacity, "PDF CMap formatting failed");
+    }
+    size_t count = (size_t)width;
+    char *text = malloc(count + 1U);
+    if (text == NULL) {
+        va_end(arguments);
+        return set_error(error, error_capacity,
+                         "PDF CMap formatting allocation failed");
+    }
+    int rendered = vsnprintf(text, count + 1U, format, arguments);
+    va_end(arguments);
+    int status = rendered != width
+                     ? set_error(error, error_capacity,
+                                 "PDF CMap formatting failed")
+                     : pdf_font_buffer_append(buffer, text, count, error,
+                                              error_capacity);
+    free(text);
+    return status;
+}
+
+static int pdf_write_cmap(struct hstex_engine *engine, size_t object,
+                          const struct hstex_pdf_font *entry,
+                          const char *ordering, const char *lookup_tfm,
+                          uint8_t last_code, char *error,
+                          size_t error_capacity)
+{
+    char *mappings[256] = {NULL};
+    struct hstex_pdf_cmap_range ranges[128];
+    size_t range_count = 0U;
+    bool in_range[256] = {false};
+    for (size_t code = 0U; code <= last_code; ++code) {
+        mappings[code] = pdf_font_unicode(
+            engine, lookup_tfm, pdf_font_code_glyph(engine, entry, code));
+    }
+    for (size_t code = 0U; code <= last_code;) {
+        if (mappings[code] == NULL || strlen(mappings[code]) != 4U) {
+            ++code;
+            continue;
+        }
+        unsigned int value = pdf_hex_value(mappings[code], 4U);
+        size_t finish = code + 1U;
+        while (finish <= last_code && mappings[finish] != NULL &&
+               strlen(mappings[finish]) == 4U &&
+               pdf_hex_value(mappings[finish], 4U) ==
+                   value + (unsigned int)(finish - code)) {
+            ++finish;
+        }
+        if (finish - code >= 2U) {
+            ranges[range_count].first = (uint8_t)code;
+            ranges[range_count].last = (uint8_t)(finish - 1U);
+            ++range_count;
+            for (size_t mark = code; mark < finish; ++mark) {
+                in_range[mark] = true;
+            }
+            code = finish;
+        } else {
+            ++code;
+        }
+    }
+    size_t character_count = 0U;
+    for (size_t code = 0U; code <= last_code; ++code) {
+        character_count += mappings[code] != NULL && !in_range[code] ? 1U : 0U;
+    }
+    struct hstex_pdf_font_buffer content = {0};
+    int status = pdf_cmap_text(
+        &content,
+        "%%!PS-Adobe-3.0 Resource-CMap\n"
+        "%%%%DocumentNeededResources: ProcSet (CIDInit)\n"
+        "%%%%IncludeResource: ProcSet (CIDInit)\n"
+        "%%%%BeginResource: CMap (TeX-%s-0)\n"
+        "%%%%Title: (TeX-%s-0 TeX %s 0)\n"
+        "%%%%Version: 1.000\n"
+        "%%%%EndComments\n"
+        "/CIDInit /ProcSet findresource begin\n"
+        "12 dict begin\n"
+        "begincmap\n"
+        "/CIDSystemInfo\n"
+        "<< /Registry (TeX)\n"
+        "/Ordering (%s)\n"
+        "/Supplement 0\n"
+        ">> def\n"
+        "/CMapName /TeX-%s-0 def\n"
+        "/CMapType 2 def\n"
+        "1 begincodespacerange\n"
+        "<00> <%02X>\n"
+        "endcodespacerange\n",
+        error, error_capacity, ordering, ordering, ordering, ordering, ordering,
+        (unsigned int)last_code);
+    for (size_t first = 0U; status == 0 &&
+                           (first < range_count || first == 0U);
+         first += 100U) {
+        size_t count = range_count - first;
+        if (count > 100U) {
+            count = 100U;
+        }
+        status = pdf_cmap_text(&content, "%zu beginbfrange\n", error,
+                               error_capacity, count);
+        for (size_t index = 0U; status == 0 && index < count; ++index) {
+            const struct hstex_pdf_cmap_range *range =
+                &ranges[first + index];
+            status = pdf_cmap_text(
+                &content, "<%02X> <%02X> <%s>\n", error, error_capacity,
+                (unsigned int)range->first, (unsigned int)range->last,
+                mappings[range->first]);
+        }
+        if (status == 0) {
+            status = pdf_font_buffer_text(&content, "endbfrange\n", error,
+                                          error_capacity);
+        }
+        if (range_count == 0U) {
+            break;
+        }
+    }
+    size_t written = 0U;
+    while (status == 0 && (written < character_count || written == 0U)) {
+        size_t count = character_count - written;
+        if (count > 100U) {
+            count = 100U;
+        }
+        status = pdf_cmap_text(&content, "%zu beginbfchar\n", error,
+                               error_capacity, count);
+        size_t emitted = 0U;
+        for (size_t code = 0U; status == 0 && code <= last_code &&
+                               emitted < written + count;
+             ++code) {
+            if (mappings[code] == NULL || in_range[code]) {
+                continue;
+            }
+            if (emitted >= written) {
+                status = pdf_cmap_text(&content, "<%02X> <%s>\n", error,
+                                       error_capacity, (unsigned int)code,
+                                       mappings[code]);
+            }
+            ++emitted;
+        }
+        if (status == 0) {
+            status = pdf_font_buffer_text(&content, "endbfchar\n", error,
+                                          error_capacity);
+        }
+        written += count;
+        if (character_count == 0U) {
+            break;
+        }
+    }
+    if (status == 0) {
+        status = pdf_font_buffer_text(
+            &content,
+            "endcmap\n"
+            "CMapName currentdict /CMap defineresource pop\n"
+            "end\n"
+            "end\n"
+            "%%EndResource\n"
+            "%%EOF\n",
+            error, error_capacity);
+    }
+    if (status == 0) {
+        status = pdf_write_stream_object(engine, object, NULL, 0U,
+                                         content.bytes, content.count, error,
+                                         error_capacity);
+    }
+    free(content.bytes);
+    for (size_t code = 0U; code < 256U; ++code) {
+        free(mappings[code]);
+    }
+    return status;
+}
+
+/* The shared EC/T1 and OT1 maps are public, document-independent PDF
+   resources.  Keeping their canonical text also preserves pdfTeX's entry
+   grouping: that grouping is observable after stream decompression and is
+   not reproduced by regrouping the same scalar mappings greedily. */
+static const char pdf_t1_shared_cmap[] =
+    "%!PS-Adobe-3.0 Resource-CMap\n"
+    "%%DocumentNeededResources: ProcSet (CIDInit)\n"
+    "%%IncludeResource: ProcSet (CIDInit)\n"
+    "%%BeginResource: CMap (TeX-T1-0)\n"
+    "%%Title: (TeX-T1-0 TeX T1 0)\n"
+    "%%Version: 1.000\n"
+    "%%EndComments\n"
+    "/CIDInit /ProcSet findresource begin\n"
+    "12 dict begin\n"
+    "begincmap\n"
+    "/CIDSystemInfo\n"
+    "<< /Registry (TeX)\n"
+    "/Ordering (T1)\n"
+    "/Supplement 0\n"
+    ">> def\n"
+    "/CMapName /TeX-T1-0 def\n"
+    "/CMapType 2 def\n"
+    "1 begincodespacerange\n"
+    "<00> <FF>\n"
+    "endcodespacerange\n"
+    "10 beginbfrange\n"
+    "<0E> <0F> <2039>\n"
+    "<10> <12> <201C>\n"
+    "<15> <16> <2013>\n"
+    "<21> <26> <0021>\n"
+    "<28> <5F> <0028>\n"
+    "<61> <7E> <0061>\n"
+    "<C0> <D6> <00C0>\n"
+    "<D8> <DE> <00D8>\n"
+    "<E0> <F6> <00E0>\n"
+    "<F8> <FE> <00F8>\n"
+    "endbfrange\n"
+    "32 beginbfchar\n"
+    "<00> <0060>\n"
+    "<01> <00B4>\n"
+    "<02> <02C6>\n"
+    "<03> <02DC>\n"
+    "<04> <00A8>\n"
+    "<05> <02DD>\n"
+    "<06> <02DA>\n"
+    "<07> <02C7>\n"
+    "<08> <02D8>\n"
+    "<09> <00AF>\n"
+    "<0A> <02D9>\n"
+    "<0B> <00B8>\n"
+    "<0C> <02DB>\n"
+    "<0D> <201A>\n"
+    "<13> <00AB>\n"
+    "<14> <00BB>\n"
+    "<17> <200C>\n"
+    "<19> <0131>\n"
+    "<1A> <0237>\n"
+    "<1B> <00660066>\n"
+    "<1C> <00660069>\n"
+    "<1D> <0066006C>\n"
+    "<1E> <006600660069>\n"
+    "<1F> <00660066006C>\n"
+    "<20> <2423>\n"
+    "<27> <2019>\n"
+    "<60> <2018>\n"
+    "<7F> <00AD>\n"
+    "<80> <0102>\n"
+    "<81> <0104>\n"
+    "<82> <0106>\n"
+    "<83> <010C>\n"
+    "endbfchar\n"
+    "64 beginbfchar\n"
+    "<84> <010E>\n"
+    "<85> <011A>\n"
+    "<86> <0118>\n"
+    "<87> <011E>\n"
+    "<88> <0139>\n"
+    "<89> <013D>\n"
+    "<8A> <0141>\n"
+    "<8B> <0143>\n"
+    "<8C> <0147>\n"
+    "<8D> <014A>\n"
+    "<8E> <0150>\n"
+    "<8F> <0154>\n"
+    "<90> <0158>\n"
+    "<91> <015A>\n"
+    "<92> <0160>\n"
+    "<93> <015E>\n"
+    "<94> <0164>\n"
+    "<95> <021A>\n"
+    "<96> <0170>\n"
+    "<97> <016E>\n"
+    "<98> <0178>\n"
+    "<99> <0179>\n"
+    "<9A> <017D>\n"
+    "<9B> <017B>\n"
+    "<9C> <0132>\n"
+    "<9D> <0130>\n"
+    "<9E> <0111>\n"
+    "<9F> <00A7>\n"
+    "<A0> <0103>\n"
+    "<A1> <0105>\n"
+    "<A2> <0107>\n"
+    "<A3> <010D>\n"
+    "<A4> <010F>\n"
+    "<A5> <011B>\n"
+    "<A6> <0119>\n"
+    "<A7> <011F>\n"
+    "<A8> <013A>\n"
+    "<A9> <013E>\n"
+    "<AA> <0142>\n"
+    "<AB> <0144>\n"
+    "<AC> <0148>\n"
+    "<AD> <014B>\n"
+    "<AE> <0151>\n"
+    "<AF> <0155>\n"
+    "<B0> <0159>\n"
+    "<B1> <015B>\n"
+    "<B2> <0161>\n"
+    "<B3> <015F>\n"
+    "<B4> <0165>\n"
+    "<B5> <021B>\n"
+    "<B6> <0171>\n"
+    "<B7> <016F>\n"
+    "<B8> <00FF>\n"
+    "<B9> <017A>\n"
+    "<BA> <017E>\n"
+    "<BB> <017C>\n"
+    "<BC> <0133>\n"
+    "<BD> <00A1>\n"
+    "<BE> <00BF>\n"
+    "<BF> <00A3>\n"
+    "<D7> <0152>\n"
+    "<DF> <00530053>\n"
+    "<F7> <0153>\n"
+    "<FF> <00DF>\n"
+    "endbfchar\n"
+    "endcmap\n"
+    "CMapName currentdict /CMap defineresource pop\n"
+    "end\n"
+    "end\n"
+    "%%EndResource\n"
+    "%%EOF\n";
+
+static const char pdf_ot1_shared_cmap[] =
+    "%!PS-Adobe-3.0 Resource-CMap\n"
+    "%%DocumentNeededResources: ProcSet (CIDInit)\n"
+    "%%IncludeResource: ProcSet (CIDInit)\n"
+    "%%BeginResource: CMap (TeX-OT1-0)\n"
+    "%%Title: (TeX-OT1-0 TeX OT1 0)\n"
+    "%%Version: 1.000\n"
+    "%%EndComments\n"
+    "/CIDInit /ProcSet findresource begin\n"
+    "12 dict begin\n"
+    "begincmap\n"
+    "/CIDSystemInfo\n"
+    "<< /Registry (TeX)\n"
+    "/Ordering (OT1)\n"
+    "/Supplement 0\n"
+    ">> def\n"
+    "/CMapName /TeX-OT1-0 def\n"
+    "/CMapType 2 def\n"
+    "1 begincodespacerange\n"
+    "<00> <7F>\n"
+    "endcodespacerange\n"
+    "8 beginbfrange\n"
+    "<00> <01> <0393>\n"
+    "<09> <0A> <03A8>\n"
+    "<23> <26> <0023>\n"
+    "<28> <3B> <0028>\n"
+    "<3F> <5B> <003F>\n"
+    "<5D> <5E> <005D>\n"
+    "<61> <7A> <0061>\n"
+    "<7B> <7C> <2013>\n"
+    "endbfrange\n"
+    "40 beginbfchar\n"
+    "<02> <0398>\n"
+    "<03> <039B>\n"
+    "<04> <039E>\n"
+    "<05> <03A0>\n"
+    "<06> <03A3>\n"
+    "<07> <03D2>\n"
+    "<08> <03A6>\n"
+    "<0B> <00660066>\n"
+    "<0C> <00660069>\n"
+    "<0D> <0066006C>\n"
+    "<0E> <006600660069>\n"
+    "<0F> <00660066006C>\n"
+    "<10> <0131>\n"
+    "<11> <0237>\n"
+    "<12> <0060>\n"
+    "<13> <00B4>\n"
+    "<14> <02C7>\n"
+    "<15> <02D8>\n"
+    "<16> <00AF>\n"
+    "<17> <02DA>\n"
+    "<18> <00B8>\n"
+    "<19> <00DF>\n"
+    "<1A> <00E6>\n"
+    "<1B> <0153>\n"
+    "<1C> <00F8>\n"
+    "<1D> <00C6>\n"
+    "<1E> <0152>\n"
+    "<1F> <00D8>\n"
+    "<21> <0021>\n"
+    "<22> <201D>\n"
+    "<27> <2019>\n"
+    "<3C> <00A1>\n"
+    "<3D> <003D>\n"
+    "<3E> <00BF>\n"
+    "<5C> <201C>\n"
+    "<5F> <02D9>\n"
+    "<60> <2018>\n"
+    "<7D> <02DD>\n"
+    "<7E> <02DC>\n"
+    "<7F> <00A8>\n"
+    "endbfchar\n"
+    "endcmap\n"
+    "CMapName currentdict /CMap defineresource pop\n"
+    "end\n"
+    "end\n"
+    "%%EndResource\n"
+    "%%EOF\n";
+
+static int pdf_write_one_shared_cmap(struct hstex_engine *engine, bool t1,
+                                     char *error, size_t error_capacity)
+{
+    size_t object = t1 ? engine->pdf_t1_cmap : engine->pdf_ot1_cmap;
+    size_t encoding = t1 ? engine->pdf_t1_cmap_encoding
+                         : engine->pdf_ot1_cmap_encoding;
+    bool *written = t1 ? &engine->pdf_t1_cmap_written
+                       : &engine->pdf_ot1_cmap_written;
+    if (object == 0U || *written) {
+        return 0;
+    }
+    if (encoding == 0U || encoding > engine->pdf_encoding_count) {
+        return set_error(error, error_capacity,
+                         "invalid shared PDF CMap encoding");
+    }
+    const char *content = t1 ? pdf_t1_shared_cmap : pdf_ot1_shared_cmap;
+    size_t content_size = t1 ? sizeof(pdf_t1_shared_cmap) - 1U
+                             : sizeof(pdf_ot1_shared_cmap) - 1U;
+    int status = pdf_write_stream_object(
+        engine, object, NULL, 0U, (const uint8_t *)content, content_size,
+        error, error_capacity);
+    if (status == 0) {
+        *written = true;
+    }
+    return status;
+}
+
+static int pdf_write_shared_cmaps(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity)
+{
+    bool t1_first = engine->pdf_ot1_cmap == 0U ||
+                    (engine->pdf_t1_cmap != 0U &&
+                     engine->pdf_t1_cmap < engine->pdf_ot1_cmap);
+    if (pdf_write_one_shared_cmap(engine, t1_first, error, error_capacity) !=
+            0 ||
+        pdf_write_one_shared_cmap(engine, !t1_first, error, error_capacity) !=
+            0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int pdf_write_font_cmap(struct hstex_engine *engine,
+                               struct hstex_pdf_font *entry, char *error,
+                               size_t error_capacity)
+{
+    if (entry->to_unicode != 0U) {
+        return 0;
+    }
     const struct hstex_font *font =
         font_by_identifier(engine, entry->identifier);
     if (font == NULL) {
-        return set_error(error, error_capacity, "invalid font in the PDF file");
+        return set_error(error, error_capacity, "invalid PDF CMap font");
     }
-    if (dictionary) {
-        engine->pdf_page_count = 0U;
-        return pdf_begin_object(engine, entry->object, error, error_capacity) !=
-                           0 ||
-                       pdf_out_formatted(
-                           engine, error, error_capacity,
-                           "<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /%s\n"
-                           "/FontDescriptor %zu 0 R\n/FirstChar %u\n"
-                           "/LastChar %u\n/Widths %zu 0 R\n>>\n",
-                           pdf_font_name(font), entry->descriptor,
-                           (unsigned int)entry->first, (unsigned int)entry->last,
-                           entry->widths) != 0 ||
-                       pdf_end_object(engine, error, error_capacity) != 0
-                   ? -1
-                   : 0;
+    if (font->pdf_no_builtin_to_unicode) {
+        return 0;
     }
-    size_t widths = pdf_new_object(engine);
-    size_t descriptor = pdf_new_object(engine);
-    entry->widths = widths;
-    entry->descriptor = descriptor;
+    enum hstex_pdf_cmap_kind kind = pdf_font_cmap_kind(engine, entry);
+    if (kind == HSTEX_PDF_CMAP_NONE) {
+        return 0;
+    }
+    const char *label = entry->encoding_place == 0U
+                            ? "builtin"
+                            : engine->pdf_encodings[entry->encoding_place - 1U]
+                                  .label;
+    if (kind == HSTEX_PDF_CMAP_T1 || kind == HSTEX_PDF_CMAP_OT1) {
+        size_t *shared = kind == HSTEX_PDF_CMAP_T1 ? &engine->pdf_t1_cmap
+                                                   : &engine->pdf_ot1_cmap;
+        const char *ordering =
+            kind == HSTEX_PDF_CMAP_T1 ? "T1" : "OT1";
+        if (*shared == 0U) {
+            *shared = pdf_new_object(engine);
+            size_t *encoding = kind == HSTEX_PDF_CMAP_T1
+                                   ? &engine->pdf_t1_cmap_encoding
+                                   : &engine->pdf_ot1_cmap_encoding;
+            *encoding = entry->encoding_place;
+        }
+        if (pdf_write_shared_cmaps(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        entry->to_unicode = *shared;
+        (void)ordering;
+        return 0;
+    }
+    char ordering[512];
+    int length = snprintf(ordering, sizeof(ordering), "%s-%s", font->name,
+                          label);
+    if (length < 0 || (size_t)length >= sizeof(ordering)) {
+        return set_error(error, error_capacity, "PDF CMap name overflow");
+    }
+    entry->to_unicode = pdf_new_object(engine);
+    return pdf_write_cmap(engine, entry->to_unicode, entry, ordering,
+                          font->name, UINT8_MAX, error, error_capacity);
+}
+
+static int pdf_write_font_widths(struct hstex_engine *engine,
+                                 struct hstex_pdf_font *entry,
+                                 const struct hstex_font *font, char *error,
+                                 size_t error_capacity)
+{
+    entry->widths = pdf_new_object(engine);
     engine->pdf_page_count = 0U;
     for (uint32_t code = entry->first; code <= entry->last; ++code) {
         if (code != entry->first &&
@@ -22664,14 +26162,27 @@ static int pdf_write_font(struct hstex_engine *engine,
             return -1;
         }
     }
-    if (pdf_begin_object(engine, widths, error, error_capacity) != 0 ||
-        pdf_out_text(engine, "[", error, error_capacity) != 0 ||
-        pdf_out(engine, (const char *)engine->pdf_page, engine->pdf_page_count,
-                error, error_capacity) != 0 ||
-        pdf_out_text(engine, "]\n", error, error_capacity) != 0 ||
-        pdf_end_object(engine, error, error_capacity) != 0) {
-        return -1;
-    }
+    return pdf_begin_object(engine, entry->widths, error, error_capacity) !=
+                       0 ||
+                   pdf_out_text(engine, "[", error, error_capacity) != 0 ||
+                   pdf_out(engine, (const char *)engine->pdf_page,
+                           engine->pdf_page_count, error, error_capacity) != 0 ||
+                   pdf_out_text(engine, "]\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+/* What the file says of a font it does not carry: how far it reaches above
+   and below the line, how wide its widest character is, and a stem width
+   guessed from its full stop. */
+static int pdf_write_unembedded_descriptor(struct hstex_engine *engine,
+                                            struct hstex_pdf_font *entry,
+                                            const struct hstex_font *font,
+                                            char *error,
+                                            size_t error_capacity)
+{
+    entry->descriptor = pdf_new_object(engine);
     int32_t ascent = pdf_font_measure(
         font, packed_dimen(font->characters['h'].height));
     int32_t capheight = pdf_font_measure(
@@ -22683,19 +26194,76 @@ static int pdf_write_font(struct hstex_engine *engine,
     int32_t quad =
         pdf_font_measure(font, font->dimen_count > 5U ? font->dimens[5] : 0);
     int32_t stem = pdf_font_stem(font);
-    /* The box reaches as far up as the font does: the ascent, or the cap
-       height where the capitals stand higher than the letter the ascent is
-       measured on. See docs/DECISIONS.md, the-pdf-file. */
     int32_t top = ascent > capheight ? ascent : capheight;
-    const char *name = pdf_font_name(font);
-    if (pdf_begin_object(engine, descriptor, error, error_capacity) != 0 ||
+    return pdf_begin_object(engine, entry->descriptor, error,
+                            error_capacity) != 0 ||
+                   pdf_out_formatted(
+                       engine, error, error_capacity,
+                       "<<\n/Type /FontDescriptor\n/FontName /%s\n"
+                       "/Flags 34\n/FontBBox [0 %d %d %d]\n/Ascent %d\n"
+                       "/CapHeight %d\n/Descent %d\n/ItalicAngle 0\n"
+                       "/StemV %d\n/XHeight %d\n>>\n",
+                       pdf_font_name(font), descent, quad, top, ascent,
+                       capheight, descent, stem, xheight) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_write_font(struct hstex_engine *engine,
+                          struct hstex_pdf_font *entry, bool dictionary,
+                          char *error, size_t error_capacity)
+{
+    const struct hstex_font *font =
+        font_by_identifier(engine, entry->identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid font in the PDF file");
+    }
+    struct hstex_pdf_physical_font *physical =
+        entry->physical_place == 0U
+            ? NULL
+            : &engine->pdf_physical_fonts[entry->physical_place - 1U];
+    if (!dictionary) {
+        if (entry->encoding_place != 0U) {
+            pdf_reserve_encoding(
+                engine, &engine->pdf_encodings[entry->encoding_place - 1U]);
+        }
+        if (pdf_write_font_widths(engine, entry, font, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+        return physical == NULL
+                   ? pdf_write_unembedded_descriptor(engine, entry, font,
+                                                     error, error_capacity)
+                   : 0;
+    }
+    const char *name =
+        physical == NULL ? pdf_font_name(font) : physical->postscript_name;
+    if (physical != NULL) {
+        entry->descriptor = physical->descriptor_object;
+    }
+    if (pdf_begin_object(engine, entry->object, error, error_capacity) != 0 ||
         pdf_out_formatted(engine, error, error_capacity,
-                          "<<\n/Type /FontDescriptor\n/FontName /%s\n"
-                          "/Flags 34\n/FontBBox [0 %d %d %d]\n/Ascent %d\n"
-                          "/CapHeight %d\n/Descent %d\n/ItalicAngle 0\n"
-                          "/StemV %d\n/XHeight %d\n>>\n",
-                          name, descent, quad, top, ascent, capheight,
-                          descent, stem, xheight) != 0 ||
+                          "<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /%s%s%s\n"
+                          "/FontDescriptor %zu 0 R\n/FirstChar %u\n"
+                          "/LastChar %u\n/Widths %zu 0 R\n",
+                          physical == NULL ? "" : physical->subset_tag,
+                          physical == NULL ? "" : "+", name,
+                          entry->descriptor, (unsigned int)entry->first,
+                          (unsigned int)entry->last, entry->widths) != 0 ||
+        (entry->encoding_place != 0U &&
+         pdf_out_formatted(
+             engine, error, error_capacity, "/Encoding %zu 0 R\n",
+             engine->pdf_encodings[entry->encoding_place - 1U].object) != 0) ||
+        (entry->to_unicode != 0U &&
+         pdf_out_formatted(engine, error, error_capacity,
+                           "/ToUnicode %zu 0 R\n", entry->to_unicode) != 0) ||
+        (font->pdf_attribute != NULL && font->pdf_attribute[0] != '\0' &&
+         (pdf_out(engine, font->pdf_attribute,
+                  strlen(font->pdf_attribute), error, error_capacity) != 0 ||
+          (font->pdf_attribute[strlen(font->pdf_attribute) - 1U] != '\n' &&
+           pdf_out_text(engine, "\n", error, error_capacity) != 0))) ||
+        pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0) {
         return -1;
     }
@@ -22885,6 +26453,140 @@ static int compare_destination_names(const void *one, const void *other)
     return strcmp((*first)->name, (*second)->name);
 }
 
+static bool pdf_trailer_identifier(const struct hstex_engine *engine,
+                                   char identifier[33]);
+
+static void pdf_xref_field(uint8_t *entry, uint8_t kind, size_t value,
+                           uint8_t last)
+{
+    entry[0] = kind;
+    entry[1] = (uint8_t)((value >> 16U) & 0xFFU);
+    entry[2] = (uint8_t)((value >> 8U) & 0xFFU);
+    entry[3] = (uint8_t)(value & 0xFFU);
+    entry[4] = last;
+}
+
+/* PDF 1.5 object compression ends in a five-byte-wide cross-reference
+   stream: one kind byte, a three-byte file offset or object-stream number,
+   and one generation/index byte. Black-box probes pin both that width and
+   the free-object chain. */
+static int pdf_write_xref_stream(struct hstex_engine *engine, size_t catalog,
+                                 size_t info, char *error,
+                                 size_t error_capacity)
+{
+    if (pdf_flush_object_stream(engine, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t xref = pdf_new_object(engine);
+    if (pdf_reserve_offsets(engine, xref, error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t xref_at = engine->pdf_written;
+    engine->pdf_offsets[xref - 1U] = xref_at;
+    size_t size = xref + 1U;
+    uint8_t *content = malloc(size * 5U);
+    size_t *next_free = calloc(size, sizeof(*next_free));
+    if (content == NULL || next_free == NULL) {
+        free(content);
+        free(next_free);
+        return set_error(error, error_capacity, "PDF xref allocation failed");
+    }
+    size_t next = 0U;
+    for (size_t number = xref; number > 0U; --number) {
+        next_free[number] = next;
+        bool direct = engine->pdf_offsets[number - 1U] != 0U;
+        bool packed = engine->pdf_object_streams[number - 1U] != 0U;
+        if (!direct && !packed) {
+            next = number;
+        }
+    }
+    pdf_xref_field(content, 0U, next, 255U);
+    for (size_t number = 1U; number <= xref; ++number) {
+        size_t slot = (number - 1U) * 5U;
+        if (engine->pdf_offsets[number - 1U] != 0U) {
+            pdf_xref_field(content + slot + 5U, 1U,
+                           engine->pdf_offsets[number - 1U], 0U);
+        } else if (engine->pdf_object_streams[number - 1U] != 0U) {
+            pdf_xref_field(content + slot + 5U, 2U,
+                           engine->pdf_object_streams[number - 1U],
+                           engine->pdf_object_stream_indices[number - 1U]);
+        } else {
+            pdf_xref_field(content + slot + 5U, 0U, next_free[number], 255U);
+        }
+    }
+    char identifier[33];
+    bool include_identifier = pdf_trailer_identifier(engine, identifier);
+    char attributes[320];
+    int length = include_identifier
+                     ? snprintf(attributes, sizeof(attributes),
+                                "/Type /XRef\n/Index [0 %zu]\n/Size %zu\n"
+                                "/W [1 3 1]\n/Root %zu 0 R\n/Info %zu 0 R\n"
+                                "/ID [<%s> <%s>]\n",
+                                size, size, catalog, info, identifier,
+                                identifier)
+                     : snprintf(attributes, sizeof(attributes),
+                                "/Type /XRef\n/Index [0 %zu]\n/Size %zu\n"
+                                "/W [1 3 1]\n/Root %zu 0 R\n/Info %zu 0 R\n",
+                                size, size, catalog, info);
+    int status =
+        length < 0 || (size_t)length >= sizeof(attributes)
+            ? set_error(error, error_capacity, "PDF xref overflow")
+            : pdf_write_stream_object(engine, xref, attributes, (size_t)length,
+                                      content, size * 5U, error,
+                                      error_capacity);
+    free(content);
+    free(next_free);
+    return status != 0 ||
+                   pdf_out_formatted(engine, error, error_capacity,
+                                     "startxref\n%zu\n%%%%EOF\n", xref_at) !=
+                       0
+               ? -1
+               : 0;
+}
+
+/* One node of the page tree.  Level zero contains the six-page nodes made
+   during shipout; higher levels contain groups of six nodes from the level
+   below. */
+static int pdf_write_page_tree_node(
+    struct hstex_engine *engine, size_t level, size_t index,
+    size_t *const objects[HSTEX_PDF_TREE_LEVELS],
+    size_t *const counts[HSTEX_PDF_TREE_LEVELS],
+    const size_t widths[HSTEX_PDF_TREE_LEVELS], size_t parent, char *error,
+    size_t error_capacity)
+{
+    if (pdf_begin_object(engine, objects[level][index], error,
+                         error_capacity) != 0 ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "<<\n/Type /Pages\n/Count %zu\n",
+                          counts[level][index]) != 0 ||
+        (parent != 0U &&
+         pdf_out_formatted(engine, error, error_capacity,
+                           "/Parent %zu 0 R\n", parent) != 0) ||
+        pdf_out_text(engine, "/Kids [", error, error_capacity) != 0) {
+        return -1;
+    }
+    size_t first = level == 0U ? engine->pdf_page_nodes[index].first
+                               : index * 6U;
+    size_t last = level == 0U
+                      ? first + engine->pdf_page_nodes[index].pages
+                      : first + 6U;
+    if (level != 0U && last > widths[level - 1U]) {
+        last = widths[level - 1U];
+    }
+    for (size_t child = first; child < last; ++child) {
+        size_t object = level == 0U ? engine->pdf_page_objects[child]
+                                    : objects[level - 1U][child];
+        if (pdf_out_formatted(engine, error, error_capacity, "%s%zu 0 R",
+                              child == first ? "" : " ", object) != 0) {
+            return -1;
+        }
+    }
+    return pdf_out_text(engine, "]\n>>\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
 /* What the reference writes after the last page: the fonts, the tree of
    pages, what the file is about, and the table of where everything is. */
 static int pdf_close(struct hstex_engine *engine, char *error,
@@ -22904,12 +26606,20 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         engine->pdf_file = NULL;
         return 0;
     }
+    /* Objects not emitted by \immediate (and non-stream objects waiting for
+       eventual object-stream packing) still have to exist in the file. */
+    for (size_t index = 0U; index < engine->pdf_object_count; ++index) {
+        if (pdf_write_document_object(engine, &engine->pdf_objects[index],
+                                      error, error_capacity) != 0) {
+            return -1;
+        }
+    }
     /* A destination that was aimed at but never put anywhere is replaced by
        one that stands at the top of the first page, the last one aimed at
        first. See docs/DECISIONS.md, destinations-in-the-file. */
     for (size_t index = engine->pdf_dest_count; index > 0U; --index) {
         const struct hstex_pdf_dest *dest = &engine->pdf_dests[index - 1U];
-        if (dest->placed) {
+        if (dest->placed || dest->structured) {
             continue;
         }
         if (pdf_begin_object(engine, dest->object, error, error_capacity) != 0 ||
@@ -22924,10 +26634,21 @@ static int pdf_close(struct hstex_engine *engine, char *error,
        See docs/DECISIONS.md, the-fonts-a-page-names. */
     size_t count = engine->pdf_font_count;
     for (size_t index = count; index > 0U; --index) {
-        if (pdf_write_font(engine, &engine->pdf_fonts[index - 1U], false, error,
-                           error_capacity) != 0) {
+        if (pdf_prepare_font(engine, &engine->pdf_fonts[index - 1U], error,
+                             error_capacity) != 0 ||
+            pdf_collect_font(engine, &engine->pdf_fonts[index - 1U], error,
+                             error_capacity) != 0) {
             return -1;
         }
+    }
+    for (size_t index = count; index > 0U; --index) {
+        if (pdf_write_font(engine, &engine->pdf_fonts[index - 1U], false,
+                           error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    if (pdf_write_physical_fonts(engine, error, error_capacity) != 0) {
+        return -1;
     }
     size_t *order = malloc(count == 0U ? 1U : count * sizeof(*order));
     if (order == NULL) {
@@ -22952,7 +26673,48 @@ static int pdf_close(struct hstex_engine *engine, char *error,
             }
         }
     }
+    /* Encoding numbers were reserved beside the widths above, but their
+       dictionaries follow the physical font descriptors in encoding-file
+       name order.  This order is independent of the first font that happens
+       to share an encoding. */
+    size_t encoding_count = engine->pdf_encoding_count;
+    size_t *encoding_order =
+        malloc(encoding_count == 0U ? 1U
+                                    : encoding_count * sizeof(*encoding_order));
+    if (encoding_order == NULL) {
+        free(order);
+        return set_error(error, error_capacity, "PDF encoding allocation failed");
+    }
+    for (size_t index = 0U; index < encoding_count; ++index) {
+        encoding_order[index] = index;
+    }
+    for (size_t index = 0U; index < encoding_count; ++index) {
+        for (size_t other = index + 1U; other < encoding_count; ++other) {
+            if (strcmp(engine->pdf_encodings[encoding_order[other]].file,
+                       engine->pdf_encodings[encoding_order[index]].file) < 0) {
+                size_t swapped = encoding_order[index];
+                encoding_order[index] = encoding_order[other];
+                encoding_order[other] = swapped;
+            }
+        }
+    }
+    for (size_t index = 0U; index < encoding_count; ++index) {
+        struct hstex_pdf_encoding *encoding =
+            &engine->pdf_encodings[encoding_order[index]];
+        if (encoding->object != 0U &&
+            pdf_write_encoding(engine, encoding, error, error_capacity) != 0) {
+            free(encoding_order);
+            free(order);
+            return -1;
+        }
+    }
+    free(encoding_order);
     for (size_t index = 0U; index < count; ++index) {
+        if (pdf_write_font_cmap(engine, &engine->pdf_fonts[order[index]], error,
+                                error_capacity) != 0) {
+            free(order);
+            return -1;
+        }
         if (pdf_write_font(engine, &engine->pdf_fonts[order[index]], true,
                            error, error_capacity) != 0) {
             free(order);
@@ -22985,19 +26747,20 @@ static int pdf_close(struct hstex_engine *engine, char *error,
             objects[0][index] = engine->pdf_page_nodes[index].object;
             counts[0][index] = engine->pdf_page_nodes[index].pages;
         }
-        /* Every node above the leaves is numbered before any is written. */
+        /* A parent is numbered, then its six children are written.  Thus a
+           full packed batch can reserve its next container between two
+           parent numbers, exactly where the page-tree builder does. */
         while (status == 0 && widths[levels - 1U] > 1U &&
                levels < HSTEX_PDF_TREE_LEVELS) {
             size_t below = widths[levels - 1U];
             size_t width = (below + 5U) / 6U;
-            objects[levels] = malloc(width * sizeof(**objects));
+            objects[levels] = calloc(width, sizeof(**objects));
             counts[levels] = malloc(width * sizeof(**counts));
             if (objects[levels] == NULL || counts[levels] == NULL) {
                 status = -1;
                 break;
             }
             for (size_t index = 0U; index < width; ++index) {
-                objects[levels][index] = pdf_new_object(engine);
                 size_t total = 0U;
                 for (size_t child = index * 6U;
                      child < below && child < index * 6U + 6U; ++child) {
@@ -23008,52 +26771,33 @@ static int pdf_close(struct hstex_engine *engine, char *error,
             widths[levels] = width;
             ++levels;
         }
-        for (size_t level = 0U; status == 0 && level < levels; ++level) {
-            for (size_t index = 0U; status == 0 && index < widths[level];
-                 ++index) {
-                status =
-                    pdf_begin_object(engine, objects[level][index], error,
-                                     error_capacity) != 0 ||
-                            pdf_out_formatted(engine, error, error_capacity,
-                                              "<<\n/Type /Pages\n/Count %zu\n",
-                                              counts[level][index]) != 0
-                        ? -1
-                        : 0;
-                if (status == 0 && level + 1U < levels) {
-                    status = pdf_out_formatted(engine, error, error_capacity,
-                                               "/Parent %zu 0 R\n",
-                                               objects[level + 1U][index / 6U]);
-                }
-                if (status == 0) {
-                    status =
-                        pdf_out_text(engine, "/Kids [", error, error_capacity);
-                }
-                size_t first = level == 0U
-                                   ? engine->pdf_page_nodes[index].first
-                                   : index * 6U;
-                size_t last = level == 0U
-                                  ? first + engine->pdf_page_nodes[index].pages
-                                  : first + 6U;
-                if (level != 0U && last > widths[level - 1U]) {
+        if (status == 0 && levels == 1U) {
+            status = pdf_write_page_tree_node(
+                engine, 0U, 0U, objects, counts, widths, 0U, error,
+                error_capacity);
+        }
+        for (size_t level = 1U; status == 0 && level < levels; ++level) {
+            for (size_t parent = 0U;
+                 status == 0 && parent < widths[level]; ++parent) {
+                pdf_reserve_packed_object_stream(engine);
+                objects[level][parent] = pdf_new_object(engine);
+                size_t first = parent * 6U;
+                size_t last = first + 6U;
+                if (last > widths[level - 1U]) {
                     last = widths[level - 1U];
                 }
                 for (size_t child = first; status == 0 && child < last;
                      ++child) {
-                    status = pdf_out_formatted(
-                        engine, error, error_capacity, "%s%zu 0 R",
-                        child == first ? "" : " ",
-                        level == 0U ? engine->pdf_page_objects[child]
-                                    : objects[level - 1U][child]);
-                }
-                if (status == 0) {
-                    status = pdf_out_text(engine, "]\n>>\n", error,
-                                          error_capacity) != 0 ||
-                                     pdf_end_object(engine, error,
-                                                    error_capacity) != 0
-                                 ? -1
-                                 : 0;
+                    status = pdf_write_page_tree_node(
+                        engine, level - 1U, child, objects, counts, widths,
+                        objects[level][parent], error, error_capacity);
                 }
             }
+        }
+        if (status == 0 && levels > 1U) {
+            status = pdf_write_page_tree_node(
+                engine, levels - 1U, 0U, objects, counts, widths, 0U, error,
+                error_capacity);
         }
         if (status == 0) {
             engine->pdf_pages_object = objects[levels - 1U][0];
@@ -23075,7 +26819,8 @@ static int pdf_close(struct hstex_engine *engine, char *error,
     size_t names = 0U;
     size_t named = 0U;
     for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
-        if (engine->pdf_dests[index].named) {
+        if (engine->pdf_dests[index].named &&
+            !engine->pdf_dests[index].structured) {
             ++named;
         }
     }
@@ -23088,7 +26833,8 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         if (status == 0) {
             size_t at = 0U;
             for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
-                if (engine->pdf_dests[index].named) {
+                if (engine->pdf_dests[index].named &&
+                    !engine->pdf_dests[index].structured) {
                     sorted[at++] = &engine->pdf_dests[index];
                 }
             }
@@ -23097,22 +26843,16 @@ static int pdf_close(struct hstex_engine *engine, char *error,
                276 million comparisons. */
             qsort(sorted, named, sizeof(*sorted), compare_destination_names);
             widths[0] = (named + 5U) / 6U;
-            objects[0] = malloc(widths[0] * sizeof(**objects));
+            objects[0] = calloc(widths[0], sizeof(**objects));
             status = objects[0] == NULL ? -1 : 0;
-            for (size_t index = 0U; status == 0 && index < widths[0]; ++index) {
-                objects[0][index] = pdf_new_object(engine);
-            }
         }
         while (status == 0 && widths[levels - 1U] > 1U &&
                levels < HSTEX_PDF_TREE_LEVELS) {
             size_t width = (widths[levels - 1U] + 5U) / 6U;
-            objects[levels] = malloc(width * sizeof(**objects));
+            objects[levels] = calloc(width, sizeof(**objects));
             if (objects[levels] == NULL) {
                 status = -1;
                 break;
-            }
-            for (size_t index = 0U; index < width; ++index) {
-                objects[levels][index] = pdf_new_object(engine);
             }
             widths[levels] = width;
             ++levels;
@@ -23120,6 +26860,7 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         for (size_t level = 0U; status == 0 && level < levels; ++level) {
             for (size_t index = 0U; status == 0 && index < widths[level];
                  ++index) {
+                objects[level][index] = pdf_new_object(engine);
                 size_t first = index * 6U;
                 size_t last = first + 6U;
                 size_t below = level == 0U ? named : widths[level - 1U];
@@ -23213,7 +26954,7 @@ static int pdf_close(struct hstex_engine *engine, char *error,
                            engine->pdf_open_action) != 0) ||
         pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0 ||
-        pdf_begin_object(engine, info, error, error_capacity) != 0 ||
+        pdf_begin_direct_object(engine, info, error, error_capacity) != 0 ||
         pdf_out_text(engine, "<<\n", error, error_capacity) != 0 ||
         /* The reference writes each of its own entries unless the document
            has already named it. */
@@ -23231,9 +26972,29 @@ static int pdf_close(struct hstex_engine *engine, char *error,
                                "/Trapped") &&
          pdf_out_text(engine, "/Trapped /False\n", error, error_capacity) !=
              0) ||
+        (!pdf_dictionary_names(engine->pdf_info, engine->pdf_info_length,
+                               "/PTEX.Fullbanner") &&
+         pdf_out_text(
+             engine,
+             "/PTEX.Fullbanner (This is pdfTeX, Version "
+             "3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) kpathsea "
+             "version 6.3.5)\n",
+             error, error_capacity) != 0) ||
         pdf_out_text(engine, ">>\n", error, error_capacity) != 0 ||
         pdf_end_object(engine, error, error_capacity) != 0) {
         return -1;
+    }
+    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0) {
+        if (pdf_write_xref_stream(engine, catalog, info, error,
+                                  error_capacity) != 0) {
+            return -1;
+        }
+        if (pdf_flush(engine, error, error_capacity) != 0) {
+            return -1;
+        }
+        (void)fclose(engine->pdf_file);
+        engine->pdf_file = NULL;
+        return 0;
     }
     size_t table = engine->pdf_written;
     size_t numbered = (size_t)engine->pdf_object_counter;
@@ -23281,11 +27042,20 @@ static int pdf_close(struct hstex_engine *engine, char *error,
             return -1;
         }
     }
+    char identifier[33];
+    bool include_identifier = pdf_trailer_identifier(engine, identifier);
     if (pdf_out_formatted(engine, error, error_capacity,
                           "trailer\n<< /Size %zu\n/Root %zu 0 R\n"
-                          "/Info %zu 0 R\n >>\nstartxref\n%zu\n%%%%EOF\n",
-                          numbered + 1U, catalog, info,
-                          table) != 0) {
+                          "/Info %zu 0 R\n",
+                          numbered + 1U, catalog, info) != 0 ||
+        (include_identifier &&
+         pdf_out_formatted(engine, error, error_capacity,
+                           "/ID [<%s> <%s>] >>\n", identifier,
+                           identifier) != 0) ||
+        (!include_identifier &&
+         pdf_out_text(engine, " >>\n", error, error_capacity) != 0) ||
+        pdf_out_formatted(engine, error, error_capacity,
+                          "startxref\n%zu\n%%%%EOF\n", table) != 0) {
         return -1;
     }
     if (pdf_flush(engine, error, error_capacity) != 0) {
@@ -23378,15 +27148,20 @@ static int ship_out(struct hstex_engine *engine, const struct hstex_box *box,
     }
     /* Whatever the page was carrying is done now, in the order it was
        written; see docs/DECISIONS.md, whatsits. */
+    clear_pdf_shipout_literals(engine);
     if (perform_shipout_whatsits(engine, box, error, error_capacity) != 0) {
+        clear_pdf_shipout_literals(engine);
         return -1;
     }
     /* \pdfoutput decides what is written: nothing positive means the page
        description the reference calls a DVI. See docs/DECISIONS.md,
        the-page-description. */
-    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0
-            ? dvi_ship(engine, box, error, error_capacity) != 0
-            : pdf_ship(engine, box, error, error_capacity) != 0) {
+    int output_status =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] <= 0
+            ? dvi_ship(engine, box, error, error_capacity)
+            : pdf_ship(engine, box, error, error_capacity);
+    clear_pdf_shipout_literals(engine);
+    if (output_status != 0) {
         return -1;
     }
     if (!tracing_shipout) {
@@ -26747,8 +30522,10 @@ static int scan_general_text_bytes(struct hstex_engine *engine,
             engine, &opening, &location, error, error_capacity) !=
             HSTEX_ENGINE_TOKEN ||
         !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        char named[128];
+        describe_token(engine, engine->executing_token, named, sizeof(named));
         return set_error(error, error_capacity,
-                         "write requires a braced token list");
+                         "%s requires a braced token list", named);
     }
     /* The reference names the primitive whose text it is -- "text of
        \\message", "text of \\write" -- and only the main loop knows which
@@ -26834,8 +30611,10 @@ static int scan_general_text(struct hstex_engine *engine,
                                              error_capacity) !=
             HSTEX_ENGINE_TOKEN ||
         !token_is_category(opening, HSTEX_CAT_BEGIN_GROUP)) {
+        char named[128];
+        describe_token(engine, engine->executing_token, named, sizeof(named));
         return set_error(error, error_capacity,
-                         "write requires a braced token list");
+                         "%s requires a braced token list", named);
     }
     char named[128];
     describe_token(engine, engine->executing_token, named, sizeof(named));
@@ -26935,6 +30714,269 @@ static int hex_digit_value(uint8_t byte)
         return byte - (uint8_t)'A' + 10;
     }
     return -1;
+}
+
+/* RFC 1321's little-endian MD5 compression.  pdfTeX exposes this digest for
+   reproducible identifiers and file fingerprints; keeping the implementation
+   here avoids an optional system-crypto dependency changing the engine's
+   observable primitive set. */
+struct hstex_md5_state {
+    uint32_t words[4];
+    uint64_t byte_count;
+    uint8_t block[64];
+    size_t used;
+};
+
+static uint32_t md5_rotate_left(uint32_t value, unsigned int amount)
+{
+    return (value << amount) | (value >> (32U - amount));
+}
+
+static void md5_compress(struct hstex_md5_state *state,
+                         const uint8_t block[64])
+{
+    static const uint32_t constants[64] = {
+        UINT32_C(0xd76aa478), UINT32_C(0xe8c7b756),
+        UINT32_C(0x242070db), UINT32_C(0xc1bdceee),
+        UINT32_C(0xf57c0faf), UINT32_C(0x4787c62a),
+        UINT32_C(0xa8304613), UINT32_C(0xfd469501),
+        UINT32_C(0x698098d8), UINT32_C(0x8b44f7af),
+        UINT32_C(0xffff5bb1), UINT32_C(0x895cd7be),
+        UINT32_C(0x6b901122), UINT32_C(0xfd987193),
+        UINT32_C(0xa679438e), UINT32_C(0x49b40821),
+        UINT32_C(0xf61e2562), UINT32_C(0xc040b340),
+        UINT32_C(0x265e5a51), UINT32_C(0xe9b6c7aa),
+        UINT32_C(0xd62f105d), UINT32_C(0x02441453),
+        UINT32_C(0xd8a1e681), UINT32_C(0xe7d3fbc8),
+        UINT32_C(0x21e1cde6), UINT32_C(0xc33707d6),
+        UINT32_C(0xf4d50d87), UINT32_C(0x455a14ed),
+        UINT32_C(0xa9e3e905), UINT32_C(0xfcefa3f8),
+        UINT32_C(0x676f02d9), UINT32_C(0x8d2a4c8a),
+        UINT32_C(0xfffa3942), UINT32_C(0x8771f681),
+        UINT32_C(0x6d9d6122), UINT32_C(0xfde5380c),
+        UINT32_C(0xa4beea44), UINT32_C(0x4bdecfa9),
+        UINT32_C(0xf6bb4b60), UINT32_C(0xbebfbc70),
+        UINT32_C(0x289b7ec6), UINT32_C(0xeaa127fa),
+        UINT32_C(0xd4ef3085), UINT32_C(0x04881d05),
+        UINT32_C(0xd9d4d039), UINT32_C(0xe6db99e5),
+        UINT32_C(0x1fa27cf8), UINT32_C(0xc4ac5665),
+        UINT32_C(0xf4292244), UINT32_C(0x432aff97),
+        UINT32_C(0xab9423a7), UINT32_C(0xfc93a039),
+        UINT32_C(0x655b59c3), UINT32_C(0x8f0ccc92),
+        UINT32_C(0xffeff47d), UINT32_C(0x85845dd1),
+        UINT32_C(0x6fa87e4f), UINT32_C(0xfe2ce6e0),
+        UINT32_C(0xa3014314), UINT32_C(0x4e0811a1),
+        UINT32_C(0xf7537e82), UINT32_C(0xbd3af235),
+        UINT32_C(0x2ad7d2bb), UINT32_C(0xeb86d391),
+    };
+    static const unsigned int shifts[64] = {
+        7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+        7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+        5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+        5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+        4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+        4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+        6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+        6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+    };
+    uint32_t message[16];
+    for (size_t index = 0U; index < 16U; ++index) {
+        size_t at = index * 4U;
+        message[index] =
+            (uint32_t)block[at] | ((uint32_t)block[at + 1U] << 8U) |
+            ((uint32_t)block[at + 2U] << 16U) |
+            ((uint32_t)block[at + 3U] << 24U);
+    }
+    uint32_t a = state->words[0];
+    uint32_t b = state->words[1];
+    uint32_t c = state->words[2];
+    uint32_t d = state->words[3];
+    for (size_t index = 0U; index < 64U; ++index) {
+        uint32_t mixed = 0U;
+        size_t message_index = 0U;
+        if (index < 16U) {
+            mixed = (b & c) | ((~b) & d);
+            message_index = index;
+        } else if (index < 32U) {
+            mixed = (d & b) | ((~d) & c);
+            message_index = (5U * index + 1U) % 16U;
+        } else if (index < 48U) {
+            mixed = b ^ c ^ d;
+            message_index = (3U * index + 5U) % 16U;
+        } else {
+            mixed = c ^ (b | (~d));
+            message_index = (7U * index) % 16U;
+        }
+        uint32_t previous_d = d;
+        d = c;
+        c = b;
+        b += md5_rotate_left(a + mixed + constants[index] +
+                                 message[message_index],
+                             shifts[index]);
+        a = previous_d;
+    }
+    state->words[0] += a;
+    state->words[1] += b;
+    state->words[2] += c;
+    state->words[3] += d;
+}
+
+static void md5_initialize(struct hstex_md5_state *state)
+{
+    state->words[0] = UINT32_C(0x67452301);
+    state->words[1] = UINT32_C(0xefcdab89);
+    state->words[2] = UINT32_C(0x98badcfe);
+    state->words[3] = UINT32_C(0x10325476);
+    state->byte_count = 0U;
+    state->used = 0U;
+}
+
+static void md5_update(struct hstex_md5_state *state, const uint8_t *bytes,
+                       size_t count)
+{
+    state->byte_count += (uint64_t)count;
+    if (state->used != 0U) {
+        size_t fill = 64U - state->used;
+        if (fill > count) {
+            fill = count;
+        }
+        memcpy(state->block + state->used, bytes, fill);
+        state->used += fill;
+        bytes += fill;
+        count -= fill;
+        if (state->used == 64U) {
+            md5_compress(state, state->block);
+            state->used = 0U;
+        }
+    }
+    while (count >= 64U) {
+        md5_compress(state, bytes);
+        bytes += 64U;
+        count -= 64U;
+    }
+    if (count != 0U) {
+        memcpy(state->block, bytes, count);
+        state->used = count;
+    }
+}
+
+static void md5_finish(struct hstex_md5_state *state, uint8_t digest[16])
+{
+    uint64_t bit_count = state->byte_count << 3U;
+    static const uint8_t padding[64] = {0x80U};
+    size_t padding_count =
+        state->used < 56U ? 56U - state->used : 120U - state->used;
+    md5_update(state, padding, padding_count);
+    uint8_t length[8];
+    for (size_t index = 0U; index < 8U; ++index) {
+        length[index] = (uint8_t)(bit_count >> (8U * index));
+    }
+    md5_update(state, length, sizeof(length));
+    for (size_t word = 0U; word < 4U; ++word) {
+        for (size_t byte = 0U; byte < 4U; ++byte) {
+            digest[word * 4U + byte] =
+                (uint8_t)(state->words[word] >> (8U * byte));
+        }
+    }
+}
+
+static bool pdf_trailer_identifier(const struct hstex_engine *engine,
+                                   char identifier[33])
+{
+    if (engine->pdf_trailer_id_set &&
+        engine->pdf_trailer_id_seed_length == 0U) {
+        return false;
+    }
+    struct hstex_md5_state state;
+    md5_initialize(&state);
+    if (engine->pdf_trailer_id_set) {
+        md5_update(&state, engine->pdf_trailer_id_seed,
+                   engine->pdf_trailer_id_seed_length);
+    } else {
+        md5_update(&state, (const uint8_t *)engine->pdf_creation_date,
+                   strlen(engine->pdf_creation_date));
+        const char *output =
+            engine->output_name == NULL ? "" : engine->output_name;
+        md5_update(&state, (const uint8_t *)output, strlen(output));
+    }
+    uint8_t digest[16];
+    md5_finish(&state, digest);
+    static const char hex[] = "0123456789ABCDEF";
+    for (size_t index = 0U; index < sizeof(digest); ++index) {
+        identifier[index * 2U] = hex[digest[index] >> 4U];
+        identifier[index * 2U + 1U] = hex[digest[index] & 0x0FU];
+    }
+    identifier[32] = '\0';
+    return true;
+}
+
+static int expand_pdf_md5_sum(struct hstex_engine *engine,
+                              struct hstex_source_location location,
+                              char *error, size_t error_capacity)
+{
+    bool from_file = false;
+    if (try_keyword(engine, "file", &from_file, error, error_capacity) != 0) {
+        return -1;
+    }
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &byte_count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    struct hstex_md5_state state;
+    md5_initialize(&state);
+    if (from_file) {
+        if (byte_count == SIZE_MAX ||
+            (byte_count != 0U && memchr(bytes, 0, byte_count) != NULL)) {
+            free(bytes);
+            return 0;
+        }
+        char *filename = malloc(byte_count + 1U);
+        if (filename == NULL) {
+            free(bytes);
+            return set_error(error, error_capacity,
+                             "MD5 filename allocation failed");
+        }
+        memcpy(filename, bytes, byte_count);
+        filename[byte_count] = '\0';
+        free(bytes);
+        char *path = resolve_input_path(engine, filename);
+        free(filename);
+        if (path == NULL) {
+            return 0;
+        }
+        FILE *file = fopen(path, "rb");
+        free(path);
+        if (file == NULL) {
+            return 0;
+        }
+        uint8_t buffer[8192];
+        size_t read_count = 0U;
+        while ((read_count = fread(buffer, 1U, sizeof(buffer), file)) != 0U) {
+            md5_update(&state, buffer, read_count);
+        }
+        bool failed = ferror(file) != 0;
+        int closed = fclose(file);
+        if (failed || closed != 0) {
+            return set_error(error, error_capacity,
+                             "could not read file for MD5 sum");
+        }
+    } else {
+        md5_update(&state, bytes, byte_count);
+        free(bytes);
+    }
+    uint8_t digest[16];
+    md5_finish(&state, digest);
+    static const char hex_digits[] = "0123456789ABCDEF";
+    char rendered[32];
+    for (size_t index = 0U; index < sizeof(digest); ++index) {
+        rendered[index * 2U] = hex_digits[(digest[index] >> 4U) & 0x0FU];
+        rendered[index * 2U + 1U] = hex_digits[digest[index] & 0x0FU];
+    }
+    return push_other_character_expansion(engine, rendered, sizeof(rendered),
+                                          location, error, error_capacity);
 }
 
 /* The four PDF string escapes. \pdfescapestring quotes the bytes PDF string
@@ -27077,6 +31119,56 @@ static int execute_pdf_glyph_to_unicode(struct hstex_engine *engine,
     engine->glyph_unicode[engine->glyph_unicode_count].glyph = glyph_text;
     engine->glyph_unicode[engine->glyph_unicode_count].unicode = unicode_text;
     ++engine->glyph_unicode_count;
+    return 0;
+}
+
+/* Font dictionaries may carry document-supplied entries.  The cmap package
+   uses this pair of primitives to install one shared CMap object: it disables
+   automatic ToUnicode generation for each font and supplies the reference
+   through /ToUnicode in the font attribute. */
+static int execute_pdf_font_attribute(struct hstex_engine *engine,
+                                      char *error, size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0 ||
+        scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    char *attribute = malloc(count + 1U);
+    if (font == NULL || attribute == NULL) {
+        free(bytes);
+        free(attribute);
+        return set_error(error, error_capacity,
+                         "PDF font attribute allocation failed");
+    }
+    if (count != 0U) {
+        memcpy(attribute, bytes, count);
+    }
+    attribute[count] = '\0';
+    free(bytes);
+    free(font->pdf_attribute);
+    font->pdf_attribute = attribute;
+    return 0;
+}
+
+static int execute_pdf_no_builtin_to_unicode(
+    struct hstex_engine *engine, char *error, size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid font for PDF ToUnicode control");
+    }
+    font->pdf_no_builtin_to_unicode = true;
     return 0;
 }
 
@@ -27410,6 +31502,37 @@ static int scan_pdf_action(struct hstex_engine *engine,
     }
     action->kind = thread ? (uint8_t)HSTEX_PDF_ACTION_THREAD
                           : (uint8_t)HSTEX_PDF_ACTION_GOTO;
+    if (!thread &&
+        try_keyword(engine, "struct", &action->structured, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if (action->structured) {
+        if (try_keyword(engine, "name", &action->structure_named, error,
+                        error_capacity) != 0) {
+            return -1;
+        }
+        if (action->structure_named) {
+            if (store_expanded_text(engine, &action->structure_name, error,
+                                    error_capacity) != 0) {
+                return -1;
+            }
+        } else {
+            bool numbered = false;
+            if (try_keyword(engine, "num", &numbered, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            if (!numbered) {
+                return set_error(error, error_capacity,
+                                 "a structure destination was expected here");
+            }
+            if (scan_integer(engine, &action->structure_number, error,
+                             error_capacity) != 0) {
+                return -1;
+            }
+        }
+    }
     bool file = false;
     if (try_keyword(engine, "file", &file, error, error_capacity) != 0) {
         return -1;
@@ -27586,6 +31709,27 @@ static int execute_pdf_dictionary(struct hstex_engine *engine, bool catalog,
     return status;
 }
 
+/* \pdftrailerid hashes its expanded general text verbatim.  An empty text
+   suppresses /ID; without the primitive, pdfTeX hashes the creation date
+   followed immediately by the output path.  Public reproducible-output
+   probes pin both cases. */
+static int execute_pdf_trailer_id(struct hstex_engine *engine, char *error,
+                                  size_t error_capacity)
+{
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (scan_expanded_general_text(engine, &bytes, &count, error,
+                                   error_capacity) != 0) {
+        free(bytes);
+        return -1;
+    }
+    free(engine->pdf_trailer_id_seed);
+    engine->pdf_trailer_id_seed = bytes;
+    engine->pdf_trailer_id_seed_length = count;
+    engine->pdf_trailer_id_set = true;
+    return 0;
+}
+
 static int reserve_pdf_objects(struct hstex_engine *engine, size_t required,
                                char *error, size_t error_capacity)
 {
@@ -27620,15 +31764,24 @@ static struct hstex_pdf_object *pdf_object_by_number(struct hstex_engine *engine
 }
 
 /* \pdfobj [reserveobjnum | useobjnum <n>] [stream [attr <text>]] <text> */
-static int execute_pdf_object(struct hstex_engine *engine, char *error,
-                              size_t error_capacity)
+static int execute_pdf_object(struct hstex_engine *engine, bool immediate,
+                              char *error, size_t error_capacity)
 {
     bool reserve = false;
     bool use_number = false;
     bool stream = false;
+    bool from_file = false;
     int32_t number = 0;
     if (try_keyword(engine, "reserveobjnum", &reserve, error, error_capacity) !=
         0) {
+        return -1;
+    }
+    /* `reserveobjnum' is the whole object specification, and the reference
+       consumes one expanded spacer after it. This matters in horizontal
+       mode: LaTeX's object allocator leaves a spacer there, and exposing it
+       would create interword glue before the following hook whatsit. See
+       docs/DECISIONS.md, PDF objects. */
+    if (reserve && skip_optional_space(engine, error, error_capacity) != 0) {
         return -1;
     }
     if (!reserve) {
@@ -27658,6 +31811,11 @@ static int execute_pdf_object(struct hstex_engine *engine, char *error,
             free(attributes);
             return -1;
         }
+        if (try_keyword(engine, "file", &from_file, error, error_capacity) !=
+            0) {
+            free(attributes);
+            return -1;
+        }
     }
     uint8_t *content = NULL;
     size_t content_count = 0U;
@@ -27666,6 +31824,41 @@ static int execute_pdf_object(struct hstex_engine *engine, char *error,
         free(attributes);
         free(content);
         return -1;
+    }
+    if (from_file) {
+        if (content_count == SIZE_MAX ||
+            (content_count != 0U && memchr(content, 0, content_count) != NULL)) {
+            free(attributes);
+            free(content);
+            return set_error(error, error_capacity,
+                             "invalid PDF stream filename");
+        }
+        char *filename = malloc(content_count + 1U);
+        if (filename == NULL) {
+            free(attributes);
+            free(content);
+            return set_error(error, error_capacity,
+                             "PDF stream filename allocation failed");
+        }
+        memcpy(filename, content, content_count);
+        filename[content_count] = '\0';
+        free(content);
+        content = NULL;
+        content_count = 0U;
+        char *path = resolve_input_path(engine, filename);
+        free(filename);
+        if (path == NULL ||
+            read_whole_path(path, &content, &content_count, error,
+                            error_capacity) != 0) {
+            free(path);
+            free(attributes);
+            free(content);
+            return path == NULL
+                       ? set_error(error, error_capacity,
+                                   "cannot find PDF stream file")
+                       : -1;
+        }
+        free(path);
     }
 
     struct hstex_pdf_object *target = NULL;
@@ -27696,10 +31889,28 @@ static int execute_pdf_object(struct hstex_engine *engine, char *error,
     target->attributes = attributes == NULL
                              ? NULL
                              : own_general_text(attributes, attribute_count);
+    target->attribute_length = attribute_count;
     target->content =
         content == NULL ? NULL : own_general_text(content, content_count);
+    target->content_length = content_count;
     free(attributes);
     free(content);
+    if ((!reserve && target->attributes == NULL && attribute_count != 0U) ||
+        (!reserve && target->content == NULL && content_count != 0U)) {
+        return set_error(error, error_capacity,
+                         "pdf object content allocation failed");
+    }
+    /* An immediate object is written now regardless of whether that means a
+       direct object or an entry in the current object stream.  Postponing a
+       compressed one changes both the object-stream membership and the
+       numbers assigned to containers created later in the document. */
+    if (immediate && !reserve) {
+        if (pdf_open(engine, error, error_capacity) != 0 ||
+            pdf_write_document_object(engine, target, error, error_capacity) !=
+                0) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -27723,7 +31934,11 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
                                size_t error_capacity)
 {
     int32_t mode = (int32_t)HSTEX_PDF_LITERAL_SET;
+    bool shipout = false;
     bool matched = false;
+    if (try_keyword(engine, "shipout", &shipout, error, error_capacity) != 0) {
+        return -1;
+    }
     if (try_keyword(engine, "direct", &matched, error, error_capacity) != 0) {
         return -1;
     }
@@ -27735,22 +31950,51 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
         }
         if (matched) {
             mode = (int32_t)HSTEX_PDF_LITERAL_PAGE;
-        } else {
-            if (try_keyword(engine, "shipout", &matched, error,
-                            error_capacity) != 0) {
-                return -1;
-            }
-            if (matched) {
-                mode = (int32_t)HSTEX_PDF_LITERAL_SHIPOUT;
-            }
         }
     }
-    uint8_t *content = NULL;
-    size_t count = 0U;
-    if (scan_expanded_general_text(engine, &content, &count, error,
-                                   error_capacity) != 0) {
+    uint8_t action = (uint8_t)mode;
+    if (shipout) {
+        action |= (uint8_t)HSTEX_PDF_LITERAL_SHIPOUT;
+    }
+    uint32_t tokens = 0U;
+    char *recorded = NULL;
+    if (shipout) {
+        struct hstex_token_vector text = {0};
+        if (scan_general_text(engine, &text, error, error_capacity) != 0 ||
+            store_token_list(engine, &text, &tokens, error, error_capacity) !=
+                0) {
+            vector_destroy(&text);
+            return -1;
+        }
+        uint8_t *shown = NULL;
+        size_t shown_count = 0U;
+        if (stored_token_list_text(engine, tokens, &shown, &shown_count, 0U,
+                                   NULL, error, error_capacity) != 0) {
+            free(shown);
+            return -1;
+        }
+        recorded = own_general_text(shown, shown_count);
+        free(shown);
+    } else {
+        uint8_t *content = NULL;
+        size_t count = 0U;
+        if (scan_expanded_general_text(engine, &content, &count, error,
+                                       error_capacity) != 0) {
+            free(content);
+            return -1;
+        }
+        recorded = own_general_text(content, count);
         free(content);
-        return -1;
+        if (recorded != NULL &&
+            store_text_as_token_list(engine, recorded, &tokens, error,
+                                     error_capacity) != 0) {
+            free(recorded);
+            return -1;
+        }
+    }
+    if (recorded == NULL) {
+        return set_error(error, error_capacity,
+                         "pdf literal allocation failed");
     }
     if (engine->pdf_literal_count == engine->pdf_literal_capacity) {
         size_t capacity = engine->pdf_literal_capacity == 0U
@@ -27759,7 +32003,7 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
         struct hstex_pdf_literal *grown =
             realloc(engine->pdf_literals, capacity * sizeof(*grown));
         if (grown == NULL) {
-            free(content);
+            free(recorded);
             return set_error(error, error_capacity,
                              "pdf literal table allocation failed");
         }
@@ -27768,25 +32012,15 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
     }
     struct hstex_pdf_literal *literal =
         &engine->pdf_literals[engine->pdf_literal_count];
-    literal->mode = mode;
-    literal->content = own_general_text(content, count);
-    free(content);
-    if (literal->content == NULL) {
-        return set_error(error, error_capacity,
-                         "pdf literal allocation failed");
-    }
+    literal->mode = (int32_t)action;
+    literal->content = recorded;
     ++engine->pdf_literal_count;
     /* The literal stands in the list where it was written, so that the page
        carries it at that place. See docs/DECISIONS.md, colour-on-a-page. */
-    uint32_t tokens = 0U;
-    if (store_text_as_token_list(engine, literal->content, &tokens, error,
-                                 error_capacity) != 0) {
-        return -1;
-    }
     struct hstex_node node = {
         .kind = HSTEX_NODE_WHATSIT,
         .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_LITERAL,
-                          .action = (uint8_t)mode,
+                          .action = action,
                           .tokens = tokens},
     };
     return append_current_list_node(engine, &node, error, error_capacity);
@@ -28065,6 +32299,21 @@ static int scan_pdf_destination_type(struct hstex_engine *engine, char **type,
 static int execute_pdf_dest(struct hstex_engine *engine, char *error,
                             size_t error_capacity)
 {
+    bool structured = false;
+    int32_t structure = 0;
+    if (try_keyword(engine, "struct", &structured, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (structured) {
+        if (scan_integer(engine, &structure, error, error_capacity) != 0) {
+            return -1;
+        }
+        if (structure <= 0) {
+            return set_error(error, error_capacity,
+                             "a positive structure object was expected here");
+        }
+    }
     bool named = false;
     int32_t number = 0;
     char *name = NULL;
@@ -28125,6 +32374,7 @@ static int execute_pdf_dest(struct hstex_engine *engine, char *error,
     node.value.whatsit.tokens = name_tokens;
     node.value.whatsit.detail = type_tokens;
     node.value.whatsit.number = number;
+    node.value.whatsit.structure = structure;
     if (append_current_list_node(engine, &node, error, error_capacity) != 0) {
         free(name);
         free(type);
@@ -28138,6 +32388,7 @@ static int execute_pdf_dest(struct hstex_engine *engine, char *error,
         free(type);
         return -1;
     }
+    record->number = structure;
     record->value = number;
     record->name = name;
     record->content = type;
@@ -29389,6 +33640,14 @@ static int append_horizontal_character(struct hstex_engine *engine,
            `hello' draws five lines where in a real font it draws one. */
         engine->traced_character = false;
         return 0;
+    }
+    /* PDF font resources are numbered when the character is taken in, not
+       when ligature processing eventually emits its node.  Tagged-PDF
+       whatsits can allocate several objects between those two events. */
+    if (font != NULL &&
+        pdf_reserve_shared_cmap(engine, engine->current_font, error,
+                                error_capacity) != 0) {
+        return -1;
     }
     struct hstex_lig_item work[HSTEX_LIG_WORK];
     size_t count = 0U;
@@ -40935,6 +45194,16 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     if (kind == (uint8_t)HSTEX_WHATSIT_CLOSE_OUT) {
         return close_write_stream(engine, stream, error, error_capacity);
     }
+    if (kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
+        uint8_t action =
+            engine->nodes[identifier - 1U].value.whatsit.action;
+        if (engine->integer_parameters[HSTEX_INTEGER_PDF_OUTPUT] > 0 &&
+            (action & (uint8_t)HSTEX_PDF_LITERAL_SHIPOUT) != 0U) {
+            return queue_pdf_shipout_literal(engine, tokens, error,
+                                             error_capacity);
+        }
+        return 0;
+    }
     if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL ||
         kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK ||
         kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST ||
@@ -45132,8 +49401,31 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_PDF_TRAILER_ID:
+            if (execute_pdf_trailer_id(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_PDF_OBJECT:
-            if (execute_pdf_object(engine, error, error_capacity) != 0) {
+            if (execute_pdf_object(engine, immediate, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_FONT_ATTRIBUTE:
+            if (finish_assignment(
+                    engine,
+                    execute_pdf_font_attribute(engine, error, error_capacity),
+                    error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_NO_BUILTIN_TO_UNICODE:
+            if (finish_assignment(
+                    engine,
+                    execute_pdf_no_builtin_to_unicode(engine, error,
+                                                      error_capacity),
+                    error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -45682,6 +49974,7 @@ handle_token:
         case HSTEX_COMMAND_UNEXPANDED:
         case HSTEX_COMMAND_DETOKENIZE:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
+        case HSTEX_COMMAND_PDF_MD5_SUM:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:
         case HSTEX_COMMAND_SCAN_TOKENS:
         case HSTEX_COMMAND_PDF_COLOR_STACK_INIT:
@@ -45691,6 +49984,10 @@ handle_token:
         case HSTEX_COMMAND_PDF_ESCAPE_NAME:
         case HSTEX_COMMAND_PDF_ESCAPE_HEX:
         case HSTEX_COMMAND_PDF_UNESCAPE_HEX:
+        case HSTEX_COMMAND_PDF_CREATION_DATE:
+        case HSTEX_COMMAND_PDF_PAGE_REF:
+        case HSTEX_COMMAND_PDF_UNIFORM_DEVIATE:
+        case HSTEX_COMMAND_E_TEX_REVISION:
         case HSTEX_COMMAND_PDF_TEX_REVISION:
         case HSTEX_COMMAND_THE:
         case HSTEX_COMMAND_NUMBER:
@@ -45714,6 +50011,12 @@ handle_token:
             continue;
         case HSTEX_COMMAND_PDF_GLYPH_TO_UNICODE:
             if (execute_pdf_glyph_to_unicode(engine, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_SET_RANDOM_SEED:
+            if (execute_pdf_set_random_seed(engine, error, error_capacity) !=
                 0) {
                 return HSTEX_ENGINE_ERROR;
             }
@@ -45772,6 +50075,8 @@ handle_token:
         case HSTEX_COMMAND_DIM_EXPR:
         case HSTEX_COMMAND_GLUE_EXPR:
         case HSTEX_COMMAND_MU_EXPR:
+        case HSTEX_COMMAND_GLUE_COMPONENT_DIMEN:
+        case HSTEX_COMMAND_GLUE_COMPONENT_ORDER:
             /* A quantity, met where a command was expected. */
             report_illegal_case(engine, *token);
             continue;
@@ -46030,6 +50335,8 @@ static void digest_node(uint64_t *digest, const struct hstex_engine *engine,
                      sizeof(node->value.whatsit.detail));
         digest_bytes(digest, &node->value.whatsit.number,
                      sizeof(node->value.whatsit.number));
+        digest_bytes(digest, &node->value.whatsit.structure,
+                     sizeof(node->value.whatsit.structure));
         digest_token_list(digest, engine, node->value.whatsit.tokens);
         break;
     case HSTEX_NODE_PENALTY:

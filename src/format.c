@@ -227,6 +227,13 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
     void *name = stream->writing ? (void *)font->name : NULL;
     transfer_array(stream, &name, &name_length, NULL, 1U, false);
     font->name = name;
+    size_t attribute_length = 0U;
+    if (stream->writing && font->pdf_attribute != NULL) {
+        attribute_length = strlen(font->pdf_attribute) + 1U;
+    }
+    void *attribute = stream->writing ? (void *)font->pdf_attribute : NULL;
+    transfer_array(stream, &attribute, &attribute_length, NULL, 1U, false);
+    font->pdf_attribute = attribute;
     size_t characters = 0U;
     if (stream->writing && font->characters != NULL) {
         characters = (size_t)HSTEX_FONT_CHARACTER_COUNT;
@@ -395,6 +402,7 @@ static void transfer_format(struct format_stream *stream,
     void *fonts = engine->fonts;
     static const struct format_hole font_holes[] = {
         FORMAT_ADDRESS(hstex_font, name),
+        FORMAT_ADDRESS(hstex_font, pdf_attribute),
         FORMAT_ADDRESS(hstex_font, characters),
         FORMAT_ADDRESS(hstex_font, lig_kern),
         FORMAT_ADDRESS(hstex_font, kerns),
