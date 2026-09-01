@@ -1,5 +1,7 @@
 #include "type1.h"
 
+#include "internal.h"
+
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -56,6 +58,9 @@ static const struct type1_operator type1_operators[] = {
     {"pop", 12U, 17U, 2U},
     {"setcurrentpoint", 12U, 33U, 2U},
 };
+
+static int type1_error(char *error, size_t capacity, const char *format, ...)
+    HSTEX_PRINTF_FORMAT(3, 4);
 
 static int type1_error(char *error, size_t capacity, const char *format, ...)
 {
