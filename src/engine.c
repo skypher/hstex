@@ -22583,10 +22583,10 @@ static int pdf_reserve_shared_cmap(struct hstex_engine *engine,
         free(encoding_file);
         return status;
     }
+    engine->pdf_cmap_font_checked[identifier] = 1U;
     if (encoding_file == NULL) {
         return 0;
     }
-    engine->pdf_cmap_font_checked[identifier] = 1U;
     struct hstex_pdf_encoding *encoding = pdf_encoding_entry(
         engine, encoding_file, error, error_capacity);
     free(encoding_file);
