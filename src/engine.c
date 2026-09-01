@@ -3672,6 +3672,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->glyph_unicode[index].unicode);
     }
     free(engine->glyph_unicode);
+    free(engine->glyph_unicode_slots);
     free(engine->output_directory);
     free(engine->output_name);
     free(engine->job_name);
@@ -26809,17 +26810,114 @@ static char pdf_upper_hex(char byte)
     return byte >= 'a' && byte <= 'f' ? (char)(byte - 'a' + 'A') : byte;
 }
 
+static uint64_t glyph_unicode_hash(const char *name)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (const unsigned char *at = (const unsigned char *)name; *at != '\0';
+         ++at) {
+        hash ^= (uint64_t)*at;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static size_t glyph_unicode_slot(const struct hstex_engine *engine,
+                                 const char *name, uint32_t *place)
+{
+    size_t mask = engine->glyph_unicode_slot_capacity - 1U;
+    size_t probe = (size_t)glyph_unicode_hash(name) & mask;
+    for (;;) {
+        uint32_t candidate = engine->glyph_unicode_slots[probe];
+        if (candidate == 0U) {
+            *place = 0U;
+            return probe;
+        }
+        if (strcmp(engine->glyph_unicode[candidate - 1U].glyph, name) == 0) {
+            *place = candidate;
+            return probe;
+        }
+        probe = (probe + 1U) & mask;
+    }
+}
+
+static void glyph_unicode_chain(struct hstex_engine *engine, uint32_t place)
+{
+    uint32_t previous = 0U;
+    size_t slot = glyph_unicode_slot(
+        engine, engine->glyph_unicode[place - 1U].glyph, &previous);
+    engine->glyph_unicode_slots[slot] = place;
+}
+
+static int glyph_unicode_rehash(struct hstex_engine *engine, size_t capacity,
+                                char *error, size_t error_capacity)
+{
+    if (capacity < 64U || (capacity & (capacity - 1U)) != 0U ||
+        capacity > SIZE_MAX / sizeof(*engine->glyph_unicode_slots)) {
+        return set_error(error, error_capacity,
+                         "invalid glyph-to-Unicode hash capacity");
+    }
+    uint32_t *slots = calloc(capacity, sizeof(*slots));
+    if (slots == NULL) {
+        return set_error(error, error_capacity,
+                         "glyph-to-Unicode hash allocation failed");
+    }
+    uint32_t *old_slots = engine->glyph_unicode_slots;
+    engine->glyph_unicode_slots = slots;
+    engine->glyph_unicode_slot_capacity = capacity;
+    for (size_t index = 0U; index < engine->glyph_unicode_count; ++index) {
+        glyph_unicode_chain(engine, (uint32_t)(index + 1U));
+    }
+    free(old_slots);
+    return 0;
+}
+
+static int glyph_unicode_reserve_slots(struct hstex_engine *engine,
+                                       size_t wanted, char *error,
+                                       size_t error_capacity)
+{
+    if (wanted > UINT32_MAX) {
+        return set_error(error, error_capacity,
+                         "too many glyph-to-Unicode mappings");
+    }
+    if (engine->glyph_unicode_slot_capacity != 0U &&
+        wanted <= engine->glyph_unicode_slot_capacity / 2U) {
+        return 0;
+    }
+    size_t capacity = engine->glyph_unicode_slot_capacity == 0U
+                          ? 64U
+                          : engine->glyph_unicode_slot_capacity;
+    while (wanted > capacity / 2U) {
+        if (capacity > SIZE_MAX / 2U) {
+            return set_error(error, error_capacity,
+                             "glyph-to-Unicode hash capacity overflow");
+        }
+        capacity *= 2U;
+    }
+    return glyph_unicode_rehash(engine, capacity, error, error_capacity);
+}
+
+int hstex_rebuild_glyph_unicode_slots(struct hstex_engine *engine,
+                                      char *error, size_t error_capacity)
+{
+    free(engine->glyph_unicode_slots);
+    engine->glyph_unicode_slots = NULL;
+    engine->glyph_unicode_slot_capacity = 0U;
+    return engine->glyph_unicode_count == 0U
+               ? 0
+               : glyph_unicode_reserve_slots(
+                     engine, engine->glyph_unicode_count, error,
+                     error_capacity);
+}
+
 static const char *pdf_find_glyph_unicode(const struct hstex_engine *engine,
                                           const char *name)
 {
-    for (size_t index = engine->glyph_unicode_count; index > 0U; --index) {
-        const struct hstex_glyph_unicode *entry =
-            &engine->glyph_unicode[index - 1U];
-        if (strcmp(entry->glyph, name) == 0) {
-            return entry->unicode;
-        }
+    if (engine->glyph_unicode_slot_capacity == 0U) {
+        return NULL;
     }
-    return NULL;
+    uint32_t place = 0U;
+    (void)glyph_unicode_slot(engine, name, &place);
+    return place == 0U ? NULL : engine->glyph_unicode[place - 1U].unicode;
 }
 
 static const char *pdf_mapped_glyph_unicode(
@@ -32815,9 +32913,16 @@ static int execute_pdf_glyph_to_unicode(struct hstex_engine *engine,
     unicode_text[unicode_count] = '\0';
     free(glyph);
     free(unicode);
+    if (glyph_unicode_reserve_slots(engine, engine->glyph_unicode_count + 1U,
+                                    error, error_capacity) != 0) {
+        free(glyph_text);
+        free(unicode_text);
+        return -1;
+    }
     engine->glyph_unicode[engine->glyph_unicode_count].glyph = glyph_text;
     engine->glyph_unicode[engine->glyph_unicode_count].unicode = unicode_text;
     ++engine->glyph_unicode_count;
+    glyph_unicode_chain(engine, (uint32_t)engine->glyph_unicode_count);
     return 0;
 }
 

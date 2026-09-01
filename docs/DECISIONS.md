@@ -392,6 +392,52 @@ the same glyph names with U+00AD or the comma-below forms U+021A and U+021B.
 HSTeX's shared T1 CMap records the observed encoding semantics directly; CMap
 object sharing and entry grouping do not alter those scalar mappings.
 
+A black-box pdfTeX 1.40.25 probe declares `A` first as U+0041 and then as
+U+0042. Its uncompressed ToUnicode CMap contains `<41> <0042>`, and extracted
+text is `B`: the newest declaration wins. HSTeX preserves the ordered mapping
+array carried by a format and keeps a separate transient open-addressed index
+of one-based array places. Adding a duplicate replaces only its index slot,
+and reading a format reconstructs the index in declaration order. Thus the
+index does not become format data or alter the observable override rule.
+
+A clock profile of `testmath` after the bounded Type 1 entry scan attributed
+53.5% inclusive CPU time to CMap writing, dominated by string comparison.
+Each glyph lookup was walking the format's full glyph-to-Unicode array in
+reverse, for as many as 256 character codes per font. The transient index
+changes that lookup from a linear walk to a hash probe.
+
+The matched warm-cache timing compared baseline commit `b6e39e7` with the
+indexed candidate. Both were GCC 13.3.0 C17 release builds using
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. Each executable built and loaded its own compatible format. One
+warm-up preceded eleven alternating baseline/candidate pairs, each in a fresh
+output directory. Baseline times in milliseconds were 717.470, 708.155,
+708.912, 698.222, 708.164, 722.290, 712.427, 719.618, 727.413, 707.897, and
+728.942; candidate times were 448.461, 418.527, 406.976, 403.387, 418.573,
+417.749, 420.554, 414.413, 409.140, 409.360, and 409.603. The medians were
+712.427 ms and 414.413 ms, a 41.8% reduction; the median paired reduction was
+42.2%. Median user CPU time fell from 0.65 s to 0.35 s, while median system
+CPU time remained 0.05 s. Peak RSS was 28,672 KiB for every measured run.
+Load averages were 36.45/37.89/38.22 before and 36.05/37.73/38.16 after. The
+baseline and candidate executable SHA-256 values were
+`e3b66ae953156337605005e78fb1c15fe345df68ddeae22f6271d8e3882bfe8b`
+and
+`96204bc6d188474c2e776fc91c78fe038ca1b3d59305a779fc1283b5ed3b417f`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`
+and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Every measured PDF had SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+The release and stress corpora remained 14/14 and 6/6.
+
+A separate pinned run of the existing per-document timing mode summed to
+3,712.5 ms for the reference and 2,838.7 ms for HSTeX, a 1.308x aggregate
+ratio in HSTeX's favor. The preceding HSTeX sum was 4,918.5 ms, so the indexed
+candidate reduced that diagnostic by 42.3%. This is broad-impact evidence,
+not the full-corpus headline benchmark.
+
 PDF string syntax permits balanced parentheses inside a literal string. The
 default `PTEX.Fullbanner` therefore carries `(TeX Live 2023/Debian)` without
 escape bytes, matching the reference information dictionary.

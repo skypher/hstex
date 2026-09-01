@@ -642,5 +642,5 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
         return format_error(error, error_capacity, "%s is not a format",
                                path);
     }
-    return 0;
+    return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
 }

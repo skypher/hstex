@@ -1046,6 +1046,7 @@ static int test_a_format_is_the_same_file_twice(void)
         "\\skip2=3pt plus 1fil \\toks1={xy}\\setbox4=\\hbox{}\\font\\f=cmr10 \\f "
         "\\time=11 \\day=2 \\month=3 \\year=2004 "
         "\\hyphenation{man-u-script}"
+        "\\pdfglyphtounicode{prime}{2031}"
         "\\pdfglyphtounicode{prime}{2032}\\dump%";
     char path[64];
     if (open_snippet(source, path) != 0) {
@@ -1135,6 +1136,7 @@ static int test_a_format_a_run_starts_from(void)
         "\\skip2=3pt plus 1fil \\toks1={xy}\\font\\f=cmr10 \\f "
         "\\time=11 \\day=2 \\month=3 \\year=2004 "
         "\\hyphenation{man-u-script}"
+        "\\pdfglyphtounicode{prime}{2031}"
         "\\pdfglyphtounicode{prime}{2032}\\dump%";
     char path[64];
     if (open_snippet(source, path) != 0) {
@@ -1182,6 +1184,13 @@ static int test_a_format_a_run_starts_from(void)
         } else {
             const struct hstex_meaning *one = meaning_named(&written, "a");
             const struct hstex_meaning *other = meaning_named(&read_back, "a");
+            uint32_t remembered_glyph = 0U;
+            for (size_t index = 0U;
+                 index < read_back.glyph_unicode_slot_capacity; ++index) {
+                if (read_back.glyph_unicode_slots[index] != 0U) {
+                    remembered_glyph = read_back.glyph_unicode_slots[index];
+                }
+            }
             status =
                 read_back.lexical_state.symbols.entry_count !=
                         written.lexical_state.symbols.entry_count ||
@@ -1199,9 +1208,12 @@ static int test_a_format_a_run_starts_from(void)
                 read_back.integer_parameters[HSTEX_INTEGER_DAY] != 5 ||
                 read_back.integer_parameters[HSTEX_INTEGER_MONTH] != 6 ||
                 read_back.integer_parameters[HSTEX_INTEGER_YEAR] != 2007 ||
-                read_back.glyph_unicode_count != 1U ||
+                read_back.glyph_unicode_count != 2U ||
                 strcmp(read_back.glyph_unicode[0].glyph, "prime") != 0 ||
-                strcmp(read_back.glyph_unicode[0].unicode, "2032") != 0 ||
+                strcmp(read_back.glyph_unicode[0].unicode, "2031") != 0 ||
+                strcmp(read_back.glyph_unicode[1].glyph, "prime") != 0 ||
+                strcmp(read_back.glyph_unicode[1].unicode, "2032") != 0 ||
+                remembered_glyph != 2U ||
                 hstex_catcode_get(&read_back.lexical_state.catcodes,
                                   (uint8_t)'@') !=
                         (uint8_t)HSTEX_CAT_LETTER ||
@@ -20651,15 +20663,19 @@ static int test_pdf_font_metrics_and_unicode(void)
     const char source[] =
         "\\pdfoutput=1 \\pdfcompresslevel=0 \\pdfobjcompresslevel=0 "
         "\\pdfgentounicode=1 \\pdfpkresolution=600 "
+        "\\pdfglyphtounicode{A}{0041}"
+        "\\pdfglyphtounicode{A}{0042}"
         "\\font\\bitmap=tcrm1000 \\font\\outline=ec-lmr10 "
+        "\\font\\custom=cmr10 "
         "\\shipout\\hbox{\\bitmap\\char0\\char6\\char21"
-        "\\outline\\char127\\char149\\char181}\\end ";
+        "\\outline\\char127\\char149\\char181\\custom A}\\end ";
     static const char *const wanted[] = {
         "/FontMatrix [.01204 0 0 .01204 0 0]",
         "[41.52 0 0 0 0 0 62.28 0 0 0 0 0 0 0 0 0 0 0 0 0 0 55.36]",
         "<7F> <002D>",
         "<95> <0162>",
         "<B5> <0163>",
+        "<41> <0042>",
     };
     char path[64];
     if (open_snippet(source, path) != 0) {

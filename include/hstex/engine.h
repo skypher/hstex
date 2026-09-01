@@ -1888,6 +1888,10 @@ struct hstex_engine {
     struct hstex_glyph_unicode *glyph_unicode;
     size_t glyph_unicode_count;
     size_t glyph_unicode_capacity;
+    /* One-based places in glyph_unicode, indexed by glyph name. The newest
+       declaration occupies a duplicate name's slot. */
+    uint32_t *glyph_unicode_slots;
+    size_t glyph_unicode_slot_capacity;
     uint32_t catcode_levels[256];
     FILE *write_streams[16];
     FILE *read_streams[16];
