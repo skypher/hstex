@@ -24074,7 +24074,10 @@ static int pdf_write_physical_fonts(struct hstex_engine *engine, char *error,
                                     size_t error_capacity)
 {
     size_t count = engine->pdf_physical_font_count;
-    size_t *order = malloc(count == 0U ? 1U : count * sizeof(*order));
+    if (count == 0U) {
+        return 0;
+    }
+    size_t *order = malloc(count * sizeof(*order));
     if (order == NULL) {
         return set_error(error, error_capacity,
                          "PDF Type 1 font ordering allocation failed");
