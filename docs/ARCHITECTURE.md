@@ -146,6 +146,8 @@ surface.
 At document close, Type 1 subset programs are prepared independently by a
 bounded worker batch, after the physical-font set and each font's glyph set
 are immutable. Object allocation and serialization remain in sorted order.
+The subset's textual charstrings are encoded and both Type 1 cipher layers
+are applied inside HSTeX; assembly does not launch an external process.
 The worker count defaults to the process's available processors, capped at
 eight and at the number of physical fonts; `HSTEX_FONT_WORKERS` selects a
 positive count explicitly, including `1` for the scalar fallback.

@@ -73,6 +73,7 @@ core = static_library(
     'src/scan.c',
     'src/source.c',
     'src/symbol.c',
+    'src/type1.c',
   ),
   include_directories: [public_include, generated_include],
   dependencies: core_dependencies,
@@ -155,6 +156,19 @@ pk_test = executable(
   dependencies: core_dependencies,
 )
 test('pk', pk_test)
+
+type1_test = executable(
+  'test_type1',
+  'tests/test_type1.c',
+  include_directories: [
+    public_include,
+    generated_include,
+    include_directories('src'),
+  ],
+  link_with: core,
+  dependencies: core_dependencies,
+)
+test('type1', type1_test)
 
 source_test = executable(
   'test_source',

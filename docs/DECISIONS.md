@@ -194,6 +194,43 @@ sequence, as well as direct numeric calls and the factored subroutine-4 form
 present in other corpus fonts, so dynamically selected hint subroutines stay
 in the embedded font.
 
+Sections 6.2--6.4 and 7.1--7.3 of the same specification define Type 1
+integer and command encodings, the charstring cipher with key 4330 and
+`lenIV` prefix, and the eexec cipher with key 55665 and four-byte prefix.
+HSTeX implements those encodings and cipher-feedback steps directly. Two
+controlled runs of `t1asm` 1.41 over the same `cmr10.pfb` disassembly produced
+identical bytes; decrypting the result showed zero-valued prefix bytes for
+both cipher layers, a clear segment ending after `currentfile eexec`, and a
+binary segment ending after `mark currentfile closefile`. HSTeX uses those
+deterministic prefix values and emits those two PDF `FontFile` segments
+without constructing an intermediate PFB file or launching an assembler.
+A separate `t1asm` 1.41 run with `/lenIV -1` emitted the five encoded bytes of
+the `.notdef` fixture directly, without prefix bytes or charstring encryption;
+HSTeX treats that value as the same explicit unencrypted mode.
+
+The targeted warm-cache `testmath` comparison used the pre-change commit
+`a20f489` and the candidate built with GCC 13.3.0 as C17 release binaries with
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`. Both were pinned to CPU 3 of an AMD EPYC 7551
+with one font worker; each received one warm-up followed by eleven runs in
+fresh output directories. Baseline times in milliseconds were 1074.0,
+1083.7, 1063.0, 1061.3, 1068.5, 1065.0, 1055.5, 1054.6, 1077.9, 1076.5,
+and 1119.2; candidate times were 1017.2, 1023.8, 1026.5, 1028.3, 1015.6,
+1067.8, 1010.8, 1002.3, 1004.3, 1082.2, and 1023.1. The medians were
+1068.5 ms and 1023.1 ms, a 4.2% reduction; the median paired reduction was
+5.0%. Median system CPU time fell from 0.14 s to 0.10 s, while peak RSS stayed
+at 28,672 KiB. Load averages were 41.39/40.77/41.65 before and
+41.62/40.88/41.66 after. The baseline and candidate executable SHA-256 values
+were `61a0d6b78f25b0f2b4fff0ab9407943d841c8cbd84c07075c626fce2bc459d6b`
+and `aeb90df61226328b87fbb0ba6fdc377a663072a58bebbfa34e0725106166d491`.
+The corpus manifest digest was
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`,
+the document digest was
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`,
+and both PDFs had SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+This targeted result is not the full-corpus headline benchmark.
+
 ## PDF font Unicode maps
 
 A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the

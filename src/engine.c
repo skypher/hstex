@@ -5,6 +5,7 @@
 #include "hstex/catcode.h"
 #include "internal.h"
 #include "pk.h"
+#include "type1.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -23563,59 +23564,10 @@ static int pdf_type1_assemble(struct hstex_pdf_physical_font *font,
                               size_t disassembly_length, char *error,
                               size_t error_capacity)
 {
-    char program[] = "t1asm";
-    char binary[] = "-b";
-    char *arguments[] = {program, binary, NULL};
-    uint8_t *pfb = NULL;
-    size_t pfb_length = 0U;
-    if (run_font_filter(program, arguments, disassembly, disassembly_length,
-                        &pfb, &pfb_length, error, error_capacity) != 0) {
-        return -1;
-    }
-    struct hstex_pdf_font_buffer output = {0};
-    size_t at = 0U;
-    bool public_part = true;
-    while (at + 6U <= pfb_length && pfb[at] == 0x80U) {
-        uint8_t kind = pfb[at + 1U];
-        size_t length = (size_t)pfb[at + 2U] |
-                        ((size_t)pfb[at + 3U] << 8U) |
-                        ((size_t)pfb[at + 4U] << 16U) |
-                        ((size_t)pfb[at + 5U] << 24U);
-        at += 6U;
-        if (kind == 3U) {
-            break;
-        }
-        if (length > pfb_length - at) {
-            free(pfb);
-            free(output.bytes);
-            return set_error(error, error_capacity,
-                             "invalid assembled Type 1 font");
-        }
-        if (kind == 1U && public_part) {
-            font->length1 += length;
-        } else if (kind == 2U) {
-            public_part = false;
-            font->length2 += length;
-        } else {
-            break;
-        }
-        if (pdf_font_buffer_append(&output, pfb + at, length, error,
-                                   error_capacity) != 0) {
-            free(pfb);
-            free(output.bytes);
-            return -1;
-        }
-        at += length;
-    }
-    free(pfb);
-    if (font->length1 == 0U || font->length2 == 0U) {
-        free(output.bytes);
-        return set_error(error, error_capacity,
-                         "invalid assembled Type 1 font");
-    }
-    font->program = output.bytes;
-    font->program_length = output.count;
-    return 0;
+    return hstex_type1_assemble(
+        disassembly, disassembly_length, &font->program,
+        &font->program_length, &font->length1, &font->length2, error,
+        error_capacity);
 }
 
 static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
