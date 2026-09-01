@@ -23869,8 +23869,13 @@ static size_t pdf_allowed_processor_count(void)
             (void)fclose(status);
         }
     }
+#if defined(_SC_NPROCESSORS_ONLN)
     long processors = sysconf(_SC_NPROCESSORS_ONLN);
-    return processors > 0L ? (size_t)processors : 1U;
+    if (processors > 0L) {
+        return (size_t)processors;
+    }
+#endif
+    return 1U;
 }
 
 static size_t pdf_type1_worker_count(size_t font_count)
