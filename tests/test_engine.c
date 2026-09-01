@@ -1619,8 +1619,22 @@ static int test_output_file_keeps_finder(void)
     }
     char directory[] = "/tmp/hstex-finder-generation-XXXXXX";
     char *previous_directory = getcwd(NULL, 0U);
-    if (previous_directory == NULL || mkdtemp(directory) == NULL ||
-        chdir(directory) != 0) {
+    int directory_descriptor = mkstemp(directory);
+    if (previous_directory == NULL || directory_descriptor < 0) {
+        if (directory_descriptor >= 0) {
+            (void)close(directory_descriptor);
+            (void)unlink(directory);
+        }
+        free(previous_directory);
+        (void)unlink(path);
+        return 1;
+    }
+    int close_status = close(directory_descriptor);
+    int unlink_status = unlink(directory);
+    if (close_status != 0 || unlink_status != 0 ||
+        mkdir(directory, 0700) != 0 || chdir(directory) != 0) {
+        (void)unlink(directory);
+        (void)rmdir(directory);
         free(previous_directory);
         (void)unlink(path);
         return 1;
