@@ -46508,7 +46508,14 @@ static int skip_conditional(struct hstex_engine *engine, size_t target,
            and asking for each of them costs more than looking at it. */
         hstex_token token = 0U;
         bool found = false;
-        if (engine->sources.count != 0U) {
+        /* TeX still obtains every skipped token through its ordinary reader.
+           Inside an alignment that is semantic: braces change the entry's
+           nesting, and a tab at depth zero can end it. Keep the direct-list
+           shortcut only where no alignment counter is active. See
+           docs/DECISIONS.md, conditional-skipping-inside-alignments. */
+        bool alignment_sensitive = engine->alignment_entry != NULL ||
+                                   engine->preamble_nesting != NULL;
+        if (!alignment_sensitive && engine->sources.count != 0U) {
             struct hstex_source_frame *frame =
                 &engine->sources.frames[engine->sources.count - 1U];
             if (frame->kind == HSTEX_SOURCE_TOKEN_LIST) {

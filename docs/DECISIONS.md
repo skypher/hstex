@@ -316,3 +316,21 @@ reader. Their net alignment depth is zero, while their positive depth around
 the stored text prevents an alignment tab or `\cr` in that text from ending
 the active cell. No implementation code or internal representation was
 copied.
+
+## Conditional skipping inside alignments
+
+Public TeX Live source was consulted at commit
+`92c94c14418d5539bf44dbe8410391ee9244260e`, file
+`texk/web2c/tex.web`. The `pass_text` procedure at source lines 9659--9680
+obtains every skipped token with the ordinary `get_next` reader. The
+alignment test in `get_next` is at lines 7259--7264, and brace-driven
+alignment-state changes are at lines 7335--7341. Thus skipped conditional
+text is not executed, but its braces still change alignment depth and a tab
+at depth zero still invokes the active template.
+
+HSTeX retains its direct token-list search for conditional delimiters when no
+alignment entry or preamble is active. While either alignment counter is
+active, skipped text passes through the ordinary token reader. This preserves
+LaTeX's row-ending brace idiom: a left brace hidden in a false branch protects
+lookahead across the next row's tab until the row macro restores the depth and
+emits `\cr`. No implementation code or internal representation was copied.

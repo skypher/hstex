@@ -22841,6 +22841,31 @@ static int test_write_inside_alignment(void)
     return status;
 }
 
+/* Braces in a skipped conditional still change an alignment entry's depth.
+   This is the brace trick LaTeX uses to let row-ending lookahead inspect the
+   next row's tab before emitting \cr; see docs/DECISIONS.md,
+   conditional-skipping-inside-alignments. */
+static int test_conditional_skip_inside_alignment(void)
+{
+    int32_t recoverable_errors = -1;
+    int status = run_snippet_record_errors(
+        "\\catcode`\\&=4 "
+        "\\def\\rowend{\\iffalse{\\fi\\ifnum0=`}\\fi"
+        "\\futurelet\\next\\finish}"
+        "\\def\\finish{\\ifnum0=`{}\\fi\\cr}"
+        "\\setbox0=\\vbox{\\halign{#&#\\cr"
+        " &A\\rowend&B\\cr}}T%",
+        "T", &recoverable_errors);
+    if (status == 0 && recoverable_errors != 0) {
+        (void)fprintf(
+            stderr,
+            "conditional skip inside alignment raised %d recoverable errors\n",
+            recoverable_errors);
+        return 1;
+    }
+    return status;
+}
+
 /* \delimiter on its own, and a character the font does not have; see
    docs/DECISIONS.md, delimiters. */
 static int test_delimiters(void)
@@ -24963,7 +24988,9 @@ int main(int argument_count, char **arguments)
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
         test_alignment_entries() != 0 ||
-        test_write_inside_alignment() != 0 || test_delimiters() != 0 ||
+        test_write_inside_alignment() != 0 ||
+        test_conditional_skip_inside_alignment() != 0 ||
+        test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
