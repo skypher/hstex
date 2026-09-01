@@ -397,6 +397,19 @@ the middle of a read. HSTeX therefore uses standard input for terminal and
 unopened streams, exposes an injectable terminal stream for deterministic
 embedding tests, and leaves ownership of that stream with its caller.
 
+## Token-list expansion after `\expandafter`
+
+A controlled pdfTeX 1.40.25 probe defines `\a` as `A` and stores `\a` in a
+token register. `\edef\b{\the\toks0}` preserves `\a` in `\b`, while
+`\edef\c{\expandafter\relax\the\toks0}` defines `\c` as `\relax A`.
+Thus a token-register value delivered directly to an expanded-definition scan
+is copied without further expansion, but a value produced as
+`\expandafter`'s selected expansion returns to the surrounding scan and is
+expanded there. HSTeX marks token-list values only in the direct case and
+tracks the nested expansion depth while `\expandafter` expands its selected
+token. LaTeX's `ifthen` evaluator relies on this distinction when it expands
+`\expandafter\TE@eval\the\toks@`.
+
 ## Virtual-font packets
 
 Public TeX Live source was consulted at commit

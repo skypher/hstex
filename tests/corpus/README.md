@@ -56,7 +56,7 @@ None is engine source, and none is read for anything but its own text.
 | `anc-test.ltx` | LaTeX | Fifteen pages of Ancient Greek transliteration, accents, and expected hyphen breaks | Page and box counts match; HSTeX emits 15 faults to the reference's 2 |
 | `encguide` | LaTeX | Font encodings, unusual alphabets, large tables, and error recovery | All comparison gates agree across 29 pages |
 | `grfguide` | LaTeX | Color, graphics, file creation, EPS inclusion, and driver errors | Page and box counts match; the fault sets do not |
-| `testpage` | LaTeX | Interactive `\typein`, printer geometry, and a two-sided branch | Scripted `letterpaper`/`n` answers produce one reference page and two HSTeX pages |
+| `testpage` | LaTeX | Interactive `\typein`, printer geometry, and a two-sided branch | All comparison gates agree on the scripted one-page branch |
 | `testfont` | plain | Terminal `\read`, dynamic font selection, and a large glyph exercise | All comparison gates agree on the one-page DVI |
 
 The stress suite feeds both engines the same answer profile defined by the

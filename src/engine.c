@@ -8346,7 +8346,7 @@ static int token_list_identifier_from_meaning(
 
 static int push_token_list_expansion(
     struct hstex_engine *engine, uint32_t identifier,
-    struct hstex_source_location location, char *error,
+    struct hstex_source_location location, bool protect, char *error,
     size_t error_capacity)
 {
     if (identifier == 0U) {
@@ -8364,12 +8364,14 @@ static int push_token_list_expansion(
     }
     for (size_t index = 0U; index < list->count; ++index) {
         hstex_token token = list->tokens[index];
-        if (hstex_token_is_control_sequence(token) ||
-            hstex_token_is_frozen_control_sequence(token)) {
-            token = hstex_token_unexpanded_control_sequence(
-                hstex_token_control_sequence_id(token));
-        } else {
-            token = hstex_token_unexpanded_non_control(token);
+        if (protect) {
+            if (hstex_token_is_control_sequence(token) ||
+                hstex_token_is_frozen_control_sequence(token)) {
+                token = hstex_token_unexpanded_control_sequence(
+                    hstex_token_control_sequence_id(token));
+            } else {
+                token = hstex_token_unexpanded_non_control(token);
+            }
         }
         expansion.data[expansion.count++] = token;
     }
@@ -8402,8 +8404,13 @@ static int expand_the_primitive(struct hstex_engine *engine,
             return -1;
         }
         if (result > 0) {
+            /* A token list supplied directly to an expanded-text scanner is
+               copied verbatim. When \expandafter asked \the for it, the
+               result instead returns to the surrounding expansion. */
+            bool protect = engine->gathering_expanded_text &&
+                           engine->expander_depth == 1U;
             return push_token_list_expansion(engine, identifier, location,
-                                             error, error_capacity);
+                                             protect, error, error_capacity);
         }
         struct hstex_glue glue;
         result = glue_from_meaning(engine, meaning, &glue, error,
@@ -10578,8 +10585,11 @@ static int expand_after(struct hstex_engine *engine,
         }
         return push_one(engine, first, first_location, error, error_capacity);
     }
-    if (expand_token_once(engine, second, second_location, error,
-                          error_capacity) != 0) {
+    ++engine->expander_depth;
+    int expanded = expand_token_once(engine, second, second_location, error,
+                                     error_capacity);
+    --engine->expander_depth;
+    if (expanded != 0) {
         return -1;
     }
     (void)location;

@@ -23889,6 +23889,7 @@ static int test_expanded_is_plain(void)
 {
     return run_snippet(
         "\\def\\foo{BAR}\\protected\\def\\pp{PROT}\\toks0={##}"
+        "\\toks1={\\foo}"
         /* \unexpanded protects from the enclosing \edef only when it feeds
            that \edef directly. */
         "\\edef\\a{\\expanded{\\unexpanded{\\foo}}}[\\meaning\\a]"
@@ -23900,11 +23901,17 @@ static int test_expanded_is_plain(void)
         "\\edef\\d{\\expanded{\\unexpanded\\expandafter{\\the\\toks0}}}"
         "[\\meaning\\d]"
         "\\edef\\e{\\unexpanded\\expandafter{\\the\\toks0}}[\\meaning\\e]"
+        /* Direct \the protects a token-register value from the enclosing
+           \edef. Expanded through \expandafter, it returns to that \edef and
+           is expanded there. */
+        "\\edef\\g{\\the\\toks1}[\\meaning\\g]"
+        "\\edef\\h{\\expandafter\\relax\\the\\toks1}[\\meaning\\h]"
         /* A protected macro is still protected, since the enclosing \edef
            inhibits it too. */
         "\\edef\\f{\\expanded{\\pp}}[\\meaning\\f]%",
         "[macro:->BAR][macro:->\\foo ][macro:->BAR][macro:->##]"
-        "[macro:->####][macro:->\\pp ]");
+        "[macro:->####][macro:->\\foo ][macro:->\\relax BAR]"
+        "[macro:->\\pp ]");
 }
 
 /* \meaning names a macro's prefixes behind the escape character, in the
