@@ -23,6 +23,67 @@ count, machine load, peak RSS, source manifest, and timing mode. Performance
 changes require a benchmark and compatibility coverage for their semantic
 boundary.
 
+## Finding a file
+
+Kpathsea 6.3.5 documents `kpsewhich -interactive` as asking for additional
+filenames on standard input. HSTeX keeps one such process for unresolved names
+instead of launching one process per question. Its end-of-answer marker is
+`latex.ltx`, which the engine's already loaded `ls-R` data can verify without
+another process. The marker's resolved path remains private to the lookup
+protocol and does not determine HSTeX's storage or search representation.
+
+A black-box pdfTeX 1.40.25 probe first opens an absent name for input, closes
+it, creates that name with an immediate output stream, and inputs it in the
+same process directory. The probe reports the initial miss and then reads the
+new definition. HSTeX therefore checks ordinary local inputs before cached
+installation answers. Its configured artifact directory receives the same
+direct check for files produced by the driver. An engine output increments
+the generation used to reconsider a cached negative answer, but it does not
+restart the persistent installation finder. An allowed restricted-shell
+command increments a separate external generation because it can modify any
+search directory, so the next unresolved lookup starts a fresh finder.
+
+The restricted-shell mode remains immediately observable as 2 through
+`\pdfshellescape`, but the public `shell_escape_commands` value is queried
+only when a syntactically valid `\write18` command reaches execution. A unit
+probe pins that delayed load and the existing allowed/disabled outcomes.
+Another probe caches a missing input, creates it, reads its contents, and
+checks that the finder process identifier is unchanged. The GCC release suite,
+the 14-document strict corpus, and the six-document stress corpus all pass
+with the change.
+
+An exact fresh-directory process trace over `testmath` compared baseline
+commit `fb3a1b8` with the candidate. The baseline used five lookup children:
+the restricted-shell allowlist, `TEXMFDBS`, a marker lookup, and two persistent
+finder instances separated by engine output. The candidate used two:
+`TEXMFDBS` and one persistent finder. No command from the document was
+executed.
+
+The targeted warm-cache timing used GCC 13.3.0 C17 release builds with
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. One warm-up preceded eleven alternating baseline/candidate pairs,
+each in a fresh output directory. Baseline times in milliseconds were
+915.830, 905.822, 901.681, 931.808, 916.849, 901.149, 1007.709, 919.327,
+939.778, 935.603, and 913.813; candidate times were 930.314, 895.950,
+894.746, 943.777, 904.375, 885.869, 901.852, 903.236, 898.924, 941.840,
+and 882.348. The medians were 916.849 ms and 901.852 ms, a 1.6% reduction;
+the median paired reduction was 1.4%. Median user CPU time fell from 0.84 s
+to 0.83 s and median system CPU time from 0.06 s to 0.05 s. Peak RSS was
+28,672 KiB for every measured run. Load averages were 37.04/37.95/38.33
+before and 36.95/37.87/38.29 after. The baseline and candidate executable
+SHA-256 values were
+`bf6ddc831a1c17c51a412820d09ab45bf450046e204635715518baa68daee602`
+and
+`94d6662775589a1efc6b26132a612ed0cf08ae40f650932fa89898b3206c88a6`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`
+and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Every measured PDF had SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+This is a targeted result, not the full-corpus headline benchmark.
+
 ## Reference-internal statistics
 
 Reference log totals for strings, string characters, memory words, control

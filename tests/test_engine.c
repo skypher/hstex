@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -1597,6 +1598,100 @@ static int test_file_streams(void)
     int status = run_snippet(source, "TTTT");
     (void)unlink(stream_path);
     (void)unlink(empty_path);
+    return status;
+}
+
+/* A name not found before an output stream creates it is found in the process
+   directory afterward. The persistent installation finder does not need to
+   restart: engine-owned input is checked directly before it is asked. */
+static int test_output_file_keeps_finder(void)
+{
+    static const char source[] =
+        "\\openin1=hstex-finder-generation-probe "
+        "\\ifeof1 M\\else X\\fi \\closein1 "
+        "\\immediate\\openout1=hstex-finder-generation-probe "
+        "\\immediate\\write1{\\string\\def\\string\\made{T}}"
+        "\\immediate\\closeout1 "
+        "\\input hstex-finder-generation-probe \\made \\end ";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char directory[] = "/tmp/hstex-finder-generation-XXXXXX";
+    char *previous_directory = getcwd(NULL, 0U);
+    if (previous_directory == NULL || mkdtemp(directory) == NULL ||
+        chdir(directory) != 0) {
+        free(previous_directory);
+        (void)unlink(path);
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        if (chdir(previous_directory) != 0) {
+            (void)fprintf(stderr,
+                          "cannot restore directory after finder test: %s\n",
+                          strerror(errno));
+        }
+        free(previous_directory);
+        (void)rmdir(directory);
+        (void)unlink(path);
+        return 1;
+    }
+    int status = 0;
+    FILE *sink = tmpfile();
+    if (sink != NULL) {
+        hstex_engine_set_message_stream(&engine, sink);
+    }
+    char output[2] = {0};
+    size_t output_count = 0U;
+    int finder_child = 0;
+    enum hstex_engine_result result = HSTEX_ENGINE_TOKEN;
+    while (status == 0 && result == HSTEX_ENGINE_TOKEN) {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+        if (result == HSTEX_ENGINE_TOKEN &&
+            hstex_token_is_character(token) && !test_token_is_space(token)) {
+            if (output_count == sizeof(output)) {
+                status = 1;
+                break;
+            }
+            output[output_count++] = (char)hstex_token_character_code(token);
+            if (output_count == 1U) {
+                finder_child = engine.finder.child;
+            }
+        }
+    }
+    if (result != HSTEX_ENGINE_EOF || output_count != sizeof(output) ||
+        memcmp(output, "MT", sizeof(output)) != 0 || finder_child <= 0 ||
+        engine.finder.child != finder_child || engine.file_generation == 0U ||
+        engine.finder.generation != engine.external_file_generation) {
+        status = 1;
+    }
+    if (status != 0) {
+        (void)fprintf(stderr,
+                      "output-file finder test failed: %s output=%.*s "
+                      "child=%d/%d generations=%" PRIu64 "/%" PRIu64 "\n",
+                      error, (int)output_count, output, finder_child,
+                      engine.finder.child, engine.finder.generation,
+                      engine.external_file_generation);
+    }
+    if (sink != NULL) {
+        (void)fclose(sink);
+    }
+    hstex_engine_destroy(&engine);
+    if (chdir(previous_directory) != 0) {
+        status = 1;
+    }
+    free(previous_directory);
+    char written[160];
+    (void)snprintf(written, sizeof(written),
+                   "%s/hstex-finder-generation-probe.tex", directory);
+    (void)unlink(written);
+    (void)rmdir(directory);
+    (void)unlink(path);
     return status;
 }
 
@@ -21106,6 +21201,9 @@ static int test_restricted_shell_escape(void)
                                                  sizeof(error)) != 0) {
         status = 1;
     }
+    if (status == 0 && engine.shell_escape_commands != NULL) {
+        status = 1;
+    }
     struct hstex_source_location last = {0};
     if (status == 0 &&
         hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
@@ -21155,6 +21253,7 @@ static int test_restricted_shell_escape(void)
     }
     if (status == 0 &&
         (!byte_sequence_present(messages, message_count, "[mode=2]") ||
+         engine.shell_escape_commands == NULL ||
          !byte_sequence_present(
              messages, message_count,
              "runsystem(printf HSTEX-DISALLOWED)...disabled (restricted).") ||
@@ -25329,6 +25428,7 @@ int main(int argument_count, char **arguments)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        test_output_file_keeps_finder() != 0 ||
         test_terminal_read_streams() != 0 ||
         test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
         test_the_current_font_is_grouped() != 0 ||

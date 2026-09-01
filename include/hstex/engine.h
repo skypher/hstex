@@ -35,9 +35,10 @@ struct hstex_file_finder {
     /* What the marker name answers with, which is how a name the tool did not
        find is told apart from one it did. */
     char *marker_answer;
-    /* The state of the directory the tool was started in: it remembers what
-       it found there, so a file the run has written since means starting it
-       again. */
+    /* The state of external search directories when the tool was started.
+       An allowed system command can change those directories, while files
+       written by the engine itself are checked directly before the tool is
+       asked. */
     uint64_t generation;
     /* Set where the tool cannot be kept alive at all, so that a run does not
        try again for every name. */
@@ -1997,12 +1998,14 @@ struct hstex_engine {
        that finding one need not walk all of them: the corpus has 23,513. */
     uint32_t *pdf_dest_slots;
     size_t pdf_dest_slot_capacity;
-    /* What kpsewhich said about the files the run has asked after, and how
-       many files the run has written since. */
+    /* What kpsewhich said about the files the run has asked after, how many
+       files the run has written since, and how many allowed system commands
+       could have changed an external search directory. */
     struct hstex_resolved_file *resolved_files;
     size_t resolved_file_count;
     size_t resolved_file_capacity;
     uint64_t file_generation;
+    uint64_t external_file_generation;
     /* Room kept for the arguments of the macro being expanded, so that the
        storage one call takes serves the next rather than being given back
        and taken again; a call that finds it busy takes its own. */

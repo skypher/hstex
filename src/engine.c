@@ -4442,20 +4442,30 @@ int hstex_engine_set_restricted_shell_escape(struct hstex_engine *engine,
         return set_error(error, error_capacity,
                          "pdfshellescape primitive is unavailable");
     }
-    char *commands = NULL;
-    if (enabled) {
-        commands = resolve_with_kpsewhich(
-            "--var-value=shell_escape_commands");
-        if (commands == NULL) {
-            return set_error(error, error_capacity,
-                             "cannot read restricted shell command list");
-        }
-    }
     free(engine->shell_escape_commands);
-    engine->shell_escape_commands = commands;
+    /* Most documents never execute \write18. Keep the mode observable from
+       \pdfshellescape now and read the installation's allowlist only if a
+       syntactically valid system command reaches the executor. */
+    engine->shell_escape_commands = NULL;
     engine->shell_escape_mode = enabled ? 2 : 0;
     engine->meanings[identifier - 1U].value.integer =
         engine->shell_escape_mode;
+    return 0;
+}
+
+static int load_restricted_shell_commands(struct hstex_engine *engine,
+                                          char *error,
+                                          size_t error_capacity)
+{
+    if (engine->shell_escape_commands != NULL) {
+        return 0;
+    }
+    engine->shell_escape_commands = resolve_with_kpsewhich(
+        "--var-value=shell_escape_commands");
+    if (engine->shell_escape_commands == NULL) {
+        return set_error(error, error_capacity,
+                         "cannot read restricted shell command list");
+    }
     return 0;
 }
 
@@ -4468,7 +4478,7 @@ static char *resolve_pk_with_kpsewhich(const char *filename)
    says nothing at all about a name it cannot find, so every question is
    asked together with a name that is always found, and an answer that is
    the marker's is the marker's rather than the name's. */
-static const char hstex_finder_marker[] = "texmf.cnf";
+static const char hstex_finder_marker[] = "latex.ltx";
 
 static void finder_stop(struct hstex_engine *engine)
 {
@@ -4598,7 +4608,11 @@ static bool finder_start(struct hstex_engine *engine)
        started often enough that a child for each would cost more than the
        one it is being started to save. */
     if (!hstex_finder_marker_found) {
-        char *marker_path = resolve_with_kpsewhich(hstex_finder_marker);
+        const char *listed = hstex_file_db_lookup(hstex_file_db_shared(),
+                                                  hstex_finder_marker);
+        char *marker_path = listed == NULL
+                                ? resolve_with_kpsewhich(hstex_finder_marker)
+                                : strdup(listed);
         if (marker_path == NULL) {
             hstex_finder_unusable = true;
             return false;
@@ -4677,7 +4691,7 @@ static bool finder_start(struct hstex_engine *engine)
         hstex_finder_unusable = true;
         return false;
     }
-    finder->generation = engine->file_generation;
+    finder->generation = engine->external_file_generation;
     return true;
 }
 
@@ -4693,9 +4707,10 @@ static char *finder_ask(struct hstex_engine *engine, const char *filename)
         return resolve_with_kpsewhich(filename);
     }
     if (finder->questions != NULL &&
-        finder->generation != engine->file_generation) {
-        /* The run has written something since, and the tool remembers what
-           the directories held when it looked. */
+        finder->generation != engine->external_file_generation) {
+        /* An allowed command has run since this child started and may have
+           changed a search directory the child remembers. Engine output is
+           checked directly before a question reaches this point. */
         finder_stop(engine);
     }
     if (finder->questions == NULL && !finder_start(engine)) {
@@ -4754,6 +4769,13 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
 {
     if (engine == NULL) {
         return resolve_with_kpsewhich(filename);
+    }
+    /* Ordinary local resource overrides take precedence over cached
+       installation data. Inputs use the same direct check before reaching
+       this resolver, so a file written in the process directory does not
+       require restarting the persistent installation finder. */
+    if (access(filename, R_OK) == 0) {
+        return strdup(filename);
     }
     struct hstex_resolved_file *entry = NULL;
     for (size_t index = 0U; index < engine->resolved_file_count; ++index) {
@@ -46883,8 +46905,17 @@ static int execute_system_command(struct hstex_engine *engine,
     if (parsed < 0) {
         return -1;
     }
-    if (parsed > 0 ||
-        !restricted_program_allowed(engine, arguments.items[0])) {
+    if (parsed > 0) {
+        destroy_system_arguments(&arguments);
+        return report_system_command(engine, bytes, byte_count,
+                                     "disabled (restricted).", error,
+                                     error_capacity);
+    }
+    if (load_restricted_shell_commands(engine, error, error_capacity) != 0) {
+        destroy_system_arguments(&arguments);
+        return -1;
+    }
+    if (!restricted_program_allowed(engine, arguments.items[0])) {
         destroy_system_arguments(&arguments);
         return report_system_command(engine, bytes, byte_count,
                                      "disabled (restricted).", error,
@@ -46923,6 +46954,7 @@ static int execute_system_command(struct hstex_engine *engine,
     }
     (void)child_status;
     ++engine->file_generation;
+    ++engine->external_file_generation;
     destroy_system_arguments(&arguments);
     return report_system_command(engine, bytes, byte_count,
                                  "executed safely (allowed).", error,
