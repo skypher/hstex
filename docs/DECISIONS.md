@@ -344,6 +344,43 @@ and both PDFs had SHA-256
 `1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
 This targeted result is not the full-corpus headline benchmark.
 
+A later clock profile of `testmath` found that the two `strstr` calls used to
+locate every Subrs and CharStrings entry terminator scanned beyond the entry's
+known section limit. Type 1 subsetting accounted for 20.3% of total CPU time
+in that profile. HSTeX now scans newlines once, compares both accepted closing
+spellings at each line, and stops at the supplied limit. The same profile then
+attributed 2.1% of total CPU time to Type 1 subsetting.
+
+The matched warm-cache timing compared baseline commit `839ffbf` with the
+bounded-scan candidate. Both were GCC 13.3.0 C17 release builds using
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. One warm-up preceded eleven alternating baseline/candidate pairs,
+each in a fresh output directory. Baseline times in milliseconds were
+937.839, 942.090, 932.749, 874.569, 971.585, 939.326, 927.572, 931.412,
+911.139, 925.659, and 949.102; candidate times were 781.890, 754.243,
+758.018, 730.898, 757.205, 762.640, 782.307, 765.982, 755.249, 761.781,
+and 748.407. The medians were 932.749 ms and 758.018 ms, an 18.7%
+reduction; the median paired reduction was 17.8%. Median user CPU time fell
+from 0.87 s to 0.69 s, while median system CPU time remained 0.05 s. Peak RSS
+was 28,672 KiB for every measured run. Load averages were 37.20/37.92/38.46
+before and 37.31/37.88/38.43 after. The baseline and candidate executable
+SHA-256 values were
+`94d6662775589a1efc6b26132a612ed0cf08ae40f650932fa89898b3206c88a6`
+and
+`e3b66ae953156337605005e78fb1c15fe345df68ddeae22f6271d8e3882bfe8b`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`
+and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Every measured PDF had SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+The release and stress corpora remained 14/14 and 6/6. A separate run of the
+existing per-document timing mode reduced the sum of HSTeX document medians
+from 5,973.3 ms to 4,918.5 ms while the corresponding reference sums were
+4,031.4 ms and 4,021.3 ms. That sum is broad-impact evidence, not the
+full-corpus headline benchmark.
+
 ## PDF font Unicode maps
 
 A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the

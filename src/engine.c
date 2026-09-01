@@ -22970,26 +22970,34 @@ static const char *pdf_type1_entry_finish(const char *start,
                                           const char *limit,
                                           bool subroutine)
 {
-    const char *spaced =
-        strstr(start, subroutine ? "\n\t} NP\n" : "\n\t} ND\n");
-    const char *compact =
-        strstr(start, subroutine ? "\n\t}NP\n" : "\n\t}ND\n");
-    if (spaced == NULL || spaced >= limit) {
-        spaced = NULL;
+    static const char subroutine_spaced[] = "\n\t} NP\n";
+    static const char subroutine_compact[] = "\n\t}NP\n";
+    static const char glyph_spaced[] = "\n\t} ND\n";
+    static const char glyph_compact[] = "\n\t}ND\n";
+    const char *spaced = subroutine ? subroutine_spaced : glyph_spaced;
+    const char *compact = subroutine ? subroutine_compact : glyph_compact;
+    size_t spaced_length = subroutine ? sizeof(subroutine_spaced) - 1U
+                                      : sizeof(glyph_spaced) - 1U;
+    size_t compact_length = subroutine ? sizeof(subroutine_compact) - 1U
+                                       : sizeof(glyph_compact) - 1U;
+    const char *at = start;
+    while (at < limit) {
+        const char *newline = memchr(at, '\n', (size_t)(limit - at));
+        if (newline == NULL) {
+            return NULL;
+        }
+        size_t remaining = (size_t)(limit - newline);
+        if (remaining >= spaced_length &&
+            memcmp(newline, spaced, spaced_length) == 0) {
+            return newline + spaced_length;
+        }
+        if (remaining >= compact_length &&
+            memcmp(newline, compact, compact_length) == 0) {
+            return newline + compact_length;
+        }
+        at = newline + 1;
     }
-    if (compact == NULL || compact >= limit) {
-        compact = NULL;
-    }
-    const char *finish =
-        spaced == NULL || (compact != NULL && compact < spaced) ? compact
-                                                                : spaced;
-    if (finish == NULL) {
-        return NULL;
-    }
-    return finish +
-           strlen(finish == compact
-                      ? (subroutine ? "\n\t}NP\n" : "\n\t}ND\n")
-                      : (subroutine ? "\n\t} NP\n" : "\n\t} ND\n"));
+    return NULL;
 }
 
 static bool pdf_type1_line_starts(const char *line, const char *end,
