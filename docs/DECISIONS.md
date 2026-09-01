@@ -297,3 +297,22 @@ finishes its row without an extra-brace recovery. HSTeX therefore excludes
 braces read directly from the current template while scanning a macro argument,
 including the bulk token-list path; otherwise the closing brace of `{x}` is
 counted even though the template's opening brace was deliberately ignored.
+
+## Balanced write expansion inside alignments
+
+Public TeX Live source was consulted at commit
+`92c94c14418d5539bf44dbe8410391ee9244260e`, file
+`texk/web2c/tex.web`. The alignment-state description and delimiter test are
+at source lines 6738--6745 and 7259--7264. The `write_out` section titled
+“Expand macros in the token list and make `link(def_ref)` point to the result”
+is at source lines 24847--24895. It places stored write tokens between a fresh
+left and right brace before expanded scanning, followed by the artificial
+`endwrite` control sequence.
+
+HSTeX independently represents that sequence as stacked token frames for an
+inserted opening brace, the stored write text, and an inserted closing-brace
+and terminator pair. Both synthetic braces pass through the ordinary token
+reader. Their net alignment depth is zero, while their positive depth around
+the stored text prevents an alignment tab or `\cr` in that text from ending
+the active cell. No implementation code or internal representation was
+copied.

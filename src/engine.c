@@ -30898,6 +30898,8 @@ static int expand_write_text(struct hstex_engine *engine,
         vector_destroy(text);
         return -1;
     }
+    hstex_token opener =
+        hstex_token_character((uint8_t)HSTEX_CAT_BEGIN_GROUP, (uint8_t)'{');
     hstex_token closer =
         hstex_token_character((uint8_t)HSTEX_CAT_END_GROUP, (uint8_t)'}');
     hstex_token ending = 0U;
@@ -30960,6 +30962,34 @@ static int expand_write_text(struct hstex_engine *engine,
     }
     hstex_source_name_top(&engine->sources,
                           (uint8_t)HSTEX_TOKEN_SOURCE_WRITE, 0U);
+    /* The stored text is scanned inside a FRESH BALANCED GROUP. The opening
+       brace must be read from the input stack, rather than merely assumed by
+       the scanner: while a write is expanded inside an alignment entry it
+       both shields tab and \cr tokens in the text and balances the synthetic
+       closing brace already waiting behind it. See docs/DECISIONS.md,
+       balanced-write-expansion. */
+    if (hstex_source_begin_one(&engine->sources, opener, location, error,
+                               error_capacity) != 0) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        return -1;
+    }
+    hstex_source_name_top(&engine->sources,
+                          (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED, 0U);
+    hstex_token scanned_opener = 0U;
+    struct hstex_source_location opener_location;
+    enum hstex_engine_result opener_result =
+        raw_next(engine, &scanned_opener, &opener_location, error,
+                 error_capacity);
+    if (opener_result != HSTEX_ENGINE_TOKEN || scanned_opener != opener) {
+        (void)hstex_source_pop_boundary(&engine->sources, NULL, 0U);
+        vector_destroy(text);
+        if (opener_result == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        return set_error(error, error_capacity,
+                         "write expansion lost its opening brace");
+    }
     struct hstex_token_vector expanded = {0};
     int status = scan_expanded_text_from_input(
         engine, &expanded, engine->scanning_text_name, true, error,

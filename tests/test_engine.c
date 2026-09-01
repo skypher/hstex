@@ -808,8 +808,12 @@ static int test_page_totals(void)
     return run_document_parts(source, expected);
 }
 
-static int run_snippet(const char *source, const char *expected)
+static int run_snippet_record_errors(const char *source, const char *expected,
+                                     int32_t *recoverable_errors)
 {
+    if (recoverable_errors != NULL) {
+        *recoverable_errors = -1;
+    }
     char path[64];
     if (open_snippet(source, path) != 0) {
         return 1;
@@ -860,9 +864,17 @@ static int run_snippet(const char *source, const char *expected)
         (void)fprintf(stderr, "]\n");
         status = 1;
     }
+    if (recoverable_errors != NULL) {
+        *recoverable_errors = engine.error_count;
+    }
     hstex_engine_destroy(&engine);
     (void)unlink(path);
     return status;
+}
+
+static int run_snippet(const char *source, const char *expected)
+{
+    return run_snippet_record_errors(source, expected, NULL);
 }
 
 /* \vsplit; see docs/DECISIONS.md, vsplit. */
@@ -22807,6 +22819,28 @@ static int test_alignment_entries(void)
         "[macro:->N][T]");
 }
 
+/* A write is re-expanded inside synthetic balanced braces. Besides keeping
+   the alignment depth unchanged, those braces hide tab and \cr tokens in the
+   stored text from the active entry; see docs/DECISIONS.md,
+   balanced-write-expansion. */
+static int test_write_inside_alignment(void)
+{
+    int32_t recoverable_errors = -1;
+    int status = run_snippet_record_errors(
+        "\\catcode`\\&=4 "
+        "\\setbox0=\\vbox{\\halign{#&#\\cr"
+        " &\\immediate\\write17{&\\cr}\\cr"
+        " &\\cr}}T%",
+        "T", &recoverable_errors);
+    if (status == 0 && recoverable_errors != 0) {
+        (void)fprintf(stderr,
+                      "write inside alignment raised %d recoverable errors\n",
+                      recoverable_errors);
+        return 1;
+    }
+    return status;
+}
+
 /* \delimiter on its own, and a character the font does not have; see
    docs/DECISIONS.md, delimiters. */
 static int test_delimiters(void)
@@ -24928,7 +24962,8 @@ int main(int argument_count, char **arguments)
         test_display_math() != 0 || test_math_choices() != 0 ||
         test_badness() != 0 || test_line_breaking() != 0 ||
         test_accents() != 0 || test_equation_numbers() != 0 || test_vcenter() != 0 ||
-        test_alignment_entries() != 0 || test_delimiters() != 0 ||
+        test_alignment_entries() != 0 ||
+        test_write_inside_alignment() != 0 || test_delimiters() != 0 ||
         test_left_right() != 0 || test_implicit_characters() != 0 || test_preamble_forms() != 0 || test_display_alignments() != 0 ||
         test_every_cr() != 0 || test_fractions() != 0 || test_parshape() != 0 || test_formula_spacing() != 0 ||
         test_conditionals_across_boxes() != 0 || test_radicals() != 0 ||
