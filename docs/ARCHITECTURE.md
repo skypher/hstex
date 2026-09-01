@@ -143,6 +143,13 @@ encoding vectors, map files, and the microtype behavior exercised by the
 strict corpus. Image inclusion is outside the current strict compatibility
 surface.
 
+At document close, Type 1 subset programs are prepared independently by a
+bounded worker batch, after the physical-font set and each font's glyph set
+are immutable. Object allocation and serialization remain in sorted order.
+The worker count defaults to the process's available processors, capped at
+eight and at the number of physical fonts; `HSTEX_FONT_WORKERS` selects a
+positive count explicitly, including `1` for the scalar fallback.
+
 ## Format and repeated passes
 
 HSTeX constructs formats from source and writes a representation-native format

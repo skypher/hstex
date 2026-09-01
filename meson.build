@@ -13,6 +13,8 @@ project(
 
 cc = meson.get_compiler('c')
 zlib = dependency('zlib')
+threads = dependency('threads')
+core_dependencies = [zlib, threads]
 warning_args = cc.get_supported_arguments(
   '-Wconversion',
   '-Wshadow',
@@ -73,7 +75,7 @@ core = static_library(
     'src/symbol.c',
   ),
   include_directories: [public_include, generated_include],
-  dependencies: zlib,
+  dependencies: core_dependencies,
   install: false,
 )
 
@@ -82,7 +84,7 @@ hstex = executable(
   'src/main.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
   install: true,
 )
 
@@ -105,7 +107,7 @@ scan_test = executable(
   'tests/test_scan.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('scan', scan_test)
 
@@ -114,7 +116,7 @@ input_test = executable(
   'tests/test_input.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('input', input_test)
 
@@ -123,7 +125,7 @@ catcode_test = executable(
   'tests/test_catcode.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('catcode', catcode_test)
 
@@ -132,7 +134,7 @@ symbol_test = executable(
   'tests/test_symbol.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('symbol', symbol_test)
 
@@ -141,7 +143,7 @@ mouth_test = executable(
   'tests/test_mouth.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('mouth', mouth_test)
 
@@ -150,7 +152,7 @@ pk_test = executable(
   'tests/test_pk.c',
   include_directories: [public_include, generated_include, include_directories('src')],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('pk', pk_test)
 
@@ -159,7 +161,7 @@ source_test = executable(
   'tests/test_source.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('source', source_test)
 
@@ -168,7 +170,7 @@ filedb_test = executable(
   'tests/test_filedb.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
 test('filedb', filedb_test)
 
@@ -177,9 +179,10 @@ engine_test = executable(
   'tests/test_engine.c',
   include_directories: [public_include, generated_include],
   link_with: core,
-  dependencies: zlib,
+  dependencies: core_dependencies,
 )
-test('engine', engine_test)
+test('engine', engine_test, env: ['HSTEX_FONT_WORKERS=4'])
+test('engine_serial_fonts', engine_test, env: ['HSTEX_FONT_WORKERS=1'])
 
 install_headers(
   'include/hstex/catcode.h',

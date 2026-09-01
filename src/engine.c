@@ -10,8 +10,10 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <spawn.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -46,6 +48,8 @@ enum {
        shown to ten characters short of it. */
     HSTEX_PRINT_LINE = 79,
     HSTEX_MAX_FONT_DIMENS = 1048576,
+    HSTEX_MAX_TYPE1_WORKERS = 8,
+    HSTEX_TYPE1_WORKER_ERROR_CAPACITY = 512,
     HSTEX_INITIAL_SAVE_CAPACITY = 64,
     HSTEX_INITIAL_CONDITIONAL_CAPACITY = 32,
     /* TeX has 256 of each register; an eTeX-enabled format has 32768. */
@@ -23860,6 +23864,156 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     return status;
 }
 
+struct hstex_type1_subset_batch {
+    struct hstex_pdf_physical_font *fonts;
+    const size_t *order;
+    size_t count;
+    atomic_size_t next;
+    int *statuses;
+    char *errors;
+};
+
+static size_t pdf_allowed_processor_count(void)
+{
+    FILE *status = fopen("/proc/self/status", "r");
+    if (status != NULL) {
+        char line[512];
+        while (fgets(line, sizeof(line), status) != NULL) {
+            static const char prefix[] = "Cpus_allowed_list:";
+            if (strncmp(line, prefix, sizeof(prefix) - 1U) != 0) {
+                continue;
+            }
+            const char *at = line + sizeof(prefix) - 1U;
+            size_t count = 0U;
+            while (*at != '\0') {
+                while (*at == ' ' || *at == '\t' || *at == ',') {
+                    ++at;
+                }
+                if (*at < '0' || *at > '9') {
+                    break;
+                }
+                char *end = NULL;
+                unsigned long first = strtoul(at, &end, 10);
+                unsigned long last = first;
+                at = end;
+                if (*at == '-') {
+                    last = strtoul(at + 1, &end, 10);
+                    at = end;
+                }
+                if (last < first || last - first > SIZE_MAX - count - 1U) {
+                    count = 0U;
+                    break;
+                }
+                count += (size_t)(last - first) + 1U;
+            }
+            (void)fclose(status);
+            if (count != 0U) {
+                return count;
+            }
+            status = NULL;
+            break;
+        }
+        if (status != NULL) {
+            (void)fclose(status);
+        }
+    }
+    long processors = sysconf(_SC_NPROCESSORS_ONLN);
+    return processors > 0L ? (size_t)processors : 1U;
+}
+
+static size_t pdf_type1_worker_count(size_t font_count)
+{
+    size_t workers = pdf_allowed_processor_count();
+    const char *asked = getenv("HSTEX_FONT_WORKERS");
+    if (asked != NULL && *asked != '\0') {
+        char *end = NULL;
+        unsigned long value = strtoul(asked, &end, 10);
+        if (end != asked && *end == '\0' && value != 0UL) {
+            workers = value > SIZE_MAX ? SIZE_MAX : (size_t)value;
+        }
+    }
+    if (workers > HSTEX_MAX_TYPE1_WORKERS) {
+        workers = HSTEX_MAX_TYPE1_WORKERS;
+    }
+    return workers < font_count ? workers : font_count;
+}
+
+static void *pdf_subset_type1_worker(void *opaque)
+{
+    struct hstex_type1_subset_batch *batch = opaque;
+    for (;;) {
+        size_t place = atomic_fetch_add_explicit(&batch->next, 1U,
+                                                 memory_order_relaxed);
+        if (place >= batch->count) {
+            break;
+        }
+        char *error = batch->errors +
+                      place * HSTEX_TYPE1_WORKER_ERROR_CAPACITY;
+        batch->statuses[place] = pdf_subset_type1(
+            &batch->fonts[batch->order[place]], error,
+            HSTEX_TYPE1_WORKER_ERROR_CAPACITY);
+    }
+    return NULL;
+}
+
+static int pdf_subset_physical_fonts(
+    struct hstex_pdf_physical_font *fonts, const size_t *order, size_t count,
+    char *error, size_t error_capacity)
+{
+    if (count == 0U) {
+        return 0;
+    }
+    if (count == 1U) {
+        return pdf_subset_type1(&fonts[order[0]], error, error_capacity);
+    }
+    int *statuses = calloc(count, sizeof(*statuses));
+    char *errors = calloc(count, HSTEX_TYPE1_WORKER_ERROR_CAPACITY);
+    size_t workers = pdf_type1_worker_count(count);
+    pthread_t *threads = calloc(workers > 1U ? workers - 1U : 1U,
+                                sizeof(*threads));
+    if (statuses == NULL || errors == NULL || threads == NULL) {
+        free(statuses);
+        free(errors);
+        free(threads);
+        return set_error(error, error_capacity,
+                         "PDF Type 1 worker allocation failed");
+    }
+    struct hstex_type1_subset_batch batch = {
+        .fonts = fonts,
+        .order = order,
+        .count = count,
+        .statuses = statuses,
+        .errors = errors,
+    };
+    atomic_init(&batch.next, 0U);
+    size_t created = 0U;
+    while (created + 1U < workers &&
+           pthread_create(&threads[created], NULL, pdf_subset_type1_worker,
+                          &batch) == 0) {
+        ++created;
+    }
+    (void)pdf_subset_type1_worker(&batch);
+    for (size_t index = 0U; index < created; ++index) {
+        (void)pthread_join(threads[index], NULL);
+    }
+    int result = 0;
+    for (size_t index = 0U; index < count; ++index) {
+        if (statuses[index] != 0) {
+            const char *detail = errors +
+                                 index * HSTEX_TYPE1_WORKER_ERROR_CAPACITY;
+            result = set_error(error, error_capacity, "%s",
+                               *detail == '\0'
+                                   ? "PDF Type 1 subset preparation failed"
+                                   : detail);
+            break;
+        }
+    }
+    free(statuses);
+    free(errors);
+    free(threads);
+    return result;
+}
+
 static bool pdf_type1_integers(const char *source, const char *key,
                                int32_t *values, size_t count)
 {
@@ -23981,7 +24135,8 @@ static int pdf_write_physical_fonts(struct hstex_engine *engine, char *error,
         }
         order[place] = value;
     }
-    int status = 0;
+    int status = pdf_subset_physical_fonts(engine->pdf_physical_fonts, order,
+                                           count, error, error_capacity);
     for (size_t index = 0U; status == 0 && index < count; ++index) {
         status = pdf_write_physical_font(
             engine, &engine->pdf_physical_fonts[order[index]], error,
