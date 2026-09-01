@@ -170,6 +170,12 @@ one bitmap pixel equal one device pixel at the configured resolution. Missing
 packets map to `.notdef`; unused codes between `FirstChar` and `LastChar` have
 zero widths.
 
+The bitmap need not already exist in a user cache. If an ordinary lookup of
+the resolution-qualified name fails, HSTeX invokes `kpsewhich --mktex=pk` for
+that exact name. This is the public Kpathsea command-line interface documented
+by `kpsewhich --help` as enabling `mktexFMT` generation; diagnostics remain on
+standard error and the resolved generated path is read from standard output.
+
 ## e-TeX expression scaling
 
 Section 3.5 of the public e-TeX manual specifies that a multiplication

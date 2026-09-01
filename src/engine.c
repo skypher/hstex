@@ -935,6 +935,7 @@ static int reserve_hyphen_exceptions(struct hstex_engine *engine,
 }
 
 static char *resolve_with_kpsewhich(const char *filename);
+static char *resolve_pk_with_kpsewhich(const char *filename);
 static char *resolve_file(struct hstex_engine *engine, const char *filename);
 
 static uint16_t read_big_endian_u16(const uint8_t *bytes)
@@ -4315,7 +4316,7 @@ static int open_private_pipe(int descriptors[2])
     return 0;
 }
 
-static char *resolve_with_kpsewhich(const char *filename)
+static char *resolve_with_kpsewhich_option(const char *filename, bool make_pk)
 {
     int descriptors[2];
     if (open_private_pipe(descriptors) != 0) {
@@ -4332,6 +4333,7 @@ static char *resolve_with_kpsewhich(const char *filename)
     }
     pid_t child = 0;
     char program[] = "kpsewhich";
+    char make_pk_option[] = "--mktex=pk";
     char *name = strdup(filename);
     if (name == NULL) {
         (void)posix_spawn_file_actions_destroy(&actions);
@@ -4339,7 +4341,11 @@ static char *resolve_with_kpsewhich(const char *filename)
         (void)close(descriptors[1]);
         return NULL;
     }
-    char *const arguments[] = {program, name, NULL};
+    char *arguments[4] = {program, name, NULL, NULL};
+    if (make_pk) {
+        arguments[1] = make_pk_option;
+        arguments[2] = name;
+    }
     int spawned =
         posix_spawn_file_actions_addclose(&actions, descriptors[0]) != 0 ||
                 posix_spawn_file_actions_adddup2(&actions, descriptors[1],
@@ -4398,6 +4404,16 @@ static char *resolve_with_kpsewhich(const char *filename)
         return NULL;
     }
     return (char *)bytes;
+}
+
+static char *resolve_with_kpsewhich(const char *filename)
+{
+    return resolve_with_kpsewhich_option(filename, false);
+}
+
+static char *resolve_pk_with_kpsewhich(const char *filename)
+{
+    return resolve_with_kpsewhich_option(filename, true);
 }
 
 /* The name whose answer marks the end of one question's answers. The tool
@@ -22147,6 +22163,9 @@ static int pdf_prepare_pk_font(struct hstex_engine *engine,
         return set_error(error, error_capacity, "PK font name is too long");
     }
     char *path = resolve_file(engine, filename);
+    if (path == NULL) {
+        path = resolve_pk_with_kpsewhich(filename);
+    }
     if (path == NULL) {
         length = snprintf(filename, sizeof(filename), "%s.pk", font->name);
         if (length < 0 || (size_t)length >= sizeof(filename)) {

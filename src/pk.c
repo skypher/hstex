@@ -1,7 +1,7 @@
 #include "pk.h"
 
+#include <inttypes.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,13 +25,19 @@ struct pk_nybbles {
     size_t position;
 };
 
-static int pk_error(char *error, size_t capacity, const char *format, ...)
+static int pk_error(char *error, size_t capacity, const char *message)
 {
     if (error != NULL && capacity != 0U) {
-        va_list arguments;
-        va_start(arguments, format);
-        (void)vsnprintf(error, capacity, format, arguments);
-        va_end(arguments);
+        (void)snprintf(error, capacity, "%s", message);
+    }
+    return -1;
+}
+
+static int pk_error_unsigned(char *error, size_t capacity, const char *message,
+                             uint32_t value)
+{
+    if (error != NULL && capacity != 0U) {
+        (void)snprintf(error, capacity, "%s%" PRIu32, message, value);
     }
     return -1;
 }
@@ -372,8 +378,8 @@ static int pk_character(struct pk_reader *reader, uint8_t flag,
     if (character < 256U) {
         struct hstex_pk_glyph *glyph = &font->glyphs[character];
         if (glyph->present) {
-            return pk_error(error, error_capacity,
-                            "duplicate PK character %u", character);
+            return pk_error_unsigned(error, error_capacity,
+                                     "duplicate PK character ", character);
         }
         glyph->present = true;
         glyph->tfm_width = tfm_width;
@@ -474,8 +480,8 @@ int hstex_pk_parse(const uint8_t *bytes, size_t length,
             break;
         } else if (command != HSTEX_PK_NO_OP) {
             hstex_pk_destroy(font);
-            return pk_error(error, error_capacity,
-                            "undefined PK command %u", command);
+            return pk_error_unsigned(error, error_capacity,
+                                     "undefined PK command ", command);
         }
     }
     while (postamble && reader.position < reader.length) {
