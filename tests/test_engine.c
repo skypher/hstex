@@ -20453,6 +20453,104 @@ static size_t byte_sequence_count(const uint8_t *bytes, size_t byte_count,
     return count;
 }
 
+/* Bitmap advances are normalized by the serialized Type 3 matrix, while the
+   shared T1 ToUnicode resource records the encoding's scalar values.  The
+   reference observations are recorded in docs/DECISIONS.md under PK
+   bitmap-font embedding and PDF font Unicode maps. */
+static int test_pdf_font_metrics_and_unicode(void)
+{
+    const char source[] =
+        "\\pdfoutput=1 \\pdfcompresslevel=0 \\pdfobjcompresslevel=0 "
+        "\\pdfgentounicode=1 \\pdfpkresolution=600 "
+        "\\font\\bitmap=tcrm1000 \\font\\outline=ec-lmr10 "
+        "\\shipout\\hbox{\\bitmap\\char0\\char6\\char21"
+        "\\outline\\char127\\char149\\char181}\\end ";
+    static const char *const wanted[] = {
+        "/FontMatrix [.01204 0 0 .01204 0 0]",
+        "[41.52 0 0 0 0 0 62.28 0 0 0 0 0 0 0 0 0 0 0 0 0 0 55.36]",
+        "<7F> <002D>",
+        "<95> <0162>",
+        "<B5> <0163>",
+    };
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "PDF font probe preparation failed: %s\n",
+                      error);
+        (void)unlink(path);
+        return 1;
+    }
+    char directory[96];
+    (void)snprintf(directory, sizeof(directory), "%s-pdf-fonts", path);
+    int status = 0;
+    if (mkdir(directory, 0700) != 0 ||
+        hstex_engine_set_output_directory(&engine, directory, error,
+                                          sizeof(error)) != 0) {
+        status = 1;
+    }
+    FILE *sink = status == 0 ? tmpfile() : NULL;
+    if (sink != NULL) {
+        hstex_engine_set_message_stream(&engine, sink);
+    }
+    struct hstex_source_location last = {0};
+    if (status == 0 &&
+        hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
+        status = 1;
+    }
+    if (sink != NULL) {
+        (void)fclose(sink);
+    }
+
+    char written[256];
+    const char *name = strrchr(path, '/');
+    (void)snprintf(written, sizeof(written), "%s%s.pdf", directory,
+                   name == NULL ? path : name);
+    FILE *file = status == 0 ? fopen(written, "rb") : NULL;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (status == 0 && file == NULL) {
+        status = 1;
+    }
+    if (file != NULL) {
+        if (fseek(file, 0L, SEEK_END) != 0) {
+            status = 1;
+        } else {
+            long size = ftell(file);
+            if (size < 0L || fseek(file, 0L, SEEK_SET) != 0) {
+                status = 1;
+            } else {
+                count = (size_t)size;
+                bytes = malloc(count == 0U ? 1U : count);
+                if (bytes == NULL || fread(bytes, 1U, count, file) != count) {
+                    status = 1;
+                }
+            }
+        }
+        (void)fclose(file);
+    }
+    for (size_t index = 0U;
+         status == 0 && index < sizeof(wanted) / sizeof(wanted[0]); ++index) {
+        if (!byte_sequence_present(bytes, count, wanted[index])) {
+            (void)fprintf(stderr, "PDF font resource is missing: %s\n",
+                          wanted[index]);
+            status = 1;
+        }
+    }
+    if (status != 0) {
+        (void)fprintf(stderr, "PDF font resource probe failed: %s\n", error);
+    }
+    free(bytes);
+    hstex_engine_destroy(&engine);
+    (void)unlink(written);
+    (void)rmdir(directory);
+    (void)unlink(path);
+    return status;
+}
+
 static int test_structured_pdf_destination(void)
 {
     const char source[] =
@@ -24884,6 +24982,7 @@ int main(int argument_count, char **arguments)
         test_the_last_node_of_a_page() != 0 ||
         test_pdf_destinations() != 0 ||
         test_structured_pdf_destination() != 0 ||
+        test_pdf_font_metrics_and_unicode() != 0 ||
         test_shipout_pdf_literal() != 0 ||
         test_tracing_paragraphs() != 0 ||
         test_the_first_line_protrudes_too() != 0 ||

@@ -179,6 +179,17 @@ sequence, as well as direct numeric calls and the factored subroutine-4 form
 present in other corpus fonts, so dynamically selected hint subroutines stay
 in the embedded font.
 
+## PDF font Unicode maps
+
+A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the
+T1 encoding's code 127 to U+002D, codes 149 and 181 to U+0162 and U+0163, and
+writes those values in the affected `ec-lmr10` ToUnicode resource. The
+normalized extracted text is therefore a hyphen and the cedilla forms of
+uppercase and lowercase T, even when a newer glyph-name database associates
+the same glyph names with U+00AD or the comma-below forms U+021A and U+021B.
+HSTeX's shared T1 CMap records the observed encoding semantics directly; CMap
+object sharing and entry grouping do not alter those scalar mappings.
+
 PDF string syntax permits balanced parentheses inside a literal string. The
 default `PTEX.Fullbanner` therefore carries `(TeX Live 2023/Debian)` without
 escape bytes, matching the reference information dictionary.
@@ -200,6 +211,15 @@ one-bit image mask from the PK minimum bounding box, and the font matrix makes
 one bitmap pixel equal one device pixel at the configured resolution. Missing
 packets map to `.notdef`; unused codes between `FirstChar` and `LastChar` have
 zero widths.
+
+The same black-box comparison fixes the metric quantization. At 10pt and 600
+dpi, pdfTeX serializes a `.01204` font matrix and normalizes the TFM advances
+0.499878, 0.749817, and 0.666504 to Type 3 widths 41.52, 62.28, and 55.36. At
+300 dpi, the corresponding matrix and widths are `.02409` and 20.75, 31.13,
+and 27.67. Thus each width is divided by the already rounded five-decimal font
+matrix, rather than independently converted with an unrounded pixels-per-point
+ratio. HSTeX computes that matrix value once in integer arithmetic and uses it
+for both the font dictionary and every width and character procedure.
 
 The bitmap need not already exist in a user cache. If an ordinary lookup of
 the resolution-qualified name fails, HSTeX invokes `kpsewhich --mktex=pk` for

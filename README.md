@@ -16,7 +16,7 @@ already supported.
 | Engine | Independent C17 implementation; no pdfTeX fallback |
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
-| Adversarial corpus | Six pinned stress cases track unsupported or mismatching behavior and run non-strictly in CI |
+| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 2/6 currently agree and the suite runs non-strictly in CI |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and the strict public corpus |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract |
 | First release target | Linux x86-64 |
@@ -90,8 +90,8 @@ the semantic gates:
 tests/corpus/run-corpus.sh --strict ./build/hstex
 ```
 
-The adversarial suite deliberately includes documents that expose current
-incompatibilities. It records findings without failing CI:
+The adversarial suite deliberately includes hostile and interactive documents.
+It records remaining findings without failing CI:
 
 ```sh
 tests/corpus/run-corpus.sh --stress ./build/hstex
@@ -127,7 +127,8 @@ and PDF object assignment remains deterministic. See
 ## Current limits
 
 - The supported semantic surface is the one exercised by the release tests
-  and strict corpus. The stress manifest records known gaps.
+  and strict corpus. The stress manifest records adversarial coverage and
+  remaining gaps.
 - The first release target is Linux x86-64. CI also compiles selected Linux
   Arm, macOS, FreeBSD, and NetBSD configurations.
 - Image inclusion is outside the current strict corpus surface.

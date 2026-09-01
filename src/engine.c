@@ -26949,7 +26949,7 @@ static const char pdf_t1_shared_cmap[] =
     "<20> <2423>\n"
     "<27> <2019>\n"
     "<60> <2018>\n"
-    "<7F> <00AD>\n"
+    "<7F> <002D>\n"
     "<80> <0102>\n"
     "<81> <0104>\n"
     "<82> <0106>\n"
@@ -26973,7 +26973,7 @@ static const char pdf_t1_shared_cmap[] =
     "<92> <0160>\n"
     "<93> <015E>\n"
     "<94> <0164>\n"
-    "<95> <021A>\n"
+    "<95> <0162>\n"
     "<96> <0170>\n"
     "<97> <016E>\n"
     "<98> <0178>\n"
@@ -27005,7 +27005,7 @@ static const char pdf_t1_shared_cmap[] =
     "<B2> <0161>\n"
     "<B3> <015F>\n"
     "<B4> <0165>\n"
-    "<B5> <021B>\n"
+    "<B5> <0163>\n"
     "<B6> <0171>\n"
     "<B7> <016F>\n"
     "<B8> <00FF>\n"
@@ -27231,14 +27231,26 @@ static int pdf_write_font_widths(struct hstex_engine *engine,
                : 0;
 }
 
-static uint64_t pdf_greatest_common_divisor(uint64_t first, uint64_t second)
+static int pdf_type3_matrix_units(const struct hstex_font *font,
+                                  uint32_t resolution, uint64_t *units,
+                                  char *error, size_t error_capacity)
 {
-    while (second != 0U) {
-        uint64_t remainder = first % second;
-        first = second;
-        second = remainder;
+    if (font->size <= 0 || resolution == 0U) {
+        return set_error(error, error_capacity,
+                         "invalid Type 3 font scale");
     }
-    return first;
+    uint64_t numerator = UINT64_C(7227) * UINT64_C(65536) * UINT64_C(1000);
+    uint64_t denominator = (uint64_t)resolution * (uint64_t)font->size;
+    *units = numerator / denominator;
+    uint64_t remainder = numerator % denominator;
+    if (remainder > denominator / 2U) {
+        ++*units;
+    }
+    if (*units == 0U || *units > (uint64_t)INT64_MAX) {
+        return set_error(error, error_capacity,
+                         "invalid Type 3 font scale");
+    }
+    return 0;
 }
 
 static int pdf_type3_width_text(const struct hstex_font *font, size_t code,
@@ -27247,27 +27259,15 @@ static int pdf_type3_width_text(const struct hstex_font *font, size_t code,
 {
     int32_t width = packed_dimen(font->characters[code].width);
     bool negative = width < 0;
-    uint64_t factors[3] = {
-        (uint64_t)(negative ? -(int64_t)width : (int64_t)width),
-        (uint64_t)resolution,
-        UINT64_C(10000),
-    };
-    uint64_t denominator = UINT64_C(65536) * UINT64_C(7227);
-    for (size_t index = 0U; index < 3U; ++index) {
-        uint64_t divisor =
-            pdf_greatest_common_divisor(factors[index], denominator);
-        factors[index] /= divisor;
-        denominator /= divisor;
+    uint64_t matrix_units = 0U;
+    if (pdf_type3_matrix_units(font, resolution, &matrix_units, error,
+                               error_capacity) != 0) {
+        return -1;
     }
-    uint64_t numerator = 1U;
-    for (size_t index = 0U; index < 3U; ++index) {
-        if (factors[index] != 0U &&
-            numerator > (uint64_t)INT64_MAX / factors[index]) {
-            return set_error(error, error_capacity,
-                             "Type 3 font width is too large");
-        }
-        numerator *= factors[index];
-    }
+    uint64_t magnitude_width =
+        (uint64_t)(negative ? -(int64_t)width : (int64_t)width);
+    uint64_t numerator = magnitude_width * UINT64_C(10000000);
+    uint64_t denominator = (uint64_t)font->size * matrix_units;
     uint64_t magnitude = numerator / denominator;
     uint64_t remainder = numerator % denominator;
     if (remainder > (denominator - 1U) / 2U) {
@@ -27286,20 +27286,10 @@ static int pdf_type3_matrix_text(const struct hstex_font *font,
                                  uint32_t resolution, char text[64],
                                  char *error, size_t error_capacity)
 {
-    if (font->size <= 0 || resolution == 0U) {
-        return set_error(error, error_capacity,
-                         "invalid Type 3 font scale");
-    }
-    uint64_t numerator = UINT64_C(7227) * UINT64_C(65536) * UINT64_C(1000);
-    uint64_t denominator = (uint64_t)resolution * (uint64_t)font->size;
-    uint64_t units = numerator / denominator;
-    uint64_t remainder = numerator % denominator;
-    if (remainder > denominator / 2U) {
-        ++units;
-    }
-    if (units > (uint64_t)INT64_MAX) {
-        return set_error(error, error_capacity,
-                         "invalid Type 3 font scale");
+    uint64_t units = 0U;
+    if (pdf_type3_matrix_units(font, resolution, &units, error,
+                               error_capacity) != 0) {
+        return -1;
     }
     (void)pdf_format_units(text, 64U, (int64_t)units, 5);
     if (text[0] == '0' && text[1] == '.') {

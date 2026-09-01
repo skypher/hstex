@@ -50,11 +50,11 @@ None is engine source, and none is read for anything but its own text.
 
 ## The adversarial stress documents
 
-| Document | Format | What it targets | Current differential finding |
+| Document | Format | What it targets | Current result |
 |---|---|---|---|
-| `clsguide-historic` | LaTeX | A 35-page class/package writer guide and nested `tabular` | HSTeX emits four brace faults absent from the reference |
+| `clsguide-historic` | LaTeX | A 35-page class/package writer guide and nested `tabular` | All comparison gates agree across 35 pages |
 | `anc-test.ltx` | LaTeX | Fifteen pages of Ancient Greek transliteration, accents, and expected hyphen breaks | Page and box counts match; HSTeX emits 15 faults to the reference's 2 |
-| `encguide` | LaTeX | Font encodings, unusual alphabets, large tables, and error recovery | HSTeX stops at a vertical-list `\cr` after 27 of the reference's 29 pages |
+| `encguide` | LaTeX | Font encodings, unusual alphabets, large tables, and error recovery | All comparison gates agree across 29 pages |
 | `grfguide` | LaTeX | Color, graphics, file creation, EPS inclusion, and driver errors | Page and box counts match; the fault sets do not |
 | `testpage` | LaTeX | Interactive `\typein`, printer geometry, and a two-sided branch | Scripted `letterpaper`/`n` answers produce one reference page and two HSTeX pages |
 | `testfont` | plain | Terminal `\read`, dynamic font selection, and a large glyph exercise | The reference emits a one-page DVI; HSTeX stops at the terminal-read boundary |
