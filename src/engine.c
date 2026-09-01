@@ -937,6 +937,7 @@ static int reserve_hyphen_exceptions(struct hstex_engine *engine,
 static char *resolve_with_kpsewhich(const char *filename);
 static char *resolve_pk_with_kpsewhich(const char *filename);
 static char *resolve_file(struct hstex_engine *engine, const char *filename);
+static void destroy_virtual_font(struct hstex_virtual_font *font);
 
 static uint16_t read_big_endian_u16(const uint8_t *bytes)
 {
@@ -3523,6 +3524,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         free(engine->token_lists[index].tokens);
     }
     for (size_t index = 0U; index < engine->font_count; ++index) {
+        destroy_virtual_font(engine->fonts[index].virtual_font);
         free(engine->fonts[index].name);
         free(engine->fonts[index].pdf_attribute);
         free(engine->fonts[index].dimens);
@@ -19890,7 +19892,9 @@ static size_t dvi_movement_width(int32_t value)
 #define HSTEX_DVI_SET_CHAR 0
 #define HSTEX_DVI_SET1 128
 #define HSTEX_DVI_SET_RULE 132
+#define HSTEX_DVI_PUT1 133
 #define HSTEX_DVI_PUT_RULE 137
+#define HSTEX_DVI_NOP 138
 #define HSTEX_DVI_BOP 139
 #define HSTEX_DVI_EOP 140
 #define HSTEX_DVI_PUSH 141
@@ -21714,6 +21718,407 @@ static bool pdf_font_suffix(const char *name, const char *suffix)
            strcmp(name + name_length - suffix_length, suffix) == 0;
 }
 
+enum hstex_virtual_state {
+    HSTEX_VIRTUAL_UNCHECKED = 0,
+    HSTEX_VIRTUAL_PHYSICAL,
+    HSTEX_VIRTUAL_LOADING,
+    HSTEX_VIRTUAL_LOADED,
+};
+
+enum {
+    HSTEX_VF_ID = 202,
+    HSTEX_VF_LONG_CHAR = 242,
+    HSTEX_VF_MAX_RECURSION = 64,
+    HSTEX_VF_MAX_STACK = 64,
+};
+
+struct hstex_virtual_packet {
+    size_t start;
+    size_t length;
+    bool present;
+};
+
+struct hstex_virtual_subfont {
+    int32_t number;
+    uint32_t identifier;
+};
+
+struct hstex_virtual_font {
+    uint8_t *bytes;
+    size_t byte_count;
+    struct hstex_virtual_subfont *subfonts;
+    size_t subfont_count;
+    uint32_t checksum;
+    int32_t design_size;
+    struct hstex_virtual_packet packets[HSTEX_FONT_CHARACTER_COUNT];
+};
+
+struct hstex_vf_reader {
+    const uint8_t *bytes;
+    size_t length;
+    size_t at;
+    const char *name;
+};
+
+static void destroy_virtual_font(struct hstex_virtual_font *font)
+{
+    if (font == NULL) {
+        return;
+    }
+    free(font->bytes);
+    free(font->subfonts);
+    free(font);
+}
+
+static int vf_take_unsigned(struct hstex_vf_reader *reader, size_t width,
+                            uint32_t *value, char *error,
+                            size_t error_capacity)
+{
+    if (reader->at > reader->length || width == 0U || width > 4U ||
+        width > reader->length - reader->at) {
+        return set_error(error, error_capacity,
+                         "truncated virtual font file: %s", reader->name);
+    }
+    uint32_t found = 0U;
+    for (size_t index = 0U; index < width; ++index) {
+        found = (found << 8U) | reader->bytes[reader->at++];
+    }
+    *value = found;
+    return 0;
+}
+
+static int vf_take_signed(struct hstex_vf_reader *reader, size_t width,
+                          int32_t *value, char *error,
+                          size_t error_capacity)
+{
+    uint32_t found = 0U;
+    if (vf_take_unsigned(reader, width, &found, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (width < 4U &&
+        (found & (UINT32_C(1) << (unsigned int)(width * 8U - 1U))) != 0U) {
+        found |= UINT32_MAX << (unsigned int)(width * 8U);
+    }
+    *value = (int32_t)found;
+    return 0;
+}
+
+static int vf_skip(struct hstex_vf_reader *reader, size_t count, char *error,
+                   size_t error_capacity)
+{
+    if (reader->at > reader->length || count > reader->length - reader->at) {
+        return set_error(error, error_capacity,
+                         "truncated virtual font file: %s", reader->name);
+    }
+    reader->at += count;
+    return 0;
+}
+
+static char *vf_filename(const char *name, char *error, size_t error_capacity)
+{
+    size_t length = strlen(name);
+    bool has_vf = length >= 3U && strcmp(name + length - 3U, ".vf") == 0;
+    bool has_tfm = length >= 4U && strcmp(name + length - 4U, ".tfm") == 0;
+    size_t stem = has_tfm ? length - 4U : length;
+    size_t suffix = has_vf ? 0U : 3U;
+    if (stem > SIZE_MAX - suffix - 1U) {
+        (void)set_error(error, error_capacity,
+                        "virtual font filename is too long");
+        return NULL;
+    }
+    char *filename = malloc(stem + suffix + 1U);
+    if (filename == NULL) {
+        (void)set_error(error, error_capacity,
+                        "virtual font filename allocation failed");
+        return NULL;
+    }
+    memcpy(filename, name, stem);
+    if (!has_vf) {
+        memcpy(filename + stem, ".vf", 4U);
+    } else {
+        filename[stem] = '\0';
+    }
+    return filename;
+}
+
+static int vf_append_subfont(struct hstex_virtual_font *virtual_font,
+                             int32_t number, uint32_t identifier, char *error,
+                             size_t error_capacity)
+{
+    for (size_t index = 0U; index < virtual_font->subfont_count; ++index) {
+        if (virtual_font->subfonts[index].number == number) {
+            return set_error(error, error_capacity,
+                             "duplicate virtual-font local number %" PRId32,
+                             number);
+        }
+    }
+    if (virtual_font->subfont_count >=
+        SIZE_MAX / sizeof(*virtual_font->subfonts)) {
+        return set_error(error, error_capacity,
+                         "too many virtual-font subfonts");
+    }
+    size_t count = virtual_font->subfont_count + 1U;
+    struct hstex_virtual_subfont *grown =
+        realloc(virtual_font->subfonts, count * sizeof(*grown));
+    if (grown == NULL) {
+        return set_error(error, error_capacity,
+                         "virtual-font subfont allocation failed");
+    }
+    virtual_font->subfonts = grown;
+    virtual_font->subfonts[virtual_font->subfont_count].number = number;
+    virtual_font->subfonts[virtual_font->subfont_count].identifier = identifier;
+    virtual_font->subfont_count = count;
+    return 0;
+}
+
+static int vf_read_subfont(struct hstex_engine *engine,
+                           struct hstex_virtual_font *virtual_font,
+                           struct hstex_vf_reader *reader, uint8_t command,
+                           int32_t virtual_size, char *error,
+                           size_t error_capacity)
+{
+    size_t number_width = (size_t)(command - HSTEX_DVI_FNT_DEF1) + 1U;
+    uint32_t number_bits = 0U;
+    uint32_t checksum = 0U;
+    int32_t scaled_size = 0;
+    int32_t design_size = 0;
+    uint32_t area_length = 0U;
+    uint32_t name_length = 0U;
+    if (vf_take_unsigned(reader, number_width, &number_bits, error,
+                         error_capacity) != 0 ||
+        vf_take_unsigned(reader, 4U, &checksum, error, error_capacity) != 0 ||
+        vf_take_signed(reader, 4U, &scaled_size, error, error_capacity) != 0 ||
+        vf_take_signed(reader, 4U, &design_size, error, error_capacity) != 0 ||
+        vf_take_unsigned(reader, 1U, &area_length, error, error_capacity) != 0 ||
+        vf_take_unsigned(reader, 1U, &name_length, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (scaled_size <= 0 || scaled_size >= (INT32_C(1) << 24)) {
+        return set_error(error, error_capacity,
+                         "invalid mapped-font size in %s", reader->name);
+    }
+    size_t total = (size_t)area_length + (size_t)name_length;
+    if (total == 0U || total > reader->length - reader->at ||
+        memchr(reader->bytes + reader->at, 0, total) != NULL) {
+        return set_error(error, error_capacity,
+                         "invalid mapped-font name in %s", reader->name);
+    }
+    char *name = strndup((const char *)reader->bytes + reader->at, total);
+    if (name == NULL) {
+        return set_error(error, error_capacity,
+                         "virtual-font name allocation failed");
+    }
+    reader->at += total;
+    int32_t size = scale_fix_word(scaled_size, virtual_size);
+    uint32_t identifier = 0U;
+    int status = size <= 0
+                     ? set_error(error, error_capacity,
+                                 "invalid mapped-font size in %s",
+                                 reader->name)
+                     : find_or_create_font(engine, name, size, &identifier,
+                                           error, error_capacity);
+    free(name);
+    if (status != 0) {
+        return -1;
+    }
+    int32_t number = number_width == 4U ? (int32_t)number_bits
+                                        : (int32_t)(uint32_t)number_bits;
+    (void)checksum;
+    (void)design_size;
+    return vf_append_subfont(virtual_font, number, identifier, error,
+                             error_capacity);
+}
+
+static int parse_virtual_font(struct hstex_engine *engine,
+                              struct hstex_virtual_font *virtual_font,
+                              const char *name, int32_t size, char *error,
+                              size_t error_capacity)
+{
+    struct hstex_vf_reader reader = {
+        .bytes = virtual_font->bytes,
+        .length = virtual_font->byte_count,
+        .name = name,
+    };
+    uint32_t command = 0U;
+    uint32_t identifier = 0U;
+    uint32_t comment_length = 0U;
+    uint32_t design = 0U;
+    if (vf_take_unsigned(&reader, 1U, &command, error, error_capacity) != 0) {
+        return -1;
+    }
+    if (command != HSTEX_DVI_PRE) {
+        return set_error(error, error_capacity,
+                         "invalid virtual-font preamble: %s", name);
+    }
+    if (vf_take_unsigned(&reader, 1U, &identifier, error, error_capacity) !=
+        0) {
+        return -1;
+    }
+    if (identifier != HSTEX_VF_ID) {
+        return set_error(error, error_capacity,
+                         "unsupported virtual-font version in %s", name);
+    }
+    if (vf_take_unsigned(&reader, 1U, &comment_length, error,
+                         error_capacity) != 0 ||
+        vf_skip(&reader, (size_t)comment_length, error, error_capacity) != 0 ||
+        vf_take_unsigned(&reader, 4U, &virtual_font->checksum, error,
+                         error_capacity) != 0 ||
+        vf_take_unsigned(&reader, 4U, &design, error, error_capacity) != 0) {
+        return -1;
+    }
+    virtual_font->design_size = (int32_t)design;
+    bool packets_started = false;
+    bool postamble = false;
+    while (reader.at < reader.length) {
+        if (vf_take_unsigned(&reader, 1U, &command, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        if (command == HSTEX_DVI_POST) {
+            postamble = true;
+            break;
+        }
+        if (command >= HSTEX_DVI_FNT_DEF1 &&
+            command < HSTEX_DVI_PRE) {
+            if (packets_started) {
+                return set_error(error, error_capacity,
+                                 "font definition follows a packet in %s",
+                                 name);
+            }
+            if (vf_read_subfont(engine, virtual_font, &reader,
+                                (uint8_t)command, size, error,
+                                error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command > HSTEX_VF_LONG_CHAR) {
+            return set_error(error, error_capacity,
+                             "invalid virtual-font command %u in %s",
+                             (unsigned int)command, name);
+        }
+        packets_started = true;
+        uint32_t packet_length = command;
+        uint32_t character = 0U;
+        uint32_t tfm_width = 0U;
+        if (command == HSTEX_VF_LONG_CHAR) {
+            if (vf_take_unsigned(&reader, 4U, &packet_length, error,
+                                 error_capacity) != 0 ||
+                vf_take_unsigned(&reader, 4U, &character, error,
+                                 error_capacity) != 0 ||
+                vf_take_unsigned(&reader, 4U, &tfm_width, error,
+                                 error_capacity) != 0) {
+                return -1;
+            }
+        } else if (vf_take_unsigned(&reader, 1U, &character, error,
+                                    error_capacity) != 0 ||
+                   vf_take_unsigned(&reader, 3U, &tfm_width, error,
+                                    error_capacity) != 0) {
+            return -1;
+        }
+        if (character >= HSTEX_FONT_CHARACTER_COUNT ||
+            (size_t)packet_length > reader.length - reader.at) {
+            return set_error(error, error_capacity,
+                             "invalid character packet in %s", name);
+        }
+        struct hstex_virtual_packet *packet =
+            &virtual_font->packets[character];
+        packet->start = reader.at;
+        packet->length = (size_t)packet_length;
+        packet->present = true;
+        reader.at += (size_t)packet_length;
+        (void)tfm_width;
+    }
+    if (!postamble) {
+        return set_error(error, error_capacity,
+                         "virtual font has no postamble: %s", name);
+    }
+    while (reader.at < reader.length) {
+        if (reader.bytes[reader.at++] != HSTEX_DVI_POST) {
+            return set_error(error, error_capacity,
+                             "junk follows virtual-font postamble: %s", name);
+        }
+    }
+    return 0;
+}
+
+static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
+                             char *error, size_t error_capacity)
+{
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid virtual font");
+    }
+    if (font->virtual_state == HSTEX_VIRTUAL_PHYSICAL ||
+        font->virtual_state == HSTEX_VIRTUAL_LOADED) {
+        return 0;
+    }
+    if (font->virtual_state == HSTEX_VIRTUAL_LOADING) {
+        return set_error(error, error_capacity,
+                         "recursive virtual-font loading: %s", font->name);
+    }
+    char *name = strdup(font->name);
+    int32_t size = font->size;
+    if (name == NULL) {
+        return set_error(error, error_capacity,
+                         "virtual-font name allocation failed");
+    }
+    font->virtual_state = HSTEX_VIRTUAL_LOADING;
+    char *filename = vf_filename(name, error, error_capacity);
+    if (filename == NULL) {
+        font->virtual_state = HSTEX_VIRTUAL_UNCHECKED;
+        free(name);
+        return -1;
+    }
+    bool local = access(filename, R_OK) == 0;
+    char *path = local ? strdup(filename) : resolve_file(engine, filename);
+    free(filename);
+    if (local && path == NULL) {
+        font->virtual_state = HSTEX_VIRTUAL_UNCHECKED;
+        free(name);
+        return set_error(error, error_capacity,
+                         "virtual-font path allocation failed");
+    }
+    if (path == NULL) {
+        font = font_by_identifier(engine, identifier);
+        if (font != NULL) {
+            font->virtual_state = HSTEX_VIRTUAL_PHYSICAL;
+        }
+        free(name);
+        return 0;
+    }
+    struct hstex_virtual_font *virtual_font =
+        calloc(1U, sizeof(*virtual_font));
+    int status = virtual_font == NULL
+                     ? set_error(error, error_capacity,
+                                 "virtual-font allocation failed")
+                     : read_whole_path(path, &virtual_font->bytes,
+                                       &virtual_font->byte_count, error,
+                                       error_capacity);
+    free(path);
+    if (status == 0) {
+        status = parse_virtual_font(engine, virtual_font, name, size, error,
+                                    error_capacity);
+    }
+    font = font_by_identifier(engine, identifier);
+    if (status == 0 && font != NULL) {
+        font->virtual_font = virtual_font;
+        font->virtual_state = HSTEX_VIRTUAL_LOADED;
+    } else {
+        destroy_virtual_font(virtual_font);
+        if (font != NULL) {
+            font->virtual_font = NULL;
+            font->virtual_state = HSTEX_VIRTUAL_UNCHECKED;
+        }
+        if (status == 0) {
+            status = set_error(error, error_capacity,
+                               "virtual font disappeared while loading");
+        }
+    }
+    free(name);
+    return status;
+}
+
 static int pdf_load_font_map(struct hstex_engine *engine, char *error,
                              size_t error_capacity)
 {
@@ -22399,6 +22804,64 @@ static const char *pdf_type1_line_end(const char *line, const char *finish)
     return end == NULL ? finish : end;
 }
 
+static const char *pdf_type1_encoding_finish(const char *encoding,
+                                              const char *eexec)
+{
+    if (encoding >= eexec) {
+        return NULL;
+    }
+    static const char readonly_finish[] = "readonly def\n";
+    const char *finish = strstr(encoding, readonly_finish);
+    if (finish != NULL && finish < eexec) {
+        return finish + sizeof(readonly_finish) - 1U;
+    }
+
+    const char *line_end = memchr(encoding, '\n', (size_t)(eexec - encoding));
+    if (line_end == NULL) {
+        return NULL;
+    }
+    const char *token_end = line_end;
+    if (token_end > encoding && token_end[-1] == '\r') {
+        --token_end;
+    }
+    while (token_end > encoding &&
+           (token_end[-1] == ' ' || token_end[-1] == '\t')) {
+        --token_end;
+    }
+    static const char direct_finish[] = " def";
+    return (size_t)(token_end - encoding) >= sizeof(direct_finish) - 1U &&
+                   memcmp(token_end - (sizeof(direct_finish) - 1U),
+                          direct_finish, sizeof(direct_finish) - 1U) == 0
+               ? line_end + 1
+               : NULL;
+}
+
+static const char *pdf_type1_entry_finish(const char *start,
+                                          const char *limit,
+                                          bool subroutine)
+{
+    const char *spaced =
+        strstr(start, subroutine ? "\n\t} NP\n" : "\n\t} ND\n");
+    const char *compact =
+        strstr(start, subroutine ? "\n\t}NP\n" : "\n\t}ND\n");
+    if (spaced == NULL || spaced >= limit) {
+        spaced = NULL;
+    }
+    if (compact == NULL || compact >= limit) {
+        compact = NULL;
+    }
+    const char *finish =
+        spaced == NULL || (compact != NULL && compact < spaced) ? compact
+                                                                : spaced;
+    if (finish == NULL) {
+        return NULL;
+    }
+    return finish +
+           strlen(finish == compact
+                      ? (subroutine ? "\n\t}NP\n" : "\n\t}ND\n")
+                      : (subroutine ? "\n\t} NP\n" : "\n\t} ND\n"));
+}
+
 static bool pdf_type1_line_starts(const char *line, const char *end,
                                   const char *text)
 {
@@ -22941,7 +23404,7 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
         return set_error(error, error_capacity,
                          "unsupported Type 1 font structure");
     }
-    const char *encoding_end = strstr(encoding, "readonly def\n");
+    const char *encoding_end = pdf_type1_encoding_finish(encoding, eexec);
     const char *subrs_header_end = strchr(subrs, '\n');
     const char *charstrings_header_end = strchr(charstrings, '\n');
     const char *charstrings_finish = strstr(charstrings, "\nend end");
@@ -22964,8 +23427,8 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
         charstrings_finish == NULL
             ? NULL
             : strstr(charstrings_finish, "mark currentfile closefile\n");
-    if (encoding_end == NULL || encoding_end >= eexec ||
-        subrs_header_end == NULL || charstrings_header_end == NULL ||
+    if (encoding_end == NULL || subrs_header_end == NULL ||
+        charstrings_header_end == NULL ||
         charstrings_finish == NULL || subrs_tail == NULL ||
         private_finish == NULL) {
         return set_error(error, error_capacity,
@@ -22973,7 +23436,6 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     }
     ++charstrings_finish;
     private_finish += strlen("mark currentfile closefile\n");
-    encoding_end += strlen("readonly def\n");
     char *number_end = NULL;
     unsigned long subr_count_value =
         strtoul(subrs + strlen("/Subrs "), &number_end, 10);
@@ -22999,14 +23461,14 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
         if ((size_t)(line_end - at) > 4U && memcmp(at, "dup ", 4U) == 0) {
             char *parsed_end = NULL;
             unsigned long index = strtoul(at + 4U, &parsed_end, 10);
-            const char *entry_end = strstr(at, "\n\t} NP\n");
-            if (entry_end == NULL || entry_end >= charstrings) {
+            const char *entry_end =
+                pdf_type1_entry_finish(at, charstrings, true);
+            if (entry_end == NULL) {
                 free(subr_spans);
                 free(subr_used);
                 return set_error(error, error_capacity,
                                  "invalid Type 1 subroutine");
             }
-            entry_end += strlen("\n\t} NP\n");
             if (parsed_end != at + 4U && index < subr_count) {
                 subr_spans[index].start = at;
                 subr_spans[index].finish = entry_end;
@@ -23033,14 +23495,14 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
         while (name_end < line_end && *name_end != ' ' && *name_end != '{') {
             ++name_end;
         }
-        const char *entry_end = strstr(glyph_at, "\n\t} ND\n");
-        if (entry_end == NULL || entry_end > charstrings_finish) {
+        const char *entry_end =
+            pdf_type1_entry_finish(glyph_at, charstrings_finish, false);
+        if (entry_end == NULL) {
             free(subr_spans);
             free(subr_used);
             return set_error(error, error_capacity,
                              "invalid Type 1 character string");
         }
-        entry_end += strlen("\n\t} ND\n");
         if (pdf_type1_glyph_selected(font, glyph_at + 1,
                                      (size_t)(name_end - glyph_at - 1))) {
             ++selected_count;
@@ -23135,13 +23597,13 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
         while (name_end < line_end && *name_end != ' ' && *name_end != '{') {
             ++name_end;
         }
-        const char *entry_end = strstr(glyph_at, "\n\t} ND\n");
-        if (entry_end == NULL || entry_end > charstrings_finish) {
+        const char *entry_end =
+            pdf_type1_entry_finish(glyph_at, charstrings_finish, false);
+        if (entry_end == NULL) {
             status = set_error(error, error_capacity,
                                "invalid Type 1 character string");
             break;
         }
-        entry_end += strlen("\n\t} ND\n");
         if (pdf_type1_glyph_selected(font, glyph_at + 1,
                                      (size_t)(name_end - glyph_at - 1))) {
             status = pdf_type1_append_entry(
@@ -23644,9 +24106,10 @@ static bool pdf_step_names_a_place(const struct hstex_engine *engine,
     return (amount < 0 ? -amount : amount) >= INT64_C(473628672);
 }
 
-static int pdf_place_character(struct hstex_engine *engine,
-                               const struct hstex_node *node, int32_t h,
-                               int32_t v, char *error, size_t error_capacity)
+static int pdf_place_physical_character(struct hstex_engine *engine,
+                                        const struct hstex_node *node,
+                                        int32_t h, int32_t v, char *error,
+                                        size_t error_capacity)
 {
     uint32_t identifier = node->value.character.font;
     const struct hstex_font *font = font_by_identifier(engine, identifier);
@@ -23879,6 +24342,390 @@ static int pdf_place_rule(struct hstex_engine *engine, int32_t left,
         return -1;
     }
     return 0;
+}
+
+struct hstex_vf_position {
+    int32_t h;
+    int32_t v;
+    int32_t w;
+    int32_t x;
+    int32_t y;
+    int32_t z;
+};
+
+static uint32_t vf_subfont_identifier(const struct hstex_virtual_font *font,
+                                      int32_t number)
+{
+    for (size_t index = 0U; index < font->subfont_count; ++index) {
+        if (font->subfonts[index].number == number) {
+            return font->subfonts[index].identifier;
+        }
+    }
+    return 0U;
+}
+
+static int vf_position_sum(int32_t first, int32_t second, int32_t *result,
+                           const char *font, char *error,
+                           size_t error_capacity)
+{
+    int64_t sum = (int64_t)first + second;
+    if (sum < INT32_MIN || sum > INT32_MAX) {
+        return set_error(error, error_capacity,
+                         "virtual-font position overflow in %s", font);
+    }
+    *result = (int32_t)sum;
+    return 0;
+}
+
+static int vf_move(int32_t *position, int32_t amount, const char *font,
+                   char *error, size_t error_capacity)
+{
+    int32_t moved = 0;
+    if (vf_position_sum(*position, amount, &moved, font, error,
+                        error_capacity) != 0) {
+        return -1;
+    }
+    *position = moved;
+    return 0;
+}
+
+static int vf_scaled_parameter(struct hstex_vf_reader *reader, size_t width,
+                               int32_t font_size, int32_t *value, char *error,
+                               size_t error_capacity)
+{
+    int32_t raw = 0;
+    if (vf_take_signed(reader, width, &raw, error, error_capacity) != 0) {
+        return -1;
+    }
+    *value = scale_fix_word(raw, font_size);
+    return 0;
+}
+
+static int pdf_place_character_depth(struct hstex_engine *engine,
+                                     const struct hstex_node *node, int32_t h,
+                                     int32_t v, unsigned int depth, char *error,
+                                     size_t error_capacity);
+
+static int pdf_place_vf_subcharacter(
+    struct hstex_engine *engine, uint32_t identifier, uint32_t code,
+    bool advance, struct hstex_vf_position *position, int32_t origin_h,
+    int32_t origin_v, unsigned int depth, const char *virtual_name, char *error,
+    size_t error_capacity)
+{
+    if (code >= HSTEX_FONT_CHARACTER_COUNT) {
+        return set_error(error, error_capacity,
+                         "virtual font %s selects character %u",
+                         virtual_name, (unsigned int)code);
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL || font->characters == NULL) {
+        return set_error(error, error_capacity,
+                         "virtual font %s selects an invalid subfont",
+                         virtual_name);
+    }
+    int32_t width = packed_dimen(font->characters[code].width);
+    int32_t h = 0;
+    int32_t v = 0;
+    if (vf_position_sum(origin_h, position->h, &h, virtual_name, error,
+                        error_capacity) != 0 ||
+        vf_position_sum(origin_v, position->v, &v, virtual_name, error,
+                        error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node child = {
+        .kind = HSTEX_NODE_CHARACTER,
+        .width = width,
+        .value.character = {.font = identifier, .character = code},
+    };
+    if (pdf_place_character_depth(engine, &child, h, v, depth, error,
+                                  error_capacity) != 0) {
+        return -1;
+    }
+    return advance ? vf_move(&position->h, width, virtual_name, error,
+                             error_capacity)
+                   : 0;
+}
+
+static int pdf_execute_virtual_packet(
+    struct hstex_engine *engine, uint32_t identifier,
+    const struct hstex_virtual_font *virtual_font,
+    const struct hstex_virtual_packet *packet, int32_t origin_h,
+    int32_t origin_v, unsigned int depth, char *error, size_t error_capacity)
+{
+    const struct hstex_font *logical = font_by_identifier(engine, identifier);
+    if (logical == NULL || packet->start > virtual_font->byte_count ||
+        packet->length > virtual_font->byte_count - packet->start) {
+        return set_error(error, error_capacity,
+                         "invalid virtual-font packet");
+    }
+    const char *name = logical->name;
+    int32_t font_size = logical->size;
+    struct hstex_vf_reader reader = {
+        .bytes = virtual_font->bytes + packet->start,
+        .length = packet->length,
+        .name = name,
+    };
+    struct hstex_vf_position position = {0};
+    struct hstex_vf_position stack[HSTEX_VF_MAX_STACK];
+    size_t stack_depth = 0U;
+    uint32_t current = virtual_font->subfont_count == 0U
+                           ? 0U
+                           : virtual_font->subfonts[0].identifier;
+    while (reader.at < reader.length) {
+        uint32_t command = 0U;
+        if (vf_take_unsigned(&reader, 1U, &command, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        if (command <= 127U) {
+            if (current == 0U) {
+                return set_error(error, error_capacity,
+                                 "virtual font %s has no current subfont",
+                                 name);
+            }
+            if (pdf_place_vf_subcharacter(
+                    engine, current, command, true, &position, origin_h,
+                    origin_v, depth + 1U, name, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_SET1 && command < HSTEX_DVI_SET_RULE) {
+            uint32_t code = 0U;
+            if (vf_take_unsigned(&reader,
+                                 (size_t)(command - HSTEX_DVI_SET1) + 1U,
+                                 &code, error, error_capacity) != 0) {
+                return -1;
+            }
+            if (current == 0U) {
+                return set_error(error, error_capacity,
+                                 "virtual font %s has no current subfont",
+                                 name);
+            }
+            if (pdf_place_vf_subcharacter(
+                    engine, current, code, true, &position, origin_h, origin_v,
+                    depth + 1U, name, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command == HSTEX_DVI_SET_RULE ||
+            command == HSTEX_DVI_PUT_RULE) {
+            int32_t height = 0;
+            int32_t width = 0;
+            int32_t left = 0;
+            int32_t bottom = 0;
+            if (vf_scaled_parameter(&reader, 4U, font_size, &height, error,
+                                    error_capacity) != 0 ||
+                vf_scaled_parameter(&reader, 4U, font_size, &width, error,
+                                    error_capacity) != 0 ||
+                vf_position_sum(origin_h, position.h, &left, name, error,
+                                error_capacity) != 0 ||
+                vf_position_sum(origin_v, position.v, &bottom, name, error,
+                                error_capacity) != 0 ||
+                pdf_place_rule(engine, left, bottom, width, height, error,
+                               error_capacity) != 0 ||
+                (command == HSTEX_DVI_SET_RULE &&
+                 vf_move(&position.h, width, name, error, error_capacity) !=
+                     0)) {
+                return -1;
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_PUT1 &&
+            command < HSTEX_DVI_PUT_RULE) {
+            uint32_t code = 0U;
+            if (vf_take_unsigned(&reader,
+                                 (size_t)(command - HSTEX_DVI_PUT1) + 1U, &code,
+                                 error, error_capacity) != 0) {
+                return -1;
+            }
+            if (current == 0U) {
+                return set_error(error, error_capacity,
+                                 "virtual font %s has no current subfont",
+                                 name);
+            }
+            if (pdf_place_vf_subcharacter(
+                    engine, current, code, false, &position, origin_h,
+                    origin_v, depth + 1U, name, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command == HSTEX_DVI_NOP) {
+            continue;
+        }
+        if (command == HSTEX_DVI_PUSH) {
+            if (stack_depth == HSTEX_VF_MAX_STACK) {
+                return set_error(error, error_capacity,
+                                 "virtual-font stack overflow in %s", name);
+            }
+            stack[stack_depth++] = position;
+            continue;
+        }
+        if (command == HSTEX_DVI_POP) {
+            if (stack_depth == 0U) {
+                return set_error(error, error_capacity,
+                                 "virtual-font stack underflow in %s", name);
+            }
+            position = stack[--stack_depth];
+            continue;
+        }
+        if (command >= HSTEX_DVI_RIGHT1 && command < HSTEX_DVI_W0) {
+            int32_t amount = 0;
+            if (vf_scaled_parameter(&reader,
+                                    (size_t)(command - HSTEX_DVI_RIGHT1) + 1U,
+                                    font_size, &amount, error,
+                                    error_capacity) != 0 ||
+                vf_move(&position.h, amount, name, error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command == HSTEX_DVI_W0 || command == HSTEX_DVI_X0) {
+            int32_t amount = command == HSTEX_DVI_W0 ? position.w : position.x;
+            if (vf_move(&position.h, amount, name, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        if ((command > HSTEX_DVI_W0 && command < HSTEX_DVI_X0) ||
+            (command > HSTEX_DVI_X0 && command < HSTEX_DVI_DOWN1)) {
+            uint8_t first = command < HSTEX_DVI_X0 ? HSTEX_DVI_W1
+                                                   : HSTEX_DVI_X1;
+            int32_t *slot = command < HSTEX_DVI_X0 ? &position.w : &position.x;
+            if (vf_scaled_parameter(&reader, (size_t)(command - first) + 1U,
+                                    font_size, slot, error, error_capacity) !=
+                    0 ||
+                vf_move(&position.h, *slot, name, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_DOWN1 && command < HSTEX_DVI_Y0) {
+            int32_t amount = 0;
+            if (vf_scaled_parameter(&reader,
+                                    (size_t)(command - HSTEX_DVI_DOWN1) + 1U,
+                                    font_size, &amount, error,
+                                    error_capacity) != 0 ||
+                vf_move(&position.v, amount, name, error, error_capacity) !=
+                    0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command == HSTEX_DVI_Y0 || command == HSTEX_DVI_Z0) {
+            int32_t amount = command == HSTEX_DVI_Y0 ? position.y : position.z;
+            if (vf_move(&position.v, amount, name, error, error_capacity) !=
+                0) {
+                return -1;
+            }
+            continue;
+        }
+        if ((command > HSTEX_DVI_Y0 && command < HSTEX_DVI_Z0) ||
+            (command > HSTEX_DVI_Z0 && command < HSTEX_DVI_FNT_NUM_0)) {
+            uint8_t first = command < HSTEX_DVI_Z0 ? HSTEX_DVI_Y1
+                                                   : HSTEX_DVI_Z1;
+            int32_t *slot = command < HSTEX_DVI_Z0 ? &position.y : &position.z;
+            if (vf_scaled_parameter(&reader, (size_t)(command - first) + 1U,
+                                    font_size, slot, error, error_capacity) !=
+                    0 ||
+                vf_move(&position.v, *slot, name, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_FNT_NUM_0 && command < HSTEX_DVI_FNT1) {
+            int32_t number = (int32_t)(command - HSTEX_DVI_FNT_NUM_0);
+            current = vf_subfont_identifier(virtual_font, number);
+            if (current == 0U) {
+                return set_error(error, error_capacity,
+                                 "undefined virtual-font local number %" PRId32
+                                 " in %s",
+                                 number, name);
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_FNT1 && command < HSTEX_DVI_XXX1) {
+            size_t width = (size_t)(command - HSTEX_DVI_FNT1) + 1U;
+            uint32_t bits = 0U;
+            if (vf_take_unsigned(&reader, width, &bits, error,
+                                 error_capacity) != 0) {
+                return -1;
+            }
+            int32_t number = width == 4U ? (int32_t)bits : (int32_t)bits;
+            current = vf_subfont_identifier(virtual_font, number);
+            if (current == 0U) {
+                return set_error(error, error_capacity,
+                                 "undefined virtual-font local number %" PRId32
+                                 " in %s",
+                                 number, name);
+            }
+            continue;
+        }
+        if (command >= HSTEX_DVI_XXX1 && command <= HSTEX_VF_LONG_CHAR) {
+            uint32_t length = 0U;
+            if (vf_take_unsigned(&reader,
+                                 (size_t)(command - HSTEX_DVI_XXX1) + 1U,
+                                 &length, error, error_capacity) != 0 ||
+                vf_skip(&reader, (size_t)length, error, error_capacity) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        return set_error(error, error_capacity,
+                         "illegal DVI command %u in virtual font %s",
+                         (unsigned int)command, name);
+    }
+    return stack_depth == 0U
+               ? 0
+               : set_error(error, error_capacity,
+                           "unbalanced virtual-font packet in %s", name);
+}
+
+static int pdf_place_character_depth(struct hstex_engine *engine,
+                                     const struct hstex_node *node, int32_t h,
+                                     int32_t v, unsigned int depth, char *error,
+                                     size_t error_capacity)
+{
+    uint32_t identifier = node->value.character.font;
+    if (load_virtual_font(engine, identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "invalid font in a page");
+    }
+    if (font->virtual_state != HSTEX_VIRTUAL_LOADED) {
+        return pdf_place_physical_character(engine, node, h, v, error,
+                                            error_capacity);
+    }
+    if (depth >= HSTEX_VF_MAX_RECURSION) {
+        return set_error(error, error_capacity,
+                         "virtual-font recursion is too deep in %s",
+                         font->name);
+    }
+    uint32_t code = node->value.character.character & 0xFFU;
+    const struct hstex_virtual_packet *packet =
+        &font->virtual_font->packets[code];
+    if (!packet->present) {
+        return set_error(error, error_capacity,
+                         "virtual font %s has no packet for character %u",
+                         font->name, (unsigned int)code);
+    }
+    return pdf_execute_virtual_packet(engine, identifier, font->virtual_font,
+                                      packet, h, v, depth, error,
+                                      error_capacity);
+}
+
+static int pdf_place_character(struct hstex_engine *engine,
+                               const struct hstex_node *node, int32_t h,
+                               int32_t v, char *error, size_t error_capacity)
+{
+    return pdf_place_character_depth(engine, node, h, v, 0U, error,
+                                     error_capacity);
 }
 
 

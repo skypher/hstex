@@ -857,6 +857,7 @@ struct hstex_char_metric {
 #define HSTEX_FONT_CHARACTER_COUNT 256U
 
 struct hstex_pk_font;
+struct hstex_virtual_font;
 
 /* One step of a metric file's ligature and kerning program. */
 struct hstex_lig_kern {
@@ -933,6 +934,12 @@ struct hstex_font {
     /* What the metrics file says of itself, which the page description
        repeats so that the two can be checked against each other. */
     uint32_t checksum;
+    /* Direct PDF output resolves a virtual font lazily. The cache belongs to
+       the output driver, not to format state; `virtual_state' distinguishes
+       an unchecked font, a physical font, a load in progress, and a loaded
+       virtual font. */
+    struct hstex_virtual_font *virtual_font;
+    uint8_t virtual_state;
 };
 
 /* One movement the page description has already written, so that a movement

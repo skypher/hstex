@@ -166,6 +166,9 @@ static void transfer_array_cleared(struct format_stream *stream, void **base,
 #define FORMAT_ADDRESS(type, field) \
     {offsetof(struct type, field), sizeof(void *)}
 
+#define FORMAT_FIELD(type, field)                                      \
+    {offsetof(struct type, field), sizeof(((struct type *)0)->field)}
+
 /* The room a compiler leaves after a struct's last field, worked out from
    the field rather than written down, so that it stays right if the fields
    move and is nothing at all where a compiler leaves nothing. */
@@ -266,6 +269,10 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
     TRANSFER_VALUE(stream, font->hyphen_character);
     TRANSFER_VALUE(stream, font->skew_character);
     TRANSFER_VALUE(stream, font->checksum);
+    if (!stream->writing) {
+        font->virtual_font = NULL;
+        font->virtual_state = 0U;
+    }
 }
 
 static void transfer_string(struct format_stream *stream, char **string)
@@ -421,6 +428,8 @@ static void transfer_format(struct format_stream *stream,
         FORMAT_ADDRESS(hstex_font, kerns),
         FORMAT_ADDRESS(hstex_font, extensibles),
         FORMAT_ADDRESS(hstex_font, dimens),
+        FORMAT_ADDRESS(hstex_font, virtual_font),
+        FORMAT_FIELD(hstex_font, virtual_state),
     };
     transfer_array_cleared(stream, &fonts, &font_count, &engine->font_capacity,
                            sizeof(*engine->fonts), true, font_holes,

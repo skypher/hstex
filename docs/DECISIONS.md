@@ -148,6 +148,16 @@ unconditionally and later subroutines only through glyph reachability. Exact
 source whitespace at compact `NP`/`ND` definitions and the private-dictionary
 close is preserved by the observed font-specific compatibility cases.
 
+The TeX Live input font `utmr8a.pfb`, with SHA-256
+`2ef9d47303d25f3c9553a43255dae8c39160e130ad5ed34444e39dee03d796a1`,
+was inspected through the public `t1disasm` 1.41 interface. Its public
+dictionary uses the direct `/Encoding StandardEncoding def` form, and its
+private dictionary uses compact `}NP` and `}ND` entry terminators. HSTeX
+accepts both that direct encoding definition and an explicit encoding array
+ending in `readonly def`, and accepts either whitespace spelling of the two
+entry terminators. The subset writer retains the source spelling unless an
+existing black-box compatibility vector specifies a different spelling.
+
 PDF string syntax permits balanced parentheses inside a literal string. The
 default `PTEX.Fullbanner` therefore carries `(TeX Live 2023/Debian)` without
 escape bytes, matching the reference information dictionary.
@@ -334,3 +344,36 @@ active, skipped text passes through the ordinary token reader. This preserves
 LaTeX's row-ending brace idiom: a left brace hidden in a false branch protects
 lookahead across the next row's tab until the row macro restores the depth and
 emits `\cr`. No implementation code or internal representation was copied.
+
+## Virtual-font packets
+
+Public TeX Live source was consulted at commit
+`92c94c14418d5539bf44dbe8410391ee9244260e`, file
+`texk/web2c/vftovp.web`. Its VF-format description is at source lines
+145--276: a version-202 preamble is followed by local font definitions,
+character packets containing DVI commands, and a postamble. Lines 185--194
+define each mapped font's scaled size as a fixed-point multiple of the virtual
+font's current size. Lines 219--243 define packet movements in the same scale,
+the initial local font and zeroed movement registers, the implicit packet
+save/restore, and the logical TFM-width advance. The validation reader at
+lines 729--844 and 1025--1044 confirms the two packet headers and that font
+definitions precede packets. The command interpreter at lines 2118--2268
+confirms signed DVI movement parameters, register behavior, font selection,
+rules, stack nesting, and length-prefixed specials.
+
+The same source commit's `texk/web2c/dvicopy.web`, lines 2710--2772, was
+consulted to confirm that a driver first resolves a logical font as virtual
+and otherwise retains the physical-font route. No source code, table layout,
+or internal representation was copied.
+
+HSTeX keeps TeX's logical TFM metrics and DVI output unchanged. Direct PDF
+output lazily reads a matching `.vf`, resolves its local TFM fonts at sizes
+scaled from the logical font, and executes the selected packet with an
+independent C state record for `h`, `v`, `w`, `x`, `y`, and `z`. Packet-reached
+characters and rules are emitted at their computed page positions; only the
+reached physical fonts enter PDF resources. The outer list still advances by
+the virtual character's logical TFM width. Length-prefixed specials are
+validated and skipped, matching the PDF backend's existing treatment of
+ordinary DVI `\special` nodes. Recursive virtual fonts are supported with a
+fixed defensive depth limit, and malformed command streams fail rather than
+falling through to PK lookup.

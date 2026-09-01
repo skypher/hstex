@@ -10711,6 +10711,18 @@ static int test_the_fonts_a_page_names(void)
     return run_document_pdf(source, expected);
 }
 
+/* Direct PDF output expands public TS1 Times virtual-font packets into the
+   mapped ptmr8r font. The chosen packets cover characters, movement, rules,
+   specials, and nested push/pop; see docs/DECISIONS.md, virtual-font
+   packets. */
+static int test_virtual_font_packets_in_pdf(void)
+{
+    return run_document("\\pdfoutput=1 \\count0=1 \\font\\vf=ptmr8c \\vf"
+                        "\\shipout\\hbox{\\char0\\char'25\\char'30"
+                        "\\char'277}%",
+                        "[1]");
+}
+
 /* The leaders of a table of contents are set in the PDF as they are in the
    DVI: the boxes repeat on the grid the enclosing list settles, and a rule
    fills the whole of the glue. See docs/DECISIONS.md, leaders-on-a-page. */
@@ -24912,6 +24924,7 @@ int main(int argument_count, char **arguments)
         test_annotations_on_a_page() != 0 ||
         test_destinations_in_the_file() != 0 ||
         test_the_fonts_a_page_names() != 0 ||
+        test_virtual_font_packets_in_pdf() != 0 ||
         test_a_paragraph_the_end_ends() != 0 ||
         test_a_link_in_a_list() != 0 ||
         test_how_wide_a_movement_is() != 0 ||
