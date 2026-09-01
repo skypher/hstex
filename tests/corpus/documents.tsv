@@ -2,6 +2,7 @@
 # reference engine.  One document per line:
 #
 #   name <TAB> format <TAB> ctan-path <TAB> sha256 <TAB> description
+#        [<TAB> stdin-profile]
 #
 # format is `plain' (run under plain TeX) or `latex'.  Documents are fetched
 # from CTAN and pinned by digest rather than vendored: they are test input,
@@ -12,3 +13,12 @@ gentle	plain	info/gentle/gentle.tex	b3e1acf4a6feb6a13b0ace279a5be7f1546ac2198452
 small2e	latex	macros/latex/base/small2e.tex	6995024e85f537d32eef704a81d7f53b84aa06cb23361559d3fea3b6c5653627	LaTeX's own minimal sample document
 sample2e	latex	macros/latex/base/sample2e.tex	f135855f870c31f1101001bdb75b11e94a23c2605f7ab5dffa1299d53b1977cc	LaTeX's own feature sample: sections, math, tabular, verbatim
 testmath	latex	macros/latex/required/amsmath/testmath.tex	9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5	The AMS amsmath test document, 41 pages of displayed mathematics
+ltx3info	latex	macros/latex/base/ltx3info.tex	4e51d48f4679f4c28daad276daf53a4a3d8ce94839ac53a9a5a7876ad1721a06	LaTeX3 project history with dense macro-level typography
+usrguide-historic	latex	macros/latex/base/usrguide-historic.tex	29016a0f4f9fce8ccf20241211cb449d0b7276c2a4383533bb30c4c379053794	The 33-page historic LaTeX author guide
+cfgguide	latex	macros/latex/base/cfgguide.tex	5e25c3378f89177d8fde29291a8a32c31924b77c496c96d6c280a31e6c5c5529	LaTeX configuration guide with verbatim code and font commands
+cyrguide	latex	macros/latex/base/cyrguide.tex	2094ba054179c7f5a6d14e8ef4a3c768e3515e2d74737ea70bd97d006874246f	Cyrillic support guide with encoding and input examples
+modguide	latex	macros/latex/base/modguide.tex	2bac90cf2e017e6cb2674fd43f4574888d14c4c57e6e743d26699ac14807c56e	LaTeX modification guide with internal command examples
+subeqn	latex	macros/latex/required/amsmath/subeqn.tex	247e1fd6c56390c2d04af3a26a8ebe5842b3a2ce195d812552dc64a0bf9a80d3	AMS subequations, nested numbering, tags, and cross-references
+technote	latex	macros/latex/required/amsmath/technote.tex	b6d7a71a0df4ecf0bb0a503e5442bcf9dd0715ee5999bc835bad5c31f79efddf	AMS documented-source class, short verbatim, and math notes
+tools-overview	latex	macros/latex/required/tools/tools-overview.tex	826c5027bb76edcd10b7ef9907c174f3408d77e258995d109735f4feb2b8a4f5	Tools-bundle overview using calc, hyperref, PDF strings, and tables
+ltxcheck	latex	macros/latex/base/ltxcheck.tex	0f4a3943b52216e07db302ce5479e3f08e76569a58bb1f0f13fce0d04c0e6290	Interactive LaTeX installation and file-lookup diagnostic	returns

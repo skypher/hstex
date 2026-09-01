@@ -90,7 +90,7 @@ jobs:
           meson test -C build --no-rebuild --print-errorlogs
           scan input catcode symbol mouth source
 
-      # The corpus is pinned by digest and fetched from CTAN, and the
+      # The corpora are pinned by digest and fetched from CTAN, and the
       # benchmark input is vendored: both are checked once, not once per
       # image.
       - name: Verify vendored benchmark input
@@ -99,7 +99,17 @@ jobs:
 
       - name: Verify document corpus digests
         if: matrix.runner == 'ubuntu-24.04'
-        run: tests/corpus/run-corpus.sh --fetch-only
+        run: |
+          tests/corpus/run-corpus.sh --fetch-only
+          tests/corpus/run-corpus.sh --stress --fetch-only
+
+      - name: Run strict release document corpus
+        if: matrix.runner == 'ubuntu-24.04'
+        run: tests/corpus/run-corpus.sh --strict ./build/hstex
+
+      - name: Run adversarial document stress corpus
+        if: matrix.runner == 'ubuntu-24.04'
+        run: tests/corpus/run-corpus.sh --stress ./build/hstex
 
   clang:
     # The other compiler the engine is expected to build clean under.

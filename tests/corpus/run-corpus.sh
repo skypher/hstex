@@ -11,12 +11,16 @@
 # reference's own storage statistics are not comparable and are not compared;
 # see docs/DECISIONS.md, what-a-clean-room-engine-cannot-reproduce.
 #
-# Usage: tests/corpus/run-corpus.sh [--strict] [--fetch-only] [--time]
-#                                   [path-to-hstex]
-#        CORPUS_WORK=dir  tests/corpus/run-corpus.sh   (default build/corpus)
+# Usage: tests/corpus/run-corpus.sh [--stress] [--strict] [--fetch-only]
+#                                   [--time] [path-to-hstex]
+#        CORPUS_WORK=dir tests/corpus/run-corpus.sh
+#
+# --stress selects deliberately adversarial documents, including interactive
+# inputs and documents that expose known incompatibilities.  It uses a
+# separate work directory and is non-strict unless --strict is also given.
 #
 # --strict exits nonzero if any document disagrees.  Without it the script
-# reports the state of the corpus and exits 0.
+# reports the state of the selected corpus and exits 0.
 #
 # --fetch-only fetches every document and checks it against its pinned digest,
 # without running either engine.  This is the corpus identity check, and needs
@@ -31,14 +35,37 @@
 
 set -e
 
+usage() {
+    cat <<'EOF'
+Usage: tests/corpus/run-corpus.sh [OPTIONS] [path-to-hstex]
+
+Run pinned public TeX documents through a reference engine and HSTeX.
+
+Options:
+  --stress      select the adversarial stress-document manifest
+  --strict      exit nonzero when a document disagrees
+  --fetch-only  fetch documents and verify their SHA-256 digests only
+  --time        report median warm document-pass timings
+  -h, --help    show this help and exit
+
+CORPUS_WORK overrides the selected suite's work directory. The defaults are
+build/corpus for the release corpus and build/corpus-stress for --stress.
+EOF
+}
+
 strict=0
 fetch_only=0
 time_runs=0
+suite=release
 while :; do
     case ${1:-} in
+    --stress) suite=stress; shift ;;
     --strict) strict=1; shift ;;
     --fetch-only) fetch_only=1; shift ;;
     --time) time_runs=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) printf 'unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     *) break ;;
     esac
 done
@@ -50,16 +77,27 @@ case $engine in
 esac
 
 here=$(cd "$(dirname "$0")" && pwd)
-manifest=$here/documents.tsv
-root=$(pwd)
-
-work=${CORPUS_WORK:-build/corpus}
+if [ "$suite" = stress ]; then
+    manifest=$here/stress-documents.tsv
+    default_work=build/corpus-stress
+else
+    manifest=$here/documents.tsv
+    default_work=build/corpus
+fi
+work=${CORPUS_WORK:-$default_work}
 mkdir -p "$work"
 work=$(cd "$work" && pwd)
 src=$work/src
 mkdir -p "$src"
 
-base=https://mirrors.ctan.org
+# Availability decides only where bytes are fetched. Every candidate is an
+# official CTAN endpoint, and only a file matching the pinned digest is moved
+# into the corpus cache.
+corpus_bases='https://mirrors.mit.edu/CTAN
+https://ctan.math.washington.edu/tex-archive
+https://mirrors.ctan.org
+https://ctan.math.illinois.edu
+https://mirrors.ibiblio.org/CTAN'
 # A document that prints the date must be given one, or the two runs differ by
 # the time of day and nothing else.
 clock='\time=600 \day=1 \month=1 \year=2026'
@@ -77,17 +115,46 @@ fetch() {
            sha256sum -c - >/dev/null 2>&1; then
         return 0
     fi
-    # Fetched from a public host, which is sometimes briefly unreachable:
-    # a single refusal or a hung connect is not a corpus that has changed.
-    # What the file is remains settled by the digest checked below.
-    curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
-        --connect-timeout 20 -o "$src/$fetch_file" "$base/$fetch_path"
-    printf '%s  %s\n' "$fetch_want" "$src/$fetch_file" | sha256sum -c - >/dev/null
+    fetch_temporary=$src/$fetch_file.fetch.$$
+    for fetch_base in $corpus_bases; do
+        if curl -sSLf --retry 3 --retry-delay 2 --retry-connrefused \
+            --connect-timeout 20 -o "$fetch_temporary" \
+            "$fetch_base/$fetch_path" &&
+           printf '%s  %s\n' "$fetch_want" "$fetch_temporary" |
+               sha256sum -c - >/dev/null; then
+            mv -f "$fetch_temporary" "$src/$fetch_file"
+            return 0
+        fi
+    done
+    rm -f "$fetch_temporary"
+    return 1
+}
+
+# Reproducible answers for public tests that use terminal \read or \typein.
+# An empty profile also gives noninteractive documents a closed stdin.
+make_stdin() {
+    stdin_profile=$1
+    stdin_file=$2
+    case ${stdin_profile:-none} in
+    none) : >"$stdin_file" ;;
+    returns)
+        awk 'BEGIN { for (i = 0; i < 64; ++i) print "" }' >"$stdin_file"
+        ;;
+    testpage) printf 'letterpaper\nn\n' >"$stdin_file" ;;
+    testfont) printf 'cmr10\n\\bigtest\n\\bye\n' >"$stdin_file" ;;
+    *)
+        printf 'unknown stdin profile %s in %s\n' \
+            "$stdin_profile" "$manifest" >&2
+        exit 2
+        ;;
+    esac
 }
 
 # What the log says about the document.
 pages_of() {
-    sed -n 's/.*Output written on [^(]*(\([0-9][0-9]*\) page.*/\1/p' "$1" | tail -1
+    sed -n \
+        -e 's/.*Output written on [^(]*(\([0-9][0-9]*\) page.*/\1/p' \
+        -e 's/.*No pages of output.*/0/p' "$1" | tail -1
 }
 boxes_of() {
     # Box reports wrap across lines in both engines; join the report to its
@@ -104,9 +171,10 @@ faults_of() {
 sed 's/#.*//' "$manifest" | grep -v '^[[:space:]]*$' > "$work/manifest.clean"
 
 if [ "$fetch_only" -eq 1 ]; then
-    while IFS='	' read -r name format path want note; do
+    while IFS='	' read -r name format path want note input_profile; do
         [ -n "$name" ] || continue
-        fetch "$path" "$name.tex" "$want"
+        suffix=${path##*.}
+        fetch "$path" "$name.$suffix" "$want"
         printf '%s  %s\n' "$name" "ok"
     done <"$work/manifest.clean"
     printf '%s documents match their pinned digests\n' \
@@ -145,43 +213,68 @@ if grep -q "	plain	" "$work/manifest.clean"; then
     plain_format_seconds=$(($(date +%s) - plain_start))
 fi
 
-printf '%-10s %-9s %-11s %-8s %s\n' document pages boxes output verdict
-printf '%-10s %-9s %-11s %-8s %s\n' ---------- --------- ----------- -------- -------
+printf '%-20s %-9s %-11s %-9s %-8s %s\n' \
+    document pages boxes faults output verdict
+printf '%-20s %-9s %-11s %-9s %-8s %s\n' \
+    -------------------- --------- ----------- --------- -------- -------
 disagreed=0
 detail=$work/detail.txt
 : >"$detail"
 
-while IFS='	' read -r name format path want note; do
+while IFS='	' read -r name format path want note input_profile; do
     [ -n "$name" ] || continue
-    fetch "$path" "$name.tex" "$want"
+    suffix=${path##*.}
+    input_file=$name.$suffix
+    fetch "$path" "$input_file" "$want"
 
     dir=$work/$name
     rm -rf "$dir"
     mkdir -p "$dir/ref" "$dir/hstex/build"
-    cp "$src/$name.tex" "$dir/ref/"
-    cp "$src/$name.tex" "$dir/hstex/"
+    cp "$src/$input_file" "$dir/ref/"
+    cp "$src/$input_file" "$dir/hstex/"
+    make_stdin "$input_profile" "$dir/stdin.txt"
 
     # The reference. A plain document is set to DVI with the clock pinned, so
     # that what comes out can be compared byte for byte with HSTeX's.
     ( cd "$dir/ref"
       if [ "$format" = plain ]; then
-          pdftex -output-format=dvi -interaction=nonstopmode \
-              "$clock \\input $name \\end" >stdout.txt 2>&1 || true
+          if [ "${input_profile:-none}" = none ]; then
+              pdftex -output-format=dvi -interaction=nonstopmode \
+                  "$clock \\input $input_file \\end" \
+                  <../stdin.txt >stdout.txt 2>&1 || true
+          else
+              pdftex -output-format=dvi \
+                  "$clock \\input $input_file \\end" \
+                  <../stdin.txt >stdout.txt 2>&1 || true
+          fi
       else
-          pdflatex -interaction=nonstopmode "$name.tex" >stdout.txt 2>&1 || true
+          if [ "${input_profile:-none}" = none ]; then
+              pdflatex -interaction=nonstopmode "$input_file" \
+                  <../stdin.txt >stdout.txt 2>&1 || true
+          else
+              pdflatex "$input_file" <../stdin.txt >stdout.txt 2>&1 || true
+          fi
       fi ) || true
     ref_log=$dir/ref/$name.log
+    if [ ! -f "$ref_log" ]; then
+        printf 'reference produced no log for %s; see %s\n' \
+            "$input_file" "$dir/ref/stdout.txt" >&2
+        exit 1
+    fi
 
     # HSTeX over the same file.
     hs_log=$dir/hstex/hstex.log
     hs_status=0
     ( cd "$dir/hstex"
       if [ "$format" = plain ]; then
-          printf '\\pdfoutput=0 %s \\input %s \\end\n' "$clock" "$name" \
+          printf '\\pdfoutput=0 %s \\input %s \\end\n' \
+              "$clock" "$input_file" \
               >"run-$name.tex"
-          "$engine" --format "$plainfmt" "run-$name.tex" >hstex.log 2>&1
+          "$engine" --format "$plainfmt" "run-$name.tex" \
+              <../stdin.txt >hstex.log 2>&1
       else
-          "$engine" --format "$hfmt" "$name.tex" >hstex.log 2>&1
+          "$engine" --format "$hfmt" "$input_file" \
+              <../stdin.txt >hstex.log 2>&1
       fi ) || hs_status=$?
 
     # What each engine actually produced. Only a plain document can be
@@ -205,13 +298,19 @@ while IFS='	' read -r name format path want note; do
     boxes_of "$hs_log" >"$dir/hstex.boxes" 2>/dev/null || : >"$dir/hstex.boxes"
     ref_boxes=$(wc -l <"$dir/ref.boxes")
     hs_boxes=$(wc -l <"$dir/hstex.boxes")
+    faults_of "$ref_log" >"$dir/ref.faults" 2>/dev/null || : >"$dir/ref.faults"
+    faults_of "$hs_log" >"$dir/hstex.faults" 2>/dev/null || : >"$dir/hstex.faults"
+    ref_faults=$(wc -l <"$dir/ref.faults")
+    hs_faults=$(wc -l <"$dir/hstex.faults")
 
     if [ "$hs_status" -ne 0 ]; then
-        stop=$(grep -oE '[^ ]*\.tex:[0-9]+:[0-9]+: .*' "$hs_log" | tail -1)
+        stop=$(grep -oE '[^ ]*\.(tex|ltx):[0-9]+:[0-9]+: .*' \
+            "$hs_log" | tail -1)
         verdict="stopped: ${stop:-exit $hs_status}"
         disagreed=$((disagreed + 1))
         hs_pages=${hs_pages:--}
         hs_boxes=-
+        hs_faults=-
     elif [ "${ref_pages:-x}" != "${hs_pages:-y}" ]; then
         verdict="page count differs"
         disagreed=$((disagreed + 1))
@@ -220,6 +319,11 @@ while IFS='	' read -r name format path want note; do
         disagreed=$((disagreed + 1))
         { printf '=== %s: box reports ===\n' "$name"
           diff "$dir/ref.boxes" "$dir/hstex.boxes" || true; } >>"$detail"
+    elif ! diff -q "$dir/ref.faults" "$dir/hstex.faults" >/dev/null; then
+        verdict="faults differ"
+        disagreed=$((disagreed + 1))
+        { printf '=== %s: faults ===\n' "$name"
+          diff "$dir/ref.faults" "$dir/hstex.faults" || true; } >>"$detail"
     elif [ "$output" = differs ] || [ "$output" = missing ]; then
         verdict="the output itself differs"
         disagreed=$((disagreed + 1))
@@ -227,9 +331,9 @@ while IFS='	' read -r name format path want note; do
         verdict=agrees
     fi
 
-    printf '%-10s %-9s %-11s %-8s %s\n' \
+    printf '%-20s %-9s %-11s %-9s %-8s %s\n' \
         "$name" "${ref_pages:--}/${hs_pages:--}" "$ref_boxes/$hs_boxes" \
-        "$output" "$verdict"
+        "$ref_faults/$hs_faults" "$output" "$verdict"
 done <"$work/manifest.clean"
 
 if [ -s "$detail" ]; then
@@ -257,30 +361,49 @@ time_median() {
     tm_side=$1
     tm_name=$2
     tm_format=$3
+    tm_input_profile=$4
+    tm_path=$5
     : >"$work/times"
     tm_i=0
     while [ "$tm_i" -lt 7 ]; do
         tm_dir=$work/$tm_name/t-$tm_side
         rm -rf "$tm_dir"
         mkdir -p "$tm_dir/build"
-        cp "$src/$tm_name.tex" "$tm_dir/"
+        tm_suffix=${tm_path##*.}
+        tm_input_file=$tm_name.$tm_suffix
+        cp "$src/$tm_input_file" "$tm_dir/"
+        make_stdin "$tm_input_profile" "$tm_dir/stdin.txt"
         if [ "$tm_format" = plain ]; then
-            printf '\\pdfoutput=0 %s \\input %s \\end\n' "$clock" "$tm_name" \
+            printf '\\pdfoutput=0 %s \\input %s \\end\n' \
+                "$clock" "$tm_input_file" \
                 >"$tm_dir/run-$tm_name.tex"
         fi
         tm_started=$(date +%s%N)
         ( cd "$tm_dir"
           if [ "$tm_side" = ref ] && [ "$tm_format" = plain ]; then
-              pdftex -output-format=dvi -interaction=nonstopmode \
-                  "$clock \\input $tm_name \\end" >/dev/null 2>&1 || :
+              if [ "${tm_input_profile:-none}" = none ]; then
+                  pdftex -output-format=dvi -interaction=nonstopmode \
+                      "$clock \\input $tm_input_file \\end" \
+                      <stdin.txt >/dev/null 2>&1 || :
+              else
+                  pdftex -output-format=dvi \
+                      "$clock \\input $tm_input_file \\end" \
+                      <stdin.txt >/dev/null 2>&1 || :
+              fi
           elif [ "$tm_side" = ref ]; then
-              pdflatex -interaction=nonstopmode "$tm_name.tex" \
-                  >/dev/null 2>&1 || :
+              if [ "${tm_input_profile:-none}" = none ]; then
+                  pdflatex -interaction=nonstopmode "$tm_input_file" \
+                      <stdin.txt >/dev/null 2>&1 || :
+              else
+                  pdflatex "$tm_input_file" \
+                      <stdin.txt >/dev/null 2>&1 || :
+              fi
           elif [ "$tm_format" = plain ]; then
               "$engine" --format "$plainfmt" "run-$tm_name.tex" \
-                  >/dev/null 2>&1 || :
+                  <stdin.txt >/dev/null 2>&1 || :
           else
-              "$engine" --format "$hfmt" "$tm_name.tex" >/dev/null 2>&1 || :
+              "$engine" --format "$hfmt" "$tm_input_file" \
+                  <stdin.txt >/dev/null 2>&1 || :
           fi ) || :
         tm_ended=$(date +%s%N)
         echo "$tm_started $tm_ended" |
@@ -298,10 +421,12 @@ if [ "$time_runs" -eq 1 ]; then
         echo
         printf '%-10s %-11s %-11s %s\n' document reference hstex speedup
         printf '%-10s %-11s %-11s %s\n' ---------- ----------- ----------- -------
-        while IFS='	' read -r name format path want note; do
+        while IFS='	' read -r name format path want note input_profile; do
             [ -n "$name" ] || continue
-            ref_seconds=$(time_median ref "$name" "$format")
-            hs_seconds=$(time_median hstex "$name" "$format")
+            ref_seconds=$(time_median \
+                ref "$name" "$format" "$input_profile" "$path")
+            hs_seconds=$(time_median \
+                hstex "$name" "$format" "$input_profile" "$path")
             printf '%-10s %-11s %-11s %s\n' "$name" "${ref_seconds}ms" \
                 "${hs_seconds}ms" \
                 "$(awk -v r="$ref_seconds" -v h="$hs_seconds" \

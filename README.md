@@ -512,6 +512,7 @@ Run the public document corpus against the reference engine:
 
 ```sh
 tests/corpus/run-corpus.sh
+tests/corpus/run-corpus.sh --stress
 ```
 
 See `CLEANROOM.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and

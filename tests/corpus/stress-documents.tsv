@@ -1,0 +1,15 @@
+# Adversarial public documents, run as black-box comparisons against the
+# reference engine. These are pinned findings, not release-corpus exceptions:
+# --strict is expected to fail until HSTeX matches each document.
+#
+#   name <TAB> format <TAB> ctan-path <TAB> sha256 <TAB> description
+#        [<TAB> stdin-profile]
+#
+# stdin-profile supplies deterministic terminal answers. Supported profiles
+# are `returns', `testpage', and `testfont'; omit it for a closed empty stdin.
+clsguide-historic	latex	macros/latex/base/clsguide-historic.tex	c1cbbe8fce71a10e98adf9404d2114cee803a93ab837050f3d58216258f6d4b5	Class and package writer guide with a nested tabular edge case
+anc-test	latex	language/hyphenation/elhyphen/anc-test.ltx	2c7c74ecd417a21b6447af12efb0eccfb8a462944aaf7ad92e418f1ed780f0b8	Fifteen pages of Ancient Greek hyphenation and accent stress input
+encguide	latex	macros/latex/base/encguide.tex	514ebf9ce8d63fbac91fb19342d95eda05b9e4b77aaebbad50a830a099bfb5b8	Font encodings, unusual alphabets, font tables, and error recovery
+grfguide	latex	macros/latex/required/graphics/grfguide.tex	826ab1dbbba4d1118d33e759966a9e4b48290cba36958ea0605ed8c8dc19e06f	Graphics and color guide that writes and includes an EPS fixture
+testpage	latex	macros/latex/base/testpage.tex	2c9014a5432169b1dfec68a81fef4b9e9d9612e4896084dca462450b1198d4b2	Interactive printer geometry and two-sided calibration test	testpage
+testfont	plain	macros/plain/base/testfont.tex	80b177cd071eb150e79f592542abeef4d10f26d982b66ddf0e0e38372ee08aa0	Interactive dynamic font loading and comprehensive glyph exercise	testfont
