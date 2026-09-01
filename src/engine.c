@@ -2692,6 +2692,9 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"pdfobj", HSTEX_COMMAND_PDF_OBJECT},
         {"pdfrefobj", HSTEX_COMMAND_PDF_REF_OBJECT},
         {"pdfliteral", HSTEX_COMMAND_PDF_LITERAL},
+        {"pdfsave", HSTEX_COMMAND_PDF_SAVE},
+        {"pdfsetmatrix", HSTEX_COMMAND_PDF_SET_MATRIX},
+        {"pdfrestore", HSTEX_COMMAND_PDF_RESTORE},
         {"pdfdest", HSTEX_COMMAND_PDF_DEST},
         {"pdfstartlink", HSTEX_COMMAND_PDF_START_LINK},
         {"pdfendlink", HSTEX_COMMAND_PDF_END_LINK},
@@ -17771,6 +17774,29 @@ static void show_whatsit(struct hstex_engine *engine,
         free(text);
         return;
     }
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_SAVE) {
+        print_esc_text(engine, "\\pdfsave");
+        return;
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_RESTORE) {
+        print_esc_text(engine, "\\pdfrestore");
+        return;
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX) {
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        char ignored[256];
+        print_esc_text(engine, "\\pdfsetmatrix{");
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) == 0 &&
+            text_count != 0U) {
+            print_bytes(engine, (const char *)text, text_count);
+        }
+        print_byte(engine, '}');
+        free(text);
+        return;
+    }
     if (kind == (uint8_t)HSTEX_WHATSIT_END_LINK) {
         print_esc_text(engine, "\\pdfendlink");
         return;
@@ -24919,6 +24945,45 @@ static int pdf_whatsit(struct hstex_engine *engine,
                        const struct hstex_node *node, int32_t h, int32_t v,
                        char *error, size_t error_capacity)
 {
+    uint8_t kind = node->value.whatsit.kind;
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_SAVE ||
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_RESTORE) {
+        const uint8_t *operator_text =
+            kind == (uint8_t)HSTEX_WHATSIT_PDF_SAVE
+                ? (const uint8_t *)"q"
+                : (const uint8_t *)"Q";
+        return pdf_write_literal(engine, operator_text, 1U,
+                                 HSTEX_PDF_LITERAL_ORIGIN, h, v, error,
+                                 error_capacity);
+    }
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX) {
+        uint8_t *matrix = NULL;
+        size_t length = 0U;
+        if (stored_token_list_text(engine, node->value.whatsit.tokens,
+                                   &matrix, &length, 0U, NULL, error,
+                                   error_capacity) != 0) {
+            free(matrix);
+            return -1;
+        }
+        static const char suffix[] = " 0 0 cm";
+        if (length > SIZE_MAX - (sizeof(suffix) - 1U)) {
+            free(matrix);
+            return set_error(error, error_capacity,
+                             "PDF matrix text is too long");
+        }
+        uint8_t *content = realloc(matrix, length + sizeof(suffix) - 1U);
+        if (content == NULL) {
+            free(matrix);
+            return set_error(error, error_capacity,
+                             "PDF matrix allocation failed");
+        }
+        memcpy(content + length, suffix, sizeof(suffix) - 1U);
+        int status = pdf_write_literal(
+            engine, content, length + sizeof(suffix) - 1U,
+            HSTEX_PDF_LITERAL_ORIGIN, h, v, error, error_capacity);
+        free(content);
+        return status;
+    }
     if (node->value.whatsit.kind == (uint8_t)HSTEX_WHATSIT_LITERAL) {
         uint8_t *text = NULL;
         size_t length = 0U;
@@ -33444,6 +33509,26 @@ static int execute_pdf_literal(struct hstex_engine *engine, char *error,
         .value.whatsit = {.kind = (uint8_t)HSTEX_WHATSIT_LITERAL,
                           .action = action,
                           .tokens = tokens},
+    };
+    return append_current_list_node(engine, &node, error, error_capacity);
+}
+
+/* The public pdfTeX interface represents graphics-state transforms as
+   zero-width whatsits at the current TeX point.  Matrix text is expanded
+   when the primitive is read; the PDF coordinate pass adds the two zero
+   translation operands and the cm operator. See docs/DECISIONS.md,
+   PDF transformations. */
+static int execute_pdf_transform(struct hstex_engine *engine, uint8_t kind,
+                                 char *error, size_t error_capacity)
+{
+    uint32_t tokens = 0U;
+    if (kind == (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX &&
+        store_expanded_text(engine, &tokens, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_node node = {
+        .kind = HSTEX_NODE_WHATSIT,
+        .value.whatsit = {.kind = kind, .tokens = tokens},
     };
     return append_current_list_node(engine, &node, error, error_capacity);
 }
@@ -46635,6 +46720,9 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     if (kind == (uint8_t)HSTEX_WHATSIT_SPECIAL ||
         kind == (uint8_t)HSTEX_WHATSIT_COLOR_STACK ||
         kind == (uint8_t)HSTEX_WHATSIT_PDF_DEST ||
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_SAVE ||
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX ||
+        kind == (uint8_t)HSTEX_WHATSIT_PDF_RESTORE ||
         kind == (uint8_t)HSTEX_WHATSIT_START_LINK ||
         kind == (uint8_t)HSTEX_WHATSIT_END_LINK ||
         kind == (uint8_t)HSTEX_WHATSIT_ANNOT) {
@@ -50880,6 +50968,20 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_PDF_SAVE:
+        case HSTEX_COMMAND_PDF_SET_MATRIX:
+        case HSTEX_COMMAND_PDF_RESTORE: {
+            uint8_t kind = meaning->command == HSTEX_COMMAND_PDF_SAVE
+                               ? (uint8_t)HSTEX_WHATSIT_PDF_SAVE
+                               : meaning->command == HSTEX_COMMAND_PDF_SET_MATRIX
+                                     ? (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX
+                                     : (uint8_t)HSTEX_WHATSIT_PDF_RESTORE;
+            if (execute_pdf_transform(engine, kind, error, error_capacity) !=
+                0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
         case HSTEX_COMMAND_PDF_DEST:
             if (execute_pdf_dest(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;

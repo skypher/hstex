@@ -113,7 +113,8 @@ The engine currently includes:
 - inline and display math, scripts, fractions, radicals, delimiters,
   equation numbers, and the math layouts exercised by the corpus;
 - direct DVI and PDF emission, including links, destinations, annotations,
-  outlines, color stacks, literals, compression, and Type 1 subsetting;
+  outlines, color stacks, origin-relative transformations, literals,
+  compression, and Type 1 subsetting;
 - TFM, Type 1, PK, encoding, and map-file handling;
 - versioned native format caches with explicit invalidation keys; and
 - scalar and runtime-dispatched AVX2 lexical scanning with identical semantic

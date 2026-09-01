@@ -312,6 +312,9 @@ enum hstex_command {
        document can write; it exists so that a lookahead reaching the end of
        an entry sees a token there, as the reference's does. */
     HSTEX_COMMAND_END_TEMPLATE,
+    HSTEX_COMMAND_PDF_SAVE,
+    HSTEX_COMMAND_PDF_SET_MATRIX,
+    HSTEX_COMMAND_PDF_RESTORE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -1441,6 +1444,9 @@ enum hstex_whatsit_kind {
     /* \setlanguage: the language the words after it are hyphenated in,
        with the two hyphenmins as they stood. */
     HSTEX_WHATSIT_LANGUAGE,
+    HSTEX_WHATSIT_PDF_SAVE,
+    HSTEX_WHATSIT_PDF_SET_MATRIX,
+    HSTEX_WHATSIT_PDF_RESTORE,
 };
 
 /* What a link or an outline entry does when it is followed. See

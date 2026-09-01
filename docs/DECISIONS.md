@@ -327,6 +327,21 @@ User-created page stacks also write their active value normally, including an
 initial value whose bytes happen to spell `0 g 0 G`. HSTeX therefore omits
 only stack zero's exact built-in value during page-start restoration.
 
+## PDF transformations
+
+Section 7.20 of the public pdfTeX user manual specifies `\pdfsave`,
+`\pdfsetmatrix`, and `\pdfrestore`. The save and restore primitives insert the
+PDF graphics-state operators `q` and `Q`; the matrix primitive expands four
+unitless numbers and inserts them as `a b c d 0 0 cm`. TeX, rather than the
+matrix text, supplies the translation about the current list position.
+
+A black-box pdfTeX 1.40.25 probe puts the three primitives in an `\hbox` and
+shows three distinct zero-width whatsits. Its uncompressed page stream anchors
+each graphics-state operation at the horizontal position where the whatsit
+stands: it translates to that point before the operation and translates back
+afterward. HSTeX keeps the expanded four-number text on the matrix whatsit and
+uses the same origin-relative PDF placement for all three operations.
+
 ## PDF page dictionaries and references
 
 Black-box pdfTeX 1.40.25 probes show that `\pdfpageattr` and

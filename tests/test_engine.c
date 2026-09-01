@@ -20941,6 +20941,126 @@ static int test_shipout_pdf_literal(void)
     return status;
 }
 
+/* The three PDF transformation primitives remain ordered zero-width
+   whatsits, and the page backend anchors their PDF operators at the point
+   where each one stands. See docs/DECISIONS.md, PDF transformations. */
+static int test_pdf_transformations(void)
+{
+    const char source[] =
+        "\\pdfoutput=1 \\pdfcompresslevel=0 \\pdfobjcompresslevel=0 "
+        "\\font\\f=cmr10 \\f \\def\\horizontal{2 } "
+        "\\setbox0=\\hbox{A\\pdfsave"
+        "\\pdfsetmatrix{\\horizontal 0 0 .5}B\\pdfrestore C}"
+        "\\shipout\\copy0 \\end ";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    char directory[96];
+    (void)snprintf(directory, sizeof(directory), "%s-pdf-transform",
+                   path);
+    int status = 0;
+    if (mkdir(directory, 0700) != 0 ||
+        hstex_engine_set_output_directory(&engine, directory, error,
+                                          sizeof(error)) != 0) {
+        status = 1;
+    }
+    FILE *sink = status == 0 ? tmpfile() : NULL;
+    if (sink != NULL) {
+        hstex_engine_set_message_stream(&engine, sink);
+    }
+    struct hstex_source_location last = {0};
+    if (status == 0 &&
+        hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
+        status = 1;
+    }
+    if (sink != NULL) {
+        (void)fclose(sink);
+    }
+
+    static const uint8_t wanted_kinds[] = {
+        (uint8_t)HSTEX_WHATSIT_PDF_SAVE,
+        (uint8_t)HSTEX_WHATSIT_PDF_SET_MATRIX,
+        (uint8_t)HSTEX_WHATSIT_PDF_RESTORE,
+    };
+    size_t found = 0U;
+    const struct hstex_box *box = &engine.boxes[0];
+    for (size_t index = 0U; index < box->node_count; ++index) {
+        size_t at = (size_t)box->node_start + index;
+        if (at >= engine.list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine.list_items[at];
+        if (identifier == 0U || (size_t)identifier > engine.node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine.nodes[identifier - 1U];
+        if (node->kind != HSTEX_NODE_WHATSIT) {
+            continue;
+        }
+        if (found >= sizeof(wanted_kinds) ||
+            node->value.whatsit.kind != wanted_kinds[found]) {
+            status = 1;
+            break;
+        }
+        ++found;
+    }
+    if (found != sizeof(wanted_kinds)) {
+        status = 1;
+    }
+
+    char written[256];
+    const char *name = strrchr(path, '/');
+    (void)snprintf(written, sizeof(written), "%s%s.pdf", directory,
+                   name == NULL ? path : name);
+    FILE *file = status == 0 ? fopen(written, "rb") : NULL;
+    uint8_t *bytes = NULL;
+    size_t count = 0U;
+    if (status == 0 && file == NULL) {
+        status = 1;
+    }
+    if (file != NULL) {
+        if (fseek(file, 0L, SEEK_END) != 0) {
+            status = 1;
+        } else {
+            long size = ftell(file);
+            if (size < 0L || fseek(file, 0L, SEEK_SET) != 0) {
+                status = 1;
+            } else {
+                count = (size_t)size;
+                bytes = malloc(count == 0U ? 1U : count);
+                if (bytes == NULL || fread(bytes, 1U, count, file) != count) {
+                    status = 1;
+                }
+            }
+        }
+        (void)fclose(file);
+    }
+    if (status == 0 &&
+        (!byte_sequence_present(bytes, count, "\nq\n") ||
+         !byte_sequence_present(bytes, count, "2 0 0 .5 0 0 cm\n") ||
+         !byte_sequence_present(bytes, count, "\nQ\n"))) {
+        status = 1;
+    }
+    if (status != 0) {
+        (void)fprintf(stderr,
+                      "PDF transformation test failed: %s nodes=%zu\n",
+                      error, found);
+    }
+    free(bytes);
+    hstex_engine_destroy(&engine);
+    (void)unlink(written);
+    (void)rmdir(directory);
+    (void)unlink(path);
+    return status;
+}
+
 /* Once the page builder has emptied the contribution list, \lastnodetype
    and its relatives report the last node it took; see docs/DECISIONS.md,
    the-last-node-of-a-page. */
@@ -25058,6 +25178,7 @@ int main(int argument_count, char **arguments)
         test_structured_pdf_destination() != 0 ||
         test_pdf_font_metrics_and_unicode() != 0 ||
         test_shipout_pdf_literal() != 0 ||
+        test_pdf_transformations() != 0 ||
         test_tracing_paragraphs() != 0 ||
         test_the_first_line_protrudes_too() != 0 ||
         test_the_last_line_is_measured_square() != 0 ||
