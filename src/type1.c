@@ -2,7 +2,6 @@
 
 #include "internal.h"
 
-#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -447,6 +446,27 @@ static int type1_disassembly_token(struct type1_buffer *output,
     return 0;
 }
 
+static void type1_format_integer(char number[12], int32_t value)
+{
+    char reversed[10];
+    size_t count = 0U;
+    uint32_t magnitude =
+        value < 0 ? 0U - (uint32_t)value : (uint32_t)value;
+    do {
+        reversed[count++] = (char)('0' + magnitude % 10U);
+        magnitude /= 10U;
+    } while (magnitude != 0U);
+
+    size_t at = 0U;
+    if (value < 0) {
+        number[at++] = '-';
+    }
+    while (count != 0U) {
+        number[at++] = reversed[--count];
+    }
+    number[at] = '\0';
+}
+
 static int type1_disassemble_charstring(const uint8_t *cipher,
                                         size_t cipher_count, int32_t len_iv,
                                         struct type1_buffer *output,
@@ -519,16 +539,10 @@ static int type1_disassemble_charstring(const uint8_t *cipher,
                             : -1 - (int32_t)(UINT32_MAX - encoded);
                 at += 4U;
             }
-            char number[32];
-            int length = snprintf(number, sizeof(number), "%" PRId32,
-                                  value);
-            if (length < 0 || (size_t)length >= sizeof(number)) {
-                status = type1_error(error, error_capacity,
-                                     "Type 1 integer formatting failed");
-            } else {
-                status = type1_disassembly_token(
-                    output, number, &line_start, error, error_capacity);
-            }
+            char number[12];
+            type1_format_integer(number, value);
+            status = type1_disassembly_token(
+                output, number, &line_start, error, error_capacity);
             continue;
         }
         uint8_t second = 0U;

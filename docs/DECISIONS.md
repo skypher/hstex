@@ -381,6 +381,49 @@ from 5,973.3 ms to 4,918.5 ms while the corresponding reference sums were
 4,031.4 ms and 4,021.3 ms. That sum is broad-impact evidence, not the
 full-corpus headline benchmark.
 
+After the glyph-to-Unicode index removed the next dominant cost, an aggregate
+3.402-second `testmath` clock profile attributed 10.9% of total CPU time to
+formatted-output machinery called by Type 1 private-section disassembly. Each
+decoded charstring integer used a general `snprintf` conversion. HSTeX now
+renders the bounded `int32_t` domain directly into a 12-byte decimal buffer;
+unsigned magnitude arithmetic includes `INT32_MIN` without signed overflow.
+The exact Type 1 specification vectors cover both signed extremes, every
+compact-number boundary, zero, and all three supported font containers. A
+second aggregate profile attributed 0.7% to the formatted-output machinery
+and 5.6% inclusive to private-section disassembly, down from 13.2%.
+
+The matched warm-cache timing compared baseline commit `839a4ad` with the
+bounded-integer candidate. Both were GCC 13.3.0 C17 release builds using
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 3 of an AMD EPYC 7551 with one
+font worker. They loaded the same format. One warm-up preceded eleven
+alternating baseline/candidate pairs, each in a fresh output directory.
+Baseline times in milliseconds were 412.392, 414.194, 412.287, 414.371,
+408.780, 412.350, 423.234, 414.343, 426.764, 415.318, and 408.547; candidate
+times were 385.710, 392.533, 380.617, 378.748, 388.556, 387.056, 377.789,
+385.913, 376.987, 377.682, and 380.515. The medians were 414.194 ms and
+380.617 ms, an 8.1% reduction; the median paired reduction was 6.9%. Median
+user CPU time fell from 0.35 s to 0.32 s, while median system CPU time
+remained 0.05 s. Peak RSS was 28,672 KiB for every measured run. Load averages
+were 35.73/35.52/36.77 before and 35.61/35.51/36.75 after. The baseline and
+candidate executable SHA-256 values were
+`96204bc6d188474c2e776fc91c78fe038ca1b3d59305a779fc1283b5ed3b417f`
+and
+`76281a3c2859a412e2c85f7560c47d2393951c622523c4115d2472ea10b31235`.
+The corpus manifest and input SHA-256 values were
+`8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`
+and
+`9b311f1835266833ad40130e7a7a6361a950c965d308c02d567361e72ce74aa5`.
+Every measured PDF had SHA-256
+`1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
+The release and stress corpora remained 14/14 and 6/6.
+
+A separate pinned run of the existing per-document timing mode summed to
+3,689.5 ms for the reference and 2,658.7 ms for HSTeX, a 1.388x aggregate
+ratio in HSTeX's favor. The preceding HSTeX sum was 2,838.7 ms, so the
+bounded formatter reduced that diagnostic by 6.3%. This is broad-impact
+evidence, not the full-corpus headline benchmark.
+
 ## PDF font Unicode maps
 
 A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the
