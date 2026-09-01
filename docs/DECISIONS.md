@@ -476,6 +476,42 @@ for the reference and 3,033.6 ms for HSTeX, a 1.419x aggregate ratio in
 HSTeX's favor. This and the matched `testmath` result are diagnostic evidence,
 not the full-corpus headline benchmark.
 
+## Cold speculative-taint reporting
+
+An aggregate `testmath` profile attributed 3.42% of exclusive CPU time to
+`hstex_engine_meaning`. The ordinary lookup had acquired a 128-byte stack
+frame and three saved registers because link-time optimization inlined the
+speculative carrier's read-before-write fault reporter into it. That reporter
+runs only after a carrier arms a nonempty taint map and a watched meaning is
+read before it is replaced. Marking the reporter cold and no-inline leaves the
+same check and reporter call in place while keeping them out of the ordinary
+lookup. In the GCC release executable, the ordinary function shrank from 303
+bytes to 96 bytes and no longer allocates a stack frame.
+
+The matched benchmark compared executable SHA-256
+`0516ddedf2b1283eedad7e849234e4762ca96bb0af57c83d63f97e32b5b13d42`
+with candidate
+`adbbcaa7e1f7dd5c0b4e4bcd6da6ccc06014012f941c2e0c30e518c71a135973`.
+Both were GCC 13.3.0 C17 release builds using
+`-O3 -flto=auto -DNDEBUG -fno-stack-protector -fno-plt
+-fno-semantic-interposition`, pinned to CPU 24 of an AMD EPYC 7551 with one
+font worker. Each document received one warm-up followed by alternating
+baseline/candidate runs in fresh output directories. On 31 `testmath` pairs,
+the medians were 464.279 ms and 463.283 ms, a 0.21% reduction; paired median
+and mean reductions were 0.21% and 0.27%, and the candidate won 20 pairs.
+Across 21 pairs each of `technote`, `tools-overview`, and
+`usrguide-historic`, every document median improved by 0.27--0.41%. The 63
+combined pairs had a 0.37% paired median reduction, a 0.39% paired mean
+reduction, and 46 candidate wins. Median peak RSS remained 28,672 KiB. The
+format SHA-256 was
+`afe3368069e3fc75dfb7b283f0dff95413492717b4d4111a4deefbc73df2111f`;
+each pair produced one identical PDF digest. Load averages ranged from
+35.84 to 36.39 over the three-document run and from 36.96 to 37.66 over the
+`testmath` run.
+
+The ordinary release suite passed, with its expected driver skip. The strict
+release and stress corpora remained 14/14 and 6/6.
+
 ## PDF font Unicode maps
 
 A controlled pdfTeX 1.40.25 `encguide` run with `\pdfgentounicode=1` maps the

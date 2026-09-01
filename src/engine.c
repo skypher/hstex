@@ -146,7 +146,7 @@ static void spec_path(const struct hstex_engine *engine, char *room,
 static void spec_snapshot_aux(struct hstex_engine *engine);
 static void load_soft_names(struct hstex_engine *engine);
 static void taint_read_before_write(struct hstex_engine *engine,
-                                    hstex_cs_id identifier);
+                                    hstex_cs_id identifier) HSTEX_COLD_NOINLINE;
 static void taint_arm(struct hstex_engine *engine);
 
 static int expand_scan_tokens(struct hstex_engine *engine,
