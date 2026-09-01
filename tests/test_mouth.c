@@ -3,6 +3,7 @@
 #include "hstex/mouth.h"
 #include "hstex/symbol.h"
 #include "hstex/token.h"
+#include "test_cli.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -350,8 +351,13 @@ static int test_caret_rewrites_only_a_name(void)
     return failed;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX mouth tests.");
+    if (option >= 0) {
+        return option;
+    }
     return test_state_machine() || test_controls_and_active() ||
            test_mutable_catcodes() || test_caret_and_line_endings() ||
            test_caret_rewrites_only_a_name() ||

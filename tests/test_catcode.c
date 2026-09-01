@@ -1,5 +1,6 @@
 #include "hstex/catcode.h"
 #include "hstex/token.h"
+#include "test_cli.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -17,8 +18,13 @@ static int expect_category(const struct hstex_catcode_table *table,
     return 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX catcode tests.");
+    if (option >= 0) {
+        return option;
+    }
     struct hstex_catcode_table table;
     hstex_catcodes_init_ini(&table);
     if (expect_category(&table, 0U, HSTEX_CAT_IGNORED) != 0 ||

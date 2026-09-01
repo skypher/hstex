@@ -2,22 +2,27 @@
 
 ## Goal
 
-Build a clean-room, pdfTeX-compatible typesetting engine in C with substantially
-lower wall-clock latency than pdfTeX. The first end-to-end milestone requires
-both correct reproduction of a real document corpus and at least a 5× speedup
-over the local pdfTeX baseline.
+Build an independent, pdfTeX-compatible typesetting engine in C with
+substantially lower wall-clock latency than pdfTeX. The first end-to-end
+milestone requires both correct reproduction of a real document corpus and at
+least a 5× speedup over the local pdfTeX baseline.
 
-## Clean-room boundary
+## Source-use boundary
 
-- Do not read, translate, adapt, or copy implementation source from TeX/WEB,
-  pdfTeX, or any other TeX engine.
-- Reference engines may be executed only as black-box behavioral oracles.
+- Public implementation source from TeX/WEB, pdfTeX, and other TeX engines may
+  be consulted for behavior, algorithms, and edge cases.
+- Do not paste or mechanically translate incompatibly licensed engine code.
+  Any compatible code or data incorporated into HSTeX must retain its required
+  notice and be recorded in `THIRD_PARTY_NOTICES.md`.
 - TeX Live macro, font, metric, encoding, and map files are input data, not
   engine implementation material.
-- Record the public specification or black-box experiment behind every
+- Record the exact specification, controlled experiment, or implementation
+  source—including version or commit, file, and section—behind every
   non-obvious compatibility decision.
 - Do not preserve a reference engine's internal representation or algorithm
   merely to simplify differential testing.
+- Production HSTeX must not invoke another TeX engine or depend on its internal
+  state. See `SOURCE_POLICY.md` for the full provenance and licensing policy.
 
 ## Implementation rules
 

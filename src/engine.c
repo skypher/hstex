@@ -4,6 +4,7 @@
 
 #include "hstex/catcode.h"
 #include "internal.h"
+#include "pk.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -2169,27 +2170,34 @@ static int register_primitive(struct hstex_engine *engine, const char *name,
                        error_capacity);
 }
 
+static bool source_date_epoch(time_t *stamp)
+{
+    const char *source_epoch = getenv("SOURCE_DATE_EPOCH");
+    if (source_epoch == NULL || source_epoch[0] == '\0') {
+        return false;
+    }
+    char *end = NULL;
+    errno = 0;
+    intmax_t parsed = strtoimax(source_epoch, &end, 10);
+    time_t converted = (time_t)parsed;
+    if (errno != 0 || end == source_epoch || *end != '\0' ||
+        (intmax_t)converted != parsed) {
+        return false;
+    }
+    *stamp = converted;
+    return true;
+}
+
 /* pdfTeX exposes one process-start PDF timestamp.  SOURCE_DATE_EPOCH selects
    UTC and a trailing Z; otherwise the local offset is written as +HH'MM'.
-   The TeX date registers remain the local wall clock in either case.  These
-   cases are pinned by test_pdf_creation_date and documented in DECISIONS.md. */
+   FORCE_SOURCE_DATE=1 applies that same UTC instant to TeX's four clock
+   parameters. These cases are pinned by test_pdf_creation_date and
+   documented in DECISIONS.md. */
 static void initialize_pdf_creation_date(struct hstex_engine *engine,
                                          time_t process_start)
 {
     time_t stamp = process_start;
-    bool reproducible = false;
-    const char *source_epoch = getenv("SOURCE_DATE_EPOCH");
-    if (source_epoch != NULL && source_epoch[0] != '\0') {
-        char *end = NULL;
-        errno = 0;
-        intmax_t parsed = strtoimax(source_epoch, &end, 10);
-        time_t converted = (time_t)parsed;
-        if (errno == 0 && end != source_epoch && *end == '\0' &&
-            (intmax_t)converted == parsed) {
-            stamp = converted;
-            reproducible = true;
-        }
-    }
+    bool reproducible = source_date_epoch(&stamp);
 
     struct tm broken_down;
     struct tm *result = reproducible ? gmtime_r(&stamp, &broken_down)
@@ -2230,6 +2238,27 @@ static void initialize_pdf_creation_date(struct hstex_engine *engine,
     } else {
         memcpy(engine->pdf_creation_date + 16U, "Z", 2U);
     }
+}
+
+static void initialize_tex_clock(struct hstex_engine *engine,
+                                 time_t process_start)
+{
+    time_t stamp = process_start;
+    const char *force = getenv("FORCE_SOURCE_DATE");
+    bool reproducible = force != NULL && strcmp(force, "1") == 0 &&
+                        source_date_epoch(&stamp);
+    struct tm broken_down;
+    struct tm *result = reproducible ? gmtime_r(&stamp, &broken_down)
+                                     : localtime_r(&stamp, &broken_down);
+    if (result == NULL) {
+        return;
+    }
+    engine->integer_parameters[HSTEX_INTEGER_TIME] =
+        (int32_t)(broken_down.tm_hour * 60 + broken_down.tm_min);
+    engine->integer_parameters[HSTEX_INTEGER_DAY] = broken_down.tm_mday;
+    engine->integer_parameters[HSTEX_INTEGER_MONTH] = broken_down.tm_mon + 1;
+    engine->integer_parameters[HSTEX_INTEGER_YEAR] =
+        broken_down.tm_year + 1900;
 }
 
 enum {
@@ -2503,6 +2532,7 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
 
     time_t now = time(NULL);
     initialize_pdf_creation_date(engine, now);
+    initialize_tex_clock(engine, now);
     struct timespec random_clock = {0};
     if (clock_gettime(CLOCK_REALTIME, &random_clock) != 0) {
         random_clock.tv_sec = now;
@@ -2515,15 +2545,6 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         initial_random_seed = -initial_random_seed;
     }
     pdf_set_random_seed(engine, (int32_t)initial_random_seed);
-    struct tm broken_down;
-    if (now != (time_t)-1 && localtime_r(&now, &broken_down) != NULL) {
-        engine->integer_parameters[HSTEX_INTEGER_TIME] =
-            (int32_t)(broken_down.tm_hour * 60 + broken_down.tm_min);
-        engine->integer_parameters[HSTEX_INTEGER_DAY] = broken_down.tm_mday;
-        engine->integer_parameters[HSTEX_INTEGER_MONTH] = broken_down.tm_mon + 1;
-        engine->integer_parameters[HSTEX_INTEGER_YEAR] =
-            broken_down.tm_year + 1900;
-    }
     static const struct {
         const char *name;
         enum hstex_command command;
@@ -3581,6 +3602,11 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->pdf_object_streams);
     free(engine->pdf_object_stream_indices);
     free(engine->dead_nodes);
+    for (size_t index = 0U; index < engine->pdf_font_count; ++index) {
+        hstex_pk_destroy(engine->pdf_fonts[index].pk_font);
+        free(engine->pdf_fonts[index].pk_font);
+        free(engine->pdf_fonts[index].pk_glyph_objects);
+    }
     free(engine->pdf_fonts);
     for (size_t index = 0U; index < engine->pdf_encoding_count; ++index) {
         struct hstex_pdf_encoding *encoding = &engine->pdf_encodings[index];
@@ -19464,7 +19490,7 @@ static void report_illegal_case(struct hstex_engine *engine, hstex_token token)
    differently; what can, and what is about the document rather than the
    engine, is which file is being written, what the format is called, and
    which fonts it holds. See docs/DECISIONS.md,
-   what-a-clean-room-engine-cannot-reproduce. */
+   reference-internal-statistics. */
 static int report_the_dump(struct hstex_engine *engine, char *error,
                            size_t error_capacity)
 {
@@ -22085,11 +22111,100 @@ static struct hstex_pdf_physical_font *pdf_physical_font_entry(
     return entry;
 }
 
+static int pdf_prepare_pk_font(struct hstex_engine *engine,
+                               struct hstex_pdf_font *entry,
+                               const struct hstex_font *font, char *error,
+                               size_t error_capacity)
+{
+    if (entry->pk_font != NULL) {
+        return 0;
+    }
+    int32_t resolution =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_PK_RESOLUTION];
+    if (resolution <= 0) {
+        resolution = 600;
+    }
+    if (resolution > 100000) {
+        return set_error(error, error_capacity,
+                         "invalid PDF bitmap-font resolution %d", resolution);
+    }
+    int64_t design = font->design_size > 0 ? font->design_size : font->size;
+    int64_t scaled = font->size > 0 ? font->size : design;
+    if (design <= 0 || scaled <= 0) {
+        return set_error(error, error_capacity,
+                         "font %s has no usable bitmap size", font->name);
+    }
+    int64_t target = ((int64_t)resolution * scaled + design / 2) / design;
+    if (target <= 0 || target > INT32_MAX) {
+        return set_error(error, error_capacity,
+                         "font %s has an invalid bitmap resolution",
+                         font->name);
+    }
+    char filename[512];
+    int length = snprintf(filename, sizeof(filename), "%s.%" PRId64 "pk",
+                          font->name, target);
+    if (length < 0 || (size_t)length >= sizeof(filename)) {
+        return set_error(error, error_capacity, "PK font name is too long");
+    }
+    char *path = resolve_file(engine, filename);
+    if (path == NULL) {
+        length = snprintf(filename, sizeof(filename), "%s.pk", font->name);
+        if (length < 0 || (size_t)length >= sizeof(filename)) {
+            return set_error(error, error_capacity, "PK font name is too long");
+        }
+        path = resolve_file(engine, filename);
+    }
+    if (path == NULL) {
+        return set_error(error, error_capacity,
+                         "cannot find PK bitmap for font %s at %" PRId64
+                         " dpi",
+                         font->name, target);
+    }
+    uint8_t *bytes = NULL;
+    size_t byte_count = 0U;
+    int status = read_whole_path(path, &bytes, &byte_count, error,
+                                 error_capacity);
+    free(path);
+    if (status != 0) {
+        return -1;
+    }
+    struct hstex_pk_font *bitmap = calloc(1U, sizeof(*bitmap));
+    if (bitmap == NULL) {
+        free(bytes);
+        return set_error(error, error_capacity,
+                         "PK bitmap-font allocation failed");
+    }
+    status = hstex_pk_parse(bytes, byte_count, bitmap, error, error_capacity);
+    free(bytes);
+    if (status != 0) {
+        free(bitmap);
+        return -1;
+    }
+    if (font->checksum != 0U && bitmap->checksum != 0U &&
+        font->checksum != bitmap->checksum) {
+        hstex_pk_destroy(bitmap);
+        free(bitmap);
+        return set_error(error, error_capacity,
+                         "PK checksum does not match font %s", font->name);
+    }
+    size_t *objects = calloc(256U, sizeof(*objects));
+    if (objects == NULL) {
+        hstex_pk_destroy(bitmap);
+        free(bitmap);
+        return set_error(error, error_capacity,
+                         "PK bitmap-font allocation failed");
+    }
+    entry->pk_font = bitmap;
+    entry->pk_glyph_objects = objects;
+    entry->pk_resolution = (uint32_t)resolution;
+    return 0;
+}
+
 static int pdf_prepare_font(struct hstex_engine *engine,
                             struct hstex_pdf_font *entry, char *error,
                             size_t error_capacity)
 {
-    if (entry->physical_place != 0U) {
+    if (entry->physical_place != 0U || entry->pk_font != NULL) {
         return 0;
     }
     const struct hstex_font *font =
@@ -22107,7 +22222,8 @@ static int pdf_prepare_font(struct hstex_engine *engine,
         free(postscript);
         free(encoding_file);
         free(font_file);
-        return 0;
+        return pdf_prepare_pk_font(engine, entry, font, error,
+                                   error_capacity);
     }
     if (status != 0 || font_file == NULL) {
         free(postscript);
@@ -22206,6 +22322,9 @@ static int pdf_collect_font(struct hstex_engine *engine,
                             struct hstex_pdf_font *entry, char *error,
                             size_t error_capacity)
 {
+    if (entry->pk_font != NULL) {
+        return 0;
+    }
     if (entry->physical_place == 0U) {
         return 0;
     }
@@ -26106,7 +26225,7 @@ static int pdf_write_font_cmap(struct hstex_engine *engine,
                                struct hstex_pdf_font *entry, char *error,
                                size_t error_capacity)
 {
-    if (entry->to_unicode != 0U) {
+    if (entry->pk_font != NULL || entry->to_unicode != 0U) {
         return 0;
     }
     const struct hstex_font *font =
@@ -26183,6 +26302,336 @@ static int pdf_write_font_widths(struct hstex_engine *engine,
                : 0;
 }
 
+static uint64_t pdf_greatest_common_divisor(uint64_t first, uint64_t second)
+{
+    while (second != 0U) {
+        uint64_t remainder = first % second;
+        first = second;
+        second = remainder;
+    }
+    return first;
+}
+
+static int pdf_type3_width_text(const struct hstex_font *font, size_t code,
+                                uint32_t resolution, char text[64], char *error,
+                                size_t error_capacity)
+{
+    int32_t width = packed_dimen(font->characters[code].width);
+    bool negative = width < 0;
+    uint64_t factors[3] = {
+        (uint64_t)(negative ? -(int64_t)width : (int64_t)width),
+        (uint64_t)resolution,
+        UINT64_C(10000),
+    };
+    uint64_t denominator = UINT64_C(65536) * UINT64_C(7227);
+    for (size_t index = 0U; index < 3U; ++index) {
+        uint64_t divisor =
+            pdf_greatest_common_divisor(factors[index], denominator);
+        factors[index] /= divisor;
+        denominator /= divisor;
+    }
+    uint64_t numerator = 1U;
+    for (size_t index = 0U; index < 3U; ++index) {
+        if (factors[index] != 0U &&
+            numerator > (uint64_t)INT64_MAX / factors[index]) {
+            return set_error(error, error_capacity,
+                             "Type 3 font width is too large");
+        }
+        numerator *= factors[index];
+    }
+    uint64_t magnitude = numerator / denominator;
+    uint64_t remainder = numerator % denominator;
+    if (remainder > (denominator - 1U) / 2U) {
+        ++magnitude;
+    }
+    if (magnitude > (uint64_t)INT64_MAX) {
+        return set_error(error, error_capacity,
+                         "Type 3 font width is too large");
+    }
+    int64_t units = negative ? -(int64_t)magnitude : (int64_t)magnitude;
+    (void)pdf_format_units(text, 64U, units, 2);
+    return 0;
+}
+
+static int pdf_type3_matrix_text(const struct hstex_font *font,
+                                 uint32_t resolution, char text[64],
+                                 char *error, size_t error_capacity)
+{
+    if (font->size <= 0 || resolution == 0U) {
+        return set_error(error, error_capacity,
+                         "invalid Type 3 font scale");
+    }
+    uint64_t numerator = UINT64_C(7227) * UINT64_C(65536) * UINT64_C(1000);
+    uint64_t denominator = (uint64_t)resolution * (uint64_t)font->size;
+    uint64_t units = numerator / denominator;
+    uint64_t remainder = numerator % denominator;
+    if (remainder > denominator / 2U) {
+        ++units;
+    }
+    if (units > (uint64_t)INT64_MAX) {
+        return set_error(error, error_capacity,
+                         "invalid Type 3 font scale");
+    }
+    (void)pdf_format_units(text, 64U, (int64_t)units, 5);
+    if (text[0] == '0' && text[1] == '.') {
+        memmove(text, text + 1, strlen(text));
+    }
+    return 0;
+}
+
+static int pdf_type3_glyph_box(const struct hstex_pk_glyph *glyph,
+                               int32_t box[4], char *error,
+                               size_t error_capacity)
+{
+    if (glyph->width == 0 || glyph->height == 0) {
+        box[0] = 0;
+        box[1] = 0;
+        box[2] = 1;
+        box[3] = 1;
+        return 0;
+    }
+    int64_t left = -(int64_t)glyph->horizontal_offset;
+    int64_t bottom = (int64_t)glyph->vertical_offset - glyph->height + 1;
+    int64_t right = (int64_t)glyph->width - glyph->horizontal_offset + 1;
+    int64_t top = (int64_t)glyph->vertical_offset + 1;
+    if (left < INT32_MIN || left > INT32_MAX || bottom < INT32_MIN ||
+        bottom > INT32_MAX || right < INT32_MIN || right > INT32_MAX ||
+        top < INT32_MIN || top > INT32_MAX) {
+        return set_error(error, error_capacity,
+                         "Type 3 glyph bounding box is too large");
+    }
+    box[0] = (int32_t)left;
+    box[1] = (int32_t)bottom;
+    box[2] = (int32_t)right;
+    box[3] = (int32_t)top;
+    return 0;
+}
+
+static int pdf_write_type3_widths(struct hstex_engine *engine,
+                                  struct hstex_pdf_font *entry,
+                                  const struct hstex_font *font, char *error,
+                                  size_t error_capacity)
+{
+    entry->widths = pdf_new_object(engine);
+    if (pdf_begin_object(engine, entry->widths, error, error_capacity) != 0 ||
+        pdf_out_text(engine, "[", error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t code = entry->first; code <= entry->last; ++code) {
+        const struct hstex_pk_glyph *glyph = &entry->pk_font->glyphs[code];
+        char width[64] = "0";
+        if (pdf_font_code_used(entry->used, code) && glyph->present &&
+            pdf_type3_width_text(font, code, entry->pk_resolution, width,
+                                 error, error_capacity) != 0) {
+            return -1;
+        }
+        if ((code != entry->first &&
+             pdf_out_text(engine, " ", error, error_capacity) != 0) ||
+            pdf_out_text(engine, width, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return pdf_out_text(engine, "]\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_write_type3_glyph(struct hstex_engine *engine,
+                                 struct hstex_pdf_font *entry,
+                                 const struct hstex_font *font, size_t code,
+                                 char *error, size_t error_capacity)
+{
+    const struct hstex_pk_glyph *glyph = &entry->pk_font->glyphs[code];
+    char width[64];
+    int32_t box[4];
+    if (pdf_type3_width_text(font, code, entry->pk_resolution, width, error,
+                             error_capacity) != 0 ||
+        pdf_type3_glyph_box(glyph, box, error, error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_pdf_font_buffer content = {0};
+    int status = pdf_font_buffer_formatted(
+        &content, error, error_capacity, "%s 0 %d %d %d %d d1\n", width,
+        box[0], box[1], box[2], box[3]);
+    if (status == 0 && glyph->width != 0 && glyph->height != 0) {
+        status = pdf_font_buffer_formatted(
+            &content, error, error_capacity,
+            "q\n%d 0 0 %d %d %d cm\nBI\n/W %d\n/H %d\n"
+            "/IM true\n/BPC 1\n/D [1 0]\nID ",
+            glyph->width, glyph->height, box[0], box[1], glyph->width,
+            glyph->height);
+        if (status == 0) {
+            status = pdf_font_buffer_append(
+                &content, glyph->bitmap, glyph->bitmap_length, error,
+                error_capacity);
+        }
+        if (status == 0) {
+            status = pdf_font_buffer_text(&content, "\nEI\nQ\n", error,
+                                          error_capacity);
+        }
+    }
+    if (status == 0) {
+        entry->pk_glyph_objects[code] = pdf_new_object(engine);
+        status = pdf_write_stream_object(
+            engine, entry->pk_glyph_objects[code], NULL, 0U, content.bytes,
+            content.count, error, error_capacity);
+    }
+    free(content.bytes);
+    return status;
+}
+
+static int pdf_write_type3_encoding(struct hstex_engine *engine,
+                                    struct hstex_pdf_font *entry, char *error,
+                                    size_t error_capacity)
+{
+    entry->pk_encoding = pdf_new_object(engine);
+    if (pdf_begin_object(engine, entry->pk_encoding, error, error_capacity) !=
+            0 ||
+        pdf_out_text(engine,
+                     "<<\n/Type /Encoding\n/Differences [", error,
+                     error_capacity) != 0) {
+        return -1;
+    }
+    bool first = true;
+    for (size_t code = entry->first; code <= entry->last; ++code) {
+        if (!pdf_font_code_used(entry->used, code)) {
+            continue;
+        }
+        const char *space = first ? "" : " ";
+        if (entry->pk_font->glyphs[code].present) {
+            if (pdf_out_formatted(engine, error, error_capacity, "%s%zu /a%zu",
+                                  space, code, code) != 0) {
+                return -1;
+            }
+        } else if (pdf_out_formatted(engine, error, error_capacity,
+                                     "%s%zu /.notdef", space, code) != 0) {
+            return -1;
+        }
+        first = false;
+    }
+    return pdf_out_text(engine, "]\n>>\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_write_type3_char_procs(struct hstex_engine *engine,
+                                      struct hstex_pdf_font *entry,
+                                      char *error, size_t error_capacity)
+{
+    entry->pk_char_procs = pdf_new_object(engine);
+    if (pdf_begin_object(engine, entry->pk_char_procs, error, error_capacity) !=
+            0 ||
+        pdf_out_text(engine, "<<", error, error_capacity) != 0) {
+        return -1;
+    }
+    for (size_t code = entry->first; code <= entry->last; ++code) {
+        if (entry->pk_glyph_objects[code] != 0U &&
+            pdf_out_formatted(engine, error, error_capacity,
+                              "\n/a%zu %zu 0 R", code,
+                              entry->pk_glyph_objects[code]) != 0) {
+            return -1;
+        }
+    }
+    return pdf_out_text(engine, "\n>>\n", error, error_capacity) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
+static int pdf_type3_font_box(const struct hstex_pdf_font *entry,
+                              int32_t box[4], char *error,
+                              size_t error_capacity)
+{
+    bool held = false;
+    for (size_t code = entry->first; code <= entry->last; ++code) {
+        if (!pdf_font_code_used(entry->used, code) ||
+            !entry->pk_font->glyphs[code].present) {
+            continue;
+        }
+        int32_t glyph_box[4];
+        if (pdf_type3_glyph_box(&entry->pk_font->glyphs[code], glyph_box,
+                                error, error_capacity) != 0) {
+            return -1;
+        }
+        if (!held) {
+            memcpy(box, glyph_box, sizeof(glyph_box));
+            held = true;
+        } else {
+            if (glyph_box[0] < box[0]) {
+                box[0] = glyph_box[0];
+            }
+            if (glyph_box[1] < box[1]) {
+                box[1] = glyph_box[1];
+            }
+            if (glyph_box[2] > box[2]) {
+                box[2] = glyph_box[2];
+            }
+            if (glyph_box[3] > box[3]) {
+                box[3] = glyph_box[3];
+            }
+        }
+    }
+    if (!held) {
+        box[0] = 0;
+        box[1] = 0;
+        box[2] = 1;
+        box[3] = 1;
+    }
+    return 0;
+}
+
+static int pdf_write_type3_font(struct hstex_engine *engine,
+                                struct hstex_pdf_font *entry,
+                                const struct hstex_font *font, bool dictionary,
+                                char *error, size_t error_capacity)
+{
+    if (!dictionary) {
+        if (pdf_write_type3_widths(engine, entry, font, error,
+                                   error_capacity) != 0) {
+            return -1;
+        }
+        for (size_t code = entry->first; code <= entry->last; ++code) {
+            if (pdf_font_code_used(entry->used, code) &&
+                entry->pk_font->glyphs[code].present &&
+                pdf_write_type3_glyph(engine, entry, font, code, error,
+                                      error_capacity) != 0) {
+                return -1;
+            }
+        }
+        return pdf_write_type3_encoding(engine, entry, error, error_capacity) !=
+                       0 ||
+                       pdf_write_type3_char_procs(engine, entry, error,
+                                                  error_capacity) != 0
+                   ? -1
+                   : 0;
+    }
+    char matrix[64];
+    int32_t box[4];
+    if (pdf_type3_matrix_text(font, entry->pk_resolution, matrix, error,
+                              error_capacity) != 0 ||
+        pdf_type3_font_box(entry, box, error, error_capacity) != 0) {
+        return -1;
+    }
+    return pdf_begin_object(engine, entry->object, error, error_capacity) != 0 ||
+                   pdf_out_formatted(
+                       engine, error, error_capacity,
+                       "<<\n/Type /Font\n/Subtype /Type3\n/Name /F%u\n"
+                       "/FontMatrix [%s 0 0 %s 0 0]\n"
+                       "/FontBBox [%d %d %d %d]\n"
+                       "/Resources <<\n/ProcSet [/PDF /ImageB]\n>>\n"
+                       "/FirstChar %u\n/LastChar %u\n/Widths %zu 0 R\n"
+                       "/Encoding %zu 0 R\n/CharProcs %zu 0 R\n>>\n",
+                       (unsigned int)entry->number, matrix, matrix, box[0],
+                       box[1], box[2], box[3], (unsigned int)entry->first,
+                       (unsigned int)entry->last, entry->widths,
+                       entry->pk_encoding, entry->pk_char_procs) != 0 ||
+                   pdf_end_object(engine, error, error_capacity) != 0
+               ? -1
+               : 0;
+}
+
 /* What the file says of a font it does not carry: how far it reaches above
    and below the line, how wide its widest character is, and a stem width
    guessed from its full stop. */
@@ -26228,6 +26677,10 @@ static int pdf_write_font(struct hstex_engine *engine,
         font_by_identifier(engine, entry->identifier);
     if (font == NULL) {
         return set_error(error, error_capacity, "invalid font in the PDF file");
+    }
+    if (entry->pk_font != NULL) {
+        return pdf_write_type3_font(engine, entry, font, dictionary, error,
+                                    error_capacity);
     }
     struct hstex_pdf_physical_font *physical =
         entry->physical_place == 0U
@@ -41621,6 +42074,12 @@ static int execute_math_accent(struct hstex_engine *engine, char *error,
     if (code < 0 || code > 0x7FFF) {
         return set_error(error, error_capacity,
                          "math accent %d is outside 0..32767", code);
+    }
+    if (((code >> 12) & 0x07) == 7) {
+        int32_t requested = engine->integer_parameters[HSTEX_INTEGER_FAMILY];
+        if (requested >= 0 && requested < 16) {
+            code = (code & ~0x0F00) | (requested << 8);
+        }
     }
     struct hstex_noad noad = {
         .kind = (uint8_t)HSTEX_NOAD_ACCENT,

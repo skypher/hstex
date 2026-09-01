@@ -15,8 +15,8 @@ tests/corpus/run-corpus.sh --stress     # run adversarial/interactive inputs
 The documents are listed in `documents.tsv` and fetched from CTAN on first
 run, each pinned by SHA-256, into `build/corpus` (override with `CORPUS_WORK`).
 They are test input, not engine source, so they are fetched rather than
-vendored; the reference engine is run only as a black-box oracle. See
-`CLEANROOM.md`.
+vendored; the comparison run uses only the reference engine's observable
+outputs. See `SOURCE_POLICY.md`.
 
 The release corpus contains documents HSTeX currently matches and is run with
 `--strict` in CI. `stress-documents.tsv` contains hostile inputs that expose
@@ -66,12 +66,16 @@ format-build, or harness failures still fail the command.
 
 ## What is compared
 
-For each document, both engines are run over the same file and the logs are
-compared on:
+For each document, both engines are run over the same file. The gate compares:
 
 - the page count;
 - every box that did not fit, with its kind, amount, badness and lines; and
-- every fault reported.
+- every fault reported;
+- generated cross-reference and navigation state;
+- page boxes and rotation;
+- line and page breaks, glyph identities and positions, and normalized text;
+- destinations, links, and bookmarks; and
+- rendered pages at fixed settings.
 
 For a plain document, the output itself is compared as well, byte for byte.
 Both engines are given `\time`, `\day`, `\month` and `\year`, because a
@@ -80,18 +84,24 @@ nothing else, and the reference is asked for DVI so that there is no PDF
 identifier or timestamp in the way. `story` and `gentle` both come out
 identical to the reference's -- 680 and 263,424 bytes.
 
-A LaTeX document is not compared this way: its PDF carries identifiers and
-timestamps of its own.
+A LaTeX PDF is compared by `compare-pdf.py`, which uses `mutool`, `pdfinfo`,
+and `pdftotext` to compare document semantics without comparing identifiers,
+timestamps, compression, object numbers, xref layout, or font subset prefixes.
+MuPDF renders both sides at 144 dpi with identical RGB and antialiasing
+settings. The fixed glyph-coordinate tolerance is 0.01 PDF points. Generated
+`.aux`, `.toc`, `.out`, and other cross-pass state files are compared exactly.
 
 The reference's summary statistics count its own string pool, `mem` array,
-hash and font tables. Those are properties of that program, not of the
-document, and reproducing them would mean copying its data structures, which
-`CLEANROOM.md` forbids. They are not compared; see `docs/DECISIONS.md`,
-`what-a-clean-room-engine-cannot-reproduce`.
+hash and font tables. Those are properties of that implementation, not of the
+document, so they are not semantic comparison targets.
 
 LaTeX documents are run for a single pass on both sides, so cross-references
 resolve to the same degree in each. A document whose references need a second
 pass reports the same unresolved state in both logs.
+
+The LaTeX comparison requires MuPDF's command-line tools and Poppler's
+`pdfinfo` and `pdftotext`. On Debian and Ubuntu these are provided by
+`mupdf-tools` and `poppler-utils`.
 
 ## Adding a document
 

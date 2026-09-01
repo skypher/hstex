@@ -1,4 +1,5 @@
 #include "hstex/input.h"
+#include "test_cli.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -99,8 +100,13 @@ static int check_large_file(const char *path)
     return 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX input-buffer tests.");
+    if (option >= 0) {
+        return option;
+    }
     char path[] = "/tmp/hstex-input-test-XXXXXX";
     int file_descriptor = mkstemp(path);
     if (file_descriptor < 0 || close(file_descriptor) != 0) {

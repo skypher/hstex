@@ -1,4 +1,5 @@
 #include "hstex/filedb.h"
+#include "test_cli.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -28,8 +29,13 @@ static bool is_readable_file(const char *path)
            S_ISREG(status.st_mode) && access(path, R_OK) == 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX file-database tests.");
+    if (option >= 0) {
+        return option;
+    }
     const struct hstex_file_db *database = hstex_file_db_shared();
     if (database == NULL) {
         (void)printf("test_filedb: no filename database here; nothing to ask\n");

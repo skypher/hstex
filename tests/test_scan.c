@@ -1,4 +1,5 @@
 #include "hstex/scan.h"
+#include "test_cli.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -54,8 +55,13 @@ static int check_declared_boundaries(void)
     return 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX scanner tests.");
+    if (option >= 0) {
+        return option;
+    }
     uint8_t storage[1024 + 64];
     for (size_t index = 0U; index < sizeof(storage); ++index) {
         storage[index] = (uint8_t)'a';

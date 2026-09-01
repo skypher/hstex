@@ -1,6 +1,6 @@
 # HSTeX
 
-HSTeX is a clean-room TeX engine written in C17 for low-latency,
+HSTeX is an independent TeX engine written in C17 for low-latency,
 pdfTeX-compatible typesetting on modern CPUs.
 
 The first end-to-end milestone is semantic agreement with pdfTeX on the
@@ -13,7 +13,7 @@ already supported.
 
 | Area | Current state |
 | --- | --- |
-| Engine | Clean-room C17 implementation; no pdfTeX fallback |
+| Engine | Independent C17 implementation; no pdfTeX fallback |
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
 | Adversarial corpus | Six pinned stress cases track unsupported or mismatching behavior and run non-strictly in CI |
@@ -75,8 +75,8 @@ pdfTeX as a fallback. The complete command-line contract is in
 The normal Meson suite exercises the tokenizer, input stack, catcodes,
 symbol table, mouth, file database, engine, and driver.
 
-The canonical Trip comparison fetches digest-pinned inputs and treats pdfTeX
-only as a black-box behavioral oracle:
+The canonical Trip comparison fetches digest-pinned inputs and compares HSTeX
+with pdfTeX behavior:
 
 ```sh
 tests/trip/run-trip.sh ./build/hstex
@@ -153,16 +153,18 @@ results are separate, as are ordinary and persistent-process results.
 The authoritative procedure is
 [`docs/BENCHMARK_CONTRACT.md`](docs/BENCHMARK_CONTRACT.md).
 
-## Clean-room development
+## Source use and provenance
 
-HSTeX implementation work must not read, translate, adapt, or copy source from
-TeX, WEB, pdfTeX, or another TeX engine. Reference engines may only be executed
-as black-box behavioral oracles. TeX Live macro, font, metric, encoding, and
-map files are external input data.
+Public TeX-engine implementations may be consulted for behavior, algorithms,
+and edge cases. Incompatibly licensed code must not be pasted or mechanically
+translated into HSTeX, and production HSTeX never invokes pdfTeX as a fallback.
+TeX Live macro, font, metric, encoding, and map files remain external input
+data.
 
-Read [`CLEANROOM.md`](CLEANROOM.md) before contributing. Non-obvious
-compatibility choices must be backed by a public specification or a recorded
-black-box experiment in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Read [`SOURCE_POLICY.md`](SOURCE_POLICY.md) before contributing. Non-obvious
+compatibility choices must identify the specification, controlled experiment,
+or exact source version and location in
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Documentation
 

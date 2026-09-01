@@ -12,11 +12,12 @@
 /* A format is the engine's state once the format source has been read, put
    by so that the next run need not read it again: the names the engine
    knows and what they mean, the registers, the parameters, the fonts and the
-   hyphenation patterns. What a run builds as it goes is not in it, and a
-   format is only written where none of that has begun. See
+   hyphenation patterns, and glyph-to-Unicode mappings. What a run builds as
+   it goes is not in it, and a format is only written where none of that has
+   begun. See
    docs/DECISIONS.md, the-format-a-run-starts-from. */
 
-static const char hstex_format_magic[] = "HSTEX format 1\n";
+static const char hstex_format_magic[] = "HSTEX format 2\n";
 
 /* How wide the records a format carries are. A format written by one build
    and read by another whose records are laid out differently is not a format
@@ -29,6 +30,7 @@ static uint64_t hstex_format_layout(void)
         sizeof(struct hstex_insert_detail),
         sizeof(struct hstex_box),     sizeof(struct hstex_font),
         sizeof(struct hstex_glue),    sizeof(struct hstex_save_entry),
+        sizeof(struct hstex_glyph_unicode),
     };
     uint64_t digest = UINT64_C(0xcbf29ce484222325);
     for (size_t index = 0U; index < sizeof(widths) / sizeof(widths[0]);
@@ -266,6 +268,17 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
     TRANSFER_VALUE(stream, font->checksum);
 }
 
+static void transfer_string(struct format_stream *stream, char **string)
+{
+    size_t length = 0U;
+    if (stream->writing && *string != NULL) {
+        length = strlen(*string) + 1U;
+    }
+    void *bytes = stream->writing ? (void *)*string : NULL;
+    transfer_array(stream, &bytes, &length, NULL, 1U, false);
+    *string = bytes;
+}
+
 /* Everything a format carries, in one order for both directions. */
 static void transfer_format(struct format_stream *stream,
                             struct hstex_engine *engine)
@@ -468,6 +481,29 @@ static void transfer_format(struct format_stream *stream,
     TRANSFER_VALUE(stream, engine->group_level);
     TRANSFER_VALUE(stream, engine->dump_requested);
 
+    /* \pdfglyphtounicode is normally executed while a macro format is
+       built. Its mappings must therefore travel with that format: they are
+       later consumed while document fonts and their ToUnicode CMaps are
+       written. */
+    size_t glyph_unicode_count = engine->glyph_unicode_count;
+    void *glyph_unicode = engine->glyph_unicode;
+    static const struct format_hole glyph_unicode_holes[] = {
+        FORMAT_ADDRESS(hstex_glyph_unicode, glyph),
+        FORMAT_ADDRESS(hstex_glyph_unicode, unicode),
+    };
+    transfer_array_cleared(
+        stream, &glyph_unicode, &glyph_unicode_count,
+        &engine->glyph_unicode_capacity, sizeof(*engine->glyph_unicode), true,
+        glyph_unicode_holes,
+        sizeof(glyph_unicode_holes) / sizeof(*glyph_unicode_holes));
+    engine->glyph_unicode = glyph_unicode;
+    engine->glyph_unicode_count = glyph_unicode_count;
+    for (size_t index = 0U;
+         index < glyph_unicode_count && !stream->failed; ++index) {
+        transfer_string(stream, &engine->glyph_unicode[index].glyph);
+        transfer_string(stream, &engine->glyph_unicode[index].unicode);
+    }
+
     /* The names the state digest passes over -- the macro package's own
        scratch -- travel with the format, because they describe the package
        the format is. A list given by the environment is the experimenter's
@@ -571,7 +607,27 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                             "out differently; build the format again",
                             path);
     }
+    static const enum hstex_integer_parameter process_clock[] = {
+        HSTEX_INTEGER_TIME,
+        HSTEX_INTEGER_DAY,
+        HSTEX_INTEGER_MONTH,
+        HSTEX_INTEGER_YEAR,
+    };
+    int32_t clock_values[sizeof(process_clock) / sizeof(*process_clock)];
+    uint32_t clock_levels[sizeof(process_clock) / sizeof(*process_clock)];
+    for (size_t index = 0U;
+         index < sizeof(process_clock) / sizeof(*process_clock); ++index) {
+        clock_values[index] = engine->integer_parameters[process_clock[index]];
+        clock_levels[index] =
+            engine->integer_parameter_levels[process_clock[index]];
+    }
     transfer_format(&stream, engine);
+    for (size_t index = 0U;
+         index < sizeof(process_clock) / sizeof(*process_clock); ++index) {
+        engine->integer_parameters[process_clock[index]] = clock_values[index];
+        engine->integer_parameter_levels[process_clock[index]] =
+            clock_levels[index];
+    }
     free(bytes);
     if (stream.failed) {
         return format_error(error, error_capacity, "%s is not a format",

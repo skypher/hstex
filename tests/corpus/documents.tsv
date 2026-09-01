@@ -1,4 +1,4 @@
-# The public document corpus, run as black-box comparisons against the
+# The public document corpus, run as behavioral comparisons against the
 # reference engine.  One document per line:
 #
 #   name <TAB> format <TAB> ctan-path <TAB> sha256 <TAB> description
@@ -7,7 +7,7 @@
 # format is `plain' (run under plain TeX) or `latex'.  Documents are fetched
 # from CTAN and pinned by digest rather than vendored: they are test input,
 # not engine source, and the repository should not carry copies of documents
-# whose licences let them be fetched.  See CLEANROOM.md.
+# whose licences let them be fetched. See SOURCE_POLICY.md.
 story	plain	systems/knuth/dist/lib/story.tex	592939f339e78d7faca19c75017ec338db7c9efdea085c4374e5b13909cc8ec6	Knuth's canonical plain TeX sample
 gentle	plain	info/gentle/gentle.tex	b3e1acf4a6feb6a13b0ace279a5be7f1546ac2198452188f6fb22b4eb590ba3f	Doob, A Gentle Introduction to TeX, a 97-page plain TeX book
 small2e	latex	macros/latex/base/small2e.tex	6995024e85f537d32eef704a81d7f53b84aa06cb23361559d3fea3b6c5653627	LaTeX's own minimal sample document

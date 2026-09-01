@@ -67,6 +67,7 @@ core = static_library(
     'src/input.c',
     'src/lex.c',
     'src/mouth.c',
+    'src/pk.c',
     'src/scan.c',
     'src/source.c',
     'src/symbol.c',
@@ -144,6 +145,15 @@ mouth_test = executable(
 )
 test('mouth', mouth_test)
 
+pk_test = executable(
+  'test_pk',
+  'tests/test_pk.c',
+  include_directories: [public_include, generated_include, include_directories('src')],
+  link_with: core,
+  dependencies: zlib,
+)
+test('pk', pk_test)
+
 source_test = executable(
   'test_source',
   'tests/test_source.c',
@@ -187,7 +197,7 @@ install_headers(
 
 install_data(
   'README.md',
-  'CLEANROOM.md',
+  'SOURCE_POLICY.md',
   'docs/COMPATIBILITY.md',
   'docs/RELEASING.md',
   install_dir: get_option('datadir') / 'doc' / meson.project_name(),

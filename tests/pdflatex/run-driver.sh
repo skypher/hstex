@@ -4,8 +4,24 @@
 
 set -eu
 
+usage() {
+    printf '%s\n' 'Usage: tests/pdflatex/run-driver.sh DRIVER ENGINE'
+    printf '%s\n' 'Exercise the pdflatex driver cache and output naming.'
+}
+
+case ${1:-} in
+-h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
 if [ "${HSTEX_TEST_PDFLATEX_DRIVER:-0}" != 1 ]; then
     exit 77
+fi
+if [ "$#" -ne 2 ]; then
+    usage >&2
+    exit 2
 fi
 
 driver=$1

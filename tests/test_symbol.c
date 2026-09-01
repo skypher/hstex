@@ -1,4 +1,5 @@
 #include "hstex/symbol.h"
+#include "test_cli.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -23,8 +24,13 @@ static int expect_name(const struct hstex_symbol_table *table,
     return 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX symbol-table tests.");
+    if (option >= 0) {
+        return option;
+    }
     struct hstex_symbol_table table;
     char error[256];
     if (hstex_symbols_init(&table, error, sizeof(error)) != 0) {

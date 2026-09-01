@@ -22,8 +22,9 @@ The reference engine is pdfTeX: `pdftex` in plain format for plain documents,
 `pdflatex` for LaTeX ones. Both engines get one pass over the same file, so
 cross-references resolve to the same degree on each side.
 
-The reference is run only as a black-box behavioural oracle. Nothing of its
-implementation is read; see `CLEANROOM.md`.
+The corpus runner uses reference executables only for their observable output.
+Implementation source may be consulted separately under `SOURCE_POLICY.md`,
+but it is not an input to the differential run.
 
 ## Correctness gates
 
@@ -39,17 +40,25 @@ agree with the reference:
 - the run completes, with the same faults reported in the same words;
 - the page count;
 - every box that did not fit, with its kind, amount, badness and lines;
-- line and page breaks;
-- glyph identities and positions within a fixed PDF-coordinate tolerance; and
-- normalized extracted text.
+- cross-reference and navigation state in generated auxiliary files;
+- every page box and rotation;
+- line and page breaks and normalized extracted text;
+- glyph identities, fonts, transforms, and positions within 0.01 PDF points;
+- named destinations, URI and page-link annotations, and bookmarks; and
+- the exact 144 dpi, 8-bit-antialiased RGB rendering produced for each side by
+  the same MuPDF invocation.
+
+`tests/corpus/compare-pdf.py` implements the representation-independent PDF
+checks using MuPDF and Poppler. Font subset prefixes are ignored. Auxiliary
+files used as cross-pass state are compared byte for byte because both engines
+receive the same job name, inputs, environment, and pass count.
 
 Metadata timestamps, compression choices, object numbers, object-stream
 grouping, xref representation, and font subset names may differ.
 
 The reference's summary statistics count its own string pool, `mem` array,
-hash and font tables. They are properties of that program rather than of the
-document and are not gated; see `docs/DECISIONS.md`,
-`what-a-clean-room-engine-cannot-reproduce`.
+hash and font tables. They describe its implementation rather than the
+document and are not semantic gates.
 
 ## Performance gates
 

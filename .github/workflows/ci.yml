@@ -54,6 +54,10 @@ jobs:
           "$HOME/meson/bin/pip" install --quiet --upgrade meson
           echo "$HOME/meson/bin" >> "$GITHUB_PATH"
 
+      - name: Install corpus comparison tools
+        if: matrix.runner == 'ubuntu-24.04'
+        run: sudo apt-get install -y mupdf-tools poppler-utils
+
       - name: Install build tools
         if: runner.os == 'macOS'
         run: brew install meson ninja
@@ -89,7 +93,7 @@ jobs:
         if: runner.os == 'macOS'
         run: >-
           meson test -C build --no-rebuild --print-errorlogs
-          scan input catcode symbol mouth source
+          scan input catcode symbol mouth pk source
 
       # The corpora are pinned by digest and fetched from CTAN, and the
       # benchmark input is vendored: both are checked once, not once per
@@ -192,7 +196,7 @@ jobs:
             # which reads real font metrics -- has nothing to read. It is the
             # same set the TeX-less macOS images run; see above.
             meson test -C build --print-errorlogs \
-              scan input catcode symbol mouth source
+              scan input catcode symbol mouth pk source
 
   netbsd:
     name: NetBSD 11
@@ -216,7 +220,7 @@ jobs:
             # which reads real font metrics -- has nothing to read. It is the
             # same set the TeX-less macOS images run; see above.
             meson test -C build --print-errorlogs \
-              scan input catcode symbol mouth source
+              scan input catcode symbol mouth pk source
 
   openbsd:
     name: OpenBSD 7.9
@@ -237,4 +241,4 @@ jobs:
             # which reads real font metrics -- has nothing to read. It is the
             # same set the TeX-less macOS images run; see above.
             meson test -C build --print-errorlogs \
-              scan input catcode symbol mouth source
+              scan input catcode symbol mouth pk source

@@ -10,6 +10,27 @@
 # taken with a build that was told the corpus's own answers.
 set -euo pipefail
 
+usage() {
+  printf '%s\n' 'Usage: tools/build-pgo.sh [BUILD-DIRECTORY]'
+  printf '%s\n' 'Build an optimized HSTeX binary using the training corpus for PGO.'
+}
+
+case ${1:-} in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  -*)
+    printf 'unknown option: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -gt 1 ]; then
+  usage >&2
+  exit 2
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build="${1:-$root/build-pgo}"
 training="$root/benchmarks/training/train.tex"

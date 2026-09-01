@@ -8,7 +8,7 @@
  *
  * The lists are input data, not anything's implementation: a line ending in
  * a colon names the directory the lines under it belong to, and the rest are
- * what that directory holds. See CLEANROOM.md.
+ * what that directory holds. See SOURCE_POLICY.md.
  *
  * Only a name the database is sure about is answered here. A name it holds
  * twice, a name it does not hold, a name with a directory in it, or a name

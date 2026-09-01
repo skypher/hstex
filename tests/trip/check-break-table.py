@@ -5,14 +5,31 @@ to the letter after it differs: nothing, a kern, or a ligature.
 \\hyphenpenalty=10000 keeps each discretionary whole so \\showbox prints its
 replace count and both its lists.
 
-    python3 tests/trip/check-break-table.py [-v]
+    python3 -u tests/trip/check-break-table.py [-v]
 
 Run it from a directory holding cmr10 (any will do -- kpsewhich finds it);
 it writes its working files into the directory it is run from.
 
 See docs/DECISIONS.md, where-a-rebuilt-run-begins.
 """
-import subprocess, re, os, sys
+import argparse
+import difflib
+import os
+import re
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser(
+    description="Compare selected cmr10 hyphen-break tables with pdfTeX."
+)
+parser.add_argument("-v", "--verbose", action="store_true", help="show diffs")
+arguments = parser.parse_args()
+
+ENGINE = os.environ.get("HSTEX") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "build",
+    "hstex",
+)
 CASES = [
  ('avatar',      'avatar',      'a1t'),
  ('abcd',        'abcd',        'b1c'),
@@ -57,7 +74,7 @@ for name, word, pat in CASES:
         if os.path.exists(f): os.remove(f)
     subprocess.run(['pdftex','-ini','-interaction=nonstopmode','mx.tex'], capture_output=True)
     with open('mx-hstex.log','w') as out:
-        subprocess.run(['/home/yang/hstex/build/hstex','--run-ini','mx.tex'],
+        subprocess.run([ENGINE, '--run-ini', 'mx.tex'],
                        stdout=out, stderr=subprocess.STDOUT)
     r, h = box('mx.log'), box('mx-hstex.log')
     if r is None or h is None:
@@ -68,8 +85,8 @@ for name, word, pat in CASES:
     else:
         bad += 1
         print("%-11s DIFFERS" % name)
-        if '-v' in sys.argv:
-            import difflib
+        if arguments.verbose:
             for l in list(difflib.unified_diff(r.split('\n'), h.split('\n'), 'ref','hstex', lineterm='', n=2))[:18]:
                 print("     ", l)
 print("differing:", bad, "of", len(CASES))
+sys.exit(1 if bad else 0)

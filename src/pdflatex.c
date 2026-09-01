@@ -32,6 +32,7 @@ static void usage(FILE *stream)
         "  -output-format=pdf\n"
         "\n"
         "HSTeX options:\n"
+        "  -h, --help           show this help and exit\n"
         "  --format-cache=DIR    store native formats below DIR\n"
         "  --rebuild-format       rebuild the native LaTeX format\n"
         "\n"
@@ -626,7 +627,8 @@ int main(int argument_count, char **arguments)
             options = false;
             continue;
         }
-        if (options && (strcmp(argument, "--help") == 0 ||
+        if (options && (strcmp(argument, "-h") == 0 ||
+                        strcmp(argument, "--help") == 0 ||
                         strcmp(argument, "-help") == 0)) {
             usage(stdout);
             return 0;

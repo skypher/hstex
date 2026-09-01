@@ -4,8 +4,19 @@
 
 set -eu
 
+usage() {
+    printf '%s\n' 'Usage: tools/package-release.sh BUILD_DIR OUTPUT_DIR'
+    printf '%s\n' 'Package tested static Linux binaries as tar and Debian assets.'
+}
+
+case ${1:-} in
+-h|--help)
+    usage
+    exit 0
+    ;;
+esac
 if [ "$#" -ne 2 ]; then
-    echo "usage: tools/package-release.sh BUILD_DIR OUTPUT_DIR" >&2
+    usage >&2
     exit 2
 fi
 
@@ -67,7 +78,7 @@ install -m 0755 "$build/hstex-pdflatex" "$prefix/bin/hstex-pdflatex"
 install -m 0644 "$root/LICENSE" "$prefix/share/doc/hstex/LICENSE"
 install -m 0644 "$root/NOTICE" "$root/THIRD_PARTY_NOTICES.md" \
     "$prefix/share/doc/hstex/"
-install -m 0644 "$root/README.md" "$root/CLEANROOM.md" \
+install -m 0644 "$root/README.md" "$root/SOURCE_POLICY.md" \
     "$root/docs/COMPATIBILITY.md" "$root/docs/RELEASING.md" \
     "$prefix/share/doc/hstex/"
 install -m 0644 "$root/docs/hstex-pdflatex.1" "$prefix/share/man/man1/"

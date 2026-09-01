@@ -28,7 +28,8 @@ jobs:
           test -f THIRD_PARTY_NOTICES.md
           sudo apt-get update
           sudo apt-get install -y build-essential curl musl-tools ninja-build \
-            python3-venv texlive-latex-base texlive-latex-recommended \
+            mupdf-tools poppler-utils python3-venv texlive-latex-base \
+            texlive-latex-recommended \
             texlive-fonts-recommended
           python3 -m venv "$HOME/meson"
           "$HOME/meson/bin/pip" install --quiet --upgrade meson

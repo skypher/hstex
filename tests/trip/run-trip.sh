@@ -1,9 +1,9 @@
 #!/bin/sh
-# Knuth's trip test, run as a black-box comparison.
+# Knuth's Trip test, run as a behavioral comparison.
 #
 # trip.tex is a test input, not engine source: it is fetched rather than
 # vendored, pinned by digest, and the reference engine is run only to
-# produce the log this one is compared against. See CLEANROOM.md.
+# produce the log this one is compared against. See SOURCE_POLICY.md.
 #
 # The trip test is above all an error-recovery test -- most of what it does
 # is wrong on purpose, and the reference reports each fault and carries on.
@@ -88,7 +88,8 @@ fetch trip.pl "$TRIP_PL_SHA"
 # The font the test defines for itself.
 pltotf trip.pl trip.tfm
 
-# A clean room per engine, holding only what trip is given to start with.
+# An isolated directory per engine, holding only what Trip is given to start
+# with.
 for room in oracle hstex; do
     rm -rf "$work/$room"
     mkdir -p "$work/$room/build"

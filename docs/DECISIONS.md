@@ -1,11 +1,13 @@
 # Engineering decisions
 
-## Clean-room boundary
+## Source-use boundary
 
-HSTeX is implemented from public specifications and black-box observations of
-reference engines. Reference-engine implementation source is never read,
-translated, or adapted. TeX macro, font, metric, encoding, and map files are
-input data rather than engine implementation source.
+HSTeX is an independent C17 implementation informed by public specifications,
+controlled observations, and, where useful, public TeX-engine source. Source
+consultation records the engine version or commit and exact location. Code is
+not pasted or mechanically translated from incompatibly licensed engines.
+TeX macro, font, metric, encoding, and map files are input data. The complete
+policy is in `SOURCE_POLICY.md`.
 
 ## Public corpus
 
@@ -20,6 +22,35 @@ Published measurements identify the compiler and flags, CPU affinity, worker
 count, machine load, peak RSS, source manifest, and timing mode. Performance
 changes require a benchmark and compatibility coverage for their semantic
 boundary.
+
+## Reference-internal statistics
+
+Reference log totals for strings, string characters, memory words, control
+sequences, and font information describe pdfTeX's internal storage rather than
+the typeset document. HSTeX compares file and format identities, font usage,
+faults, box reports, auxiliary state, and document output, but does not imitate
+or gate on those implementation-specific totals.
+
+## Reproducible process clock
+
+Controlled pdfTeX 1.40.25 runs show that `SOURCE_DATE_EPOCH=946684800`
+selects `D:20000101000000Z` for `\pdfcreationdate`, while the ordinary TeX
+clock remains local unless `FORCE_SOURCE_DATE` is exactly `1`. With that
+second variable set, `\year`, `\month`, `\day`, and `\time` are respectively
+2000, 1, 1, and 0 in UTC. HSTeX follows that behavior. Loading a format keeps
+the new process's four clock values instead of restoring the values present
+when the format was built. Corpus comparisons pin both processes to
+2026-01-01 10:00 UTC.
+
+## Variable-family math accents
+
+The high three class bits of a `\mathaccent` code have the same class-seven
+meaning as a math character: when they are seven and `\fam` names a family,
+the accent comes from that family. A pdfTeX 1.40.25 probe with
+`\fam=4 \mathaccent\"707E A` selects both the tilde and `A` from family 4.
+HSTeX resolves and records that family when the accent is scanned, before a
+surrounding math-alphabet group can restore `\fam`, then uses the recorded
+family while measuring and placing the accent.
 
 ## Large glue realization
 
@@ -39,9 +70,11 @@ Black-box pdfTeX 1.40.25 probes with `TZ=UTC SOURCE_DATE_EPOCH=946684800` and
 with `TZ=America/New_York SOURCE_DATE_EPOCH=946684800` both expand to
 `D:20000101000000Z`.  Without `SOURCE_DATE_EPOCH`, UTC uses the same trailing
 `Z`, while `Asia/Shanghai` and `America/New_York` write local wall time followed
-by `+08'00'` and `-04'00'`, respectively.  A separate probe shows that setting
-`SOURCE_DATE_EPOCH` does not change `\year`, `\month`, `\day`, or `\time`.
-HSTeX therefore stores the PDF timestamp separately from those TeX registers.
+by `+08'00'` and `-04'00'`, respectively. A separate probe shows that setting
+`SOURCE_DATE_EPOCH` alone does not change `\year`, `\month`, `\day`, or
+`\time`; `FORCE_SOURCE_DATE=1` applies the UTC source epoch to those registers.
+HSTeX stores the PDF timestamp separately and refreshes the TeX clock when a
+format is loaded.
 
 ## PDF random numbers
 
@@ -118,6 +151,24 @@ close is preserved by the observed font-specific compatibility cases.
 PDF string syntax permits balanced parentheses inside a literal string. The
 default `PTEX.Fullbanner` therefore carries `(TeX Live 2023/Debian)` without
 escape bytes, matching the reference information dictionary.
+
+## PK bitmap-font embedding
+
+The public-domain *PKtype* 2.3 specification, §§14–26, defines the PK preamble,
+the short, extended, and long character packets, raw bitmaps, packed run
+numbers, and repeated rows. HSTeX implements those documented formats directly
+in `src/pk.c`; no implementation code was copied. The consulted source is the
+[23 April 2020 PKtype document](https://tug.ctan.org/info/knuth-pdf/other/pktype.pdf).
+
+When a TeX font has no map entry, HSTeX requests the PK bitmap at
+`\pdfpkresolution`, scaled by the requested size over the TFM design size. A
+controlled pdfTeX 1.40.25 comparison with `tcrm0600`, `tcrm0800`, `tcrm0900`,
+`tcrm1000`, and `tcrm1200` shows one PDF Type 3 font per logical TeX font. Its
+used character codes are named `a<code>`, each character procedure paints a
+one-bit image mask from the PK minimum bounding box, and the font matrix makes
+one bitmap pixel equal one device pixel at the configured resolution. Missing
+packets map to `.notdef`; unused codes between `FirstChar` and `LastChar` have
+zero widths.
 
 ## e-TeX expression scaling
 

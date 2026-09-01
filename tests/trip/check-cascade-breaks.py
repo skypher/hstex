@@ -7,14 +7,23 @@ the discretionary's replace count and both its lists instead of the emptied
 one a taken break leaves behind.  A probe that takes its break cannot test
 what the break replaces.
 
-    python3 tests/trip/check-cascade-breaks.py
+    python3 -u tests/trip/check-cascade-breaks.py
 
 Run it from a directory holding trip.tfm; tests/trip/run-trip.sh builds one
 in build/trip.
 
 See docs/DECISIONS.md, a-break-inside-a-cascade-of-ligatures.
 """
-import subprocess, re, os, sys
+import argparse
+import os
+import re
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser(
+    description="Compare cascading-ligature discretionary breaks with pdfTeX."
+)
+parser.parse_args()
 
 # The engine, wherever this is run from -- and it must be run from a
 # directory holding trip.tfm, which is not the repository root.

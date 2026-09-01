@@ -856,6 +856,8 @@ struct hstex_char_metric {
 
 #define HSTEX_FONT_CHARACTER_COUNT 256U
 
+struct hstex_pk_font;
+
 /* One step of a metric file's ligature and kerning program. */
 struct hstex_lig_kern {
     uint8_t skip;
@@ -952,6 +954,11 @@ struct hstex_pdf_font {
     size_t encoding_place;
     size_t physical_place;
     size_t to_unicode;
+    struct hstex_pk_font *pk_font;
+    size_t *pk_glyph_objects;
+    size_t pk_encoding;
+    size_t pk_char_procs;
+    uint32_t pk_resolution;
 };
 
 /* One PostScript encoding shared by all mapped TeX fonts that name it. */

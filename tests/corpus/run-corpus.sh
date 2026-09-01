@@ -1,15 +1,14 @@
 #!/bin/sh
-# The public document corpus, run as a black-box comparison.
+# The public document corpus, run as a behavioral comparison.
 #
 # Each document is fetched from CTAN, pinned by digest, and typeset twice:
 # once by the reference engine and once by HSTeX.  Nothing of the reference
-# but its behaviour is used -- it is run to produce the log this engine's is
-# compared against.  See CLEANROOM.md.
+# but its observable output is used by this runner. See SOURCE_POLICY.md.
 #
-# What is compared is what the reference says about the document: how many
-# pages it made, which boxes did not fit, and which faults it reported.  The
-# reference's own storage statistics are not comparable and are not compared;
-# see docs/DECISIONS.md, what-a-clean-room-engine-cannot-reproduce.
+# The comparison includes logs, auxiliary state, page geometry, line and page
+# breaks, glyph placement, extracted text, links, destinations, bookmarks, and
+# deterministic rendered pages. The reference's own storage statistics
+# describe its implementation and are not semantic comparison targets.
 #
 # Usage: tests/corpus/run-corpus.sh [--stress] [--strict] [--fetch-only]
 #                                   [--time] [path-to-hstex]
@@ -101,6 +100,9 @@ https://mirrors.ibiblio.org/CTAN'
 # A document that prints the date must be given one, or the two runs differ by
 # the time of day and nothing else.
 clock='\time=600 \day=1 \month=1 \year=2026'
+SOURCE_DATE_EPOCH=1767261600
+FORCE_SOURCE_DATE=1
+export SOURCE_DATE_EPOCH FORCE_SOURCE_DATE
 latex_ltx=
 [ "$fetch_only" -eq 1 ] || latex_ltx=$(kpsewhich latex.ltx)
 
@@ -180,6 +182,16 @@ if [ "$fetch_only" -eq 1 ]; then
     printf '%s documents match their pinned digests\n' \
         "$(wc -l <"$work/manifest.clean")"
     exit 0
+fi
+
+if grep -q "	latex	" "$work/manifest.clean"; then
+    for comparison_tool in python3 mutool pdfinfo pdftotext; do
+        if ! command -v "$comparison_tool" >/dev/null 2>&1; then
+            printf 'required corpus comparison tool is missing: %s\n' \
+                "$comparison_tool" >&2
+            exit 1
+        fi
+    done
 fi
 
 # HSTEX'S LATEX FORMAT, BUILT ONCE. The reference starts each document from
@@ -277,8 +289,9 @@ while IFS='	' read -r name format path want note input_profile; do
               <../stdin.txt >hstex.log 2>&1
       fi ) || hs_status=$?
 
-    # What each engine actually produced. Only a plain document can be
-    # compared this way: a PDF carries its own identifiers and timestamps.
+    # What each engine actually produced. DVI is byte-stable with the pinned
+    # clock. PDF is compared semantically because identifiers, timestamps,
+    # compression, and object numbering may differ.
     output=-
     if [ "$format" = plain ]; then
         ref_dvi=$dir/ref/$name.dvi
@@ -289,6 +302,76 @@ while IFS='	' read -r name format path want note input_profile; do
             output=same
         else
             output=differs
+        fi
+    else
+        ref_pdf=$dir/ref/$name.pdf
+        hs_output_dir=$dir/hstex/build/document-output
+        hs_pdf=$hs_output_dir/$name.pdf
+        pdf_output=none
+        if [ "$hs_status" -ne 0 ]; then
+            if [ -f "$ref_pdf" ] || [ -f "$hs_pdf" ]; then
+                pdf_output=differs
+            fi
+        elif [ -f "$ref_pdf" ] && [ -f "$hs_pdf" ]; then
+            mkdir -p "$dir/pdf-semantics"
+            if python3 -u "$here/compare-pdf.py" \
+                "$ref_pdf" "$hs_pdf" --artifacts "$dir/pdf-semantics" \
+                >"$dir/pdf.compare" 2>&1; then
+                pdf_output=same
+            else
+                pdf_compare_status=$?
+                if [ "$pdf_compare_status" -eq 1 ]; then
+                    pdf_output=differs
+                    { printf '=== %s: PDF semantics ===\n' "$name"
+                      cat "$dir/pdf.compare"; } >>"$detail"
+                else
+                    printf 'PDF comparison failed for %s; see %s\n' \
+                        "$name" "$dir/pdf.compare" >&2
+                    cat "$dir/pdf.compare" >&2
+                    exit 1
+                fi
+            fi
+        elif [ -f "$ref_pdf" ] || [ -f "$hs_pdf" ]; then
+            pdf_output=missing
+        fi
+
+        # Cross-reference and navigation files are semantic state between
+        # passes. Exact bytes are expected because both runs use the same job
+        # name, input, environment, and pass count.
+        auxiliary_output=none
+        : >"$dir/auxiliary.compare"
+        for auxiliary_suffix in \
+            aux bbl bcf brf idx ind lof lol lot nav out run.xml snm toc vrb; do
+            ref_auxiliary=$dir/ref/$name.$auxiliary_suffix
+            hs_auxiliary=$hs_output_dir/$name.$auxiliary_suffix
+            if [ -f "$ref_auxiliary" ] || [ -f "$hs_auxiliary" ]; then
+                [ "$auxiliary_output" = none ] && auxiliary_output=same
+                if [ ! -f "$ref_auxiliary" ] || [ ! -f "$hs_auxiliary" ]; then
+                    auxiliary_output=missing
+                    printf '%s.%s exists on only one side\n' \
+                        "$name" "$auxiliary_suffix" >>"$dir/auxiliary.compare"
+                elif ! cmp -s "$ref_auxiliary" "$hs_auxiliary"; then
+                    [ "$auxiliary_output" = missing ] || auxiliary_output=differs
+                    { printf '%s.%s differs\n' "$name" "$auxiliary_suffix"
+                      diff -u "$ref_auxiliary" "$hs_auxiliary" || true; } \
+                        >>"$dir/auxiliary.compare"
+                fi
+            fi
+        done
+        if [ "$auxiliary_output" = differs ] || \
+           [ "$auxiliary_output" = missing ]; then
+            { printf '=== %s: auxiliary state ===\n' "$name"
+              cat "$dir/auxiliary.compare"; } >>"$detail"
+        fi
+
+        if [ "$pdf_output" = missing ] || [ "$auxiliary_output" = missing ]; then
+            output=missing
+        elif [ "$pdf_output" = differs ] || [ "$auxiliary_output" = differs ]; then
+            output=differs
+        elif [ "$pdf_output" = same ] || [ "$auxiliary_output" = same ]; then
+            output=same
+        else
+            output=none
         fi
     fi
 

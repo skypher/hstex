@@ -3,6 +3,7 @@
 #include "hstex/mouth.h"
 #include "hstex/source.h"
 #include "hstex/token.h"
+#include "test_cli.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -49,8 +50,13 @@ static int expect_character(struct hstex_source_stack *stack, uint8_t character,
     return 0;
 }
 
-int main(void)
+int main(int argument_count, char **arguments)
 {
+    int option = hstex_test_arguments(
+        argument_count, arguments, "Run the HSTeX input-source tests.");
+    if (option >= 0) {
+        return option;
+    }
     char first_path[] = "/tmp/hstex-source-first-XXXXXX";
     char second_path[] = "/tmp/hstex-source-second-XXXXXX";
     int first = mkstemp(first_path);

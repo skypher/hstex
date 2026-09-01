@@ -23,7 +23,8 @@
 static void print_usage(FILE *stream, const char *program)
 {
     (void)fprintf(stream,
-                  "usage: %s --version\n"
+                  "usage: %s [-h|--help]\n"
+                  "       %s --version\n"
                   "       %s --cpu-features\n"
                   "       %s --probe-input FILE\n"
                   "       %s --trace-ini-mouth FILE\n"
@@ -35,7 +36,7 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --format FORMAT DOCUMENT\n"
                   "       %s --format-output FORMAT DOCUMENT DIRECTORY [JOBNAME]\n",
                   program, program, program, program, program, program, program,
-                  program, program, program, program);
+                  program, program, program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -493,6 +494,12 @@ static void keep_the_heap(void)
 
 int main(int argument_count, char **arguments)
 {
+    if (argument_count == 2 &&
+        (strcmp(arguments[1], "-h") == 0 ||
+         strcmp(arguments[1], "--help") == 0)) {
+        print_usage(stdout, arguments[0]);
+        return 0;
+    }
     keep_the_heap();
     if (argument_count == 2 && strcmp(arguments[1], "--version") == 0) {
         (void)printf("hstex %s\n", HSTEX_VERSION);

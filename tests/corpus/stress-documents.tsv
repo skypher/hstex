@@ -1,4 +1,4 @@
-# Adversarial public documents, run as black-box comparisons against the
+# Adversarial public documents, run as behavioral comparisons against the
 # reference engine. These are pinned findings, not release-corpus exceptions:
 # --strict is expected to fail until HSTeX matches each document.
 #
