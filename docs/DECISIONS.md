@@ -386,6 +386,17 @@ LaTeX's row-ending brace idiom: a left brace hidden in a false branch protects
 lookahead across the next row's tab until the row macro restores the depth and
 emits `\cr`. No implementation code or internal representation was copied.
 
+## Terminal read streams
+
+Controlled pdfTeX 1.40.25 runs with redirected standard input show that
+`\read-1`, `\read16`, and `\read3` when stream 3 has not been opened all
+consume the next terminal line. `\readline-1` consumes the same source while
+assigning other-character catcodes. An open file stream continues to use its
+file, and its end remains a file-end event rather than switching sources in
+the middle of a read. HSTeX therefore uses standard input for terminal and
+unopened streams, exposes an injectable terminal stream for deterministic
+embedding tests, and leaves ownership of that stream with its caller.
+
 ## Virtual-font packets
 
 Public TeX Live source was consulted at commit

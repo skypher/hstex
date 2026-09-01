@@ -47076,11 +47076,13 @@ static int execute_read_kind(struct hstex_engine *engine, bool other_catcodes,
         char *line = NULL;
         size_t capacity = 0U;
         ssize_t length = -1;
+        FILE *source =
+            engine->terminal_input == NULL ? stdin : engine->terminal_input;
         if (stream >= 0 && stream < 16 &&
             engine->read_streams[(size_t)stream] != NULL) {
-            length = getline(&line, &capacity,
-                             engine->read_streams[(size_t)stream]);
+            source = engine->read_streams[(size_t)stream];
         }
+        length = getline(&line, &capacity, source);
         bool ended = length < 0;
         if (length < 0) {
             length = 0;
@@ -48880,6 +48882,11 @@ static int execute_ignore_spaces(struct hstex_engine *engine, char *error,
 /* Run the document: everything the executor does not handle itself belongs
    to the main vertical list, which is built exactly as a \vbox body is. See
    docs/DECISIONS.md, the-main-vertical-list. */
+void hstex_engine_set_terminal_input(struct hstex_engine *engine, FILE *stream)
+{
+    engine->terminal_input = stream;
+}
+
 void hstex_engine_set_message_stream(struct hstex_engine *engine,
                                      FILE *stream)
 {

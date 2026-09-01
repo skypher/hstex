@@ -2263,6 +2263,8 @@ struct hstex_engine {
        while the group is still being measured; see docs/DECISIONS.md,
        middle-delimiters. */
     int32_t middle_delimiter_size;
+    /* Where a terminal \read gets its lines; null means standard input. */
+    FILE *terminal_input;
     /* Where \message writes; the standard output when this is null. */
     FILE *message_stream;
     /* A box or rule has reached the current page, so it is no longer empty;
@@ -2612,6 +2614,10 @@ enum hstex_engine_result hstex_engine_next_output(
 int hstex_engine_run(struct hstex_engine *engine,
                      struct hstex_source_location *last, char *error,
                      size_t error_capacity);
+/* Where terminal and unopened-stream \read commands get their lines. NULL,
+   the default, means standard input. The engine does not close this stream. */
+void hstex_engine_set_terminal_input(struct hstex_engine *engine,
+                                     FILE *stream);
 /* Where \message writes. NULL, the default, means the standard output. */
 void hstex_engine_set_message_stream(struct hstex_engine *engine,
                                      FILE *stream);

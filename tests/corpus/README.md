@@ -57,7 +57,7 @@ None is engine source, and none is read for anything but its own text.
 | `encguide` | LaTeX | Font encodings, unusual alphabets, large tables, and error recovery | All comparison gates agree across 29 pages |
 | `grfguide` | LaTeX | Color, graphics, file creation, EPS inclusion, and driver errors | Page and box counts match; the fault sets do not |
 | `testpage` | LaTeX | Interactive `\typein`, printer geometry, and a two-sided branch | Scripted `letterpaper`/`n` answers produce one reference page and two HSTeX pages |
-| `testfont` | plain | Terminal `\read`, dynamic font selection, and a large glyph exercise | The reference emits a one-page DVI; HSTeX stops at the terminal-read boundary |
+| `testfont` | plain | Terminal `\read`, dynamic font selection, and a large glyph exercise | All comparison gates agree on the one-page DVI |
 
 The stress suite feeds both engines the same answer profile defined by the
 runner. This makes interactive behavior reproducible in CI without editing

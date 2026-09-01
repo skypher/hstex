@@ -1586,6 +1586,72 @@ static int test_file_streams(void)
     return status;
 }
 
+/* A negative, out-of-range, or unopened read stream takes its next line from
+   the terminal input. The production default is stdin; this probe supplies a
+   private stream so the ordinary test suite remains deterministic. See
+   docs/DECISIONS.md, terminal read streams. */
+static int test_terminal_read_streams(void)
+{
+    static const char source[] =
+        "\\read-1 to\\a \\read3 to\\b "
+        "\\endlinechar=-1 \\readline16 to\\c "
+        "\\def\\ea{abc def }\\def\\eb{xy }"
+        "\\edef\\ec{\\detokenize{raw bytes}}"
+        "\\message{[\\ifx\\a\\ea T\\else F\\fi"
+        "\\ifx\\b\\eb T\\else F\\fi"
+        "\\ifx\\c\\ec T\\else F\\fi]}\\end";
+    static const char input[] = "abc def\nxy\nraw bytes\n";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    FILE *terminal = tmpfile();
+    if (terminal == NULL ||
+        fwrite(input, 1U, sizeof(input) - 1U, terminal) != sizeof(input) - 1U ||
+        fflush(terminal) != 0 || fseek(terminal, 0L, SEEK_SET) != 0) {
+        if (terminal != NULL) {
+            (void)fclose(terminal);
+        }
+        hstex_engine_destroy(&engine);
+        (void)unlink(path);
+        return 1;
+    }
+    hstex_engine_set_terminal_input(&engine, terminal);
+    char *captured = NULL;
+    size_t captured_length = 0U;
+    FILE *sink = open_memstream(&captured, &captured_length);
+    if (sink == NULL) {
+        (void)fclose(terminal);
+        hstex_engine_destroy(&engine);
+        (void)unlink(path);
+        return 1;
+    }
+    hstex_engine_set_message_stream(&engine, sink);
+    struct hstex_source_location last = {0};
+    int status = hstex_engine_run(&engine, &last, error, sizeof(error));
+    (void)fclose(sink);
+    (void)fclose(terminal);
+    if (status == 0 &&
+        (captured == NULL || strstr(captured, "[TTT]") == NULL)) {
+        status = 1;
+    }
+    if (status != 0) {
+        (void)fprintf(stderr,
+                      "terminal read stream test failed: %s messages=[%s]\n",
+                      error, captured == NULL ? "" : captured);
+    }
+    free(captured);
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 /* An output command without \immediate leaves a whatsit on the list, and the
    text of a \write is expanded only when the page is shipped; see
    docs/DECISIONS.md, whatsits. */
@@ -24957,6 +25023,7 @@ int main(int argument_count, char **arguments)
         test_input_primitive() != 0 || test_job_name() != 0 ||
         test_hyphenation_data() != 0 ||
         test_document_job_transition() != 0 || test_file_streams() != 0 ||
+        test_terminal_read_streams() != 0 ||
         test_whatsits() != 0 || test_whatsits_on_an_empty_page() != 0 ||
         test_the_current_font_is_grouped() != 0 ||
         test_discretionaries() != 0 || test_hyphenation() != 0 ||

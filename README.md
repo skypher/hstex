@@ -16,7 +16,7 @@ already supported.
 | Engine | Independent C17 implementation; no pdfTeX fallback |
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
-| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 2/6 currently agree and the suite runs non-strictly in CI |
+| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 3/6 currently agree and the suite runs non-strictly in CI |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and the strict public corpus |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract |
 | First release target | Linux x86-64 |
