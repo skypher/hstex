@@ -158,6 +158,27 @@ ending in `readonly def`, and accepts either whitespace spelling of the two
 entry terminators. The subset writer retains the source spelling unless an
 existing black-box compatibility vector specifies a different spelling.
 
+The same disassembler was used on the TeX Live input fonts `tipa10.pfb` and
+`tipx10.pfb`, whose SHA-256 digests are
+`35e95e46af40da515a0361c259a80a7e1741079090df543a6d7c1dde3bd7b28a` and
+`f93e4edb0bb968a8419cca2b918e1262c7c7ddd109887601fd93d79f59aefef4`.
+Their subroutine arrays end with `% endarray` and `noaccess def` rather than a
+standalone `ND`, and their CharStrings and Private dictionaries close with
+`end readonly put` and `end noaccess put`. HSTeX records the end of each
+parsed subroutine and preserves the source tail after the final one, instead
+of using a particular dictionary-definition operator as the boundary. It
+also accepts that exact protected-dictionary close pair.
+
+Section 8.1, “Changing Hints Within a Character,” of Adobe's public
+[Type 1 Font Format specification](https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/T1_SPEC.pdf),
+pages 69--70, defines the hint-replacement sequence
+`subr# 1 3 callothersubr pop callsubr`: OtherSubrs entry 3 returns the
+subroutine number to the Type 1 operand stack, and the bare `callsubr`
+consumes it. HSTeX's subset reachability scan recognizes that token-bounded
+sequence, as well as direct numeric calls and the factored subroutine-4 form
+present in other corpus fonts, so dynamically selected hint subroutines stay
+in the embedded font.
+
 PDF string syntax permits balanced parentheses inside a literal string. The
 default `PTEX.Fullbanner` therefore carries `(TeX Live 2023/Debian)` without
 escape bytes, matching the reference information dictionary.

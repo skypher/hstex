@@ -10723,6 +10723,16 @@ static int test_virtual_font_packets_in_pdf(void)
                         "[1]");
 }
 
+/* TIPA's Type 1 program protects its Subrs and CharStrings dictionaries
+   separately instead of using the common ND/end-end boundaries; see
+   docs/DECISIONS.md, Type 1 subset serialization. */
+static int test_protected_type1_dictionaries_in_pdf(void)
+{
+    return run_document("\\pdfoutput=1 \\count0=1 \\font\\tipa=tipa10 "
+                        "\\tipa\\shipout\\hbox{A}%",
+                        "[1]");
+}
+
 /* The leaders of a table of contents are set in the PDF as they are in the
    DVI: the boxes repeat on the grid the enclosing list settles, and a rule
    fills the whole of the glue. See docs/DECISIONS.md, leaders-on-a-page. */
@@ -24925,6 +24935,7 @@ int main(int argument_count, char **arguments)
         test_destinations_in_the_file() != 0 ||
         test_the_fonts_a_page_names() != 0 ||
         test_virtual_font_packets_in_pdf() != 0 ||
+        test_protected_type1_dictionaries_in_pdf() != 0 ||
         test_a_paragraph_the_end_ends() != 0 ||
         test_a_link_in_a_list() != 0 ||
         test_how_wide_a_movement_is() != 0 ||

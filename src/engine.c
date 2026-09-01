@@ -23014,70 +23014,133 @@ struct hstex_type1_span {
     const char *finish;
 };
 
+static bool pdf_type1_token_space(char byte)
+{
+    return byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r';
+}
+
+static bool pdf_type1_previous_token(const char *start, const char *at,
+                                     const char **token_start,
+                                     const char **token_finish)
+{
+    while (at > start && pdf_type1_token_space(at[-1])) {
+        --at;
+    }
+    const char *finish = at;
+    while (at > start && !pdf_type1_token_space(at[-1])) {
+        --at;
+    }
+    *token_start = at;
+    *token_finish = finish;
+    return at < finish;
+}
+
+static bool pdf_type1_token_equals(const char *start, const char *finish,
+                                   const char *text)
+{
+    size_t length = strlen(text);
+    return (size_t)(finish - start) == length &&
+           memcmp(start, text, length) == 0;
+}
+
+static bool pdf_type1_token_integer(const char *start, const char *finish,
+                                    long *value)
+{
+    char number[64];
+    size_t length = (size_t)(finish - start);
+    if (length == 0U || length >= sizeof(number)) {
+        return false;
+    }
+    memcpy(number, start, length);
+    number[length] = '\0';
+    char *parsed_end = NULL;
+    long parsed = strtol(number, &parsed_end, 10);
+    if (parsed_end == number || *parsed_end != '\0') {
+        return false;
+    }
+    *value = parsed;
+    return true;
+}
+
 static void pdf_type1_mark_subrs(const char *start, const char *finish,
                                  bool *used, size_t count)
 {
     const char *at = start;
-    static const char call[] = " callsubr";
+    static const char call[] = "callsubr";
     while (at < finish) {
         const char *found = strstr(at, call);
         if (found == NULL || found >= finish) {
             break;
         }
-        const char *end = found;
-        while (end > start && end[-1] == ' ') {
-            --end;
+        const char *after = found + sizeof(call) - 1U;
+        if ((found > start && !pdf_type1_token_space(found[-1])) ||
+            (after < finish && !pdf_type1_token_space(*after))) {
+            at = after;
+            continue;
         }
-        const char *begin = end;
-        while (begin > start && begin[-1] != ' ' && begin[-1] != '\t' &&
-               begin[-1] != '\n' && begin[-1] != '\r') {
-            --begin;
+        const char *token_start = NULL;
+        const char *token_finish = NULL;
+        if (!pdf_type1_previous_token(start, found, &token_start,
+                                      &token_finish)) {
+            at = after;
+            continue;
         }
-        char number[64];
-        size_t length = (size_t)(end - begin);
-        if (length < sizeof(number)) {
-            memcpy(number, begin, length);
-            number[length] = '\0';
-            char *parsed_end = NULL;
-            long value = strtol(number, &parsed_end, 10);
-            if (parsed_end != number && *parsed_end == '\0' && value >= 0 &&
-                (size_t)value < count) {
+        long value = 0;
+        if (pdf_type1_token_integer(token_start, token_finish, &value)) {
+            if (value >= 0 && (size_t)value < count) {
                 used[(size_t)value] = true;
-                /* The standard Type 1 flex dispatcher is subroutine 4.  It
-                   receives the real subroutine number beneath 4 on the
-                   operand stack, pops it after callothersubr, and performs
-                   a bare callsubr. */
-                if (value == 4) {
-                    const char *prior_end = begin;
-                    while (prior_end > start &&
-                           (prior_end[-1] == ' ' || prior_end[-1] == '\t' ||
-                            prior_end[-1] == '\n' || prior_end[-1] == '\r')) {
-                        --prior_end;
-                    }
-                    const char *prior_begin = prior_end;
-                    while (prior_begin > start &&
-                           prior_begin[-1] != ' ' &&
-                           prior_begin[-1] != '\t' &&
-                           prior_begin[-1] != '\n' &&
-                           prior_begin[-1] != '\r') {
-                        --prior_begin;
-                    }
-                    size_t prior_length =
-                        (size_t)(prior_end - prior_begin);
-                    if (prior_length < sizeof(number)) {
-                        memcpy(number, prior_begin, prior_length);
-                        number[prior_length] = '\0';
-                        parsed_end = NULL;
-                        long indirect = strtol(number, &parsed_end, 10);
-                        if (parsed_end != number && *parsed_end == '\0' &&
-                            indirect >= 0 && (size_t)indirect < count) {
-                            used[(size_t)indirect] = true;
-                        }
-                    }
+            }
+            /* Some converted fonts factor hint replacement through
+               subroutine 4. The actual subroutine index remains directly
+               beneath that dispatcher on the operand stack. */
+            if (value == 4) {
+                const char *prior_start = NULL;
+                const char *prior_finish = NULL;
+                long indirect = 0;
+                if (pdf_type1_previous_token(start, token_start, &prior_start,
+                                              &prior_finish) &&
+                    pdf_type1_token_integer(prior_start, prior_finish,
+                                            &indirect) &&
+                    indirect >= 0 && (size_t)indirect < count) {
+                    used[(size_t)indirect] = true;
                 }
             }
+        } else if (pdf_type1_token_equals(token_start, token_finish, "pop")) {
+            /* Adobe Type 1 Font Format section 8.1 specifies
+               `subr# 1 3 callothersubr pop callsubr` for replacing hints.
+               The bare call receives `subr#` from OtherSubrs entry 3. */
+            const char *other_call_start = NULL;
+            const char *other_call_finish = NULL;
+            const char *other_start = NULL;
+            const char *other_finish = NULL;
+            const char *count_start = NULL;
+            const char *count_finish = NULL;
+            const char *subr_start = NULL;
+            const char *subr_finish = NULL;
+            long other = 0;
+            long argument_count = 0;
+            long indirect = 0;
+            if (pdf_type1_previous_token(start, token_start,
+                                         &other_call_start,
+                                         &other_call_finish) &&
+                pdf_type1_token_equals(other_call_start, other_call_finish,
+                                       "callothersubr") &&
+                pdf_type1_previous_token(start, other_call_start, &other_start,
+                                         &other_finish) &&
+                pdf_type1_token_integer(other_start, other_finish, &other) &&
+                pdf_type1_previous_token(start, other_start, &count_start,
+                                         &count_finish) &&
+                pdf_type1_token_integer(count_start, count_finish,
+                                        &argument_count) &&
+                pdf_type1_previous_token(start, count_start, &subr_start,
+                                         &subr_finish) &&
+                pdf_type1_token_integer(subr_start, subr_finish, &indirect) &&
+                other == 3 && argument_count == 1 && indirect >= 0 &&
+                (size_t)indirect < count) {
+                used[(size_t)indirect] = true;
+            }
         }
-        at = found + sizeof(call) - 1U;
+        at = after;
     }
 }
 
@@ -23402,7 +23465,8 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     if (encoding == NULL || eexec == NULL || subrs == NULL ||
         charstrings == NULL) {
         return set_error(error, error_capacity,
-                         "unsupported Type 1 font structure");
+                         "unsupported Type 1 font structure in %s",
+                         font->file);
     }
     const char *encoding_end = pdf_type1_encoding_finish(encoding, eexec);
     const char *subrs_header_end = strchr(subrs, '\n');
@@ -23414,14 +23478,11 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
            line, while Euler and RSFS put one `end` on each line. */
         charstrings_finish = strstr(charstrings, "\nend\nend\n");
     }
-    const char *subrs_tail = NULL;
-    if (subrs_header_end != NULL && charstrings != NULL) {
-        const char *candidate = subrs_header_end;
-        while ((candidate = strstr(candidate, "\nND\n")) != NULL &&
-               candidate < charstrings) {
-            subrs_tail = candidate + 1;
-            candidate += strlen("\nND\n");
-        }
+    if (charstrings_finish == NULL) {
+        /* TIPA protects the two dictionaries separately after closing
+           them, rather than applying a bare `end` to each. */
+        charstrings_finish =
+            strstr(charstrings, "\nend readonly put\nend noaccess put\n");
     }
     const char *private_finish =
         charstrings_finish == NULL
@@ -23429,10 +23490,10 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
             : strstr(charstrings_finish, "mark currentfile closefile\n");
     if (encoding_end == NULL || subrs_header_end == NULL ||
         charstrings_header_end == NULL ||
-        charstrings_finish == NULL || subrs_tail == NULL ||
-        private_finish == NULL) {
+        charstrings_finish == NULL || private_finish == NULL) {
         return set_error(error, error_capacity,
-                         "unsupported Type 1 font structure");
+                         "unsupported Type 1 font structure in %s",
+                         font->file);
     }
     ++charstrings_finish;
     private_finish += strlen("mark currentfile closefile\n");
@@ -23456,6 +23517,7 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
                          "PDF Type 1 subroutine allocation failed");
     }
     const char *at = subrs_header_end + 1;
+    const char *subrs_tail = at;
     while (at < charstrings) {
         const char *line_end = pdf_type1_line_end(at, charstrings);
         if ((size_t)(line_end - at) > 4U && memcmp(at, "dup ", 4U) == 0) {
@@ -23473,6 +23535,7 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
                 subr_spans[index].start = at;
                 subr_spans[index].finish = entry_end;
             }
+            subrs_tail = entry_end;
             at = entry_end;
             continue;
         }
