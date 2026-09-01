@@ -24999,6 +24999,7 @@ int main(int argument_count, char **arguments)
         run_snippet("\\def\\grab#1,#2;{<#2:#1>}\\grab {a,b},c;%",
                     "<c:a,b>") != 0 ||
         run_snippet("\\def\\tag pre#1!{(#1)}\\tag preX!%", "(X)") != 0 ||
+        run_snippet("\\def\\tag stop{T}\\tag stop%", "T") != 0 ||
         run_snippet("\\def\\grabbrace#1#{[#1]}\\grabbrace abc{X}%",
                     "[abc]X") != 0 ||
         run_snippet("\\def\\a{G}{\\def\\a{L}\\a}\\a%", "LG") != 0 ||
