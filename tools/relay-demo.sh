@@ -9,16 +9,31 @@
 # rest, and leaves the fleet parked for the next run. Chunks read the disk
 # as it stands when THEY are released, so edits between runs are seen; the
 # aux delta between runs is patched into the chunks automatically from the
-# snapshot the parking run took. The state digest is fully strict and needs
-# no waiver for this; tools/soft-names.txt exists only for label-delta
-# experiments (see docs/DECISIONS.md, the-waiver-checked-and-then-retired),
-# and any use of it is taint-policed.
+# snapshot the parking run took. The default state digest is strict.
 #
 # This script demonstrates the loop: it compiles DOCUMENT twice with an
 # edit-hook of your choosing in between, and reports both times.
 #
 #   tools/relay-demo.sh <format.hfmt> <document.tex> <workdir> [edit-command]
 set -euo pipefail
+
+usage() {
+  printf '%s\n' \
+    'Usage: tools/relay-demo.sh FORMAT.hfmt DOCUMENT.tex WORKDIR [EDIT-COMMAND]' \
+    'Compile twice through the persistent fleet, applying EDIT-COMMAND between runs.'
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+  usage >&2
+  exit 2
+fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 format="$1"; document="$2"; work="$3"; edit="${4:-true}"

@@ -47481,8 +47481,7 @@ static void finish_a_chunk(struct hstex_engine *engine);
    verifier writes it by comparing the aux the fleet was parked with -- a
    copy taken before the parking run read it -- against the aux on disk
    now. Only \newlabel and \bibcite become definitions when an aux is
-   read, so only they are compared; see tools/gen-aux-patch.py, which this
-   ports. */
+   read, so only they are compared. */
 
 struct aux_line {
     uint64_t name_hash;

@@ -62,7 +62,7 @@ The mouth reads physical lines lazily, trims trailing byte-32 spaces, snapshots
 the current `endlinechar`, applies mutable catcodes and `^^` conversion as bytes
 are requested, and implements TeX's new-line/middle-line/skip-spaces automaton.
 It interns regular and active control sequences into separate namespaces and
-feeds the same source stack used by future macro replacement lists.
+feeds the same source stack used by macro replacement lists.
 
 Macro bodies are immutable token arrays addressed by integer identifiers.
 Control-sequence meanings live in a growable indexed table, and replacement
@@ -113,11 +113,10 @@ branch semantics as ordinary execution. Protected macros remain opaque during
 expanded definitions and writes. Checked 64-bit intermediates implement 32-bit
 `advance`, `multiply`, and `divide` assignments.
 
-File input first checks the process and calling-file directories. During the
-bootstrap phase it uses `kpsewhich` as a safe argv-based lookup fallback for
-TeX Live inputs; resolved files enter the same owned source stack. This fallback
-is a compatibility bridge to be replaced by an in-process indexed path cache
-before performance measurements.
+File input first checks the process and calling-file directories, then searches
+TeX Live's `ls-R` databases through an in-process index. Ambiguous or custom
+search configurations use `kpsewhich` as a safe argv-based fallback. Resolved
+files enter the same owned source stack.
 
 The bootstrap stream layer owns sixteen input and output `FILE` handles inside
 the engine context. Immediate writes expand a sentinel-terminated token frame,
@@ -133,16 +132,16 @@ dispatched implementations are tested at every offset and length class.
 
 ## PDF backend
 
-Milestone one emits PDF directly and supports the observable pdfTeX primitives
-used by the benchmark. Shipped pages become immutable display jobs. Workers may
-compress streams, prepare page-local objects, and collect font glyph usage.
+HSTeX emits PDF directly and supports the observable pdfTeX primitives used by
+the compatibility corpus. Shipped pages become immutable display jobs. Workers
+may compress streams, prepare page-local objects, and collect font glyph usage.
 The coordinator resolves cross-page destinations, annotations, shared fonts,
 object IDs, the xref structure, and final ordering.
 
-The first font surface includes TFM metrics, Type 1 fonts, PK bitmap fonts,
+The font surface includes TFM metrics, Type 1 fonts, PK bitmap fonts,
 encoding vectors, map files, and the microtype behavior exercised by the
-benchmark. Image support is not on the milestone-one critical path because the
-pinned corpus contains no `\includegraphics` inputs.
+strict corpus. Image inclusion is outside the current strict compatibility
+surface.
 
 ## Format and repeated passes
 
@@ -150,7 +149,8 @@ HSTeX constructs formats from source and writes a representation-native format
 cache. The cache is versioned and checksummed; it is never interpreted as a
 pdfTeX format dump.
 
-Each TeX pass receives fresh mutable engine state. A future persistent process
-may share only immutable format, file-content, parsed-font, and compiled-macro
-artifacts whose invalidation keys are explicit. The benchmark reports both
-ordinary process-per-pass latency and any persistent-mode result.
+Ordinary TeX passes receive fresh mutable engine state. Experimental
+checkpoint/fleet mode forks page-boundary snapshots and shares immutable
+format, file-content, parsed-font, and compiled-macro artifacts. Its results
+are reported separately from ordinary process-per-pass latency under the
+benchmark contract.
