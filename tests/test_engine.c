@@ -21061,6 +21061,106 @@ static int test_pdf_transformations(void)
     return status;
 }
 
+/* Document runs use the TeX installation's restricted command allowlist.
+   A delayed \write18 remains a distinct whatsit; an immediate allowed
+   command is executed without a command shell. See docs/DECISIONS.md,
+   restricted shell escape. */
+static int test_restricted_shell_escape(void)
+{
+    const char source[] =
+        "\\message{[mode=\\the\\pdfshellescape]}"
+        "\\setbox0=\\hbox{\\write18{kpsewhich --version}}"
+        "\\immediate\\write18{printf HSTEX-DISALLOWED}"
+        "\\immediate\\write18{kpsewhich --version}\\end ";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    FILE *sink = tmpfile();
+    int status = sink == NULL ? 1 : 0;
+    if (sink != NULL) {
+        hstex_engine_set_message_stream(&engine, sink);
+    }
+    if (status == 0 &&
+        hstex_engine_set_restricted_shell_escape(&engine, true, error,
+                                                 sizeof(error)) != 0) {
+        status = 1;
+    }
+    struct hstex_source_location last = {0};
+    if (status == 0 &&
+        hstex_engine_run(&engine, &last, error, sizeof(error)) != 0) {
+        status = 1;
+    }
+
+    const struct hstex_box *box = &engine.boxes[0];
+    const struct hstex_node *system_node = NULL;
+    for (size_t index = 0U; index < box->node_count; ++index) {
+        size_t at = (size_t)box->node_start + index;
+        if (at >= engine.list_item_count) {
+            break;
+        }
+        uint32_t identifier = engine.list_items[at];
+        if (identifier == 0U || (size_t)identifier > engine.node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine.nodes[identifier - 1U];
+        if (node->kind == HSTEX_NODE_WHATSIT) {
+            system_node = node;
+            break;
+        }
+    }
+    if (system_node == NULL ||
+        system_node->value.whatsit.kind !=
+            (uint8_t)HSTEX_WHATSIT_SYSTEM) {
+        status = 1;
+    }
+
+    uint8_t *messages = NULL;
+    size_t message_count = 0U;
+    if (sink != NULL &&
+        (fflush(sink) != 0 || fseek(sink, 0L, SEEK_END) != 0)) {
+        status = 1;
+    }
+    long length = sink == NULL ? -1L : ftell(sink);
+    if (sink != NULL &&
+        (length < 0L || fseek(sink, 0L, SEEK_SET) != 0)) {
+        status = 1;
+    } else if (sink != NULL) {
+        message_count = (size_t)length;
+        messages = malloc(message_count == 0U ? 1U : message_count);
+        if (messages == NULL ||
+            fread(messages, 1U, message_count, sink) != message_count) {
+            status = 1;
+        }
+    }
+    if (status == 0 &&
+        (!byte_sequence_present(messages, message_count, "[mode=2]") ||
+         !byte_sequence_present(
+             messages, message_count,
+             "runsystem(printf HSTEX-DISALLOWED)...disabled (restricted).") ||
+         !byte_sequence_present(
+             messages, message_count,
+             "runsystem(kpsewhich --version)...executed safely (allowed)."))) {
+        status = 1;
+    }
+    if (status != 0) {
+        (void)fprintf(stderr, "restricted shell test failed: %s\n", error);
+    }
+    free(messages);
+    if (sink != NULL) {
+        (void)fclose(sink);
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 /* Once the page builder has emptied the contribution list, \lastnodetype
    and its relatives report the last node it took; see docs/DECISIONS.md,
    the-last-node-of-a-page. */
@@ -24602,6 +24702,71 @@ static int test_pdf_file_size(void)
     return result;
 }
 
+/* Section 7.18 of the public pdfTeX manual specifies the file-date syntax
+   and the reproducible-build UTC rule. The parser here has the same argument
+   shape used by epstopdf-base.sty. */
+static int test_pdf_file_mod_date(void)
+{
+    char data_path[64];
+    if (open_snippet("date", data_path) != 0) {
+        return 1;
+    }
+    const struct timespec times[2] = {
+        {.tv_sec = 946684800, .tv_nsec = 0},
+        {.tv_sec = 946684800, .tv_nsec = 0},
+    };
+    if (utimensat(AT_FDCWD, data_path, times, 0) != 0) {
+        (void)unlink(data_path);
+        return 1;
+    }
+
+    const char *saved_epoch = getenv("SOURCE_DATE_EPOCH");
+    const char *saved_force = getenv("FORCE_SOURCE_DATE");
+    char *epoch_copy = saved_epoch == NULL ? NULL : strdup(saved_epoch);
+    char *force_copy = saved_force == NULL ? NULL : strdup(saved_force);
+    if ((saved_epoch != NULL && epoch_copy == NULL) ||
+        (saved_force != NULL && force_copy == NULL) ||
+        setenv("SOURCE_DATE_EPOCH", "946684800", 1) != 0 ||
+        setenv("FORCE_SOURCE_DATE", "1", 1) != 0) {
+        free(epoch_copy);
+        free(force_copy);
+        (void)unlink(data_path);
+        return 1;
+    }
+
+    char source[1024];
+    int length = snprintf(
+        source, sizeof(source),
+        "[\\pdffilemoddate{%s}]"
+        "\\def\\Date#1:#2#3#4#5#6#7#8#9{#2#3#4#5-#6#7-#8#9 \\Time}"
+        "\\def\\Time#1#2#3#4#5#6#7\\nil{#1#2:#3#4:#5#6}"
+        "[\\expandafter\\Date\\pdffilemoddate{%s}\\nil]"
+        "X\\pdffilemoddate{%s-missing}Y%%%%",
+        data_path, data_path, data_path);
+    int status = 0;
+    if (length < 0 || (size_t)length >= sizeof(source)) {
+        status = 1;
+    } else {
+        status = run_snippet(source,
+                             "[D:20000101000000Z][2000-01-01 00:00:00]XY");
+    }
+
+    if (epoch_copy == NULL) {
+        (void)unsetenv("SOURCE_DATE_EPOCH");
+    } else {
+        (void)setenv("SOURCE_DATE_EPOCH", epoch_copy, 1);
+    }
+    if (force_copy == NULL) {
+        (void)unsetenv("FORCE_SOURCE_DATE");
+    } else {
+        (void)setenv("FORCE_SOURCE_DATE", force_copy, 1);
+    }
+    free(epoch_copy);
+    free(force_copy);
+    (void)unlink(data_path);
+    return status;
+}
+
 /* The string and file forms, uppercase rendering, expansion, and a missing
    file are pinned to pdfTeX 1.40.25 and RFC 1321's standard vectors; see
    docs/DECISIONS.md, PDF MD5 sums. */
@@ -25179,6 +25344,7 @@ int main(int argument_count, char **arguments)
         test_pdf_font_metrics_and_unicode() != 0 ||
         test_shipout_pdf_literal() != 0 ||
         test_pdf_transformations() != 0 ||
+        test_restricted_shell_escape() != 0 ||
         test_tracing_paragraphs() != 0 ||
         test_the_first_line_protrudes_too() != 0 ||
         test_the_last_line_is_measured_square() != 0 ||
@@ -25345,7 +25511,8 @@ int main(int argument_count, char **arguments)
         test_dimensions_and_glue() != 0 || test_glue_components() != 0 ||
         test_token_lists() != 0 ||
         test_empty_hboxes() != 0 || test_vertical_lists() != 0 ||
-        test_pdf_file_size() != 0 || test_pdf_md5_sum() != 0) {
+        test_pdf_file_size() != 0 || test_pdf_file_mod_date() != 0 ||
+        test_pdf_md5_sum() != 0) {
         return 1;
     }
     return 0;

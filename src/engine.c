@@ -2614,6 +2614,7 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"pdfpageref", HSTEX_COMMAND_PDF_PAGE_REF},
         {"pdfuniformdeviate", HSTEX_COMMAND_PDF_UNIFORM_DEVIATE},
         {"pdfsetrandomseed", HSTEX_COMMAND_PDF_SET_RANDOM_SEED},
+        {"pdffilemoddate", HSTEX_COMMAND_PDF_FILE_MOD_DATE},
         {"pdffilesize", HSTEX_COMMAND_PDF_FILE_SIZE},
         {"pdfmdfivesum", HSTEX_COMMAND_PDF_MD5_SUM},
         {"pdfstrcmp", HSTEX_COMMAND_PDF_STRING_COMPARE},
@@ -3669,6 +3670,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->output_directory);
     free(engine->output_name);
     free(engine->job_name);
+    free(engine->shell_escape_commands);
     free(engine->pdf_trailer_id_seed);
     hstex_lexical_state_destroy(&engine->lexical_state);
     memset(engine, 0, sizeof(*engine));
@@ -4414,6 +4416,42 @@ static char *resolve_with_kpsewhich_option(const char *filename, bool make_pk)
 static char *resolve_with_kpsewhich(const char *filename)
 {
     return resolve_with_kpsewhich_option(filename, false);
+}
+
+int hstex_engine_set_restricted_shell_escape(struct hstex_engine *engine,
+                                             bool enabled, char *error,
+                                             size_t error_capacity)
+{
+    if (engine == NULL) {
+        return set_error(error, error_capacity,
+                         "invalid shell-escape configuration");
+    }
+    static const uint8_t primitive[] = "pdfshellescape";
+    hstex_cs_id identifier = 0U;
+    if (hstex_symbol_find(&engine->lexical_state.symbols,
+                          HSTEX_SYMBOL_REGULAR, primitive,
+                          sizeof(primitive) - 1U, &identifier) != 1 ||
+        identifier == 0U || (size_t)identifier > engine->meaning_capacity ||
+        engine->meanings[identifier - 1U].command !=
+            HSTEX_COMMAND_INTEGER_CONSTANT) {
+        return set_error(error, error_capacity,
+                         "pdfshellescape primitive is unavailable");
+    }
+    char *commands = NULL;
+    if (enabled) {
+        commands = resolve_with_kpsewhich(
+            "--var-value=shell_escape_commands");
+        if (commands == NULL) {
+            return set_error(error, error_capacity,
+                             "cannot read restricted shell command list");
+        }
+    }
+    free(engine->shell_escape_commands);
+    engine->shell_escape_commands = commands;
+    engine->shell_escape_mode = enabled ? 2 : 0;
+    engine->meanings[identifier - 1U].value.integer =
+        engine->shell_escape_mode;
+    return 0;
 }
 
 static char *resolve_pk_with_kpsewhich(const char *filename)
@@ -8312,6 +8350,72 @@ static int expand_pdf_file_size(struct hstex_engine *engine,
     return 0;
 }
 
+static int expand_pdf_file_mod_date(
+    struct hstex_engine *engine, struct hstex_source_location location,
+    char *error, size_t error_capacity)
+{
+    char *filename = NULL;
+    if (scan_input_filename(engine, &filename, false, error,
+                            error_capacity) != 0) {
+        return -1;
+    }
+    char *path = resolve_input_path(engine, filename);
+    free(filename);
+    if (path == NULL) {
+        return 0;
+    }
+    struct stat status;
+    if (stat(path, &status) != 0) {
+        free(path);
+        return 0;
+    }
+    free(path);
+
+    /* Section 7.18 of the public pdfTeX manual specifies UTC when both
+       reproducible-build variables are present, independently of their
+       values. Otherwise the file's local civil time and offset are used. */
+    bool utc = getenv("SOURCE_DATE_EPOCH") != NULL &&
+               getenv("FORCE_SOURCE_DATE") != NULL;
+    struct tm broken_down;
+    struct tm *converted = utc ? gmtime_r(&status.st_mtime, &broken_down)
+                               : localtime_r(&status.st_mtime, &broken_down);
+    if (converted == NULL) {
+        return 0;
+    }
+    char digits[20] = {0};
+    if (strftime(digits, sizeof(digits), "%Y%m%d%H%M%S", &broken_down) !=
+        14U) {
+        return 0;
+    }
+
+    char rendered[24] = {0};
+    memcpy(rendered, "D:", 2U);
+    memcpy(rendered + 2U, digits, 14U);
+    size_t length = 17U;
+    if (utc) {
+        rendered[16] = 'Z';
+    } else {
+        char offset[8] = {0};
+        if (strftime(offset, sizeof(offset), "%z", &broken_down) == 5U &&
+            (offset[0] == '+' || offset[0] == '-') &&
+            strcmp(offset, "+0000") != 0 &&
+            strcmp(offset, "-0000") != 0) {
+            rendered[16] = offset[0];
+            rendered[17] = offset[1];
+            rendered[18] = offset[2];
+            rendered[19] = '\'';
+            rendered[20] = offset[3];
+            rendered[21] = offset[4];
+            rendered[22] = '\'';
+            length = 23U;
+        } else {
+            rendered[16] = 'Z';
+        }
+    }
+    return push_other_character_expansion(engine, rendered, length, location,
+                                          error, error_capacity);
+}
+
 static int token_list_identifier_from_meaning(
     struct hstex_engine *engine, const struct hstex_meaning *meaning,
     uint32_t *identifier, char *error, size_t error_capacity)
@@ -10739,6 +10843,10 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_PDF_FILE_SIZE) {
         return expand_pdf_file_size(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_PDF_FILE_MOD_DATE) {
+        return expand_pdf_file_mod_date(engine, location, error,
+                                        error_capacity);
+    }
     if (meaning->command == HSTEX_COMMAND_PDF_MD5_SUM) {
         return expand_pdf_md5_sum(engine, location, error, error_capacity);
     }
@@ -11159,6 +11267,13 @@ static enum hstex_engine_result next_expanded_inner(
         if (meaning->command == HSTEX_COMMAND_PDF_FILE_SIZE) {
             if (expand_pdf_file_size(engine, *location, error,
                                      error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_FILE_MOD_DATE) {
+            if (expand_pdf_file_mod_date(engine, *location, error,
+                                         error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -17797,6 +17912,21 @@ static void show_whatsit(struct hstex_engine *engine,
         free(text);
         return;
     }
+    if (kind == (uint8_t)HSTEX_WHATSIT_SYSTEM) {
+        uint8_t *text = NULL;
+        size_t text_count = 0U;
+        char ignored[256];
+        print_esc_text(engine, "\\write18{");
+        if (stored_token_list_text(engine, node->value.whatsit.tokens, &text,
+                                   &text_count, 0U, NULL, ignored,
+                                   sizeof(ignored)) == 0 &&
+            text_count != 0U) {
+            print_bytes(engine, (const char *)text, text_count);
+        }
+        print_byte(engine, '}');
+        free(text);
+        return;
+    }
     if (kind == (uint8_t)HSTEX_WHATSIT_END_LINK) {
         print_esc_text(engine, "\\pdfendlink");
         return;
@@ -19058,6 +19188,7 @@ static bool command_is_expandable(enum hstex_command command)
     case HSTEX_COMMAND_PDF_ESCAPE_HEX:
     case HSTEX_COMMAND_PDF_ESCAPE_NAME:
     case HSTEX_COMMAND_PDF_ESCAPE_STRING:
+    case HSTEX_COMMAND_PDF_FILE_MOD_DATE:
     case HSTEX_COMMAND_PDF_FILE_SIZE:
     case HSTEX_COMMAND_PDF_MD5_SUM:
     case HSTEX_COMMAND_PDF_LAST_MATCH:
@@ -46520,6 +46651,233 @@ static int write_stream_bytes(struct hstex_engine *engine, int32_t stream,
     return 0;
 }
 
+struct hstex_system_arguments {
+    char *storage;
+    char **items;
+    size_t count;
+    size_t capacity;
+};
+
+static void destroy_system_arguments(struct hstex_system_arguments *arguments)
+{
+    free(arguments->storage);
+    free(arguments->items);
+    memset(arguments, 0, sizeof(*arguments));
+}
+
+static bool system_argument_space(uint8_t byte)
+{
+    return byte == (uint8_t)' ' || byte == (uint8_t)'\t' ||
+           byte == (uint8_t)'\n' || byte == (uint8_t)'\r';
+}
+
+static int append_system_argument(struct hstex_system_arguments *arguments,
+                                  char *word, char *error,
+                                  size_t error_capacity)
+{
+    if (arguments->count + 2U > arguments->capacity) {
+        size_t capacity = arguments->capacity == 0U
+                              ? 8U
+                              : arguments->capacity * 2U;
+        if (capacity < arguments->capacity ||
+            capacity > SIZE_MAX / sizeof(*arguments->items)) {
+            return set_error(error, error_capacity,
+                             "system command has too many arguments");
+        }
+        char **grown = realloc(arguments->items,
+                               capacity * sizeof(*arguments->items));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "system argument allocation failed");
+        }
+        arguments->items = grown;
+        arguments->capacity = capacity;
+    }
+    arguments->items[arguments->count++] = word;
+    arguments->items[arguments->count] = NULL;
+    return 0;
+}
+
+/* Restricted shell escape is parsed into an argv and executed directly.
+   Quotes and backslashes group arguments, but no byte is interpreted by a
+   command shell, so a filename cannot append a second command. */
+static int parse_system_arguments(const uint8_t *bytes, size_t byte_count,
+                                  struct hstex_system_arguments *arguments,
+                                  char *error, size_t error_capacity)
+{
+    memset(arguments, 0, sizeof(*arguments));
+    arguments->storage = malloc(byte_count + 1U);
+    if (arguments->storage == NULL) {
+        return set_error(error, error_capacity,
+                         "system command allocation failed");
+    }
+    size_t cursor = 0U;
+    size_t used = 0U;
+    while (cursor < byte_count) {
+        while (cursor < byte_count && system_argument_space(bytes[cursor])) {
+            ++cursor;
+        }
+        if (cursor == byte_count) {
+            break;
+        }
+        if (append_system_argument(arguments, arguments->storage + used, error,
+                                   error_capacity) != 0) {
+            destroy_system_arguments(arguments);
+            return -1;
+        }
+        uint8_t quote = 0U;
+        while (cursor < byte_count) {
+            uint8_t byte = bytes[cursor];
+            if (byte == 0U) {
+                destroy_system_arguments(arguments);
+                return 1;
+            }
+            if (quote == 0U && system_argument_space(byte)) {
+                break;
+            }
+            if (quote == 0U &&
+                (byte == (uint8_t)'\'' || byte == (uint8_t)'"')) {
+                quote = byte;
+                ++cursor;
+                continue;
+            }
+            if (quote != 0U && byte == quote) {
+                quote = 0U;
+                ++cursor;
+                continue;
+            }
+            if (byte == (uint8_t)'\\' && quote != (uint8_t)'\'') {
+                ++cursor;
+                if (cursor == byte_count || bytes[cursor] == 0U) {
+                    destroy_system_arguments(arguments);
+                    return 1;
+                }
+                byte = bytes[cursor];
+            }
+            arguments->storage[used++] = (char)byte;
+            ++cursor;
+        }
+        if (quote != 0U) {
+            destroy_system_arguments(arguments);
+            return 1;
+        }
+        arguments->storage[used++] = '\0';
+    }
+    if (arguments->count == 0U) {
+        destroy_system_arguments(arguments);
+        return 1;
+    }
+    return 0;
+}
+
+static bool restricted_program_allowed(const struct hstex_engine *engine,
+                                       const char *program)
+{
+    if (program[0] == '\0' || strchr(program, '/') != NULL ||
+        engine->shell_escape_commands == NULL) {
+        return false;
+    }
+    const char *cursor = engine->shell_escape_commands;
+    while (*cursor != '\0') {
+        while (*cursor == ',' || system_argument_space((uint8_t)*cursor)) {
+            ++cursor;
+        }
+        const char *start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            ++cursor;
+        }
+        const char *end = cursor;
+        while (end > start &&
+               system_argument_space((uint8_t)end[-1])) {
+            --end;
+        }
+        size_t length = (size_t)(end - start);
+        if (strlen(program) == length &&
+            memcmp(program, start, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int report_system_command(struct hstex_engine *engine,
+                                 const uint8_t *bytes, size_t byte_count,
+                                 const char *result, char *error,
+                                 size_t error_capacity)
+{
+    print_fresh_line(engine);
+    print_text(engine, "runsystem(");
+    print_bytes(engine, (const char *)bytes, byte_count);
+    print_text(engine, ")...");
+    print_text(engine, result);
+    print_line(engine);
+    if (fflush(diagnostic_stream(engine)) != 0) {
+        return set_error(error, error_capacity,
+                         "system command diagnostic failed");
+    }
+    return 0;
+}
+
+static int execute_system_command(struct hstex_engine *engine,
+                                  const uint8_t *bytes, size_t byte_count,
+                                  char *error, size_t error_capacity)
+{
+    if (engine->shell_escape_mode == 0) {
+        return report_system_command(engine, bytes, byte_count, "disabled.",
+                                     error, error_capacity);
+    }
+    struct hstex_system_arguments arguments;
+    int parsed = parse_system_arguments(bytes, byte_count, &arguments, error,
+                                        error_capacity);
+    if (parsed < 0) {
+        return -1;
+    }
+    if (parsed > 0 ||
+        !restricted_program_allowed(engine, arguments.items[0])) {
+        destroy_system_arguments(&arguments);
+        return report_system_command(engine, bytes, byte_count,
+                                     "disabled (restricted).", error,
+                                     error_capacity);
+    }
+
+    FILE *messages = diagnostic_stream(engine);
+    (void)fflush(messages);
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        destroy_system_arguments(&arguments);
+        return set_error(error, error_capacity,
+                         "cannot prepare restricted system command");
+    }
+    int descriptor = fileno(messages);
+    int action_status = 0;
+    if (descriptor >= 0) {
+        if (descriptor != STDOUT_FILENO) {
+            action_status = posix_spawn_file_actions_adddup2(
+                &actions, descriptor, STDOUT_FILENO);
+        }
+        if (action_status == 0 && descriptor != STDERR_FILENO) {
+            action_status = posix_spawn_file_actions_adddup2(
+                &actions, descriptor, STDERR_FILENO);
+        }
+    }
+    pid_t child = 0;
+    int spawned = action_status != 0
+                      ? action_status
+                      : posix_spawnp(&child, arguments.items[0], &actions,
+                                     NULL, arguments.items, environ);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    int child_status = 0;
+    while (spawned == 0 && waitpid(child, &child_status, 0) < 0 &&
+           errno == EINTR) {
+    }
+    (void)child_status;
+    ++engine->file_generation;
+    destroy_system_arguments(&arguments);
+    return report_system_command(engine, bytes, byte_count,
+                                 "executed safely (allowed).", error,
+                                 error_capacity);
+}
+
 static int execute_write(struct hstex_engine *engine, bool immediate,
                          char *error, size_t error_capacity)
 {
@@ -46528,6 +46886,7 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
     if (scan_integer(engine, &stream, error, error_capacity) != 0) {
         return -1;
     }
+    bool system_command = stream == 18;
     if (!immediate) {
         /* The text is kept as it was written and expanded when the page is
            shipped, which is what lets \write{\thepage} name the page it
@@ -46542,8 +46901,10 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
             vector_destroy(&text);
             return -1;
         }
-        return new_whatsit(engine, HSTEX_WHATSIT_WRITE, stream, tokens, error,
-                           error_capacity);
+        return new_whatsit(engine,
+                           system_command ? HSTEX_WHATSIT_SYSTEM
+                                          : HSTEX_WHATSIT_WRITE,
+                           stream, tokens, error, error_capacity);
     }
     uint8_t *bytes = NULL;
     size_t byte_count = 0U;
@@ -46556,8 +46917,11 @@ static int execute_write(struct hstex_engine *engine, bool immediate,
         free(bytes);
         return -1;
     }
-    int status = write_stream_bytes(engine, stream, bytes, byte_count, error,
-                                    error_capacity);
+    int status = system_command
+                     ? execute_system_command(engine, bytes, byte_count, error,
+                                              error_capacity)
+                     : write_stream_bytes(engine, stream, bytes, byte_count,
+                                          error, error_capacity);
     free(bytes);
     return status;
 }
@@ -46758,8 +47122,11 @@ static int perform_whatsit(struct hstex_engine *engine, uint32_t identifier,
     if (expanded != 0) {
         return -1;
     }
-    int status = write_stream_bytes(engine, stream, bytes, byte_count, error,
-                                    error_capacity);
+    int status = kind == (uint8_t)HSTEX_WHATSIT_SYSTEM
+                     ? execute_system_command(engine, bytes, byte_count, error,
+                                              error_capacity)
+                     : write_stream_bytes(engine, stream, bytes, byte_count,
+                                          error, error_capacity);
     free(bytes);
     return status;
 }
@@ -51516,6 +51883,7 @@ handle_token:
         case HSTEX_COMMAND_EXPANDED:
         case HSTEX_COMMAND_UNEXPANDED:
         case HSTEX_COMMAND_DETOKENIZE:
+        case HSTEX_COMMAND_PDF_FILE_MOD_DATE:
         case HSTEX_COMMAND_PDF_FILE_SIZE:
         case HSTEX_COMMAND_PDF_MD5_SUM:
         case HSTEX_COMMAND_PDF_STRING_COMPARE:

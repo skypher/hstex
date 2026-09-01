@@ -315,6 +315,8 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_SAVE,
     HSTEX_COMMAND_PDF_SET_MATRIX,
     HSTEX_COMMAND_PDF_RESTORE,
+    /* Appended so native formats retain every earlier command number. */
+    HSTEX_COMMAND_PDF_FILE_MOD_DATE,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -1447,6 +1449,9 @@ enum hstex_whatsit_kind {
     HSTEX_WHATSIT_PDF_SAVE,
     HSTEX_WHATSIT_PDF_SET_MATRIX,
     HSTEX_WHATSIT_PDF_RESTORE,
+    /* A \write18 command, expanded and checked against the installation's
+       restricted-shell allowlist when it is performed. */
+    HSTEX_WHATSIT_SYSTEM,
 };
 
 /* What a link or an outline entry does when it is followed. See
@@ -1887,6 +1892,11 @@ struct hstex_engine {
     FILE *read_streams[16];
     char *output_directory;
     char *job_name;
+    /* Zero disables \write18. Two is the restricted mode advertised by
+       \pdfshellescape; the command names come from texmf.cnf through
+       kpsewhich rather than from an engine-private allowlist. */
+    int32_t shell_escape_mode;
+    char *shell_escape_commands;
     /* An explicitly supplied \pdftrailerid seed.  A set, empty seed omits
        the ID; an unset seed selects pdfTeX's creation-date/output-name
        default. */
@@ -2602,6 +2612,11 @@ int hstex_engine_set_output_directory(struct hstex_engine *engine,
    front-end choice, made only after a format has begun a document job. */
 int hstex_engine_set_job_name(struct hstex_engine *engine, const char *name,
                               char *error, size_t error_capacity);
+/* Select TeX Live's restricted shell-escape profile, or disable shell escape.
+   The restricted command allowlist is read from the active TeX installation. */
+int hstex_engine_set_restricted_shell_escape(struct hstex_engine *engine,
+                                             bool enabled, char *error,
+                                             size_t error_capacity);
 int hstex_engine_hyphenate_word(struct hstex_engine *engine,
                                 int32_t language, const uint8_t *word,
                                 size_t length, uint8_t *break_before,

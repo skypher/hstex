@@ -16,7 +16,7 @@ already supported.
 | Engine | Independent C17 implementation; no pdfTeX fallback |
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
-| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 4/6 currently agree and the suite runs non-strictly in CI |
+| Adversarial corpus | Six pinned stress cases exercise hostile inputs; 5/6 currently agree and the suite runs non-strictly in CI |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and the strict public corpus |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract |
 | First release target | Linux x86-64 |
@@ -115,6 +115,8 @@ The engine currently includes:
 - direct DVI and PDF emission, including links, destinations, annotations,
   outlines, color stacks, origin-relative transformations, literals,
   compression, and Type 1 subsetting;
+- public file metadata primitives and TeX Live's restricted shell-command
+  profile, with allowlisted programs executed without a command shell;
 - TFM, Type 1, PK, encoding, and map-file handling;
 - versioned native format caches with explicit invalidation keys; and
 - scalar and runtime-dispatched AVX2 lexical scanning with identical semantic

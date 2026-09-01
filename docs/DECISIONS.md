@@ -123,6 +123,21 @@ Black-box pdfTeX 1.40.25 probes pin the general-text behavior: the empty string,
 `0CC9CD4DD26C5137B675A0D819CB9AB0`. The file form hashes raw bytes, while a
 file that cannot be resolved expands to nothing.
 
+## PDF file modification dates
+
+Section 7.18 of the public pdfTeX user manual specifies expandable
+`\pdffilemoddate`, the PDF date syntax, and the reproducible-build UTC rule.
+HSTeX resolves the expanded general text through the same public TeX file
+lookup used by `\input` and `\pdffilesize`, reads the resulting file metadata,
+and emits local civil time with a `+HH'MM'` or `-HH'MM'` offset. Zero offset is
+written as `Z`. An unresolved file expands to nothing.
+
+Black-box pdfTeX 1.40.25 probes against a fixed file pin the remaining forms:
+the active `+08:00` zone produces `D:20260901173949+08'00'`, while `TZ=UTC`
+produces `D:20260901093949Z`. When both `SOURCE_DATE_EPOCH` and
+`FORCE_SOURCE_DATE` are present, HSTeX follows the manual and converts the
+file's own modification time to UTC; their values do not replace that time.
+
 ## PDF trailer identifiers
 
 Public reproducible-output guidance says that `\pdftrailerid` controls the
@@ -341,6 +356,22 @@ each graphics-state operation at the horizontal position where the whatsit
 stands: it translates to that point before the operation and translates back
 afterward. HSTeX keeps the expanded four-number text on the matrix whatsit and
 uses the same origin-relative PDF placement for all three operations.
+
+## Restricted shell escape
+
+The public `shell_escape_commands` variable in `texmf.cnf` names the programs
+an installation permits in restricted shell-escape mode. HSTeX reads that
+value through `kpsewhich`, reports mode 2 through `\pdfshellescape`, and treats
+stream 18 as a system-command whatsit. `-no-shell-escape` selects mode 0.
+
+A black-box pdfTeX 1.40.25 probe under the same TeX Live configuration reports
+`\pdfshellescape=2`; `printf` is logged as `disabled (restricted)`, while
+`kpsewhich --version` is logged as `executed safely (allowed)`. With
+`-no-shell-escape`, the value is zero and the same allowed command is logged as
+`disabled`. HSTeX preserves those three outcomes. Restricted commands are
+split into arguments with quote and backslash handling and passed directly to
+the allowlisted executable. No command shell interprets metacharacters or
+expansions.
 
 ## PDF page dictionaries and references
 

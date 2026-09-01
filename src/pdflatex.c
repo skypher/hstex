@@ -620,6 +620,7 @@ int main(int argument_count, char **arguments)
     const char *requested_job_name = NULL;
     const char *document = NULL;
     bool rebuild = false;
+    bool restricted_shell_escape = true;
     bool options = true;
     for (int index = 1; index < argument_count; ++index) {
         const char *argument = arguments[index];
@@ -687,10 +688,14 @@ int main(int argument_count, char **arguments)
              strcmp(argument, "--halt-on-error") == 0 ||
              strcmp(argument, "-file-line-error") == 0 ||
              strcmp(argument, "--file-line-error") == 0 ||
-             strcmp(argument, "-no-shell-escape") == 0 ||
-             strcmp(argument, "--no-shell-escape") == 0 ||
              strcmp(argument, "-output-format=pdf") == 0 ||
              strcmp(argument, "--output-format=pdf") == 0)) {
+            continue;
+        }
+        if (options &&
+            (strcmp(argument, "-no-shell-escape") == 0 ||
+             strcmp(argument, "--no-shell-escape") == 0)) {
+            restricted_shell_escape = false;
             continue;
         }
         if (options && argument[0] == '-') {
@@ -776,7 +781,11 @@ int main(int argument_count, char **arguments)
         free(job_name);
         return 1;
     }
-    char *const command[] = {(char *)engine, "--format-output", format,
+    char *const command[] = {(char *)engine,
+                             restricted_shell_escape
+                                 ? "--format-output"
+                                 : "--format-output-no-shell",
+                             format,
                              (char *)document, (char *)output_directory, job_name,
                              NULL};
     int status = run_engine(command, NULL, log_path, error, sizeof(error));

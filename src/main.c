@@ -34,9 +34,11 @@ static void print_usage(FILE *stream, const char *program)
                   "       %s --make-format LATEX_LTX FORMAT\n"
                   "       %s --make-ini-format SOURCE FORMAT\n"
                   "       %s --format FORMAT DOCUMENT\n"
-                  "       %s --format-output FORMAT DOCUMENT DIRECTORY [JOBNAME]\n",
+                  "       %s --format-no-shell FORMAT DOCUMENT\n"
+                  "       %s --format-output FORMAT DOCUMENT DIRECTORY [JOBNAME]\n"
+                  "       %s --format-output-no-shell FORMAT DOCUMENT DIRECTORY [JOBNAME]\n",
                   program, program, program, program, program, program, program,
-                  program, program, program, program, program);
+                  program, program, program, program, program, program, program);
 }
 
 static uint64_t fnv1a64(const uint8_t *data, size_t length)
@@ -367,7 +369,8 @@ static int make_format(const char *format_path, const char *format_file,
 static int run_document_from_format(const char *format_file,
                                     const char *document_path,
                                     const char *output_directory,
-                                    const char *job_name)
+                                    const char *job_name,
+                                    bool restricted_shell_escape)
 {
     char error[512] = {0};
     struct hstex_engine engine;
@@ -379,7 +382,9 @@ static int run_document_from_format(const char *format_file,
         hstex_engine_set_output_directory(&engine, output_directory, error,
                                           sizeof(error)) != 0 ||
         hstex_engine_read_format(&engine, format_file, error, sizeof(error)) !=
-            0) {
+            0 ||
+        hstex_engine_set_restricted_shell_escape(
+            &engine, restricted_shell_escape, error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex: %s\n",
                       error[0] == '\0' ? "cannot prepare document output"
                                        : error);
@@ -535,14 +540,28 @@ int main(int argument_count, char **arguments)
     }
     if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
         return run_document_from_format(arguments[2], arguments[3],
-                                        "build/document-output", NULL);
+                                        "build/document-output", NULL, true);
+    }
+    if (argument_count == 4 &&
+        strcmp(arguments[1], "--format-no-shell") == 0) {
+        return run_document_from_format(arguments[2], arguments[3],
+                                        "build/document-output", NULL, false);
     }
     if ((argument_count == 5 || argument_count == 6) &&
         strcmp(arguments[1], "--format-output") == 0) {
         return run_document_from_format(arguments[2], arguments[3],
                                         arguments[4],
                                         argument_count == 6 ? arguments[5]
-                                                            : NULL);
+                                                            : NULL,
+                                        true);
+    }
+    if ((argument_count == 5 || argument_count == 6) &&
+        strcmp(arguments[1], "--format-output-no-shell") == 0) {
+        return run_document_from_format(arguments[2], arguments[3],
+                                        arguments[4],
+                                        argument_count == 6 ? arguments[5]
+                                                            : NULL,
+                                        false);
     }
 
     print_usage(stderr, arguments[0]);

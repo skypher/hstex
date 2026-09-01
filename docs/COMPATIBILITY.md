@@ -55,7 +55,8 @@ which is useful for testing an unpacked build alongside an installed release.
 | `-output-directory=DIR`, `--output-directory=DIR` | Supported |
 | `-jobname=NAME`, `--jobname=NAME` | Supported |
 | `-interaction=errorstopmode` | Supported; this is HSTeX's current interaction mode |
-| `-halt-on-error`, `-file-line-error`, `-no-shell-escape` | Supported |
+| `-halt-on-error`, `-file-line-error` | Supported |
+| `-no-shell-escape` | Supported; disables the default TeX Live restricted-command profile |
 | `-output-format=pdf` | Supported |
 | `--format-cache=DIR`, `--rebuild-format` | HSTeX extensions |
 | Any other pdfTeX option | Rejected with exit status 2 |
@@ -67,6 +68,10 @@ requests. The log records the engine output for that pass.
 HSTeX does not silently invoke pdfTeX or fall back to it. A rejected option or
 unsupported document behavior is reported by HSTeX, so a successful run is an
 HSTeX result rather than a reference-engine result.
+
+By default the driver uses the active TeX installation's
+`shell_escape_commands` allowlist. Allowed commands are started directly with
+parsed arguments, without passing document text to a command shell.
 
 ## Compatibility and performance evidence
 

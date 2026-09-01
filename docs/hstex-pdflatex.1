@@ -26,8 +26,12 @@ The long form is also accepted.
 .B -interaction=errorstopmode
 Select the current HSTeX interaction mode.
 .TP
-.BR -halt-on-error , " " -file-line-error , " " -no-shell-escape
+.BR -halt-on-error , " " -file-line-error
 Supported compatibility options.
+.TP
+.B -no-shell-escape
+Disable the default restricted shell-escape profile. The default allowlist is
+read from the active TeX installation.
 .TP
 .B -output-format=pdf
 Select PDF output.
