@@ -4100,6 +4100,49 @@ static void checkpoint_write_pdf_state(FILE *out,
                      sizeof(*engine->pdf_object_stream_indices),
                      (size_t)offset_capacity, out);
     }
+    /* The deferred objects (fonts, descriptors and the like the pdf_close writes
+       at the end), each with its attribute and content bytes. */
+    uint64_t objects = (uint64_t)engine->pdf_object_count;
+    (void)fwrite(&objects, sizeof(objects), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_object_count; ++index) {
+        const struct hstex_pdf_object *object = &engine->pdf_objects[index];
+        uint8_t flags = (uint8_t)((object->reserved ? 1U : 0U) |
+                                  (object->stream ? 2U : 0U) |
+                                  (object->written ? 4U : 0U));
+        uint64_t attribute_length = (uint64_t)object->attribute_length;
+        uint64_t content_length = (uint64_t)object->content_length;
+        (void)fwrite(&object->number, sizeof(object->number), 1U, out);
+        (void)fwrite(&flags, sizeof(flags), 1U, out);
+        (void)fwrite(&attribute_length, sizeof(attribute_length), 1U, out);
+        if (attribute_length != 0U) {
+            (void)fwrite(object->attributes, 1U, (size_t)attribute_length, out);
+        }
+        (void)fwrite(&content_length, sizeof(content_length), 1U, out);
+        if (content_length != 0U) {
+            (void)fwrite(object->content, 1U, (size_t)content_length, out);
+        }
+    }
+    /* The page tree the catalogue points at: its nodes, the page objects in
+       order, and the /Pages object's own number. */
+    uint64_t page_nodes = (uint64_t)engine->pdf_page_node_count;
+    (void)fwrite(&page_nodes, sizeof(page_nodes), 1U, out);
+    if (page_nodes != 0U) {
+        (void)fwrite(engine->pdf_page_nodes, sizeof(*engine->pdf_page_nodes),
+                     (size_t)page_nodes, out);
+    }
+    uint64_t page_objects = (uint64_t)engine->pdf_page_object_count;
+    (void)fwrite(&page_objects, sizeof(page_objects), 1U, out);
+    if (page_objects != 0U) {
+        (void)fwrite(engine->pdf_page_objects,
+                     sizeof(*engine->pdf_page_objects), (size_t)page_objects,
+                     out);
+    }
+    uint64_t pages_object = (uint64_t)engine->pdf_pages_object;
+    uint64_t first_page = (uint64_t)engine->pdf_first_page;
+    int32_t pdf_level = engine->pdf_level;
+    (void)fwrite(&pages_object, sizeof(pages_object), 1U, out);
+    (void)fwrite(&first_page, sizeof(first_page), 1U, out);
+    (void)fwrite(&pdf_level, sizeof(pdf_level), 1U, out);
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4148,6 +4191,112 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         }
         engine->pdf_offset_capacity = n;
     }
+    /* The deferred objects. */
+    uint64_t objects = 0U;
+    if (fread(&objects, sizeof(objects), 1U, in) != 1U ||
+        objects > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_objects))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (objects != 0U) {
+        struct hstex_pdf_object *grown = realloc(
+            engine->pdf_objects, (size_t)objects * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_objects = grown;
+        engine->pdf_object_capacity = (size_t)objects;
+    }
+    for (size_t index = 0U; index < (size_t)objects; ++index) {
+        struct hstex_pdf_object *object = &engine->pdf_objects[index];
+        uint8_t flags = 0U;
+        uint64_t attribute_length = 0U, content_length = 0U;
+        if (fread(&object->number, sizeof(object->number), 1U, in) != 1U ||
+            fread(&flags, sizeof(flags), 1U, in) != 1U ||
+            fread(&attribute_length, sizeof(attribute_length), 1U, in) != 1U) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        object->reserved = (flags & 1U) != 0U;
+        object->stream = (flags & 2U) != 0U;
+        object->written = (flags & 4U) != 0U;
+        object->attributes = NULL;
+        object->attribute_length = (size_t)attribute_length;
+        if (attribute_length != 0U) {
+            object->attributes = malloc((size_t)attribute_length);
+            if (object->attributes == NULL ||
+                fread(object->attributes, 1U, (size_t)attribute_length, in) !=
+                    (size_t)attribute_length) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+        }
+        if (fread(&content_length, sizeof(content_length), 1U, in) != 1U) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        object->content = NULL;
+        object->content_length = (size_t)content_length;
+        if (content_length != 0U) {
+            object->content = malloc((size_t)content_length);
+            if (object->content == NULL ||
+                fread(object->content, 1U, (size_t)content_length, in) !=
+                    (size_t)content_length) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+        }
+    }
+    engine->pdf_object_count = (size_t)objects;
+    /* The page tree. */
+    uint64_t page_nodes = 0U;
+    if (fread(&page_nodes, sizeof(page_nodes), 1U, in) != 1U ||
+        page_nodes > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_page_nodes))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (page_nodes != 0U) {
+        struct hstex_pdf_page_node *grown = realloc(
+            engine->pdf_page_nodes, (size_t)page_nodes * sizeof(*grown));
+        if (grown == NULL ||
+            fread(grown, sizeof(*grown), (size_t)page_nodes, in) !=
+                (size_t)page_nodes) {
+            engine->pdf_page_nodes = grown;
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_page_nodes = grown;
+        engine->pdf_page_node_capacity = (size_t)page_nodes;
+    }
+    engine->pdf_page_node_count = (size_t)page_nodes;
+    uint64_t page_objects = 0U;
+    if (fread(&page_objects, sizeof(page_objects), 1U, in) != 1U ||
+        page_objects > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_page_objects))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (page_objects != 0U) {
+        size_t *grown = realloc(engine->pdf_page_objects,
+                                (size_t)page_objects * sizeof(*grown));
+        if (grown == NULL ||
+            fread(grown, sizeof(*grown), (size_t)page_objects, in) !=
+                (size_t)page_objects) {
+            engine->pdf_page_objects = grown;
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_page_objects = grown;
+        engine->pdf_page_object_capacity = (size_t)page_objects;
+    }
+    engine->pdf_page_object_count = (size_t)page_objects;
+    uint64_t pages_object = 0U, first_page = 0U;
+    int32_t pdf_level = 0;
+    if (fread(&pages_object, sizeof(pages_object), 1U, in) != 1U ||
+        fread(&first_page, sizeof(first_page), 1U, in) != 1U ||
+        fread(&pdf_level, sizeof(pdf_level), 1U, in) != 1U) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    engine->pdf_pages_object = (size_t)pages_object;
+    engine->pdf_first_page = (size_t)first_page;
+    engine->pdf_level = pdf_level;
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
