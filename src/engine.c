@@ -3859,17 +3859,20 @@ static int checkpoint_write_hbox(FILE *out,
     if (CKPT_WRITE(out, count) != 0) {
         return -1;
     }
-    if (box == NULL) {
-        return 0;
-    }
-    if (checkpoint_write_bytes(out, box->node_identifiers,
+    if (box != NULL &&
+        checkpoint_write_bytes(out, box->node_identifiers,
                                (size_t)count *
                                    sizeof(*box->node_identifiers)) != 0) {
         return -1;
     }
-    return (CKPT_WRITE(out, box->width) != 0 ||
-            CKPT_WRITE(out, box->height) != 0 ||
-            CKPT_WRITE(out, box->depth) != 0)
+    /* The trailer is written even for a NULL box, because the reader always
+       reads it back (into a builder it made empty); leaving it out only when
+       the box is absent would slide everything after it out of step. */
+    int64_t width = box != NULL ? box->width : 0;
+    int32_t height = box != NULL ? box->height : 0;
+    int32_t depth = box != NULL ? box->depth : 0;
+    return (CKPT_WRITE(out, width) != 0 || CKPT_WRITE(out, height) != 0 ||
+            CKPT_WRITE(out, depth) != 0)
                ? -1
                : 0;
 }
@@ -3907,20 +3910,25 @@ static int checkpoint_write_vbox(FILE *out,
     if (CKPT_WRITE(out, count) != 0) {
         return -1;
     }
-    if (box == NULL) {
-        return 0;
-    }
-    if (checkpoint_write_bytes(out, box->node_identifiers,
+    if (box != NULL &&
+        checkpoint_write_bytes(out, box->node_identifiers,
                                (size_t)count *
                                    sizeof(*box->node_identifiers)) != 0) {
         return -1;
     }
-    return (CKPT_WRITE(out, box->extent) != 0 ||
-            CKPT_WRITE(out, box->trailing_depth) != 0 ||
-            CKPT_WRITE(out, box->width) != 0 ||
-            CKPT_WRITE(out, box->continues) != 0 ||
-            CKPT_WRITE(out, box->max_depth_known) != 0 ||
-            CKPT_WRITE(out, box->max_depth) != 0)
+    /* As in the hbox: the trailer travels even for a NULL box, since the reader
+       always takes it back. */
+    int64_t extent = box != NULL ? box->extent : 0;
+    int32_t trailing_depth = box != NULL ? box->trailing_depth : 0;
+    int32_t width = box != NULL ? box->width : 0;
+    bool continues = box != NULL ? box->continues : false;
+    bool max_depth_known = box != NULL ? box->max_depth_known : false;
+    int32_t max_depth = box != NULL ? box->max_depth : 0;
+    return (CKPT_WRITE(out, extent) != 0 ||
+            CKPT_WRITE(out, trailing_depth) != 0 ||
+            CKPT_WRITE(out, width) != 0 || CKPT_WRITE(out, continues) != 0 ||
+            CKPT_WRITE(out, max_depth_known) != 0 ||
+            CKPT_WRITE(out, max_depth) != 0)
                ? -1
                : 0;
 }
