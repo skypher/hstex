@@ -2506,6 +2506,11 @@ struct hstex_engine {
        rather than carrying the previous run's target past the document's end.
        Zero means not yet scheduled. */
     int32_t checkpoint_disk_next;
+    /* Set once a page-zero checkpoint has been dropped -- the post-preamble
+       state, taken the first clean moment the body has put something on page
+       one, so a warm run's first chunk resumes it instead of re-reading the
+       whole preamble. Per run, so init zeroes it. */
+    bool checkpoint_zero_done;
     /* Chunks parked at page boundaries and released together; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     int32_t parallel_chunk;

@@ -54667,6 +54667,21 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
         }
         target_page = -1;
     }
+    /* Page zero: the post-preamble state, dropped the first clean moment the
+       body has put something on page one (page_has_box, still shipped_pages
+       zero). A warm run's first chunk resumes this instead of re-reading the
+       whole preamble; if no clean moment comes before page one ships, ck-0 is
+       simply absent and that chunk falls back to a fresh preamble read. */
+    if (stride > 0 && stride_dir[0] != '\0' && engine->shipped_pages == 0 &&
+        engine->page_has_box && !engine->checkpoint_zero_done) {
+        char path[600];
+        (void)snprintf(path, sizeof(path), "%s/ck-0.bin", stride_dir);
+        if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
+            engine->checkpoint_zero_done = true;
+        } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
+            (void)fprintf(stderr, "CKPT page-0 declined: %s\n", err);
+        }
+    }
     /* A checkpoint every `stride' pages, but a page boundary that sits inside
        an open construct (math, alignment, a box, a conditional) has no clean
        state to serialize and is declined. Rather than skip the whole window,
@@ -55880,6 +55895,13 @@ enum hstex_engine_result hstex_engine_next_output(
     struct hstex_source_location *location, char *error,
     size_t error_capacity)
 {
+    if (engine->output_depth == 0U && engine->shipped_pages == 0 &&
+        engine->page_has_box && !engine->checkpoint_zero_done) {
+        /* The preamble is behind us and page one has begun: drop the
+           post-preamble checkpoint so a warm run's first chunk need not read
+           the preamble again. */
+        maybe_write_checkpoint(engine);
+    }
     if (engine->output_depth == 0U &&
         engine->shipped_pages != engine->last_page_boundary) {
         /* What nothing can reach is given back every eighth page rather

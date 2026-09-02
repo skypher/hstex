@@ -849,11 +849,15 @@ static int parallel_run_chunk(const char *format_file, const char *document_path
         (void)fclose(null_in);
     }
     int status;
-    if (checkpoint_page == 0) {
+    if (checkpoint_page < 0) {
+        /* No page-zero checkpoint to resume: this chunk reads the preamble
+           itself and typesets from the top. */
         status = run_document_from_format(format_file, document_path, chunk_dir,
                                           job_name, restricted_shell_escape,
                                           NULL);
     } else {
+        /* Resume a checkpoint -- ck-0 is the post-preamble state, so a chunk
+           resuming it skips the preamble like any other. */
         char checkpoint[1088];
         (void)snprintf(checkpoint, sizeof(checkpoint), "%s/ck-%d.bin", cache_dir,
                        checkpoint_page);
@@ -887,12 +891,17 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
         return -1; /* no usable checkpoints; caller compiles sequentially */
     }
     (void)pages;
-    /* One chunk per boundary plus the last: chunk 0 is pages 1..ckpts[0] from
-       scratch, chunk i (1..nck-1) resumes ckpts[i-1] and stops at ckpts[i], and
-       the final chunk resumes ckpts[nck-1] and runs to \end{document}, writing
-       the catalogue and xref. Every chunk tiles into one shared PDF at the byte
-       the sequential run had reached, so nothing is joined afterward. */
-    int nchunks = nck + 1;
+    /* A cold run that found a clean post-preamble moment left a page-zero
+       checkpoint (ck-0), which parallel_checkpoint_pages returns as page 0 at
+       the front. When it is there, EVERY chunk resumes a checkpoint -- chunk i
+       resumes ckpts[i] and stops at ckpts[i+1], the last running to
+       \end{document} -- so no chunk re-reads the preamble. When it is not,
+       chunk 0 alone reads the preamble and typesets pages 1..ckpts[0] from the
+       top, and chunk i>0 resumes ckpts[i-1]. Either way every chunk tiles into
+       one shared PDF at the byte the sequential run had reached, so nothing is
+       joined afterward. */
+    bool have_zero = nck > 0 && ckpts[0] == 0;
+    int nchunks = have_zero ? nck : nck + 1;
     char shared_pdf[1024];
     (void)snprintf(shared_pdf, sizeof(shared_pdf), "%s/%s.pdf", output_directory,
                    job_name);
@@ -931,8 +940,10 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
     while (launched < nchunks || running > 0) {
         while (running < cap && launched < nchunks) {
             int i = launched++;
-            int checkpoint_page = i == 0 ? 0 : ckpts[i - 1];
-            int stop_page = i < nck ? ckpts[i] : 0; /* last chunk: to the end */
+            /* -1 marks the from-scratch chunk (no checkpoint to resume). */
+            int checkpoint_page = have_zero ? ckpts[i] : (i == 0 ? -1 : ckpts[i - 1]);
+            int stop_page = have_zero ? (i + 1 < nck ? ckpts[i + 1] : 0)
+                                      : (i < nck ? ckpts[i] : 0);
             (void)snprintf(chunk_dirs[i], sizeof(chunk_dirs[i]), "%s/chunk_%d",
                            cache_dir, i);
             pid_t child = fork();
