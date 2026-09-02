@@ -569,6 +569,57 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
     return 0;
 }
 
+int hstex_engine_format_to_file(struct hstex_engine *engine, FILE *file)
+{
+    if (engine == NULL || file == NULL) {
+        return -1;
+    }
+    struct format_stream stream = {0};
+    stream.file = file;
+    stream.writing = true;
+    transfer(&stream, (void *)(uintptr_t)(const void *)hstex_format_magic,
+             sizeof(hstex_format_magic));
+    uint64_t layout = hstex_format_layout();
+    transfer(&stream, &layout, sizeof(layout));
+    transfer_format(&stream, engine);
+    return stream.failed ? -1 : 0;
+}
+
+int hstex_engine_format_from_buffer(struct hstex_engine *engine,
+                                    const uint8_t *bytes, size_t length,
+                                    size_t *consumed, char *error,
+                                    size_t error_capacity)
+{
+    if (engine == NULL || bytes == NULL) {
+        return format_error(error, error_capacity, "invalid format buffer");
+    }
+    struct format_stream stream = {0};
+    stream.bytes = bytes;
+    stream.length = length;
+    char magic[sizeof(hstex_format_magic)];
+    transfer(&stream, magic, sizeof(magic));
+    if (stream.failed ||
+        memcmp(magic, hstex_format_magic, sizeof(magic)) != 0) {
+        return format_error(error, error_capacity,
+                            "not a checkpoint (bad format header)");
+    }
+    uint64_t layout = 0U;
+    transfer(&stream, &layout, sizeof(layout));
+    if (stream.failed || layout != hstex_format_layout()) {
+        return format_error(error, error_capacity,
+                            "checkpoint was written by a build laid out "
+                            "differently");
+    }
+    transfer_format(&stream, engine);
+    if (stream.failed) {
+        return format_error(error, error_capacity, "corrupt checkpoint format");
+    }
+    if (consumed != NULL) {
+        *consumed = stream.at;
+    }
+    return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
+}
+
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                              char *error, size_t error_capacity)
 {

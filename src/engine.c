@@ -1495,6 +1495,15 @@ static void release_input_tokens(void *owner, hstex_token *tokens,
     token_block_free(tokens, count);
 }
 
+/* Room for a checkpoint's own tokens on the very list release_input_tokens
+   gives them back to, so a restored frame's block and the pool agree on how
+   big it is. */
+static hstex_token *alloc_input_tokens(void *owner, size_t count)
+{
+    (void)owner;
+    return token_block_alloc(count);
+}
+
 static void retain_macro(struct hstex_engine *engine,
                          const struct hstex_meaning *meaning)
 {
@@ -3817,6 +3826,414 @@ int hstex_engine_begin_job(struct hstex_engine *engine, const char *path,
                           (uint32_t)HSTEX_TOKEN_EVERY_JOB);
     trace_token_parameter(engine, (size_t)HSTEX_TOKEN_EVERY_JOB);
     }
+    return 0;
+}
+
+/* ---- Mid-run checkpoint: the whole run to disk and back ------------------
+   A format holds the assignable state -- meanings, registers, fonts, the node
+   arena. A checkpoint wraps that with what a run has built by a page boundary
+   that the format never keeps: the half-filled page, the marks, the pending
+   inserts, and (through the source-stack serializer) the reading position. It
+   is written only where a group, a conditional, and a paragraph are all shut,
+   which a page boundary is, so the save and conditional stacks -- pointer-laden
+   and rarely wanted -- need no serializer. A fresh process reads it and takes
+   the document up from that page, writing its own PDF. */
+
+static int checkpoint_write_bytes(FILE *out, const void *data, size_t length)
+{
+    return (length == 0U || fwrite(data, 1U, length, out) == length) ? 0 : -1;
+}
+
+static int checkpoint_read_bytes(FILE *in, void *data, size_t length)
+{
+    return (length == 0U || fread(data, 1U, length, in) == length) ? 0 : -1;
+}
+
+#define CKPT_WRITE(out, value) checkpoint_write_bytes((out), &(value), sizeof(value))
+#define CKPT_READ(in, value) checkpoint_read_bytes((in), &(value), sizeof(value))
+
+static int checkpoint_write_hbox(FILE *out,
+                                 const struct hstex_hbox_builder *box)
+{
+    uint64_t count = box != NULL ? (uint64_t)box->count : 0U;
+    if (CKPT_WRITE(out, count) != 0) {
+        return -1;
+    }
+    if (box == NULL) {
+        return 0;
+    }
+    if (checkpoint_write_bytes(out, box->node_identifiers,
+                               (size_t)count *
+                                   sizeof(*box->node_identifiers)) != 0) {
+        return -1;
+    }
+    return (CKPT_WRITE(out, box->width) != 0 ||
+            CKPT_WRITE(out, box->height) != 0 ||
+            CKPT_WRITE(out, box->depth) != 0)
+               ? -1
+               : 0;
+}
+
+static int checkpoint_read_hbox(FILE *in, struct hstex_hbox_builder *box)
+{
+    uint64_t count = 0U;
+    if (CKPT_READ(in, count) != 0 ||
+        count > (uint64_t)(SIZE_MAX / sizeof(*box->node_identifiers))) {
+        return -1;
+    }
+    if (count != 0U) {
+        uint32_t *ids = realloc(box->node_identifiers,
+                                (size_t)count * sizeof(*ids));
+        if (ids == NULL) {
+            return -1;
+        }
+        box->node_identifiers = ids;
+        box->capacity = (size_t)count;
+        if (checkpoint_read_bytes(in, ids, (size_t)count * sizeof(*ids)) != 0) {
+            return -1;
+        }
+    }
+    box->count = (size_t)count;
+    return (CKPT_READ(in, box->width) != 0 ||
+            CKPT_READ(in, box->height) != 0 || CKPT_READ(in, box->depth) != 0)
+               ? -1
+               : 0;
+}
+
+static int checkpoint_write_vbox(FILE *out,
+                                 const struct hstex_vbox_builder *box)
+{
+    uint64_t count = box != NULL ? (uint64_t)box->count : 0U;
+    if (CKPT_WRITE(out, count) != 0) {
+        return -1;
+    }
+    if (box == NULL) {
+        return 0;
+    }
+    if (checkpoint_write_bytes(out, box->node_identifiers,
+                               (size_t)count *
+                                   sizeof(*box->node_identifiers)) != 0) {
+        return -1;
+    }
+    return (CKPT_WRITE(out, box->extent) != 0 ||
+            CKPT_WRITE(out, box->trailing_depth) != 0 ||
+            CKPT_WRITE(out, box->width) != 0 ||
+            CKPT_WRITE(out, box->continues) != 0 ||
+            CKPT_WRITE(out, box->max_depth_known) != 0 ||
+            CKPT_WRITE(out, box->max_depth) != 0)
+               ? -1
+               : 0;
+}
+
+static int checkpoint_read_vbox(FILE *in, struct hstex_vbox_builder *box)
+{
+    uint64_t count = 0U;
+    if (CKPT_READ(in, count) != 0) {
+        return -1;
+    }
+    if (count > (uint64_t)(SIZE_MAX / sizeof(*box->node_identifiers))) {
+        return -1;
+    }
+    if (count != 0U) {
+        uint32_t *ids = realloc(box->node_identifiers,
+                                (size_t)count * sizeof(*ids));
+        if (ids == NULL) {
+            return -1;
+        }
+        box->node_identifiers = ids;
+        box->capacity = (size_t)count;
+        if (checkpoint_read_bytes(in, ids, (size_t)count * sizeof(*ids)) != 0) {
+            return -1;
+        }
+    }
+    box->count = (size_t)count;
+    return (CKPT_READ(in, box->extent) != 0 ||
+            CKPT_READ(in, box->trailing_depth) != 0 ||
+            CKPT_READ(in, box->width) != 0 ||
+            CKPT_READ(in, box->continues) != 0 ||
+            CKPT_READ(in, box->max_depth_known) != 0 ||
+            CKPT_READ(in, box->max_depth) != 0)
+               ? -1
+               : 0;
+}
+
+int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
+                                  char *error, size_t error_capacity)
+{
+    if (engine == NULL || path == NULL) {
+        return set_error(error, error_capacity, "invalid checkpoint write");
+    }
+    /* A group may stand open -- \begin{document} is one -- and a paragraph
+       may be half-built where a page broke inside the next one; both are
+       carried. Only an open conditional, which a page boundary never sits
+       inside, is refused. */
+    if (engine->conditional_count != 0U) {
+        return set_error(error, error_capacity,
+                         "a checkpoint cannot sit inside a conditional");
+    }
+    FILE *out = fopen(path, "wb");
+    if (out == NULL) {
+        return set_error(error, error_capacity, "cannot write %s", path);
+    }
+    if (hstex_engine_format_to_file(engine, out) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint state");
+    }
+    int32_t shipped = engine->shipped_pages;
+    int32_t mode = (int32_t)engine->mode;
+    int32_t prev_depth = engine->prev_depth;
+    int32_t space_factor = engine->space_factor;
+    int32_t prev_graf = engine->prev_graf;
+    uint32_t current_font = engine->current_font;
+    uint8_t inner_mode = engine->inner_mode ? 1U : 0U;
+    uint8_t building = engine->building_paragraph ? 1U : 0U;
+    uint8_t has_pending = engine->has_pending_character ? 1U : 0U;
+    uint8_t pending = engine->pending_character;
+    uint8_t page_has_box = engine->page_has_box ? 1U : 0U;
+    uint8_t page_last_taken = engine->page_last_taken ? 1U : 0U;
+    if (CKPT_WRITE(out, shipped) != 0 || CKPT_WRITE(out, mode) != 0 ||
+        CKPT_WRITE(out, prev_depth) != 0 || CKPT_WRITE(out, space_factor) != 0 ||
+        CKPT_WRITE(out, prev_graf) != 0 || CKPT_WRITE(out, current_font) != 0 ||
+        CKPT_WRITE(out, inner_mode) != 0 || CKPT_WRITE(out, building) != 0 ||
+        CKPT_WRITE(out, has_pending) != 0 || CKPT_WRITE(out, pending) != 0 ||
+        CKPT_WRITE(out, page_has_box) != 0 ||
+        CKPT_WRITE(out, page_last_taken) != 0 ||
+        checkpoint_write_bytes(out, engine->page_integers,
+                               sizeof(engine->page_integers)) != 0 ||
+        checkpoint_write_bytes(out, engine->page_dimens,
+                               sizeof(engine->page_dimens)) != 0 ||
+        checkpoint_write_vbox(out, engine->page_builder) != 0 ||
+        checkpoint_write_vbox(out, engine->contribution_builder) != 0 ||
+        checkpoint_write_hbox(out, engine->paragraph_builder) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint page");
+    }
+    uint64_t marks = (uint64_t)engine->mark_class_count;
+    if (CKPT_WRITE(out, marks) != 0 ||
+        checkpoint_write_bytes(out, engine->mark_classes,
+                               (size_t)marks *
+                                   sizeof(*engine->mark_classes)) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint marks");
+    }
+    uint64_t inserts = (uint64_t)engine->page_insert_count;
+    if (CKPT_WRITE(out, inserts) != 0 ||
+        checkpoint_write_bytes(out, engine->page_inserts,
+                               (size_t)inserts *
+                                   sizeof(*engine->page_inserts)) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity,
+                         "cannot write checkpoint inserts");
+    }
+    /* The open groups' save stack (POD, no pointers), the level they nest to,
+       and the floors the output routine's own group and conditionals sit above
+       -- the format never holds these, since it is written at group zero. */
+    uint32_t output_group_floor = engine->output_group_floor;
+    uint64_t output_conditional_floor =
+        (uint64_t)engine->output_conditional_floor;
+    if (CKPT_WRITE(out, output_group_floor) != 0 ||
+        CKPT_WRITE(out, output_conditional_floor) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint floors");
+    }
+    uint32_t group_level = engine->group_level;
+    uint64_t saves = (uint64_t)engine->save_count;
+    if (CKPT_WRITE(out, group_level) != 0 || CKPT_WRITE(out, saves) != 0 ||
+        checkpoint_write_bytes(out, engine->saves,
+                               (size_t)saves * sizeof(*engine->saves)) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint saves");
+    }
+    if (hstex_source_serialize(&engine->sources, out) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity,
+                         "cannot write checkpoint reading position");
+    }
+    if (fclose(out) != 0) {
+        return set_error(error, error_capacity, "cannot finish %s", path);
+    }
+    return 0;
+}
+
+int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
+                                   const char *path, char *error,
+                                   size_t error_capacity)
+{
+    if (engine == NULL || path == NULL) {
+        return set_error(error, error_capacity, "invalid checkpoint resume");
+    }
+    FILE *in = fopen(path, "rb");
+    if (in == NULL) {
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    if (fseek(in, 0L, SEEK_END) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    long length = ftell(in);
+    rewind(in);
+    if (length < 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    uint8_t *bytes = malloc((size_t)length == 0U ? 1U : (size_t)length);
+    if (bytes == NULL ||
+        fread(bytes, 1U, (size_t)length, in) != (size_t)length) {
+        free(bytes);
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    size_t consumed = 0U;
+    if (hstex_engine_format_from_buffer(engine, bytes, (size_t)length, &consumed,
+                                        error, error_capacity) != 0) {
+        free(bytes);
+        (void)fclose(in);
+        return -1;
+    }
+    free(bytes);
+    if (fseek(in, (long)consumed, SEEK_SET) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint offset");
+    }
+    /* The paragraph builder is made only when a paragraph begins, so a fresh
+       engine has none; a checkpoint taken mid-paragraph needs one to read the
+       half-built line back into. */
+    if (engine->paragraph_builder == NULL) {
+        engine->paragraph_builder =
+            calloc(1U, sizeof(*engine->paragraph_builder));
+        if (engine->paragraph_builder == NULL) {
+            (void)fclose(in);
+            return set_error(error, error_capacity,
+                             "cannot allocate a paragraph builder");
+        }
+    }
+    int32_t shipped = 0, mode = 0, prev_depth = 0, space_factor = 0,
+            prev_graf = 0;
+    uint32_t current_font = 0U;
+    uint8_t inner_mode = 0U, building = 0U, has_pending = 0U, pending = 0U,
+            page_has_box = 0U, page_last_taken = 0U;
+    if (CKPT_READ(in, shipped) != 0 || CKPT_READ(in, mode) != 0 ||
+        CKPT_READ(in, prev_depth) != 0 || CKPT_READ(in, space_factor) != 0 ||
+        CKPT_READ(in, prev_graf) != 0 || CKPT_READ(in, current_font) != 0 ||
+        CKPT_READ(in, inner_mode) != 0 || CKPT_READ(in, building) != 0 ||
+        CKPT_READ(in, has_pending) != 0 || CKPT_READ(in, pending) != 0 ||
+        CKPT_READ(in, page_has_box) != 0 ||
+        CKPT_READ(in, page_last_taken) != 0 ||
+        checkpoint_read_bytes(in, engine->page_integers,
+                              sizeof(engine->page_integers)) != 0 ||
+        checkpoint_read_bytes(in, engine->page_dimens,
+                              sizeof(engine->page_dimens)) != 0 ||
+        checkpoint_read_vbox(in, engine->page_builder) != 0 ||
+        checkpoint_read_vbox(in, engine->contribution_builder) != 0 ||
+        checkpoint_read_hbox(in, engine->paragraph_builder) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint page");
+    }
+    engine->shipped_pages = shipped;
+    engine->mode = (enum hstex_mode)mode;
+    engine->prev_depth = prev_depth;
+    engine->space_factor = space_factor;
+    engine->prev_graf = prev_graf;
+    engine->current_font = current_font;
+    engine->inner_mode = inner_mode != 0U;
+    engine->building_paragraph = building != 0U;
+    engine->has_pending_character = has_pending != 0U;
+    engine->pending_character = pending;
+    engine->page_has_box = page_has_box != 0U;
+    engine->page_last_taken = page_last_taken != 0U;
+    uint64_t marks = 0U;
+    if (CKPT_READ(in, marks) != 0 ||
+        marks > (uint64_t)(SIZE_MAX / sizeof(*engine->mark_classes))) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint marks");
+    }
+    if (marks != 0U) {
+        struct hstex_mark_class *grown =
+            realloc(engine->mark_classes, (size_t)marks * sizeof(*grown));
+        if (grown == NULL ||
+            checkpoint_read_bytes(in, grown,
+                                  (size_t)marks * sizeof(*grown)) != 0) {
+            engine->mark_classes = grown;
+            (void)fclose(in);
+            return set_error(error, error_capacity, "corrupt checkpoint marks");
+        }
+        engine->mark_classes = grown;
+        engine->mark_class_capacity = (size_t)marks;
+    }
+    engine->mark_class_count = (size_t)marks;
+    uint64_t inserts = 0U;
+    if (CKPT_READ(in, inserts) != 0 ||
+        inserts > (uint64_t)(SIZE_MAX / sizeof(*engine->page_inserts))) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint inserts");
+    }
+    if (inserts != 0U) {
+        struct hstex_page_insert *grown =
+            realloc(engine->page_inserts, (size_t)inserts * sizeof(*grown));
+        if (grown == NULL ||
+            checkpoint_read_bytes(in, grown,
+                                  (size_t)inserts * sizeof(*grown)) != 0) {
+            engine->page_inserts = grown;
+            (void)fclose(in);
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint inserts");
+        }
+        engine->page_inserts = grown;
+    }
+    engine->page_insert_count = (size_t)inserts;
+    if (inserts != 0U) {
+        engine->page_insert_capacity = (size_t)inserts;
+    }
+    uint32_t output_group_floor = 0U;
+    uint64_t output_conditional_floor = 0U;
+    if (CKPT_READ(in, output_group_floor) != 0 ||
+        CKPT_READ(in, output_conditional_floor) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint floors");
+    }
+    engine->output_group_floor = output_group_floor;
+    engine->output_conditional_floor = (size_t)output_conditional_floor;
+    uint32_t group_level = 0U;
+    uint64_t saves = 0U;
+    if (CKPT_READ(in, group_level) != 0 || CKPT_READ(in, saves) != 0 ||
+        saves > (uint64_t)(SIZE_MAX / sizeof(*engine->saves))) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint saves");
+    }
+    if (saves != 0U) {
+        struct hstex_save_entry *grown =
+            realloc(engine->saves, (size_t)saves * sizeof(*grown));
+        if (grown == NULL ||
+            checkpoint_read_bytes(in, grown,
+                                  (size_t)saves * sizeof(*grown)) != 0) {
+            engine->saves = grown;
+            (void)fclose(in);
+            return set_error(error, error_capacity, "corrupt checkpoint saves");
+        }
+        engine->saves = grown;
+        engine->save_capacity = (size_t)saves;
+    }
+    engine->save_count = (size_t)saves;
+    engine->group_level = group_level;
+    /* The stack's hands for owning and letting go of token blocks must be the
+       engine's BEFORE the reading position is read back, so that every frame
+       restored from the checkpoint takes its block from the pool it will be
+       given back to. */
+    engine->sources.definition_owner = engine;
+    engine->sources.definition_release = release_input_definition;
+    engine->sources.tokens_release = release_input_tokens;
+    engine->sources.tokens_alloc = alloc_input_tokens;
+    if (hstex_source_deserialize(&engine->sources, in, &engine->lexical_state,
+                                 error, error_capacity) != 0) {
+        (void)fclose(in);
+        return -1;
+    }
+    (void)fclose(in);
+    engine->active_vbox_builder = engine->contribution_builder;
+    engine->active_hbox_builder =
+        engine->building_paragraph ? engine->paragraph_builder : NULL;
+    engine->dump_requested = false;
+    engine->interaction_mode = HSTEX_INTERACTION_ERROR_STOP;
     return 0;
 }
 
@@ -52846,6 +53263,57 @@ static void note_page_digest(const struct hstex_engine *engine)
     (void)fflush(log);
 }
 
+/* At a page boundary, drop a checkpoint if one was asked for. HSTEX_CKPT is
+   `<page>:<file>' -- one checkpoint, when that many pages have shipped;
+   HSTEX_CKPT_EVERY is `<stride>:<dir>' -- one every `stride' pages, named
+   `<dir>/ck-<page>.bin', which the chapter-parallel driver takes up. */
+static void maybe_write_checkpoint(struct hstex_engine *engine)
+{
+    static int parsed = 0;
+    static int32_t target_page = -1;
+    static char target_path[512] = {0};
+    static int32_t stride = 0;
+    static char stride_dir[400] = {0};
+    if (parsed == 0) {
+        parsed = 1;
+        const char *one = getenv("HSTEX_CKPT");
+        if (one != NULL) {
+            const char *colon = strchr(one, ':');
+            if (colon != NULL) {
+                target_page = (int32_t)strtol(one, NULL, 10);
+                (void)snprintf(target_path, sizeof(target_path), "%s",
+                               colon + 1);
+            }
+        }
+        const char *every = getenv("HSTEX_CKPT_EVERY");
+        if (every != NULL) {
+            const char *colon = strchr(every, ':');
+            if (colon != NULL) {
+                stride = (int32_t)strtol(every, NULL, 10);
+                (void)snprintf(stride_dir, sizeof(stride_dir), "%s", colon + 1);
+            }
+        }
+    }
+    char err[256];
+    if (target_page >= 0 && engine->shipped_pages == target_page &&
+        target_path[0] != '\0') {
+        if (hstex_engine_write_checkpoint(engine, target_path, err,
+                                          sizeof(err)) != 0 &&
+            getenv("HSTEX_CKPT_DEBUG") != NULL) {
+            (void)fprintf(stderr, "CKPT write failed at %d: %s\n",
+                          engine->shipped_pages, err);
+        }
+        target_page = -1;
+    }
+    if (stride > 0 && stride_dir[0] != '\0' && engine->shipped_pages > 0 &&
+        engine->shipped_pages % stride == 0) {
+        char path[600];
+        (void)snprintf(path, sizeof(path), "%s/ck-%d.bin", stride_dir,
+                       engine->shipped_pages);
+        (void)hstex_engine_write_checkpoint(engine, path, err, sizeof(err));
+    }
+}
+
 /* A chunk parked where a run may be taken up. Everything the run is stands
    in the child, which then waits on a gate the whole fleet shares; when the
    gate opens they all go at once, each running as far as the next boundary
@@ -54027,6 +54495,7 @@ enum hstex_engine_result hstex_engine_next_output(
             compact_nodes(engine);
         }
         note_page_digest(engine);
+        maybe_write_checkpoint(engine);
         take_up_elsewhere(engine);
         park_a_chunk(engine);
         speculation_boundary(engine);

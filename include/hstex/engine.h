@@ -2613,6 +2613,14 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
                               char *error, size_t error_capacity);
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                              char *error, size_t error_capacity);
+/* The whole run to disk at a page boundary, and a fresh engine taken up from
+   it -- the format's state plus the half-built page and reading position it
+   never holds. See src/engine.c. */
+int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
+                                  char *error, size_t error_capacity);
+int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
+                                   const char *path, char *error,
+                                   size_t error_capacity);
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity);
 /* Push a file named the way \input names it, resolved through the same

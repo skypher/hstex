@@ -418,6 +418,49 @@ static int run_document_from_format(const char *format_file,
     return status;
 }
 
+/* Take a document up from a mid-run checkpoint: a fresh engine reads the whole
+   run's state and reading position, then finishes the document into its own
+   PDF in `output_directory' under `job_name'. What it writes are the pages
+   from the checkpoint on -- the tail of the run that the checkpoint parked. */
+static int resume_checkpoint_document(const char *checkpoint_file,
+                                      const char *output_directory,
+                                      const char *job_name)
+{
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (hstex_engine_init(&engine, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        return 1;
+    }
+    if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
+        hstex_engine_set_output_directory(&engine, output_directory, error,
+                                          sizeof(error)) != 0 ||
+        hstex_engine_resume_checkpoint(&engine, checkpoint_file, error,
+                                       sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex: %s\n",
+                      error[0] == '\0' ? "cannot resume checkpoint" : error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    if (job_name != NULL &&
+        hstex_engine_set_job_name(&engine, job_name, error, sizeof(error)) !=
+            0) {
+        (void)fprintf(stderr, "hstex: %s\n", error);
+        hstex_engine_destroy(&engine);
+        return 1;
+    }
+    size_t tokens = 0U;
+    int status = drain_engine(&engine, checkpoint_file, &tokens);
+    if (status == 0) {
+        (void)printf("resumed=%s pages=%d symbols=%zu macros=%zu\n",
+                     checkpoint_file, engine.shipped_pages,
+                     engine.lexical_state.symbols.entry_count,
+                     engine.macro_count);
+    }
+    hstex_engine_destroy(&engine);
+    return status;
+}
+
 static int run_latex(const char *format_path, const char *document_path)
 {
     char error[512] = {0};
@@ -541,6 +584,10 @@ int main(int argument_count, char **arguments)
     if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
         return run_document_from_format(arguments[2], arguments[3],
                                         "build/document-output", NULL, true);
+    }
+    if (argument_count == 5 && strcmp(arguments[1], "--resume") == 0) {
+        return resume_checkpoint_document(arguments[2], arguments[3],
+                                          arguments[4]);
     }
     if (argument_count == 4 &&
         strcmp(arguments[1], "--format-no-shell") == 0) {

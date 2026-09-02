@@ -343,11 +343,22 @@ int hstex_source_deserialize(struct hstex_source_stack *stack, FILE *in,
             }
             hstex_token *tokens = NULL;
             if (count != 0U) {
-                tokens = malloc((size_t)count * sizeof(*tokens));
+                /* Allocated where the engine's own owned blocks come from, so
+                   the pool that takes it back does not overrun it; a plain
+                   malloc otherwise, freed plainly, for the standalone test. */
+                tokens = stack->tokens_alloc != NULL
+                             ? stack->tokens_alloc(stack->definition_owner,
+                                                   (size_t)count)
+                             : malloc((size_t)count * sizeof(*tokens));
                 if (tokens == NULL ||
                     read_bytes(in, tokens,
                                (size_t)count * sizeof(*tokens)) != 0) {
-                    free(tokens);
+                    if (stack->tokens_release != NULL) {
+                        stack->tokens_release(stack->definition_owner, tokens,
+                                              (size_t)count);
+                    } else {
+                        free(tokens);
+                    }
                     return set_error(error, error_capacity,
                                      "truncated checkpoint tokens");
                 }

@@ -92,6 +92,12 @@ struct hstex_source_stack {
        them; giving it back to the library instead would take it out of the
        pool for good. Null where they are to be given back the plain way. */
     void (*tokens_release)(void *owner, hstex_token *tokens, size_t count);
+    /* Where a frame's own tokens are asked FROM, so that a block restored from
+       a checkpoint sits on the same free list `tokens_release` gives it back
+       to -- a plain library block would be given back to a pool whose bookkeep
+       overruns it. Null where a checkpoint is read outside the engine (the
+       serializer test), where a plain allocation and a plain free suffice. */
+    hstex_token *(*tokens_alloc)(void *owner, size_t count);
     /* Room the stack keeps for the expansions it is reading, given back in
        the order it was taken; an expansion that does not fit finds its own.
        The store only grows while nothing stands in it. */
