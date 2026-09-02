@@ -184,6 +184,15 @@ source_test = executable(
 )
 test('source', source_test)
 
+source_serialize_test = executable(
+  'test_source_serialize',
+  'tests/test_source_serialize.c',
+  include_directories: [public_include, generated_include],
+  link_with: core,
+  dependencies: core_dependencies,
+)
+test('source_serialize', source_serialize_test)
+
 filedb_test = executable(
   'test_filedb',
   'tests/test_filedb.c',

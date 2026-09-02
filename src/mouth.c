@@ -338,6 +338,52 @@ void hstex_mouth_init(struct hstex_mouth *mouth, const uint8_t *data,
     mouth->state = HSTEX_MOUTH_NEW_LINE;
 }
 
+void hstex_mouth_position(const struct hstex_mouth *mouth,
+                          struct hstex_mouth_position *out,
+                          const uint8_t **line_bytes)
+{
+    out->next_line_offset = mouth->next_line_offset;
+    out->line_start = mouth->line_start;
+    out->line_content_length = mouth->line_content_length;
+    out->line_cursor = mouth->line_cursor;
+    out->line_raw_length = mouth->line_raw_length;
+    out->line_number = mouth->line_number;
+    out->end_line_byte = mouth->end_line_byte;
+    out->state = (uint8_t)mouth->state;
+    out->line_loaded = mouth->line_loaded;
+    out->has_end_line_byte = mouth->has_end_line_byte;
+    *line_bytes = mouth->line_loaded ? mouth->line_buffer : NULL;
+}
+
+int hstex_mouth_restore(struct hstex_mouth *mouth, const uint8_t *data,
+                        size_t length, struct hstex_lexical_state *lexical_state,
+                        const struct hstex_mouth_position *position,
+                        const uint8_t *line_bytes, char *error,
+                        size_t error_capacity)
+{
+    hstex_mouth_init(mouth, data, length, lexical_state);
+    mouth->next_line_offset = position->next_line_offset;
+    mouth->line_start = position->line_start;
+    mouth->line_content_length = position->line_content_length;
+    mouth->line_cursor = position->line_cursor;
+    mouth->line_raw_length = position->line_raw_length;
+    mouth->line_number = position->line_number;
+    mouth->end_line_byte = position->end_line_byte;
+    mouth->state = (enum hstex_mouth_state)position->state;
+    mouth->line_loaded = position->line_loaded;
+    mouth->has_end_line_byte = position->has_end_line_byte;
+    if (position->line_loaded && position->line_raw_length != 0U) {
+        if (reserve_line(mouth, position->line_raw_length, error,
+                         error_capacity) != 0) {
+            return -1;
+        }
+        if (line_bytes != NULL) {
+            memcpy(mouth->line_buffer, line_bytes, position->line_raw_length);
+        }
+    }
+    return 0;
+}
+
 void hstex_mouth_destroy(struct hstex_mouth *mouth)
 {
     if (mouth == NULL) {

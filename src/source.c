@@ -155,6 +155,202 @@ void hstex_source_stack_destroy(struct hstex_source_stack *stack)
     memset(stack, 0, sizeof(*stack));
 }
 
+/* ---- Checkpoint: the reading position to disk and back ------------------ */
+
+static int write_bytes(FILE *out, const void *data, size_t length)
+{
+    return (length == 0U || fwrite(data, 1U, length, out) == length) ? 0 : -1;
+}
+
+static int read_bytes(FILE *in, void *data, size_t length)
+{
+    return (length == 0U || fread(data, 1U, length, in) == length) ? 0 : -1;
+}
+
+#define WRITE_SCALAR(out, value) write_bytes((out), &(value), sizeof(value))
+#define READ_SCALAR(in, value) read_bytes((in), &(value), sizeof(value))
+
+int hstex_source_serialize(const struct hstex_source_stack *stack, FILE *out)
+{
+    if (stack == NULL || out == NULL) {
+        return -1;
+    }
+    uint64_t frame_count = (uint64_t)stack->count;
+    if (WRITE_SCALAR(out, frame_count) != 0) {
+        return -1;
+    }
+    for (size_t index = 0U; index < stack->count; ++index) {
+        const struct hstex_source_frame *frame = &stack->frames[index];
+        uint8_t kind = (uint8_t)frame->kind;
+        if (WRITE_SCALAR(out, kind) != 0) {
+            return -1;
+        }
+        if (frame->kind == HSTEX_SOURCE_FILE) {
+            const struct hstex_file_source *file = frame->value.file;
+            uint64_t path_length =
+                file->path != NULL ? (uint64_t)strlen(file->path) : 0U;
+            struct hstex_mouth_position position;
+            const uint8_t *line_bytes = NULL;
+            hstex_mouth_position(&file->mouth, &position, &line_bytes);
+            if (WRITE_SCALAR(out, path_length) != 0 ||
+                write_bytes(out, file->path, (size_t)path_length) != 0 ||
+                WRITE_SCALAR(out, position) != 0) {
+                return -1;
+            }
+            if (position.line_loaded && position.line_raw_length != 0U &&
+                write_bytes(out, line_bytes,
+                            (size_t)position.line_raw_length) != 0) {
+                return -1;
+            }
+        } else {
+            const struct hstex_token_source *source = &frame->value.token_list;
+            /* The tokens still to come are written where they stand, however
+               the frame reached them -- store, definition, or its own held
+               word -- so the copy that comes back owns them and needs neither
+               the store nor the definition. */
+            uint32_t count = source->count;
+            uint32_t cursor = source->cursor;
+            struct hstex_source_location location = source->location;
+            uint8_t source_kind = source->source_kind;
+            uint32_t frame_name = source->frame_name;
+            if (WRITE_SCALAR(out, count) != 0 ||
+                WRITE_SCALAR(out, cursor) != 0 ||
+                WRITE_SCALAR(out, location) != 0 ||
+                WRITE_SCALAR(out, source_kind) != 0 ||
+                WRITE_SCALAR(out, frame_name) != 0 ||
+                write_bytes(out, source->tokens,
+                            (size_t)count * sizeof(*source->tokens)) != 0) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int hstex_source_deserialize(struct hstex_source_stack *stack, FILE *in,
+                             struct hstex_lexical_state *lexical_state,
+                             char *error, size_t error_capacity)
+{
+    if (stack == NULL || in == NULL) {
+        return set_error(error, error_capacity, "invalid deserialize request");
+    }
+    while (stack->count != 0U) {
+        pop_frame(stack);
+    }
+    stack->lexical_state = lexical_state;
+    uint64_t frame_count = 0U;
+    if (READ_SCALAR(in, frame_count) != 0) {
+        return set_error(error, error_capacity, "truncated source checkpoint");
+    }
+    for (uint64_t index = 0U; index < frame_count; ++index) {
+        if (reserve_frames(stack, stack->count + 1U, error, error_capacity) !=
+            0) {
+            return -1;
+        }
+        uint8_t kind = 0U;
+        if (READ_SCALAR(in, kind) != 0) {
+            return set_error(error, error_capacity, "truncated source frame");
+        }
+        struct hstex_source_frame *frame = &stack->frames[stack->count];
+        memset(frame, 0, sizeof(*frame));
+        if (kind == (uint8_t)HSTEX_SOURCE_FILE) {
+            uint64_t path_length = 0U;
+            if (READ_SCALAR(in, path_length) != 0 ||
+                path_length > (uint64_t)(SIZE_MAX - 1U)) {
+                return set_error(error, error_capacity, "bad checkpoint path");
+            }
+            char *path = malloc((size_t)path_length + 1U);
+            if (path == NULL) {
+                return set_error(error, error_capacity,
+                                 "checkpoint path allocation failed");
+            }
+            struct hstex_mouth_position position;
+            if (read_bytes(in, path, (size_t)path_length) != 0 ||
+                READ_SCALAR(in, position) != 0) {
+                free(path);
+                return set_error(error, error_capacity,
+                                 "truncated checkpoint file frame");
+            }
+            path[path_length] = '\0';
+            uint8_t *line_bytes = NULL;
+            if (position.line_loaded && position.line_raw_length != 0U) {
+                line_bytes = malloc((size_t)position.line_raw_length);
+                if (line_bytes == NULL ||
+                    read_bytes(in, line_bytes,
+                               (size_t)position.line_raw_length) != 0) {
+                    free(line_bytes);
+                    free(path);
+                    return set_error(error, error_capacity,
+                                     "truncated checkpoint line");
+                }
+            }
+            struct hstex_file_source *file = calloc(1U, sizeof(*file));
+            if (file == NULL ||
+                hstex_input_open(path, &file->input, error, error_capacity) !=
+                    0) {
+                free(file);
+                free(line_bytes);
+                free(path);
+                return -1;
+            }
+            if (hstex_mouth_restore(&file->mouth, file->input.data,
+                                    file->input.length, lexical_state,
+                                    &position, line_bytes, error,
+                                    error_capacity) != 0) {
+                hstex_input_close(&file->input);
+                free(file);
+                free(line_bytes);
+                free(path);
+                return -1;
+            }
+            free(line_bytes);
+            file->path = path;
+            frame->kind = HSTEX_SOURCE_FILE;
+            frame->value.file = file;
+            stack->file_top = stack->count + 1U;
+        } else {
+            uint32_t count = 0U;
+            uint32_t cursor = 0U;
+            struct hstex_source_location location = {0};
+            uint8_t source_kind = 0U;
+            uint32_t frame_name = 0U;
+            if (READ_SCALAR(in, count) != 0 || READ_SCALAR(in, cursor) != 0 ||
+                READ_SCALAR(in, location) != 0 ||
+                READ_SCALAR(in, source_kind) != 0 ||
+                READ_SCALAR(in, frame_name) != 0) {
+                return set_error(error, error_capacity,
+                                 "truncated checkpoint token frame");
+            }
+            hstex_token *tokens = NULL;
+            if (count != 0U) {
+                tokens = malloc((size_t)count * sizeof(*tokens));
+                if (tokens == NULL ||
+                    read_bytes(in, tokens,
+                               (size_t)count * sizeof(*tokens)) != 0) {
+                    free(tokens);
+                    return set_error(error, error_capacity,
+                                     "truncated checkpoint tokens");
+                }
+            }
+            struct hstex_token_source *source = &frame->value.token_list;
+            frame->kind = HSTEX_SOURCE_TOKEN_LIST;
+            source->tokens = tokens;
+            source->count = count;
+            source->cursor = cursor;
+            source->location = location;
+            source->held = 0U;
+            source->definition = 0U;
+            source->store_base = 0U;
+            source->flags = count != 0U ? (uint8_t)HSTEX_TOKEN_SOURCE_OWNS : 0U;
+            source->source_kind = source_kind;
+            source->frame_name = frame_name;
+        }
+        ++stack->count;
+    }
+    note_top_frame(stack);
+    return 0;
+}
+
 int hstex_source_push_file(struct hstex_source_stack *stack, const char *path,
                            char *error, size_t error_capacity)
 {

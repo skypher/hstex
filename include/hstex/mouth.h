@@ -65,6 +65,34 @@ struct hstex_mouth {
 void hstex_mouth_init(struct hstex_mouth *mouth, const uint8_t *data,
                       size_t length, struct hstex_lexical_state *lexical_state);
 void hstex_mouth_destroy(struct hstex_mouth *mouth);
+
+/* Where a mouth stands, taken out and put back so a run can be written to
+   disk at a page boundary and read on again. `hstex_mouth_position` copies
+   out the scalar cursor of `mouth`; `line_bytes` is set to the current
+   collapsed line (`line_raw_length` bytes, valid until the next read) or NULL
+   where none is loaded. `hstex_mouth_restore` initialises `mouth` over freshly
+   reopened `data` and puts the cursor back, copying `line_bytes` into a line
+   buffer of its own. See src/source.c, the source-stack serializer. */
+struct hstex_mouth_position {
+    size_t next_line_offset;
+    size_t line_start;
+    size_t line_content_length;
+    size_t line_cursor;
+    size_t line_raw_length;
+    uint32_t line_number;
+    uint8_t end_line_byte;
+    uint8_t state;
+    bool line_loaded;
+    bool has_end_line_byte;
+};
+void hstex_mouth_position(const struct hstex_mouth *mouth,
+                          struct hstex_mouth_position *out,
+                          const uint8_t **line_bytes);
+int hstex_mouth_restore(struct hstex_mouth *mouth, const uint8_t *data,
+                        size_t length, struct hstex_lexical_state *lexical_state,
+                        const struct hstex_mouth_position *position,
+                        const uint8_t *line_bytes, char *error,
+                        size_t error_capacity);
 enum hstex_mouth_result hstex_mouth_next(
     struct hstex_mouth *mouth, hstex_token *token,
     struct hstex_source_location *location, char *error,

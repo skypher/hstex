@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 enum hstex_source_frame_kind {
     HSTEX_SOURCE_FILE = 0,
@@ -260,5 +261,18 @@ const char *hstex_source_current_name(const struct hstex_source_stack *stack);
    the stack is a file. */
 struct hstex_file_source *hstex_source_current_file(
     const struct hstex_source_stack *stack);
+
+/* The whole reading position, written to `out` and read back, so that a run
+   can be checkpointed to disk at a page boundary and taken up again by a fresh
+   process. A file frame is written as its path and the mouth's cursor (the
+   file is reopened on restore); a token frame is written with its tokens
+   snapshotted inline and comes back owning a copy of them -- the definition it
+   was reading and the store it shared are not carried over, so what an error
+   would draw of a macro being read is lost, but every token still to be read
+   is exactly preserved. Deserialize expects a freshly initialised stack. */
+int hstex_source_serialize(const struct hstex_source_stack *stack, FILE *out);
+int hstex_source_deserialize(struct hstex_source_stack *stack, FILE *in,
+                             struct hstex_lexical_state *lexical_state,
+                             char *error, size_t error_capacity);
 
 #endif
