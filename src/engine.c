@@ -4086,6 +4086,23 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
         return set_error(error, error_capacity,
                          "cannot write checkpoint group kinds");
     }
+    /* \parshape: the one-based offset of the current shape, and the arena of
+       every shape read so far that the offset points into. A page can break
+       inside a construct that holds a parshape open (a list, level 2), and
+       without it the resumed paragraph is set at the default shape -- same
+       words, different line breaks. */
+    uint32_t parshape = engine->parshape;
+    uint32_t parshape_level = engine->parshape_level;
+    uint64_t parshape_used = (uint64_t)engine->parshape_used;
+    if (CKPT_WRITE(out, parshape) != 0 ||
+        CKPT_WRITE(out, parshape_level) != 0 ||
+        CKPT_WRITE(out, parshape_used) != 0 ||
+        checkpoint_write_bytes(out, engine->parshapes,
+                               (size_t)parshape_used *
+                                   sizeof(*engine->parshapes)) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write checkpoint parshape");
+    }
     if (hstex_source_serialize(&engine->sources, out) != 0) {
         (void)fclose(out);
         return set_error(error, error_capacity,
@@ -4294,6 +4311,40 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
                              "corrupt checkpoint group kinds");
         }
     }
+    /* \parshape, mirroring the write side: the offset, its level, and the arena
+       it points into. */
+    uint32_t parshape = 0U, parshape_level = 0U;
+    uint64_t parshape_used = 0U;
+    if (CKPT_READ(in, parshape) != 0 || CKPT_READ(in, parshape_level) != 0 ||
+        CKPT_READ(in, parshape_used) != 0 ||
+        parshape_used > (uint64_t)(SIZE_MAX / sizeof(*engine->parshapes))) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint parshape");
+    }
+    if (parshape_used != 0U) {
+        if ((size_t)parshape_used > engine->parshape_capacity) {
+            int32_t *grown = realloc(engine->parshapes,
+                                     (size_t)parshape_used *
+                                         sizeof(*engine->parshapes));
+            if (grown == NULL) {
+                (void)fclose(in);
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint parshape");
+            }
+            engine->parshapes = grown;
+            engine->parshape_capacity = (size_t)parshape_used;
+        }
+        if (checkpoint_read_bytes(in, engine->parshapes,
+                                  (size_t)parshape_used *
+                                      sizeof(*engine->parshapes)) != 0) {
+            (void)fclose(in);
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint parshape");
+        }
+    }
+    engine->parshape = parshape;
+    engine->parshape_level = parshape_level;
+    engine->parshape_used = (size_t)parshape_used;
     /* The stack's hands for owning and letting go of token blocks must be the
        engine's BEFORE the reading position is read back, so that every frame
        restored from the checkpoint takes its block from the pool it will be
