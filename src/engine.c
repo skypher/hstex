@@ -4335,6 +4335,21 @@ static void checkpoint_write_pdf_state(FILE *out,
             ckpt_write_str(out, stack->values[value]);
         }
     }
+    /* The document outline (bookmarks): each item's objects, its nesting and
+       sibling links, and its attribute string. */
+    uint64_t outlines = (uint64_t)engine->pdf_outline_count;
+    (void)fwrite(&outlines, sizeof(outlines), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_outline_count; ++index) {
+        const struct hstex_pdf_outline *outline = &engine->pdf_outlines[index];
+        uint64_t links[8] = {(uint64_t)outline->object,   (uint64_t)outline->title,
+                             (uint64_t)outline->action,   (uint64_t)outline->parent,
+                             (uint64_t)outline->previous, (uint64_t)outline->next,
+                             (uint64_t)outline->first,    (uint64_t)outline->last};
+        int32_t counts[2] = {outline->count, outline->visible};
+        (void)fwrite(links, sizeof(links[0]), 8U, out);
+        (void)fwrite(counts, sizeof(counts[0]), 2U, out);
+        ckpt_write_str(out, outline->attributes);
+    }
     uint64_t open_action = (uint64_t)engine->pdf_open_action;
     uint64_t outline_object = (uint64_t)engine->pdf_outline_object;
     (void)fwrite(&open_action, sizeof(open_action), 1U, out);
@@ -4823,6 +4838,44 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         stack->count = (size_t)count;
     }
     engine->pdf_colour_count = (size_t)colours;
+    uint64_t outlines = 0U;
+    if (fread(&outlines, sizeof(outlines), 1U, in) != 1U ||
+        outlines > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_outlines))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (outlines != 0U) {
+        struct hstex_pdf_outline *grown =
+            realloc(engine->pdf_outlines, (size_t)outlines * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)outlines * sizeof(*grown));
+        engine->pdf_outlines = grown;
+        engine->pdf_outline_capacity = (size_t)outlines;
+    }
+    for (size_t index = 0U; index < (size_t)outlines; ++index) {
+        struct hstex_pdf_outline *outline = &engine->pdf_outlines[index];
+        uint64_t links[8] = {0U};
+        int32_t counts[2] = {0, 0};
+        if (fread(links, sizeof(links[0]), 8U, in) != 8U ||
+            fread(counts, sizeof(counts[0]), 2U, in) != 2U ||
+            ckpt_read_str(in, &outline->attributes) != 0) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        outline->object = (size_t)links[0];
+        outline->title = (size_t)links[1];
+        outline->action = (size_t)links[2];
+        outline->parent = (size_t)links[3];
+        outline->previous = (size_t)links[4];
+        outline->next = (size_t)links[5];
+        outline->first = (size_t)links[6];
+        outline->last = (size_t)links[7];
+        outline->count = counts[0];
+        outline->visible = counts[1];
+    }
+    engine->pdf_outline_count = (size_t)outlines;
     uint64_t open_action = 0U, outline_object = 0U;
     if (fread(&open_action, sizeof(open_action), 1U, in) != 1U ||
         fread(&outline_object, sizeof(outline_object), 1U, in) != 1U ||
