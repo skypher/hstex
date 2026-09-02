@@ -3998,6 +3998,21 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
     uint8_t pending = engine->pending_character;
     uint8_t page_has_box = engine->page_has_box ? 1U : 0U;
     uint8_t page_last_taken = engine->page_last_taken ? 1U : 0U;
+    /* Whether the page's goal is already settled (the first box reached it) and
+       whether the output routine is mid-flight. Without page_frozen a resumed
+       page that already holds boxes looks unfrozen, so the next box re-freezes
+       it -- reset_page_state -- and ships what stood there as a spurious page
+       ahead of the real one. */
+    uint8_t page_frozen = engine->page_frozen ? 1U : 0U;
+    uint8_t output_active = engine->output_active ? 1U : 0U;
+    /* The best page break found on the partial page so far. Without these a
+       resume starts with least_page_cost at nought -- a cost no real break can
+       beat -- so the first break search settles on breaking before any content
+       and ships an empty page ahead of the real one. */
+    int32_t least_page_cost = engine->least_page_cost;
+    int32_t best_page_penalty = engine->best_page_penalty;
+    int32_t best_page_size = engine->best_page_size;
+    uint64_t best_page_break = (uint64_t)engine->best_page_break;
     if (CKPT_WRITE(out, shipped) != 0 || CKPT_WRITE(out, mode) != 0 ||
         CKPT_WRITE(out, prev_depth) != 0 || CKPT_WRITE(out, space_factor) != 0 ||
         CKPT_WRITE(out, prev_graf) != 0 || CKPT_WRITE(out, current_font) != 0 ||
@@ -4005,6 +4020,14 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
         CKPT_WRITE(out, has_pending) != 0 || CKPT_WRITE(out, pending) != 0 ||
         CKPT_WRITE(out, page_has_box) != 0 ||
         CKPT_WRITE(out, page_last_taken) != 0 ||
+        CKPT_WRITE(out, page_frozen) != 0 ||
+        CKPT_WRITE(out, output_active) != 0 ||
+        CKPT_WRITE(out, least_page_cost) != 0 ||
+        CKPT_WRITE(out, best_page_penalty) != 0 ||
+        CKPT_WRITE(out, best_page_size) != 0 ||
+        CKPT_WRITE(out, best_page_break) != 0 ||
+        checkpoint_write_bytes(out, &engine->page_last_node,
+                               sizeof(engine->page_last_node)) != 0 ||
         checkpoint_write_bytes(out, engine->page_integers,
                                sizeof(engine->page_integers)) != 0 ||
         checkpoint_write_bytes(out, engine->page_dimens,
@@ -4050,6 +4073,18 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                                (size_t)saves * sizeof(*engine->saves)) != 0) {
         (void)fclose(out);
         return set_error(error, error_capacity, "cannot write checkpoint saves");
+    }
+    /* The KIND of each open group -- simple `{}', semi-simple `\begingroup',
+       an hbox, the output routine, and so on -- indexed by level. Without it a
+       resume knows how many groups stand open but not what closes each, so a
+       page broken inside a `\begingroup' environment meets its `\endgroup' with
+       the wrong closer and unravels ("Extra \endgroup"). */
+    if (checkpoint_write_bytes(out, engine->group_kinds,
+                               (size_t)group_level *
+                                   sizeof(*engine->group_kinds)) != 0) {
+        (void)fclose(out);
+        return set_error(error, error_capacity,
+                         "cannot write checkpoint group kinds");
     }
     if (hstex_source_serialize(&engine->sources, out) != 0) {
         (void)fclose(out);
@@ -4118,7 +4153,10 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
             prev_graf = 0;
     uint32_t current_font = 0U;
     uint8_t inner_mode = 0U, building = 0U, has_pending = 0U, pending = 0U,
-            page_has_box = 0U, page_last_taken = 0U;
+            page_has_box = 0U, page_last_taken = 0U, page_frozen = 0U,
+            output_active = 0U;
+    int32_t least_page_cost = 0, best_page_penalty = 0, best_page_size = 0;
+    uint64_t best_page_break = 0U;
     if (CKPT_READ(in, shipped) != 0 || CKPT_READ(in, mode) != 0 ||
         CKPT_READ(in, prev_depth) != 0 || CKPT_READ(in, space_factor) != 0 ||
         CKPT_READ(in, prev_graf) != 0 || CKPT_READ(in, current_font) != 0 ||
@@ -4126,6 +4164,14 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
         CKPT_READ(in, has_pending) != 0 || CKPT_READ(in, pending) != 0 ||
         CKPT_READ(in, page_has_box) != 0 ||
         CKPT_READ(in, page_last_taken) != 0 ||
+        CKPT_READ(in, page_frozen) != 0 ||
+        CKPT_READ(in, output_active) != 0 ||
+        CKPT_READ(in, least_page_cost) != 0 ||
+        CKPT_READ(in, best_page_penalty) != 0 ||
+        CKPT_READ(in, best_page_size) != 0 ||
+        CKPT_READ(in, best_page_break) != 0 ||
+        checkpoint_read_bytes(in, &engine->page_last_node,
+                              sizeof(engine->page_last_node)) != 0 ||
         checkpoint_read_bytes(in, engine->page_integers,
                               sizeof(engine->page_integers)) != 0 ||
         checkpoint_read_bytes(in, engine->page_dimens,
@@ -4148,6 +4194,12 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     engine->pending_character = pending;
     engine->page_has_box = page_has_box != 0U;
     engine->page_last_taken = page_last_taken != 0U;
+    engine->page_frozen = page_frozen != 0U;
+    engine->output_active = output_active != 0U;
+    engine->least_page_cost = least_page_cost;
+    engine->best_page_penalty = best_page_penalty;
+    engine->best_page_size = best_page_size;
+    engine->best_page_break = (size_t)best_page_break;
     uint64_t marks = 0U;
     if (CKPT_READ(in, marks) != 0 ||
         marks > (uint64_t)(SIZE_MAX / sizeof(*engine->mark_classes))) {
@@ -4222,6 +4274,26 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     }
     engine->save_count = (size_t)saves;
     engine->group_level = group_level;
+    /* The kind of each open group, mirroring the write side; a resume needs it
+       to close every group with the right closer. */
+    if (group_level != 0U) {
+        if ((size_t)group_level > engine->group_kind_capacity) {
+            uint8_t *grown = realloc(engine->group_kinds, (size_t)group_level);
+            if (grown == NULL) {
+                (void)fclose(in);
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint group kinds");
+            }
+            engine->group_kinds = grown;
+            engine->group_kind_capacity = (size_t)group_level;
+        }
+        if (checkpoint_read_bytes(in, engine->group_kinds,
+                                  (size_t)group_level) != 0) {
+            (void)fclose(in);
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint group kinds");
+        }
+    }
     /* The stack's hands for owning and letting go of token blocks must be the
        engine's BEFORE the reading position is read back, so that every frame
        restored from the checkpoint takes its block from the pool it will be
