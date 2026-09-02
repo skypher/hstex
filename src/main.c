@@ -805,17 +805,18 @@ static int parallel_checkpoint_pages(const char *cache_dir, int *pages,
 static int parallel_run_chunk(const char *format_file, const char *document_path,
                               const char *output_directory,
                               const char *cache_dir, const char *chunk_dir,
-                              int checkpoint_page, int stop_page,
-                              bool restricted_shell_escape)
+                              const char *job_name, int checkpoint_page,
+                              int stop_page, bool restricted_shell_escape)
 {
     (void)mkdir(chunk_dir, 0700);
-    static const char *const carried[] = {"clay.aux", "clay.toc", "clay.out",
-                                          "clay.bbl", "clay.lof", "clay.lot"};
-    for (size_t i = 0U; i < sizeof(carried) / sizeof(carried[0]); ++i) {
+    static const char *const suffixes[] = {".aux", ".toc", ".out",
+                                           ".bbl", ".lof", ".lot"};
+    for (size_t i = 0U; i < sizeof(suffixes) / sizeof(suffixes[0]); ++i) {
         char from[1024], to[1024];
-        (void)snprintf(from, sizeof(from), "%s/%s", output_directory,
-                       carried[i]);
-        (void)snprintf(to, sizeof(to), "%s/%s", chunk_dir, carried[i]);
+        (void)snprintf(from, sizeof(from), "%s/%s%s", output_directory,
+                       job_name, suffixes[i]);
+        (void)snprintf(to, sizeof(to), "%s/%s%s", chunk_dir, job_name,
+                       suffixes[i]);
         (void)parallel_copy_file(from, to); /* absent files are fine */
     }
     char stop[32];
@@ -840,12 +841,13 @@ static int parallel_run_chunk(const char *format_file, const char *document_path
     int status;
     if (checkpoint_page == 0) {
         status = run_document_from_format(format_file, document_path, chunk_dir,
-                                          "clay", restricted_shell_escape, NULL);
+                                          job_name, restricted_shell_escape,
+                                          NULL);
     } else {
         char checkpoint[1088];
         (void)snprintf(checkpoint, sizeof(checkpoint), "%s/ck-%d.bin", cache_dir,
                        checkpoint_page);
-        status = resume_checkpoint_document(checkpoint, chunk_dir, "clay");
+        status = resume_checkpoint_document(checkpoint, chunk_dir, job_name);
     }
     return status;
 }
@@ -891,8 +893,8 @@ static int parallel_spawn(char *const argv[])
    wrong, only -- in that case -- not faster. */
 static int run_parallel_warm(const char *format_file, const char *document_path,
                              const char *output_directory,
-                             const char *cache_dir, int pages,
-                             bool restricted_shell_escape)
+                             const char *cache_dir, const char *job_name,
+                             int pages, bool restricted_shell_escape)
 {
     int ckpts[1024];
     int nck = parallel_checkpoint_pages(cache_dir, ckpts, 1024);
@@ -943,7 +945,7 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
             if (child == 0) {
                 _exit(parallel_run_chunk(
                     format_file, document_path, output_directory, cache_dir,
-                    chunk_dirs[i], checkpoint_page, stop_page,
+                    chunk_dirs[i], job_name, checkpoint_page, stop_page,
                     restricted_shell_escape));
             }
             if (child < 0) {
@@ -967,8 +969,8 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
     int result = -1;
     if (failures == 0) {
         char output_pdf[1024];
-        (void)snprintf(output_pdf, sizeof(output_pdf), "%s/clay.pdf",
-                       output_directory);
+        (void)snprintf(output_pdf, sizeof(output_pdf), "%s/%s.pdf",
+                       output_directory, job_name);
         /* Lift the tail out of the reference PDF (the current clay.pdf, from the
            cold run) BEFORE the join overwrites it; pdfseparate names each page
            file by its own number. */
@@ -992,8 +994,8 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
                 int argc = 0, p = 0;
                 argv[argc++] = (char *)"pdfunite";
                 for (int i = 0; i < nchunks; ++i, ++p) {
-                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/clay.pdf",
-                                   chunk_dirs[i]);
+                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/%s.pdf",
+                                   chunk_dirs[i], job_name);
                     argv[argc++] = paths[p];
                 }
                 for (int page = tail_start; page <= pages; ++page, ++p) {
@@ -1023,12 +1025,37 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
    resume processes and joins their pages; if that cannot be done it falls back
    to a sequential compile, which is correct and no slower than an ordinary
    run. */
+/* The job name a document defaults to: its file name without directory or
+   extension (clay.tex -> clay), which is what \jobname and the PDF are named. */
+static void parallel_default_job(const char *document_path, char *out,
+                                 size_t capacity)
+{
+    const char *base = strrchr(document_path, '/');
+    base = base == NULL ? document_path : base + 1;
+    const char *dot = strrchr(base, '.');
+    size_t length = dot == NULL ? strlen(base) : (size_t)(dot - base);
+    if (length >= capacity) {
+        length = capacity - 1U;
+    }
+    memcpy(out, base, length);
+    out[length] = '\0';
+}
+
 static int run_parallel_document(const char *format_file,
                                  const char *document_path,
+                                 const char *output_directory,
+                                 const char *job_name,
                                  bool restricted_shell_escape)
 {
-    const char *output_directory = "build/document-output";
-    (void)mkdir("build", 0700);
+    char job_buffer[256];
+    if (job_name == NULL) {
+        parallel_default_job(document_path, job_buffer, sizeof(job_buffer));
+        job_name = job_buffer;
+    }
+    /* build/document-output is nested, and mkdir is not recursive. */
+    if (strcmp(output_directory, "build/document-output") == 0) {
+        (void)mkdir("build", 0700);
+    }
     (void)mkdir(output_directory, 0700);
     char cache_dir[256];
     (void)snprintf(cache_dir, sizeof(cache_dir), "%s/%s", output_directory,
@@ -1053,7 +1080,7 @@ static int run_parallel_document(const char *format_file,
                       "resuming chapters in parallel\n",
                       cached_pages, cached_stride);
         if (run_parallel_warm(format_file, document_path, output_directory,
-                              cache_dir, cached_pages,
+                              cache_dir, job_name, cached_pages,
                               restricted_shell_escape) == 0) {
             return 0;
         }
@@ -1061,7 +1088,7 @@ static int run_parallel_document(const char *format_file,
                       "hstex: parallel resume unavailable -- compiling "
                       "sequentially over the cache\n");
         return run_document_from_format(format_file, document_path,
-                                        output_directory, NULL,
+                                        output_directory, job_name,
                                         restricted_shell_escape, NULL);
     }
 
@@ -1079,7 +1106,7 @@ static int run_parallel_document(const char *format_file,
     int pages = 0;
     int status =
         run_document_from_format(format_file, document_path, output_directory,
-                                 NULL, restricted_shell_escape, &pages);
+                                 job_name, restricted_shell_escape, &pages);
     (void)unsetenv("HSTEX_CKPT_EVERY");
     if (status == 0 &&
         parallel_write_manifest(cache_dir, hash, HSTEX_PARALLEL_STRIDE,
@@ -1137,7 +1164,16 @@ int main(int argument_count, char **arguments)
                                         NULL);
     }
     if (argument_count == 4 && strcmp(arguments[1], "--parallel") == 0) {
-        return run_parallel_document(arguments[2], arguments[3], true);
+        return run_parallel_document(arguments[2], arguments[3],
+                                     "build/document-output", NULL, true);
+    }
+    if ((argument_count == 5 || argument_count == 6) &&
+        (strcmp(arguments[1], "--parallel-output") == 0 ||
+         strcmp(arguments[1], "--parallel-output-no-shell") == 0)) {
+        return run_parallel_document(
+            arguments[2], arguments[3], arguments[4],
+            argument_count == 6 ? arguments[5] : NULL,
+            strcmp(arguments[1], "--parallel-output") == 0);
     }
     if (argument_count == 5 && strcmp(arguments[1], "--resume") == 0) {
         return resume_checkpoint_document(arguments[2], arguments[3],

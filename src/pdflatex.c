@@ -781,10 +781,19 @@ int main(int argument_count, char **arguments)
         free(job_name);
         return 1;
     }
+    /* Parallel disk-checkpoint compilation is the default: a first run drops a
+       checkpoint cache, and a later run of the same source resumes the chapters
+       in parallel. HSTEX_NO_PARALLEL=1 reverts to a plain sequential compile
+       for anyone who does not want the cache. Either way the engine writes the
+       same job.pdf into the output directory. */
+    bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL;
+    const char *mode =
+        parallel ? (restricted_shell_escape ? "--parallel-output"
+                                            : "--parallel-output-no-shell")
+                 : (restricted_shell_escape ? "--format-output"
+                                            : "--format-output-no-shell");
     char *const command[] = {(char *)engine,
-                             restricted_shell_escape
-                                 ? "--format-output"
-                                 : "--format-output-no-shell",
+                             (char *)mode,
                              format,
                              (char *)document, (char *)output_directory, job_name,
                              NULL};
