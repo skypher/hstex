@@ -4279,6 +4279,67 @@ static void checkpoint_write_pdf_state(FILE *out,
     /* glyph_unicode is not written here: it rides in the format part of the
        checkpoint (\pdfglyphtounicode is a format-time thing), so it is already
        restored by the time this section is read. */
+
+    /* The link and destination apparatus hyperref builds: the annotations, the
+       placements the outline and links point at, the actions behind them, the
+       named destinations and their lookup slots, and the colour stacks. Most
+       are flat records; destinations and colours carry their own strings. */
+    ckpt_write_bytes(out, engine->pdf_annots,
+                     engine->pdf_annot_count * sizeof(*engine->pdf_annots));
+    ckpt_write_bytes(out, engine->pdf_places,
+                     engine->pdf_place_count * sizeof(*engine->pdf_places));
+    ckpt_write_bytes(out, engine->pdf_actions,
+                     engine->pdf_action_count * sizeof(*engine->pdf_actions));
+    uint64_t dests = (uint64_t)engine->pdf_dest_count;
+    (void)fwrite(&dests, sizeof(dests), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_dest_count; ++index) {
+        const struct hstex_pdf_dest *dest = &engine->pdf_dests[index];
+        uint64_t length = (uint64_t)dest->length;
+        (void)fwrite(&length, sizeof(length), 1U, out);
+        if (length != 0U) {
+            (void)fwrite(dest->name, 1U, (size_t)length, out);
+        }
+        uint8_t flags = (uint8_t)((dest->named ? 1U : 0U) |
+                                  (dest->structured ? 2U : 0U) |
+                                  (dest->placed ? 4U : 0U));
+        int32_t number = dest->number;
+        uint64_t object = (uint64_t)dest->object;
+        (void)fwrite(&number, sizeof(number), 1U, out);
+        (void)fwrite(&object, sizeof(object), 1U, out);
+        (void)fwrite(&flags, sizeof(flags), 1U, out);
+    }
+    uint64_t dest_slots = (uint64_t)engine->pdf_dest_slot_capacity;
+    (void)fwrite(&dest_slots, sizeof(dest_slots), 1U, out);
+    if (dest_slots != 0U) {
+        (void)fwrite(engine->pdf_dest_slots, sizeof(*engine->pdf_dest_slots),
+                     (size_t)dest_slots, out);
+    }
+    uint64_t future = (uint64_t)engine->pdf_future_page_count;
+    (void)fwrite(&future, sizeof(future), 1U, out);
+    if (future != 0U) {
+        (void)fwrite(engine->pdf_future_pages,
+                     sizeof(*engine->pdf_future_pages), (size_t)future, out);
+    }
+    uint64_t colours = (uint64_t)engine->pdf_colour_count;
+    (void)fwrite(&colours, sizeof(colours), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_colour_count; ++index) {
+        const struct hstex_color_stack *stack = &engine->pdf_colours[index];
+        ckpt_write_str(out, stack->initial);
+        uint8_t flags = (uint8_t)((stack->page ? 1U : 0U) |
+                                  (stack->direct ? 2U : 0U) |
+                                  (stack->created ? 4U : 0U));
+        (void)fwrite(&flags, sizeof(flags), 1U, out);
+        uint64_t count = (uint64_t)stack->count;
+        (void)fwrite(&count, sizeof(count), 1U, out);
+        for (size_t value = 0U; value < stack->count; ++value) {
+            ckpt_write_str(out, stack->values[value]);
+        }
+    }
+    uint64_t open_action = (uint64_t)engine->pdf_open_action;
+    uint64_t outline_object = (uint64_t)engine->pdf_outline_object;
+    (void)fwrite(&open_action, sizeof(open_action), 1U, out);
+    (void)fwrite(&outline_object, sizeof(outline_object), 1U, out);
+    (void)fwrite(&engine->pdf_link, sizeof(engine->pdf_link), 1U, out);
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4601,6 +4662,175 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         font->descriptor_object = (size_t)sizes[3];
     }
     engine->pdf_physical_font_count = (size_t)physical;
+    /* The link and destination apparatus. */
+    uint8_t *bytes = NULL;
+    size_t bytes_length = 0U;
+    if (ckpt_read_bytes(in, &bytes, &bytes_length) != 0 ||
+        bytes_length % sizeof(*engine->pdf_annots) != 0U) {
+        free(bytes);
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    free(engine->pdf_annots);
+    engine->pdf_annots = (struct hstex_pdf_annotation *)bytes;
+    engine->pdf_annot_count = bytes_length / sizeof(*engine->pdf_annots);
+    engine->pdf_annot_capacity = engine->pdf_annot_count;
+    if (ckpt_read_bytes(in, &bytes, &bytes_length) != 0 ||
+        bytes_length % sizeof(*engine->pdf_places) != 0U) {
+        free(bytes);
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    free(engine->pdf_places);
+    engine->pdf_places = (struct hstex_pdf_placement *)bytes;
+    engine->pdf_place_count = bytes_length / sizeof(*engine->pdf_places);
+    engine->pdf_place_capacity = engine->pdf_place_count;
+    if (ckpt_read_bytes(in, &bytes, &bytes_length) != 0 ||
+        bytes_length % sizeof(*engine->pdf_actions) != 0U) {
+        free(bytes);
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    free(engine->pdf_actions);
+    engine->pdf_actions = (struct hstex_pdf_action *)bytes;
+    engine->pdf_action_count = bytes_length / sizeof(*engine->pdf_actions);
+    engine->pdf_action_capacity = engine->pdf_action_count;
+    uint64_t dests = 0U;
+    if (fread(&dests, sizeof(dests), 1U, in) != 1U ||
+        dests > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_dests))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (dests != 0U) {
+        struct hstex_pdf_dest *grown =
+            realloc(engine->pdf_dests, (size_t)dests * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)dests * sizeof(*grown));
+        engine->pdf_dests = grown;
+        engine->pdf_dest_capacity = (size_t)dests;
+    }
+    for (size_t index = 0U; index < (size_t)dests; ++index) {
+        struct hstex_pdf_dest *dest = &engine->pdf_dests[index];
+        uint64_t name_length = 0U, object = 0U;
+        int32_t number = 0;
+        uint8_t flags = 0U;
+        if (fread(&name_length, sizeof(name_length), 1U, in) != 1U ||
+            name_length > (uint64_t)SIZE_MAX) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        if (name_length != 0U) {
+            dest->name = malloc((size_t)name_length);
+            if (dest->name == NULL ||
+                fread(dest->name, 1U, (size_t)name_length, in) !=
+                    (size_t)name_length) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+        }
+        dest->length = (size_t)name_length;
+        if (fread(&number, sizeof(number), 1U, in) != 1U ||
+            fread(&object, sizeof(object), 1U, in) != 1U ||
+            fread(&flags, sizeof(flags), 1U, in) != 1U) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        dest->number = number;
+        dest->object = (size_t)object;
+        dest->named = (flags & 1U) != 0U;
+        dest->structured = (flags & 2U) != 0U;
+        dest->placed = (flags & 4U) != 0U;
+    }
+    engine->pdf_dest_count = (size_t)dests;
+    uint64_t dest_slots = 0U;
+    if (fread(&dest_slots, sizeof(dest_slots), 1U, in) != 1U ||
+        dest_slots > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_dest_slots))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (dest_slots != 0U) {
+        uint32_t *grown = realloc(engine->pdf_dest_slots,
+                                  (size_t)dest_slots * sizeof(*grown));
+        if (grown == NULL ||
+            fread(grown, sizeof(*grown), (size_t)dest_slots, in) !=
+                (size_t)dest_slots) {
+            engine->pdf_dest_slots = grown;
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_dest_slots = grown;
+        engine->pdf_dest_slot_capacity = (size_t)dest_slots;
+    }
+    uint64_t future = 0U;
+    if (fread(&future, sizeof(future), 1U, in) != 1U ||
+        future > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_future_pages))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (future != 0U) {
+        size_t *grown = realloc(engine->pdf_future_pages,
+                                (size_t)future * sizeof(*grown));
+        if (grown == NULL ||
+            fread(grown, sizeof(*grown), (size_t)future, in) != (size_t)future) {
+            engine->pdf_future_pages = grown;
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_future_pages = grown;
+        engine->pdf_future_page_capacity = (size_t)future;
+    }
+    engine->pdf_future_page_count = (size_t)future;
+    uint64_t colours = 0U;
+    if (fread(&colours, sizeof(colours), 1U, in) != 1U ||
+        colours > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_colours))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (colours != 0U) {
+        struct hstex_color_stack *grown =
+            realloc(engine->pdf_colours, (size_t)colours * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)colours * sizeof(*grown));
+        engine->pdf_colours = grown;
+    }
+    for (size_t index = 0U; index < (size_t)colours; ++index) {
+        struct hstex_color_stack *stack = &engine->pdf_colours[index];
+        uint8_t flags = 0U;
+        uint64_t count = 0U;
+        if (ckpt_read_str(in, &stack->initial) != 0 ||
+            fread(&flags, sizeof(flags), 1U, in) != 1U ||
+            fread(&count, sizeof(count), 1U, in) != 1U ||
+            count > (uint64_t)(SIZE_MAX / sizeof(char *))) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        stack->page = (flags & 1U) != 0U;
+        stack->direct = (flags & 2U) != 0U;
+        stack->created = (flags & 4U) != 0U;
+        if (count != 0U) {
+            stack->values = calloc((size_t)count, sizeof(*stack->values));
+            if (stack->values == NULL) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+            stack->capacity = (size_t)count;
+            for (size_t value = 0U; value < (size_t)count; ++value) {
+                if (ckpt_read_str(in, &stack->values[value]) != 0) {
+                    return set_error(error, error_capacity,
+                                     "corrupt checkpoint pdf state");
+                }
+            }
+        }
+        stack->count = (size_t)count;
+    }
+    engine->pdf_colour_count = (size_t)colours;
+    uint64_t open_action = 0U, outline_object = 0U;
+    if (fread(&open_action, sizeof(open_action), 1U, in) != 1U ||
+        fread(&outline_object, sizeof(outline_object), 1U, in) != 1U ||
+        fread(&engine->pdf_link, sizeof(engine->pdf_link), 1U, in) != 1U) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    engine->pdf_open_action = (size_t)open_action;
+    engine->pdf_outline_object = (size_t)outline_object;
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
