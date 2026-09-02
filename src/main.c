@@ -653,6 +653,10 @@ static int parallel_validity_hash(const char *format_file,
    so a later run can tell at a glance whether it may take the checkpoints up. */
 #define HSTEX_PARALLEL_CACHE ".hstex-parallel"
 #define HSTEX_PARALLEL_STRIDE 40
+/* How many times a cold run will recompile to settle the .aux before it gives
+   up on a fixpoint; a person reruns latex two or three times, and a document
+   whose references never settle is rare. */
+#define HSTEX_PARALLEL_MAX_PASSES 6
 
 static int parallel_write_manifest(const char *cache_dir, uint64_t hash,
                                    int stride, int pages)
@@ -819,9 +823,15 @@ static int parallel_run_chunk(const char *format_file, const char *document_path
                        suffixes[i]);
         (void)parallel_copy_file(from, to); /* absent files are fine */
     }
-    char stop[32];
-    (void)snprintf(stop, sizeof(stop), "%d", stop_page);
-    (void)setenv("HSTEX_RESUME_STOP", stop, 1);
+    /* stop_page <= 0 means run to the end -- the one chunk that finalizes a
+       tiled PDF (writes the catalogue and xref). */
+    if (stop_page > 0) {
+        char stop[32];
+        (void)snprintf(stop, sizeof(stop), "%d", stop_page);
+        (void)setenv("HSTEX_RESUME_STOP", stop, 1);
+    } else {
+        (void)unsetenv("HSTEX_RESUME_STOP");
+    }
     (void)unsetenv("HSTEX_CKPT_EVERY");
     char log_path[1088];
     (void)snprintf(log_path, sizeof(log_path), "%s/log", chunk_dir);
@@ -852,31 +862,6 @@ static int parallel_run_chunk(const char *format_file, const char *document_path
     return status;
 }
 
-/* Wait for a child, returning 0 only when it exited cleanly. */
-static int parallel_wait(pid_t child)
-{
-    if (child < 0) {
-        return -1;
-    }
-    int wstatus = 0;
-    while (waitpid(child, &wstatus, 0) < 0 && errno == EINTR) {
-    }
-    return WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0 ? 0 : -1;
-}
-
-/* Run `argv' (NULL-terminated) as a child and wait for it; 0 on a clean exit.
-   execvp is used so a missing tool just fails rather than needing a hard path;
-   the caller treats that as "assembly unavailable" and falls back. */
-static int parallel_spawn(char *const argv[])
-{
-    pid_t child = fork();
-    if (child == 0) {
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-    return parallel_wait(child);
-}
-
 /* A warm run: fan the chapters out to fresh processes -- chunk 0 from scratch,
    the rest resumed from their checkpoints -- each writing its own pages, then
    assemble the pieces into one clay.pdf.
@@ -901,12 +886,21 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
     if (nck <= 0) {
         return -1; /* no usable checkpoints; caller compiles sequentially */
     }
-    /* One chunk per checkpoint boundary: chunk 0 is pages 1..ckpts[0] from
-       scratch, chunk i (i>=1) resumes ckpts[i-1] and stops at ckpts[i]. Together
-       they cover pages 1..ckpts[nck-1]; the pages after that are the tail. */
-    int nchunks = nck;
-    int tail_start = ckpts[nck - 1] + 1;
-    int tail_count = tail_start <= pages ? pages - tail_start + 1 : 0;
+    (void)pages;
+    /* One chunk per boundary plus the last: chunk 0 is pages 1..ckpts[0] from
+       scratch, chunk i (1..nck-1) resumes ckpts[i-1] and stops at ckpts[i], and
+       the final chunk resumes ckpts[nck-1] and runs to \end{document}, writing
+       the catalogue and xref. Every chunk tiles into one shared PDF at the byte
+       the sequential run had reached, so nothing is joined afterward. */
+    int nchunks = nck + 1;
+    char shared_pdf[1024];
+    (void)snprintf(shared_pdf, sizeof(shared_pdf), "%s/%s.pdf", output_directory,
+                   job_name);
+    FILE *shared = fopen(shared_pdf, "wb"); /* create empty for the chunks */
+    if (shared != NULL) {
+        (void)fclose(shared);
+    }
+    (void)setenv("HSTEX_TILE", shared_pdf, 1);
     char (*chunk_dirs)[1024] = malloc((size_t)nchunks * sizeof(*chunk_dirs));
     pid_t *children = malloc((size_t)nchunks * sizeof(*children));
     if (chunk_dirs == NULL || children == NULL) {
@@ -938,7 +932,7 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
         while (running < cap && launched < nchunks) {
             int i = launched++;
             int checkpoint_page = i == 0 ? 0 : ckpts[i - 1];
-            int stop_page = ckpts[i];
+            int stop_page = i < nck ? ckpts[i] : 0; /* last chunk: to the end */
             (void)snprintf(chunk_dirs[i], sizeof(chunk_dirs[i]), "%s/chunk_%d",
                            cache_dir, i);
             pid_t child = fork();
@@ -966,56 +960,11 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
             break;
         }
     }
-    int result = -1;
-    if (failures == 0) {
-        char output_pdf[1024];
-        (void)snprintf(output_pdf, sizeof(output_pdf), "%s/%s.pdf",
-                       output_directory, job_name);
-        /* Lift the tail out of the reference PDF (the current clay.pdf, from the
-           cold run) BEFORE the join overwrites it; pdfseparate names each page
-           file by its own number. */
-        int have_tail = 1;
-        if (tail_count > 0) {
-            char first[16], last[16], pattern[1024];
-            (void)snprintf(first, sizeof(first), "%d", tail_start);
-            (void)snprintf(last, sizeof(last), "%d", pages);
-            (void)snprintf(pattern, sizeof(pattern), "%s/tail-%%d.pdf",
-                           cache_dir);
-            char *sep_argv[] = {(char *)"pdfseparate", (char *)"-f",
-                                first,   (char *)"-l",  last,
-                                output_pdf, pattern,      NULL};
-            have_tail = parallel_spawn(sep_argv) == 0;
-        }
-        if (have_tail) {
-            int parts = nchunks + tail_count;
-            char **argv = malloc((size_t)(parts + 3) * sizeof(*argv));
-            char (*paths)[1088] = malloc((size_t)parts * sizeof(*paths));
-            if (argv != NULL && paths != NULL) {
-                int argc = 0, p = 0;
-                argv[argc++] = (char *)"pdfunite";
-                for (int i = 0; i < nchunks; ++i, ++p) {
-                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/%s.pdf",
-                                   chunk_dirs[i], job_name);
-                    argv[argc++] = paths[p];
-                }
-                for (int page = tail_start; page <= pages; ++page, ++p) {
-                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/tail-%d.pdf",
-                                   cache_dir, page);
-                    argv[argc++] = paths[p];
-                }
-                argv[argc++] = output_pdf;
-                argv[argc] = NULL;
-                if (parallel_spawn(argv) == 0) {
-                    result = 0;
-                }
-            }
-            free(argv);
-            free(paths);
-        }
-    }
+    (void)unsetenv("HSTEX_TILE");
+    /* The chunks wrote the one shared PDF directly; nothing to join. */
     free(chunk_dirs);
     free(children);
-    return result;
+    return failures == 0 ? 0 : -1;
 }
 
 /* Compile a document the parallel way. A cold run -- no cache, or one built
@@ -1094,19 +1043,47 @@ static int run_parallel_document(const char *format_file,
 
     (void)fprintf(stderr, "hstex: cold run -- building checkpoint cache in %s\n",
                   cache_dir);
-    parallel_clear_cache(cache_dir);
-    if (mkdir(cache_dir, 0700) != 0 && errno != EEXIST) {
-        (void)fprintf(stderr, "hstex: cannot make %s\n", cache_dir);
-        return 1;
-    }
     char ckpt_every[1200];
     (void)snprintf(ckpt_every, sizeof(ckpt_every), "%d:%s",
                    HSTEX_PARALLEL_STRIDE, cache_dir);
+    char aux_path[600];
+    (void)snprintf(aux_path, sizeof(aux_path), "%s/%s.aux", output_directory,
+                   job_name);
     (void)setenv("HSTEX_CKPT_EVERY", ckpt_every, 1);
-    int pages = 0;
-    int status =
-        run_document_from_format(format_file, document_path, output_directory,
-                                 job_name, restricted_shell_escape, &pages);
+    /* A warm run's resumed chapters read the settled .aux and typeset against
+       it; the checkpoints they resume from must have been taken at that same
+       settled layout, or the byte offsets a chapter tiles into no longer line
+       up. So the cold run recompiles until the .aux stops changing -- as a
+       person reruns latex to get the references right -- dropping a fresh set
+       of checkpoints each pass. The pass that reads an .aux identical to the
+       previous one is standing on the fixpoint, and its checkpoints are the
+       ones the warm run reproduces exactly. */
+    uint64_t previous_aux = 0U;
+    bool have_previous = false;
+    int pages = 0, status = 0;
+    for (int pass = 0; pass < HSTEX_PARALLEL_MAX_PASSES; ++pass) {
+        parallel_clear_cache(cache_dir);
+        if (mkdir(cache_dir, 0700) != 0 && errno != EEXIST) {
+            (void)fprintf(stderr, "hstex: cannot make %s\n", cache_dir);
+            (void)unsetenv("HSTEX_CKPT_EVERY");
+            return 1;
+        }
+        status = run_document_from_format(format_file, document_path,
+                                          output_directory, job_name,
+                                          restricted_shell_escape, &pages);
+        if (status != 0) {
+            break;
+        }
+        uint64_t aux = 0xcbf29ce484222325ULL; /* FNV-1a offset basis */
+        if (parallel_hash_file(aux_path, &aux) != 0) {
+            break; /* no .aux at all -- a single pass is the whole story */
+        }
+        if (have_previous && aux == previous_aux) {
+            break; /* settled: this pass read the .aux a warm run will read */
+        }
+        previous_aux = aux;
+        have_previous = true;
+    }
     (void)unsetenv("HSTEX_CKPT_EVERY");
     if (status == 0 &&
         parallel_write_manifest(cache_dir, hash, HSTEX_PARALLEL_STRIDE,

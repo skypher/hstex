@@ -2500,6 +2500,12 @@ struct hstex_engine {
        a-checkpoint-inside-a-file. */
     int32_t checkpoint_page;
     int32_t checkpoint_stride;
+    /* The next page a disk checkpoint (HSTEX_CKPT_EVERY) is due at. It lives on
+       the engine, not in a static, so a driver that compiles a document several
+       times in one process to settle the .aux gets a fresh schedule each run
+       rather than carrying the previous run's target past the document's end.
+       Zero means not yet scheduled. */
+    int32_t checkpoint_disk_next;
     /* Chunks parked at page boundaries and released together; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     int32_t parallel_chunk;

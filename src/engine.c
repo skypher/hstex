@@ -54631,7 +54631,6 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
     static char target_path[512] = {0};
     static int32_t stride = 0;
     static char stride_dir[400] = {0};
-    static int32_t next_target = 0;
     if (parsed == 0) {
         parsed = 1;
         const char *one = getenv("HSTEX_CKPT");
@@ -54651,7 +54650,11 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
                 (void)snprintf(stride_dir, sizeof(stride_dir), "%s", colon + 1);
             }
         }
-        next_target = stride;
+    }
+    /* The schedule is per-run, so a settle-the-aux driver that compiles several
+       times in one process starts each run's stride afresh. */
+    if (stride > 0 && engine->checkpoint_disk_next == 0) {
+        engine->checkpoint_disk_next = stride;
     }
     char err[256];
     if (target_page >= 0 && engine->shipped_pages == target_page &&
@@ -54671,12 +54674,13 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
        the page it actually lands on, and the parallel driver discovers those
        pages by listing the cache, so an off-stride boundary is fine. */
     if (stride > 0 && stride_dir[0] != '\0' && engine->shipped_pages > 0 &&
-        next_target > 0 && engine->shipped_pages >= next_target) {
+        engine->checkpoint_disk_next > 0 &&
+        engine->shipped_pages >= engine->checkpoint_disk_next) {
         char path[600];
         (void)snprintf(path, sizeof(path), "%s/ck-%d.bin", stride_dir,
                        engine->shipped_pages);
         if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
-            next_target = engine->shipped_pages + stride;
+            engine->checkpoint_disk_next = engine->shipped_pages + stride;
         } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
             (void)fprintf(stderr, "CKPT declined at %d: %s\n",
                           engine->shipped_pages, err);
