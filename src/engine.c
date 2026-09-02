@@ -23244,13 +23244,33 @@ static int pdf_begin_object_kind(struct hstex_engine *engine, size_t number,
     return 0;
 }
 
+/* The effective object-stream level. Parallel disk-checkpoint compilation
+   tiles the chunks into one PDF at fixed byte offsets, and an object stream
+   packs objects across page boundaries -- so a chunk's bytes would depend on
+   the next chunk's, and the tiles would not line up. Turn streams off there so
+   every object stands on its own; the file is a little larger but renders the
+   same. */
+static int32_t pdf_object_stream_level(const struct hstex_engine *engine)
+{
+    static int parallel = -1;
+    if (parallel < 0) {
+        parallel = (getenv("HSTEX_TILE") != NULL ||
+                    getenv("HSTEX_CKPT_EVERY") != NULL)
+                       ? 1
+                       : 0;
+    }
+    return parallel
+               ? 0
+               : engine->integer_parameters[HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL];
+}
+
 /* The object-stream container receives its number when the first packed
    object begins, before that object's dictionary can create objects of its
    own.  In particular, an action may create a structured destination while
    its enclosing annotation is being assembled. */
 static void pdf_reserve_packed_object_stream(struct hstex_engine *engine)
 {
-    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0 &&
+    if (pdf_object_stream_level(engine) > 0 &&
         engine->pdf_packed_object_count == 0U &&
         engine->pdf_packed_object_number == 0U) {
         engine->pdf_packed_object_number = pdf_new_object(engine);
@@ -23279,8 +23299,7 @@ static int pdf_end_object(struct hstex_engine *engine, char *error,
     size_t number = engine->pdf_current_object_number;
     size_t length = engine->pdf_current_object_count;
     bool packed = !engine->pdf_current_object_direct &&
-                  engine->integer_parameters
-                          [HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0;
+                  pdf_object_stream_level(engine) > 0;
     engine->pdf_current_object_active = false;
     engine->pdf_current_object_count = 0U;
     if (!packed) {
@@ -30458,7 +30477,7 @@ static int pdf_close(struct hstex_engine *engine, char *error,
         pdf_end_object(engine, error, error_capacity) != 0) {
         return -1;
     }
-    if (engine->integer_parameters[HSTEX_INTEGER_PDF_OBJ_COMPRESS_LEVEL] > 0) {
+    if (pdf_object_stream_level(engine) > 0) {
         if (pdf_write_xref_stream(engine, catalog, info, error,
                                   error_capacity) != 0) {
             return -1;
