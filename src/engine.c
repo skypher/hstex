@@ -4072,6 +4072,70 @@ static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
     return 0;
 }
 
+/* A string, distinguishing null from empty: -1 length is null. */
+static void ckpt_write_str(FILE *out, const char *string)
+{
+    int64_t length = string == NULL ? -1 : (int64_t)strlen(string);
+    (void)fwrite(&length, sizeof(length), 1U, out);
+    if (length > 0) {
+        (void)fwrite(string, 1U, (size_t)length, out);
+    }
+}
+
+static void ckpt_write_bytes(FILE *out, const void *data, size_t length)
+{
+    uint64_t n = (uint64_t)length;
+    (void)fwrite(&n, sizeof(n), 1U, out);
+    if (length != 0U) {
+        (void)fwrite(data, 1U, length, out);
+    }
+}
+
+/* Read a string back; *out is null for a -1 length, else a fresh copy. */
+static int ckpt_read_str(FILE *in, char **out)
+{
+    *out = NULL;
+    int64_t length = 0;
+    if (fread(&length, sizeof(length), 1U, in) != 1U) {
+        return -1;
+    }
+    if (length < 0) {
+        return 0;
+    }
+    char *copy = malloc((size_t)length + 1U);
+    if (copy == NULL) {
+        return -1;
+    }
+    if (length > 0 && fread(copy, 1U, (size_t)length, in) != (size_t)length) {
+        free(copy);
+        return -1;
+    }
+    copy[length] = '\0';
+    *out = copy;
+    return 0;
+}
+
+/* Read a byte buffer back; *out is a fresh copy (or null when empty). */
+static int ckpt_read_bytes(FILE *in, uint8_t **out, size_t *out_length)
+{
+    *out = NULL;
+    *out_length = 0U;
+    uint64_t n = 0U;
+    if (fread(&n, sizeof(n), 1U, in) != 1U || n > (uint64_t)SIZE_MAX) {
+        return -1;
+    }
+    if (n != 0U) {
+        uint8_t *copy = malloc((size_t)n);
+        if (copy == NULL || fread(copy, 1U, (size_t)n, in) != (size_t)n) {
+            free(copy);
+            return -1;
+        }
+        *out = copy;
+        *out_length = (size_t)n;
+    }
+    return 0;
+}
+
 /* The PDF backend's file-writing state -- where the file has reached, the next
    object number, and where each object landed. A resume rebuilds a
    self-contained PDF from object one, so this is NOT restored by an ordinary
@@ -4143,6 +4207,78 @@ static void checkpoint_write_pdf_state(FILE *out,
     (void)fwrite(&pages_object, sizeof(pages_object), 1U, out);
     (void)fwrite(&first_page, sizeof(first_page), 1U, out);
     (void)fwrite(&pdf_level, sizeof(pdf_level), 1U, out);
+
+    /* The two built-in CMaps and their encodings, referenced by every Type 1
+       font's ToUnicode. */
+    uint64_t cmaps[4] = {
+        (uint64_t)engine->pdf_t1_cmap, (uint64_t)engine->pdf_ot1_cmap,
+        (uint64_t)engine->pdf_t1_cmap_encoding,
+        (uint64_t)engine->pdf_ot1_cmap_encoding};
+    uint8_t cmap_written = (uint8_t)((engine->pdf_t1_cmap_written ? 1U : 0U) |
+                                     (engine->pdf_ot1_cmap_written ? 2U : 0U));
+    (void)fwrite(cmaps, sizeof(cmaps[0]), 4U, out);
+    (void)fwrite(&cmap_written, sizeof(cmap_written), 1U, out);
+
+    /* The fonts as the PDF backend knows them: the logical fonts, the encodings
+       they name, and the physical programs they subset. Bitmap (PK) fonts carry
+       more still; a font using one is flagged and left for later. */
+    uint64_t fonts = (uint64_t)engine->pdf_font_count;
+    (void)fwrite(&fonts, sizeof(fonts), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_font_count; ++index) {
+        const struct hstex_pdf_font *font = &engine->pdf_fonts[index];
+        (void)fwrite(&font->identifier, sizeof(font->identifier), 1U, out);
+        uint64_t sizes[9] = {(uint64_t)font->object,        (uint64_t)font->widths,
+                             (uint64_t)font->descriptor,    (uint64_t)font->number,
+                             (uint64_t)font->first,         (uint64_t)font->last,
+                             (uint64_t)font->encoding_place,
+                             (uint64_t)font->physical_place,
+                             (uint64_t)font->to_unicode};
+        (void)fwrite(sizes, sizeof(sizes[0]), 9U, out);
+        (void)fwrite(font->used, 1U, sizeof(font->used), out);
+        uint8_t has_pk = font->pk_font != NULL ? 1U : 0U;
+        (void)fwrite(&has_pk, sizeof(has_pk), 1U, out);
+    }
+    uint64_t encodings = (uint64_t)engine->pdf_encoding_count;
+    (void)fwrite(&encodings, sizeof(encodings), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_encoding_count; ++index) {
+        const struct hstex_pdf_encoding *encoding = &engine->pdf_encodings[index];
+        ckpt_write_str(out, encoding->file);
+        ckpt_write_str(out, encoding->label);
+        for (size_t glyph = 0U; glyph < 256U; ++glyph) {
+            ckpt_write_str(out, encoding->glyphs[glyph]);
+        }
+        (void)fwrite(encoding->used, 1U, sizeof(encoding->used), out);
+        uint64_t object = (uint64_t)encoding->object;
+        (void)fwrite(&object, sizeof(object), 1U, out);
+    }
+    uint64_t physical = (uint64_t)engine->pdf_physical_font_count;
+    (void)fwrite(&physical, sizeof(physical), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_physical_font_count; ++index) {
+        const struct hstex_pdf_physical_font *font =
+            &engine->pdf_physical_fonts[index];
+        ckpt_write_str(out, font->file);
+        ckpt_write_str(out, font->postscript_name);
+        ckpt_write_bytes(out, font->disassembly, font->disassembly_length);
+        for (size_t glyph = 0U; glyph < 256U; ++glyph) {
+            ckpt_write_str(out, font->builtin_glyphs[glyph]);
+        }
+        uint64_t glyph_count = (uint64_t)font->glyph_count;
+        (void)fwrite(&glyph_count, sizeof(glyph_count), 1U, out);
+        for (size_t glyph = 0U; glyph < font->glyph_count; ++glyph) {
+            ckpt_write_str(out, font->glyphs[glyph]);
+        }
+        (void)fwrite(&font->measure_identifier, sizeof(font->measure_identifier),
+                     1U, out);
+        ckpt_write_bytes(out, font->program, font->program_length);
+        uint64_t sizes[4] = {(uint64_t)font->length1, (uint64_t)font->length2,
+                             (uint64_t)font->file_object,
+                             (uint64_t)font->descriptor_object};
+        (void)fwrite(sizes, sizeof(sizes[0]), 4U, out);
+        (void)fwrite(font->subset_tag, 1U, sizeof(font->subset_tag), out);
+    }
+    /* glyph_unicode is not written here: it rides in the format part of the
+       checkpoint (\pdfglyphtounicode is a format-time thing), so it is already
+       restored by the time this section is read. */
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4297,6 +4433,174 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
     engine->pdf_pages_object = (size_t)pages_object;
     engine->pdf_first_page = (size_t)first_page;
     engine->pdf_level = pdf_level;
+    /* The built-in CMaps. */
+    uint64_t cmaps[4] = {0U, 0U, 0U, 0U};
+    uint8_t cmap_written = 0U;
+    if (fread(cmaps, sizeof(cmaps[0]), 4U, in) != 4U ||
+        fread(&cmap_written, sizeof(cmap_written), 1U, in) != 1U) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    engine->pdf_t1_cmap = (size_t)cmaps[0];
+    engine->pdf_ot1_cmap = (size_t)cmaps[1];
+    engine->pdf_t1_cmap_encoding = (size_t)cmaps[2];
+    engine->pdf_ot1_cmap_encoding = (size_t)cmaps[3];
+    engine->pdf_t1_cmap_written = (cmap_written & 1U) != 0U;
+    engine->pdf_ot1_cmap_written = (cmap_written & 2U) != 0U;
+    /* The logical fonts. */
+    uint64_t fonts = 0U;
+    if (fread(&fonts, sizeof(fonts), 1U, in) != 1U ||
+        fonts > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_fonts))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (fonts != 0U) {
+        struct hstex_pdf_font *grown =
+            realloc(engine->pdf_fonts, (size_t)fonts * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)fonts * sizeof(*grown));
+        engine->pdf_fonts = grown;
+        engine->pdf_font_capacity = (size_t)fonts;
+    }
+    for (size_t index = 0U; index < (size_t)fonts; ++index) {
+        struct hstex_pdf_font *font = &engine->pdf_fonts[index];
+        uint64_t sizes[9] = {0U};
+        uint8_t has_pk = 0U;
+        if (fread(&font->identifier, sizeof(font->identifier), 1U, in) != 1U ||
+            fread(sizes, sizeof(sizes[0]), 9U, in) != 9U ||
+            fread(font->used, 1U, sizeof(font->used), in) != sizeof(font->used) ||
+            fread(&has_pk, sizeof(has_pk), 1U, in) != 1U) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        if (has_pk) {
+            return set_error(error, error_capacity,
+                             "tiling a bitmap-font document is not supported");
+        }
+        font->object = (size_t)sizes[0];
+        font->widths = (size_t)sizes[1];
+        font->descriptor = (size_t)sizes[2];
+        font->number = (uint32_t)sizes[3];
+        font->first = (uint32_t)sizes[4];
+        font->last = (uint32_t)sizes[5];
+        font->encoding_place = (size_t)sizes[6];
+        font->physical_place = (size_t)sizes[7];
+        font->to_unicode = (size_t)sizes[8];
+        font->pk_font = NULL;
+        font->pk_glyph_objects = NULL;
+    }
+    engine->pdf_font_count = (size_t)fonts;
+    /* The encodings. */
+    uint64_t encodings = 0U;
+    if (fread(&encodings, sizeof(encodings), 1U, in) != 1U ||
+        encodings > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_encodings))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (encodings != 0U) {
+        struct hstex_pdf_encoding *grown =
+            realloc(engine->pdf_encodings, (size_t)encodings * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)encodings * sizeof(*grown));
+        engine->pdf_encodings = grown;
+        engine->pdf_encoding_capacity = (size_t)encodings;
+    }
+    for (size_t index = 0U; index < (size_t)encodings; ++index) {
+        struct hstex_pdf_encoding *encoding = &engine->pdf_encodings[index];
+        if (ckpt_read_str(in, &encoding->file) != 0 ||
+            ckpt_read_str(in, &encoding->label) != 0) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        for (size_t glyph = 0U; glyph < 256U; ++glyph) {
+            if (ckpt_read_str(in, &encoding->glyphs[glyph]) != 0) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+        }
+        uint64_t object = 0U;
+        if (fread(encoding->used, 1U, sizeof(encoding->used), in) !=
+                sizeof(encoding->used) ||
+            fread(&object, sizeof(object), 1U, in) != 1U) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        encoding->object = (size_t)object;
+    }
+    engine->pdf_encoding_count = (size_t)encodings;
+    /* The physical fonts. */
+    uint64_t physical = 0U;
+    if (fread(&physical, sizeof(physical), 1U, in) != 1U ||
+        physical > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_physical_fonts))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (physical != 0U) {
+        struct hstex_pdf_physical_font *grown = realloc(
+            engine->pdf_physical_fonts, (size_t)physical * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)physical * sizeof(*grown));
+        engine->pdf_physical_fonts = grown;
+        engine->pdf_physical_font_capacity = (size_t)physical;
+    }
+    for (size_t index = 0U; index < (size_t)physical; ++index) {
+        struct hstex_pdf_physical_font *font =
+            &engine->pdf_physical_fonts[index];
+        if (ckpt_read_str(in, &font->file) != 0 ||
+            ckpt_read_str(in, &font->postscript_name) != 0 ||
+            ckpt_read_bytes(in, (uint8_t **)&font->disassembly,
+                            &font->disassembly_length) != 0) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        for (size_t glyph = 0U; glyph < 256U; ++glyph) {
+            if (ckpt_read_str(in, &font->builtin_glyphs[glyph]) != 0) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+        }
+        uint64_t glyph_count = 0U;
+        if (fread(&glyph_count, sizeof(glyph_count), 1U, in) != 1U ||
+            glyph_count > (uint64_t)(SIZE_MAX / sizeof(char *))) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        if (glyph_count != 0U) {
+            font->glyphs = calloc((size_t)glyph_count, sizeof(*font->glyphs));
+            if (font->glyphs == NULL) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+            font->glyph_capacity = (size_t)glyph_count;
+            for (size_t glyph = 0U; glyph < (size_t)glyph_count; ++glyph) {
+                if (ckpt_read_str(in, &font->glyphs[glyph]) != 0) {
+                    return set_error(error, error_capacity,
+                                     "corrupt checkpoint pdf state");
+                }
+            }
+        }
+        font->glyph_count = (size_t)glyph_count;
+        uint64_t sizes[4] = {0U};
+        if (fread(&font->measure_identifier, sizeof(font->measure_identifier),
+                  1U, in) != 1U ||
+            ckpt_read_bytes(in, &font->program, &font->program_length) != 0 ||
+            fread(sizes, sizeof(sizes[0]), 4U, in) != 4U ||
+            fread(font->subset_tag, 1U, sizeof(font->subset_tag), in) !=
+                sizeof(font->subset_tag)) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        font->length1 = (size_t)sizes[0];
+        font->length2 = (size_t)sizes[1];
+        font->file_object = (size_t)sizes[2];
+        font->descriptor_object = (size_t)sizes[3];
+    }
+    engine->pdf_physical_font_count = (size_t)physical;
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
