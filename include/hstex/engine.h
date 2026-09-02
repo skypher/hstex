@@ -2198,8 +2198,12 @@ struct hstex_engine {
     hstex_cs_id conditional_opener;
     /* Set while an \edef or \xdef body is being read. The reference
        refuses an \outer macro there BEFORE expanding it, so the expander
-       has to know. Holds the name to put in the message. */
+       has to know. Non-null is the flag; the name in the message is worked
+       out from `expanded_definition_target' only if the fault actually
+       fires, so a document's millions of \edef bodies do not each pay for a
+       description nothing reads. */
     const char *expanded_definition_name;
+    hstex_token expanded_definition_target;
     /* The same, for a text gathered with expansion straight from the input
        -- "text of \message". An \outer macro is forbidden in one just as
        it is in a definition, and the fault names it. */

@@ -3901,7 +3901,35 @@ static int insert_missing_brace_for_align(struct hstex_engine *engine,
                                           bool opening, char *error,
                                           size_t error_capacity);
 
-static enum hstex_engine_result raw_next(
+static enum hstex_engine_result raw_next_slow(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity);
+
+/* Nearly every token a run reads is already sitting on the top token-list
+   frame, with no alignment entry being counted and no preamble open. That
+   case is pulled out here so the hot callers read it inline -- a load and a
+   cursor bump -- rather than paying a call into the slow path six hundred
+   million times over the corpus. Everything else -- an exhausted frame, a
+   file, a template, an alignment or preamble in progress -- is left to
+   raw_next_slow, which is raw_next's full body. */
+static inline enum hstex_engine_result raw_next(
+    struct hstex_engine *engine, hstex_token *token,
+    struct hstex_source_location *location, char *error, size_t error_capacity)
+{
+    struct hstex_token_source *top = engine->sources.top;
+    if (top != NULL && top->cursor < top->count &&
+        engine->alignment_entry == NULL && engine->preamble_nesting == NULL &&
+        top->source_kind != (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE &&
+        top->source_kind != (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER) {
+        *token = top->tokens[top->cursor++];
+        *location = top->location;
+        engine->alignment_token_from_template = false;
+        return HSTEX_ENGINE_TOKEN;
+    }
+    return raw_next_slow(engine, token, location, error, error_capacity);
+}
+
+static enum hstex_engine_result raw_next_slow(
     struct hstex_engine *engine, hstex_token *token,
     struct hstex_source_location *location, char *error, size_t error_capacity)
 {
@@ -3911,6 +3939,17 @@ static enum hstex_engine_result raw_next(
         uint8_t came_from = engine->sources.top != NULL
                                 ? engine->sources.top->source_kind
                                 : (uint8_t)HSTEX_TOKEN_SOURCE_INSERTED;
+        /* No alignment entry is being counted and no preamble is being
+           read for nearly every token of a document, and a token that did
+           not come from a template then leaves nothing for
+           note_alignment_token to do beyond clearing the template mark. */
+        if (engine->alignment_entry == NULL &&
+            engine->preamble_nesting == NULL &&
+            came_from != (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE &&
+            came_from != (uint8_t)HSTEX_TOKEN_SOURCE_TEMPLATE_AFTER) {
+            engine->alignment_token_from_template = false;
+            return HSTEX_ENGINE_TOKEN;
+        }
         uint32_t frame_name =
             engine->sources.top != NULL ? engine->sources.top->frame_name : 0U;
         int noted = note_alignment_token(
@@ -10341,18 +10380,21 @@ static int instantiate_macro(struct hstex_engine *engine, uint32_t identifier,
         }
         bounds[next_parameter - 1U].start = start;
         bounds[next_parameter - 1U].count = arena->count - start;
-        uint8_t written = (uint8_t)'#';
-        for (size_t index = 0U; index < macro->parameter_count_tokens;
-             ++index) {
-            hstex_token one = macro->parameter_text[index];
-            if (hstex_token_is_parameter(one) &&
-                hstex_token_parameter_number(one) == (uint8_t)next_parameter) {
-                written = hstex_token_parameter_character(one);
-                break;
+        if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] > 0) {
+            uint8_t written = (uint8_t)'#';
+            for (size_t index = 0U; index < macro->parameter_count_tokens;
+                 ++index) {
+                hstex_token one = macro->parameter_text[index];
+                if (hstex_token_is_parameter(one) &&
+                    hstex_token_parameter_number(one) ==
+                        (uint8_t)next_parameter) {
+                    written = hstex_token_parameter_character(one);
+                    break;
+                }
             }
+            trace_macro_argument(engine, next_parameter, written,
+                                 arena->data + start, arena->count - start);
         }
-        trace_macro_argument(engine, next_parameter, written,
-                             arena->data + start, arena->count - start);
         ++next_parameter;
     }
     if ((macro->shape & (uint8_t)HSTEX_MACRO_PLAIN_PARAMETERS) == 0U &&
@@ -10780,7 +10822,9 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
             return push_one(engine, token, location, error, error_capacity);
         }
         engine->expanding_macro_cs = hstex_token_control_sequence_id(token);
-        trace_macro_expansion(engine, token);
+        if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] > 0) {
+            trace_macro_expansion(engine, token);
+        }
         return instantiate_macro(engine, meaning->value.macro_identifier, macro,
                                  location, error, error_capacity);
     }
@@ -11145,10 +11189,15 @@ static enum hstex_engine_result next_expanded_inner(
                               "scanning %s",
                               engine->expanded_text_name);
                 } else {
+                    /* Worked out here, the once it is wanted, rather than
+                       for every \edef body that never faults. */
+                    char definition_named[128];
+                    describe_token(engine, engine->expanded_definition_target,
+                                   definition_named, sizeof(definition_named));
                     tex_error(engine, help,
                               "Forbidden control sequence found while "
                               "scanning definition of %s",
-                              engine->expanded_definition_name);
+                              definition_named);
                 }
                 /* The offending name is put back to be read again, and what
                    the scanner is holding becomes a SPACE -- which joins
@@ -11160,7 +11209,9 @@ static enum hstex_engine_result next_expanded_inner(
             }
             engine->expanding_macro_cs =
                 hstex_token_control_sequence_id(current);
-            trace_macro_expansion(engine, current);
+            if (engine->integer_parameters[HSTEX_INTEGER_TRACING_MACROS] > 0) {
+                trace_macro_expansion(engine, current);
+            }
             if (instantiate_macro(engine, meaning->value.macro_identifier,
                                   macro, *location, error,
                                   error_capacity) != 0) {
@@ -11719,17 +11770,12 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     }
 
     struct hstex_token_vector replacement = {0};
-    /* The name a diagnostic calls this definition while its body is being
-       gathered. It is the same name for every token of the body, and
-       working it out again for each of them was ten million descriptions in
-       a format build -- twenty-six a definition -- so it is worked out
-       here, once, for a target that does not change while the body is
-       read. */
-    char definition_named[128];
-    if (expanded_replacement) {
-        describe_token(engine, target, definition_named,
-                       sizeof(definition_named));
-    }
+    /* The name a diagnostic would call this definition is not worked out
+       here: it is wanted only where an \outer macro runs into the body,
+       which almost never happens, so the target is remembered and described
+       lazily in that fault's own path. A non-null `expanded_definition_name'
+       stays the flag that a definition body is being gathered. */
+    static const char definition_name_flag[] = "";
     size_t depth = empty_body ? 0U : 1U;
     while (depth != 0U) {
         /* Where the body is being read from a list of tokens standing
@@ -11810,7 +11856,8 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
             runaway_partial_lead = &parameter_text;
             runaway_partial_prefix = "->";
             runaway_partial = &replacement;
-            engine->expanded_definition_name = definition_named;
+            engine->expanded_definition_name = definition_name_flag;
+            engine->expanded_definition_target = target;
         }
         enum hstex_engine_result result =
             expanded_replacement
