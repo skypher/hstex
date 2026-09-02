@@ -4363,6 +4363,26 @@ static void checkpoint_write_pdf_state(FILE *out,
         (void)fwrite(engine->pdf_font_places, sizeof(*engine->pdf_font_places),
                      (size_t)font_places, out);
     }
+    /* The PDF-management records (what a tagged document's structure is built
+       from) and the shipout literals still to be emitted. */
+    uint64_t records = (uint64_t)engine->pdf_record_count;
+    (void)fwrite(&records, sizeof(records), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_record_count; ++index) {
+        const struct hstex_pdf_record *record = &engine->pdf_records[index];
+        int32_t triple[3] = {(int32_t)record->kind, record->number,
+                             record->value};
+        (void)fwrite(triple, sizeof(triple[0]), 3U, out);
+        ckpt_write_str(out, record->name);
+        ckpt_write_str(out, record->content);
+    }
+    uint64_t literals = (uint64_t)engine->pdf_shipout_literal_count;
+    uint64_t cursor = (uint64_t)engine->pdf_shipout_literal_cursor;
+    (void)fwrite(&literals, sizeof(literals), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_shipout_literal_count; ++index) {
+        ckpt_write_bytes(out, engine->pdf_shipout_literals[index].content,
+                         engine->pdf_shipout_literals[index].length);
+    }
+    (void)fwrite(&cursor, sizeof(cursor), 1U, out);
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4910,6 +4930,65 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         engine->pdf_font_places = grown;
         engine->pdf_font_place_capacity = (size_t)font_places;
     }
+    /* The PDF-management records and shipout literals. */
+    uint64_t records = 0U;
+    if (fread(&records, sizeof(records), 1U, in) != 1U ||
+        records > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_records))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (records != 0U) {
+        struct hstex_pdf_record *grown =
+            realloc(engine->pdf_records, (size_t)records * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)records * sizeof(*grown));
+        engine->pdf_records = grown;
+        engine->pdf_record_capacity = (size_t)records;
+    }
+    for (size_t index = 0U; index < (size_t)records; ++index) {
+        struct hstex_pdf_record *record = &engine->pdf_records[index];
+        int32_t triple[3] = {0, 0, 0};
+        if (fread(triple, sizeof(triple[0]), 3U, in) != 3U ||
+            ckpt_read_str(in, &record->name) != 0 ||
+            ckpt_read_str(in, &record->content) != 0) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        record->kind = (enum hstex_pdf_record_kind)triple[0];
+        record->number = triple[1];
+        record->value = triple[2];
+    }
+    engine->pdf_record_count = (size_t)records;
+    uint64_t literals = 0U, cursor = 0U;
+    if (fread(&literals, sizeof(literals), 1U, in) != 1U ||
+        literals > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_shipout_literals))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (literals != 0U) {
+        struct hstex_pdf_shipout_literal *grown = realloc(
+            engine->pdf_shipout_literals, (size_t)literals * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)literals * sizeof(*grown));
+        engine->pdf_shipout_literals = grown;
+        engine->pdf_shipout_literal_capacity = (size_t)literals;
+    }
+    for (size_t index = 0U; index < (size_t)literals; ++index) {
+        if (ckpt_read_bytes(in, &engine->pdf_shipout_literals[index].content,
+                            &engine->pdf_shipout_literals[index].length) != 0) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+    }
+    engine->pdf_shipout_literal_count = (size_t)literals;
+    if (fread(&cursor, sizeof(cursor), 1U, in) != 1U) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    engine->pdf_shipout_literal_cursor = (size_t)cursor;
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
