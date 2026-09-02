@@ -2537,6 +2537,11 @@ struct hstex_engine {
     int spec_carrier;
     int spec_finished;
     int verifying;
+    /* A tiling chunk that stopped at its own boundary rather than reaching
+       \end{document}: it has written its pages into the shared PDF and must
+       NOT write the deferred objects, catalogue or xref -- those belong to the
+       one chunk that runs to the end. */
+    bool tile_middle;
     int32_t spec_start;
     char spec_dir[512];
     int32_t *spec_pages;

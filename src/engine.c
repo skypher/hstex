@@ -23055,6 +23055,36 @@ static int pdf_open(struct hstex_engine *engine, char *error,
     if (path == NULL) {
         return set_error(error, error_capacity, "PDF allocation failed");
     }
+    /* Tiling: every chunk writes into ONE shared PDF at the byte the sequential
+       run had reached (pdf_written, restored from the checkpoint -- zero for the
+       opening chunk, which alone lays down the header). Chunks write their own
+       disjoint byte ranges, so the file is opened for update, never truncated,
+       and the driver has made it exist beforehand. */
+    const char *tile_path = getenv("HSTEX_TILE");
+    if (tile_path != NULL && tile_path[0] != '\0') {
+        free(path);
+        engine->pdf_file = fopen(tile_path, "r+b");
+        if (engine->pdf_file == NULL) {
+            return set_error(error, error_capacity, "cannot write %s",
+                             tile_path);
+        }
+        if (fseek(engine->pdf_file, (long)engine->pdf_written, SEEK_SET) != 0) {
+            return set_error(error, error_capacity, "cannot seek %s", tile_path);
+        }
+        engine->output_name = strdup(tile_path);
+        if (engine->pdf_written != 0U) {
+            return 0; /* a resumed chunk: the header is already in the file */
+        }
+        char header[32];
+        int written = snprintf(header, sizeof(header),
+                               "%%PDF-1.%d\n%%\xD0\xD4\xC5\xD8\n",
+                               engine->integer_parameters
+                                   [HSTEX_INTEGER_PDF_MINOR_VERSION]);
+        return written < 0
+                   ? set_error(error, error_capacity, "cannot write the PDF file")
+                   : pdf_out(engine, header, (size_t)written, error,
+                             error_capacity);
+    }
     if (engine->verifying) {
         /* The verifier writes where the fleet writes, so that the file it
            validates and the file it fills are one file. The chunks may have
@@ -29729,10 +29759,11 @@ static int pdf_close(struct hstex_engine *engine, char *error,
     if (engine->pdf_file == NULL) {
         return 0;
     }
-    if (engine->spec_finished) {
-        /* The verifier stopped by handing off: everything after its pages
-           is already in the file, trailer and all, written by the chunks
-           it validated. */
+    if (engine->spec_finished || engine->tile_middle) {
+        /* Either the verifier handed off, or this is a middle tiling chunk: its
+           pages are in the shared file and everything after them -- deferred
+           objects, catalogue, xref -- belongs to the finishing chunk. Flush what
+           is buffered and let go of the file. */
         if (pdf_flush(engine, error, error_capacity) != 0) {
             return -1;
         }
@@ -54179,7 +54210,16 @@ static int maybe_stop_at_resume_page(struct hstex_engine *engine)
             stop = (int32_t)strtol(ask, NULL, 10);
         }
     }
-    return stop >= 0 && engine->shipped_pages >= stop;
+    if (stop >= 0 && engine->shipped_pages >= stop) {
+        /* A chunk that tiles into a shared PDF and stops here has written only
+           its pages; the deferred objects, catalogue and xref are the finishing
+           chunk's to write, so mark this one so pdf_close leaves them alone. */
+        if (getenv("HSTEX_TILE") != NULL) {
+            engine->tile_middle = true;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 /* A chunk parked where a run may be taken up. Everything the run is stands
