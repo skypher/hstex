@@ -4383,6 +4383,27 @@ static void checkpoint_write_pdf_state(FILE *out,
                          engine->pdf_shipout_literals[index].length);
     }
     (void)fwrite(&cursor, sizeof(cursor), 1U, out);
+    /* The colour-stack registry: which stacks were created, whether each opens
+       a page by saying what colour (or transparency) it is in, and its live
+       value stack. Without it a resumed chunk forgets a page stack exists and
+       drops its page-start `... gs' or colour literal. See docs/DECISIONS.md,
+       colour-on-a-page. The live values live in pdf_colours (above); this is
+       the parallel registry the page-start emission reads. */
+    uint64_t stacks = (uint64_t)engine->color_stack_count;
+    (void)fwrite(&stacks, sizeof(stacks), 1U, out);
+    for (size_t index = 0U; index < engine->color_stack_count; ++index) {
+        const struct hstex_color_stack *stack = &engine->color_stacks[index];
+        ckpt_write_str(out, stack->initial);
+        uint8_t flags = (uint8_t)((stack->page ? 1U : 0U) |
+                                  (stack->direct ? 2U : 0U) |
+                                  (stack->created ? 4U : 0U));
+        (void)fwrite(&flags, sizeof(flags), 1U, out);
+        uint64_t count = (uint64_t)stack->count;
+        (void)fwrite(&count, sizeof(count), 1U, out);
+        for (size_t value = 0U; value < stack->count; ++value) {
+            ckpt_write_str(out, stack->values[value]);
+        }
+    }
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4989,6 +5010,54 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         return set_error(error, error_capacity, "corrupt checkpoint pdf state");
     }
     engine->pdf_shipout_literal_cursor = (size_t)cursor;
+    /* The colour-stack registry (mirrors the writer). */
+    uint64_t stacks = 0U;
+    if (fread(&stacks, sizeof(stacks), 1U, in) != 1U ||
+        stacks > (uint64_t)(SIZE_MAX / sizeof(*engine->color_stacks))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (stacks != 0U) {
+        struct hstex_color_stack *grown =
+            realloc(engine->color_stacks, (size_t)stacks * sizeof(*grown));
+        if (grown == NULL) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        memset(grown, 0, (size_t)stacks * sizeof(*grown));
+        engine->color_stacks = grown;
+        engine->color_stack_capacity = (size_t)stacks;
+    }
+    for (size_t index = 0U; index < (size_t)stacks; ++index) {
+        struct hstex_color_stack *stack = &engine->color_stacks[index];
+        uint8_t flags = 0U;
+        uint64_t count = 0U;
+        if (ckpt_read_str(in, &stack->initial) != 0 ||
+            fread(&flags, sizeof(flags), 1U, in) != 1U ||
+            fread(&count, sizeof(count), 1U, in) != 1U ||
+            count > (uint64_t)(SIZE_MAX / sizeof(char *))) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        stack->page = (flags & 1U) != 0U;
+        stack->direct = (flags & 2U) != 0U;
+        stack->created = (flags & 4U) != 0U;
+        if (count != 0U) {
+            stack->values = calloc((size_t)count, sizeof(*stack->values));
+            if (stack->values == NULL) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+            stack->capacity = (size_t)count;
+            for (size_t value = 0U; value < (size_t)count; ++value) {
+                if (ckpt_read_str(in, &stack->values[value]) != 0) {
+                    return set_error(error, error_capacity,
+                                     "corrupt checkpoint pdf state");
+                }
+            }
+        }
+        stack->count = (size_t)count;
+    }
+    engine->color_stack_count = (size_t)stacks;
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
@@ -54562,6 +54631,7 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
     static char target_path[512] = {0};
     static int32_t stride = 0;
     static char stride_dir[400] = {0};
+    static int32_t next_target = 0;
     if (parsed == 0) {
         parsed = 1;
         const char *one = getenv("HSTEX_CKPT");
@@ -54581,6 +54651,7 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
                 (void)snprintf(stride_dir, sizeof(stride_dir), "%s", colon + 1);
             }
         }
+        next_target = stride;
     }
     char err[256];
     if (target_page >= 0 && engine->shipped_pages == target_page &&
@@ -54593,12 +54664,23 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
         }
         target_page = -1;
     }
+    /* A checkpoint every `stride' pages, but a page boundary that sits inside
+       an open construct (math, alignment, a box, a conditional) has no clean
+       state to serialize and is declined. Rather than skip the whole window,
+       keep trying each following page until one takes; the file is named for
+       the page it actually lands on, and the parallel driver discovers those
+       pages by listing the cache, so an off-stride boundary is fine. */
     if (stride > 0 && stride_dir[0] != '\0' && engine->shipped_pages > 0 &&
-        engine->shipped_pages % stride == 0) {
+        next_target > 0 && engine->shipped_pages >= next_target) {
         char path[600];
         (void)snprintf(path, sizeof(path), "%s/ck-%d.bin", stride_dir,
                        engine->shipped_pages);
-        (void)hstex_engine_write_checkpoint(engine, path, err, sizeof(err));
+        if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
+            next_target = engine->shipped_pages + stride;
+        } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
+            (void)fprintf(stderr, "CKPT declined at %d: %s\n",
+                          engine->shipped_pages, err);
+        }
     }
 }
 
