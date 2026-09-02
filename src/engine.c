@@ -53314,6 +53314,24 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
     }
 }
 
+/* A resumed chunk stops when it has shipped up to HSTEX_RESUME_STOP, so it
+   typesets its own range of a document and no more; finishing there closes its
+   PDF without reaching \end{document}, whose aux dance belongs to the last
+   chunk alone. */
+static int maybe_stop_at_resume_page(struct hstex_engine *engine)
+{
+    static int parsed = 0;
+    static int32_t stop = -1;
+    if (parsed == 0) {
+        parsed = 1;
+        const char *ask = getenv("HSTEX_RESUME_STOP");
+        if (ask != NULL) {
+            stop = (int32_t)strtol(ask, NULL, 10);
+        }
+    }
+    return stop >= 0 && engine->shipped_pages >= stop;
+}
+
 /* A chunk parked where a run may be taken up. Everything the run is stands
    in the child, which then waits on a gate the whole fleet shares; when the
    gate opens they all go at once, each running as far as the next boundary
@@ -54496,6 +54514,12 @@ enum hstex_engine_result hstex_engine_next_output(
         }
         note_page_digest(engine);
         maybe_write_checkpoint(engine);
+        if (maybe_stop_at_resume_page(engine)) {
+            /* A resumed chunk stops here at its own boundary and finishes its
+               PDF the ordinary way -- not the fleet's spec_finished hand-off,
+               which leaves the trailer to chunks that are not there. */
+            return HSTEX_ENGINE_EOF;
+        }
         take_up_elsewhere(engine);
         park_a_chunk(engine);
         speculation_boundary(engine);
