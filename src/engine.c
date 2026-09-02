@@ -4072,6 +4072,36 @@ static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
     return 0;
 }
 
+/* The PDF backend's file-writing state -- where the file has reached, the next
+   object number, and where each object landed. A resume rebuilds a
+   self-contained PDF from object one, so this is NOT restored by an ordinary
+   resume; it is written length-prefixed (the caller frames it) so such a resume
+   skips it, and read back only when a chunk is TILING into one shared PDF.
+   Grown field by field toward carrying the whole backend; what a tiling resume
+   still lacks it will find missing here. */
+static void checkpoint_write_pdf_state(FILE *out,
+                                       const struct hstex_engine *engine)
+{
+    uint64_t written = (uint64_t)engine->pdf_written;
+    int32_t counter = engine->pdf_object_counter;
+    uint64_t object_count = (uint64_t)engine->pdf_object_count;
+    uint64_t offset_capacity = (uint64_t)engine->pdf_offset_capacity;
+    (void)fwrite(&written, sizeof(written), 1U, out);
+    (void)fwrite(&counter, sizeof(counter), 1U, out);
+    (void)fwrite(&object_count, sizeof(object_count), 1U, out);
+    (void)fwrite(&offset_capacity, sizeof(offset_capacity), 1U, out);
+    if (offset_capacity != 0U) {
+        (void)fwrite(engine->pdf_offsets, sizeof(*engine->pdf_offsets),
+                     (size_t)offset_capacity, out);
+        (void)fwrite(engine->pdf_object_streams,
+                     sizeof(*engine->pdf_object_streams),
+                     (size_t)offset_capacity, out);
+        (void)fwrite(engine->pdf_object_stream_indices,
+                     sizeof(*engine->pdf_object_stream_indices),
+                     (size_t)offset_capacity, out);
+    }
+}
+
 int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                                   char *error, size_t error_capacity)
 {
@@ -4220,6 +4250,32 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
         (void)fclose(out);
         return set_error(error, error_capacity, "cannot write checkpoint parshape");
     }
+    /* The PDF backend state, framed by its length so a non-tiling resume can
+       step over it in one seek. */
+    char *pdf_buffer = NULL;
+    size_t pdf_length = 0U;
+    FILE *pdf_out = open_memstream(&pdf_buffer, &pdf_length);
+    if (pdf_out == NULL) {
+        (void)fclose(out);
+        free(staging);
+        return set_error(error, error_capacity, "cannot stage checkpoint pdf");
+    }
+    checkpoint_write_pdf_state(pdf_out, engine);
+    if (fclose(pdf_out) != 0) {
+        free(pdf_buffer);
+        (void)fclose(out);
+        free(staging);
+        return set_error(error, error_capacity, "cannot stage checkpoint pdf");
+    }
+    uint64_t pdf_section = (uint64_t)pdf_length;
+    if (CKPT_WRITE(out, pdf_section) != 0 ||
+        checkpoint_write_bytes(out, pdf_buffer, pdf_length) != 0) {
+        free(pdf_buffer);
+        (void)fclose(out);
+        free(staging);
+        return set_error(error, error_capacity, "cannot write checkpoint pdf");
+    }
+    free(pdf_buffer);
     if (hstex_source_serialize(&engine->sources, out) != 0) {
         (void)fclose(out);
         free(staging);
@@ -4479,6 +4535,18 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     engine->parshape = parshape;
     engine->parshape_level = parshape_level;
     engine->parshape_used = (size_t)parshape_used;
+    /* The PDF backend state follows, framed by its length. An ordinary resume
+       rebuilds a self-contained PDF and steps over it; only a tiling resume
+       reads it back (wired later). */
+    uint64_t pdf_section = 0U;
+    if (CKPT_READ(in, pdf_section) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint pdf");
+    }
+    if (fseek(in, (long)pdf_section, SEEK_CUR) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint pdf");
+    }
     /* The stack's hands for owning and letting go of token blocks must be the
        engine's BEFORE the reading position is read back, so that every frame
        restored from the checkpoint takes its block from the pool it will be
