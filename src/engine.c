@@ -3965,11 +3965,18 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
     }
     /* A group may stand open -- \begin{document} is one -- and a paragraph
        may be half-built where a page broke inside the next one; both are
-       carried. Only an open conditional, which a page boundary never sits
-       inside, is refused. */
-    if (engine->conditional_count != 0U) {
+       carried. What is NOT carried is the mid-construct state a checkpoint
+       has no serializer for: an open conditional, math that a page broke
+       inside, an alignment in progress, or a box other than the running
+       paragraph. A boundary sitting in any of those is declined, and the
+       chunk before it simply runs on to the next clean boundary. */
+    if (engine->conditional_count != 0U || engine->math_depth != 0U ||
+        engine->building_alignment || engine->alignment_entry != NULL ||
+        (engine->active_hbox_builder != NULL &&
+         engine->active_hbox_builder != engine->paragraph_builder)) {
         return set_error(error, error_capacity,
-                         "a checkpoint cannot sit inside a conditional");
+                         "a checkpoint needs a clean page boundary "
+                         "(no math, alignment, box, or conditional open)");
     }
     FILE *out = fopen(path, "wb");
     if (out == NULL) {
