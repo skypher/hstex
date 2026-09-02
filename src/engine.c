@@ -5600,6 +5600,18 @@ static void note_file_open(struct hstex_engine *engine, const char *path)
     print_bytes(engine, name, length);
     ++engine->open_parens;
     (void)fflush(diagnostic_stream(engine));
+    /* For incremental rebuilds: note, in reading order, the page each source
+       file first opens at, so a later run whose edit lies in one file can
+       reuse every checkpoint taken before that file was read. Gated on the
+       cold run's env; a few hundred opens, so append-and-close is cheap. */
+    const char *sources_log = getenv("HSTEX_CKPT_SOURCES");
+    if (sources_log != NULL) {
+        FILE *log = fopen(sources_log, "ab");
+        if (log != NULL) {
+            (void)fprintf(log, "%d\t%s\n", engine->shipped_pages, path);
+            (void)fclose(log);
+        }
+    }
 }
 
 static void note_files_closed(struct hstex_engine *engine)
@@ -30701,6 +30713,14 @@ static int pdf_close(struct hstex_engine *engine, char *error,
     }
     if (pdf_flush(engine, error, error_capacity) != 0) {
         return -1;
+    }
+    /* An incremental rebuild finishes by tiling a fresh, possibly shorter, tail
+       over the previous build's PDF (whose prefix it reused); trim whatever of
+       the old file stands past the new %%EOF so no stale trailer is left for a
+       reader to find. For a fresh file this is the size it already is. */
+    long end = ftell(engine->pdf_file);
+    if (end >= 0 && ftruncate(fileno(engine->pdf_file), (off_t)end) != 0) {
+        /* Trimming is a courtesy; a reader stops at %%EOF regardless. */
     }
     (void)fclose(engine->pdf_file);
     engine->pdf_file = NULL;

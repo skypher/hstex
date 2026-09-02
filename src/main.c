@@ -978,13 +978,190 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
     return failures == 0 ? 0 : -1;
 }
 
+/* After a cold run, boil its raw source-open log (a page and a path per line,
+   in reading order) down to one line per source file: the page it first opened
+   at, its content hash, and its path. A later run compares the hashes to see
+   which files an edit touched and, from the pages, which checkpoints predate
+   the touch. Output files (.aux/.toc/...) are left out -- they change every
+   run and are not what an edit means. */
+static void parallel_record_sources(const char *cache_dir)
+{
+    char log_path[600], out_path[600];
+    (void)snprintf(log_path, sizeof(log_path), "%s/sources.log", cache_dir);
+    (void)snprintf(out_path, sizeof(out_path), "%s/sources", cache_dir);
+    FILE *log = fopen(log_path, "rb");
+    if (log == NULL) {
+        return;
+    }
+    struct source_note {
+        char path[1024];
+        int page;
+    } *notes = NULL;
+    size_t count = 0U, capacity = 0U;
+    char line[1200];
+    while (fgets(line, sizeof(line), log) != NULL) {
+        char *tab = strchr(line, '\t');
+        if (tab == NULL) {
+            continue;
+        }
+        *tab = '\0';
+        int page = (int)strtol(line, NULL, 10);
+        char *path = tab + 1;
+        size_t length = strlen(path);
+        while (length > 0U && (path[length - 1U] == '\n' ||
+                               path[length - 1U] == '\r')) {
+            path[--length] = '\0';
+        }
+        if (length == 0U || length >= sizeof(notes[0].path) ||
+            !parallel_is_source_name(path)) {
+            continue;
+        }
+        size_t index = 0U;
+        for (; index < count; ++index) {
+            if (strcmp(notes[index].path, path) == 0) {
+                break;
+            }
+        }
+        if (index < count) {
+            if (page < notes[index].page) {
+                notes[index].page = page;
+            }
+            continue;
+        }
+        if (count == capacity) {
+            size_t grown = capacity == 0U ? 32U : capacity * 2U;
+            struct source_note *bigger =
+                realloc(notes, grown * sizeof(*bigger));
+            if (bigger == NULL) {
+                break;
+            }
+            notes = bigger;
+            capacity = grown;
+        }
+        (void)snprintf(notes[count].path, sizeof(notes[count].path), "%s", path);
+        notes[count].page = page;
+        ++count;
+    }
+    (void)fclose(log);
+    FILE *out = fopen(out_path, "wb");
+    if (out != NULL) {
+        for (size_t index = 0U; index < count; ++index) {
+            uint64_t hash = 0xcbf29ce484222325ULL;
+            if (parallel_hash_file(notes[index].path, &hash) != 0) {
+                continue;
+            }
+            (void)fprintf(out, "%d\t%" PRIu64 "\t%s\n", notes[index].page, hash,
+                          notes[index].path);
+        }
+        (void)fclose(out);
+    }
+    free(notes);
+}
+
+/* Which checkpoint a warm-ish rebuild can resume from when the source has been
+   edited: the last one taken before the page any changed file first opened at.
+   Every page before that read only files the edit did not touch, so the
+   previous build's PDF prefix and the checkpoint's reading position are still
+   good and the rebuild need only run forward. Returns the checkpoint page, 0
+   for ck-0 (post-preamble), or -1 when no checkpoint predates the edit (an
+   early file changed, the source record is missing, or nothing tracked
+   changed) and the caller should fall back to a full cold rebuild. */
+static int parallel_incremental_reuse_page(const char *cache_dir,
+                                           const int *ckpts, int nck)
+{
+    char path[600];
+    (void)snprintf(path, sizeof(path), "%s/sources", cache_dir);
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    int edit_page = INT_MAX;
+    bool any_changed = false;
+    char line[1400];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *first = strchr(line, '\t');
+        if (first == NULL) {
+            continue;
+        }
+        char *second = strchr(first + 1, '\t');
+        if (second == NULL) {
+            continue;
+        }
+        *first = '\0';
+        *second = '\0';
+        int page = (int)strtol(line, NULL, 10);
+        uint64_t stored = strtoull(first + 1, NULL, 10);
+        char *file_path = second + 1;
+        size_t length = strlen(file_path);
+        while (length > 0U && (file_path[length - 1U] == '\n' ||
+                               file_path[length - 1U] == '\r')) {
+            file_path[--length] = '\0';
+        }
+        uint64_t current = 0xcbf29ce484222325ULL;
+        bool changed = parallel_hash_file(file_path, &current) != 0 ||
+                       current != stored;
+        if (changed) {
+            any_changed = true;
+            if (page < edit_page) {
+                edit_page = page;
+            }
+        }
+    }
+    (void)fclose(file);
+    if (!any_changed) {
+        return -1; /* the mismatch was not in a tracked source; rebuild cold */
+    }
+    int reuse = -1;
+    for (int index = 0; index < nck; ++index) {
+        if (ckpts[index] < edit_page && ckpts[index] > reuse) {
+            reuse = ckpts[index];
+        }
+    }
+    return reuse;
+}
+
+/* An incremental rebuild: resume the last checkpoint the edit did not reach and
+   run forward to the end, tiling into the previous build's PDF so its untouched
+   prefix is kept and only the pages from the edit on are written again. The
+   resumed run reads the settled .aux left by the previous build, so a reference
+   the edit did not change resolves the same; an edit that DID change a
+   reference is out of scope here (the caller only reaches this for a change
+   whose file opens after a checkpoint) and would need a cold rebuild. Returns 0
+   on success, -1 to fall back. */
+static int run_parallel_incremental(const char *cache_dir,
+                                    const char *output_directory,
+                                    const char *job_name, int reuse_page)
+{
+    char shared_pdf[1024];
+    (void)snprintf(shared_pdf, sizeof(shared_pdf), "%s/%s.pdf", output_directory,
+                   job_name);
+    if (access(shared_pdf, R_OK | W_OK) != 0) {
+        return -1; /* no previous PDF to reuse */
+    }
+    char checkpoint[1088];
+    (void)snprintf(checkpoint, sizeof(checkpoint), "%s/ck-%d.bin", cache_dir,
+                   reuse_page);
+    if (access(checkpoint, R_OK) != 0) {
+        return -1;
+    }
+    (void)setenv("HSTEX_TILE", shared_pdf, 1);
+    (void)unsetenv("HSTEX_RESUME_STOP"); /* run to \end{document} */
+    (void)unsetenv("HSTEX_CKPT_EVERY");
+    int status =
+        resume_checkpoint_document(checkpoint, output_directory, job_name);
+    (void)unsetenv("HSTEX_TILE");
+    return status;
+}
+
 /* Compile a document the parallel way. A cold run -- no cache, or one built
    from different source -- compiles sequentially while dropping a checkpoint
    every stride pages, then records a manifest so the next run of the same
    source finds the cache warm. A warm run fans the chapters out to parallel
    resume processes and joins their pages; if that cannot be done it falls back
    to a sequential compile, which is correct and no slower than an ordinary
-   run. */
+   run. An edited source that changed only files opening after some checkpoint
+   is rebuilt incrementally -- forward from that checkpoint, reusing the prefix
+   of the last PDF. */
 /* The job name a document defaults to: its file name without directory or
    extension (clay.tex -> clay), which is what \jobname and the PDF are named. */
 static void parallel_default_job(const char *document_path, char *out,
@@ -1052,6 +1229,31 @@ static int run_parallel_document(const char *format_file,
                                         restricted_shell_escape, NULL);
     }
 
+    /* Not warm: either there is no cache or the source has been edited. If a
+       cache is there and the edit lies past a checkpoint, rebuild forward from
+       it rather than from the top -- the pages before it read only files the
+       edit did not touch. */
+    if (parallel_read_manifest(cache_dir, &cached_hash, &cached_stride,
+                               &cached_pages) == 0) {
+        int ckpts[1024];
+        int nck = parallel_checkpoint_pages(cache_dir, ckpts, 1024);
+        int reuse = nck > 0
+                        ? parallel_incremental_reuse_page(cache_dir, ckpts, nck)
+                        : -1;
+        if (reuse >= 0) {
+            (void)fprintf(stderr,
+                          "hstex: incremental rebuild -- resuming the "
+                          "checkpoint at page %d and running forward\n",
+                          reuse);
+            if (run_parallel_incremental(cache_dir, output_directory, job_name,
+                                         reuse) == 0) {
+                return 0;
+            }
+            (void)fprintf(stderr, "hstex: incremental rebuild unavailable -- "
+                                  "building the cache cold\n");
+        }
+    }
+
     (void)fprintf(stderr, "hstex: cold run -- building checkpoint cache in %s\n",
                   cache_dir);
     char ckpt_every[1200];
@@ -1060,7 +1262,14 @@ static int run_parallel_document(const char *format_file,
     char aux_path[600];
     (void)snprintf(aux_path, sizeof(aux_path), "%s/%s.aux", output_directory,
                    job_name);
+    char sources_log[600];
+    (void)snprintf(sources_log, sizeof(sources_log), "%s/sources.log",
+                   cache_dir);
     (void)setenv("HSTEX_CKPT_EVERY", ckpt_every, 1);
+    /* Log which page each source file opens at, so a later edit can be placed
+       against the checkpoints. The final pass's log is the one kept -- the
+       cache, and the log in it, is cleared at the head of every pass. */
+    (void)setenv("HSTEX_CKPT_SOURCES", sources_log, 1);
     /* A warm run's resumed chapters read the settled .aux and typeset against
        it; the checkpoints they resume from must have been taken at that same
        settled layout, or the byte offsets a chapter tiles into no longer line
@@ -1096,11 +1305,16 @@ static int run_parallel_document(const char *format_file,
         have_previous = true;
     }
     (void)unsetenv("HSTEX_CKPT_EVERY");
-    if (status == 0 &&
-        parallel_write_manifest(cache_dir, hash, HSTEX_PARALLEL_STRIDE,
-                                pages) != 0) {
-        (void)fprintf(stderr,
-                      "hstex: warning: could not record parallel manifest\n");
+    (void)unsetenv("HSTEX_CKPT_SOURCES");
+    if (status == 0) {
+        /* Boil the final pass's source-open log down to one hashed line per
+           file, so the next run can tell what an edit touched. */
+        parallel_record_sources(cache_dir);
+        if (parallel_write_manifest(cache_dir, hash, HSTEX_PARALLEL_STRIDE,
+                                    pages) != 0) {
+            (void)fprintf(stderr,
+                          "hstex: warning: could not record parallel manifest\n");
+        }
     }
     return status;
 }
