@@ -7,14 +7,18 @@
 #include "hstex/token.h"
 #include "hstex_config.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #ifdef __GLIBC__
 #include <malloc.h>
@@ -370,7 +374,8 @@ static int run_document_from_format(const char *format_file,
                                     const char *document_path,
                                     const char *output_directory,
                                     const char *job_name,
-                                    bool restricted_shell_escape)
+                                    bool restricted_shell_escape,
+                                    int *pages_out)
 {
     char error[512] = {0};
     struct hstex_engine engine;
@@ -407,6 +412,9 @@ static int run_document_from_format(const char *format_file,
     size_t document_output_tokens = 0U;
     int status = drain_engine(&engine, document_path, &document_output_tokens);
     if (status == 0) {
+        if (pages_out != NULL) {
+            *pages_out = engine.shipped_pages;
+        }
         (void)printf(
             "document=%s pages=%d output_tokens=%zu symbols=%zu macros=%zu"
             " definitions=%zu\n",
@@ -526,6 +534,188 @@ static int run_latex(const char *format_path, const char *document_path)
     return status;
 }
 
+/* ---- Parallel disk-checkpoint driver ------------------------------------
+   The default way to compile: a cold run drops a checkpoint cache beside the
+   output and records what the run was of, so a later run of the same source
+   can take the chapters up in parallel from those checkpoints instead of
+   reading the whole document again. This file wires the orchestration -- the
+   cache, its validity, the cold bootstrap, and the parallel fan-out; the
+   chunks resume through the same --resume path a single chunk uses. */
+
+/* A content fingerprint of everything the run's output depends on that this
+   driver can see cheaply: the document's own bytes and the format's. An edit
+   to either makes the cache stale. (Inputs the document \inputs are followed
+   by incremental reuse, which is a later step; for now a changed top file or
+   format is what a cold run keys on.) */
+static int parallel_hash_file(const char *path, uint64_t *hash)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    uint64_t h = *hash;
+    uint8_t buffer[65536];
+    size_t got;
+    while ((got = fread(buffer, 1U, sizeof(buffer), file)) != 0U) {
+        for (size_t index = 0U; index < got; ++index) {
+            h ^= buffer[index];
+            h *= 0x100000001b3ULL; /* FNV-1a */
+        }
+    }
+    int ok = ferror(file) ? -1 : 0;
+    (void)fclose(file);
+    *hash = h;
+    return ok;
+}
+
+/* True for the source extensions a build reads; the outputs it writes
+   (.aux, .toc, .log, .pdf, ...) are deliberately excluded, since they change
+   every run and would make the cache always look stale. */
+static bool parallel_is_source_name(const char *name)
+{
+    static const char *const exts[] = {".tex", ".sty", ".cls", ".ltx",
+                                       ".def", ".clo", ".bib", ".cfg"};
+    const char *dot = strrchr(name, '.');
+    if (dot == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < sizeof(exts) / sizeof(exts[0]); ++index) {
+        if (strcmp(dot, exts[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The document's own directory, so the files it \inputs from beside it are
+   hashed too -- a top file that only \inputs a main file (clay.tex does) would
+   otherwise never look changed. Copies the directory part of `path' into `out',
+   or "." when there is none. */
+static void parallel_directory_of(const char *path, char *out, size_t capacity)
+{
+    const char *slash = strrchr(path, '/');
+    if (slash == NULL) {
+        (void)snprintf(out, capacity, ".");
+        return;
+    }
+    size_t length = (size_t)(slash - path);
+    if (length >= capacity) {
+        length = capacity - 1U;
+    }
+    memcpy(out, path, length);
+    out[length] = '\0';
+}
+
+static int parallel_validity_hash(const char *format_file,
+                                  const char *document_path, uint64_t *hash)
+{
+    uint64_t total = 0xcbf29ce484222325ULL; /* FNV-1a offset basis */
+    if (parallel_hash_file(format_file, &total) != 0) {
+        return -1;
+    }
+    /* Every source file beside the document folds in, its name included so a
+       rename is noticed. Each file's hash is XORed in, which needs no sorting
+       to be the same from run to run whatever order the directory is read. */
+    char directory[512];
+    parallel_directory_of(document_path, directory, sizeof(directory));
+    DIR *dir = opendir(directory);
+    if (dir == NULL) {
+        return parallel_hash_file(document_path, &total) == 0
+                   ? (*hash = total, 0)
+                   : -1;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!parallel_is_source_name(entry->d_name)) {
+            continue;
+        }
+        uint64_t one = 0xcbf29ce484222325ULL;
+        for (const char *c = entry->d_name; *c != '\0'; ++c) {
+            one ^= (uint8_t)*c;
+            one *= 0x100000001b3ULL;
+        }
+        char file_path[1024];
+        (void)snprintf(file_path, sizeof(file_path), "%s/%s", directory,
+                       entry->d_name);
+        if (parallel_hash_file(file_path, &one) != 0) {
+            (void)closedir(dir);
+            return -1;
+        }
+        total ^= one;
+    }
+    (void)closedir(dir);
+    *hash = total;
+    return 0;
+}
+
+/* The cache lives beside the output as a hidden directory; the manifest at its
+   head says what source and format it was built from and how it was strided,
+   so a later run can tell at a glance whether it may take the checkpoints up. */
+#define HSTEX_PARALLEL_CACHE ".hstex-parallel"
+#define HSTEX_PARALLEL_STRIDE 40
+
+static int parallel_write_manifest(const char *cache_dir, uint64_t hash,
+                                   int stride, int pages)
+{
+    char path[1024];
+    (void)snprintf(path, sizeof(path), "%s/manifest", cache_dir);
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return -1;
+    }
+    (void)fprintf(file, "hstex-parallel 1\nhash %" PRIu64 "\nstride %d\npages %d\n",
+                  hash, stride, pages);
+    return fclose(file) == 0 ? 0 : -1;
+}
+
+/* Read the manifest's recorded hash and stride; returns 0 and fills them when
+   the cache is present and readable, non-zero when there is no usable cache. */
+static int parallel_read_manifest(const char *cache_dir, uint64_t *hash,
+                                  int *stride, int *pages)
+{
+    char path[1024];
+    (void)snprintf(path, sizeof(path), "%s/manifest", cache_dir);
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    int version = 0;
+    unsigned long long stored = 0ULL;
+    int stored_stride = 0, stored_pages = 0;
+    int matched = fscanf(file, "hstex-parallel %d hash %llu stride %d pages %d",
+                         &version, &stored, &stored_stride, &stored_pages);
+    (void)fclose(file);
+    if (matched != 4 || version != 1) {
+        return -1;
+    }
+    *hash = (uint64_t)stored;
+    *stride = stored_stride;
+    *pages = stored_pages;
+    return 0;
+}
+
+/* Remove a cache directory's files and the directory itself, so a cold run
+   starts from nothing rather than mixing checkpoints from two builds. */
+static void parallel_clear_cache(const char *cache_dir)
+{
+    DIR *dir = opendir(cache_dir);
+    if (dir != NULL) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 ||
+                strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char path[1024];
+            (void)snprintf(path, sizeof(path), "%s/%s", cache_dir,
+                           entry->d_name);
+            (void)remove(path);
+        }
+        (void)closedir(dir);
+    }
+    (void)rmdir(cache_dir);
+}
+
 /* A run takes and gives back the room for eight million definitions, and the
    allocator's own answer to that is to hand the pages back to the system and
    ask for them again. It is told to keep them instead: the run reaches the
@@ -538,6 +728,73 @@ static void keep_the_heap(void)
     (void)mallopt(M_TOP_PAD, 32 * 1024 * 1024);
     (void)mallopt(M_MMAP_THRESHOLD, 32 * 1024 * 1024);
 #endif
+}
+
+/* Compile a document the parallel way. A cold run -- no cache, or one built
+   from different source -- compiles sequentially while dropping a checkpoint
+   every stride pages, then records a manifest so the next run of the same
+   source finds the cache warm. The warm run's fan-out (resuming the chunks in
+   parallel and tiling their pages into one PDF) attaches here as it is built;
+   until then a warm run compiles sequentially over the intact cache, which is
+   correct and no slower than an ordinary run. */
+static int run_parallel_document(const char *format_file,
+                                 const char *document_path,
+                                 bool restricted_shell_escape)
+{
+    const char *output_directory = "build/document-output";
+    (void)mkdir("build", 0700);
+    (void)mkdir(output_directory, 0700);
+    char cache_dir[256];
+    (void)snprintf(cache_dir, sizeof(cache_dir), "%s/%s", output_directory,
+                   HSTEX_PARALLEL_CACHE);
+
+    uint64_t hash = 0U;
+    if (parallel_validity_hash(format_file, document_path, &hash) != 0) {
+        (void)fprintf(stderr, "hstex: cannot read %s or %s\n", document_path,
+                      format_file);
+        return 1;
+    }
+    uint64_t cached_hash = 0U;
+    int cached_stride = 0, cached_pages = 0;
+    bool warm =
+        parallel_read_manifest(cache_dir, &cached_hash, &cached_stride,
+                               &cached_pages) == 0 &&
+        cached_hash == hash;
+
+    if (warm) {
+        (void)fprintf(stderr,
+                      "hstex: warm checkpoint cache (%d pages, stride %d)\n",
+                      cached_pages, cached_stride);
+        /* Parallel warm resume + tiling lands here; for now compile over the
+           intact cache without rewriting it. */
+        return run_document_from_format(format_file, document_path,
+                                        output_directory, NULL,
+                                        restricted_shell_escape, NULL);
+    }
+
+    (void)fprintf(stderr, "hstex: cold run -- building checkpoint cache in %s\n",
+                  cache_dir);
+    parallel_clear_cache(cache_dir);
+    if (mkdir(cache_dir, 0700) != 0 && errno != EEXIST) {
+        (void)fprintf(stderr, "hstex: cannot make %s\n", cache_dir);
+        return 1;
+    }
+    char ckpt_every[1200];
+    (void)snprintf(ckpt_every, sizeof(ckpt_every), "%d:%s",
+                   HSTEX_PARALLEL_STRIDE, cache_dir);
+    (void)setenv("HSTEX_CKPT_EVERY", ckpt_every, 1);
+    int pages = 0;
+    int status =
+        run_document_from_format(format_file, document_path, output_directory,
+                                 NULL, restricted_shell_escape, &pages);
+    (void)unsetenv("HSTEX_CKPT_EVERY");
+    if (status == 0 &&
+        parallel_write_manifest(cache_dir, hash, HSTEX_PARALLEL_STRIDE,
+                                pages) != 0) {
+        (void)fprintf(stderr,
+                      "hstex: warning: could not record parallel manifest\n");
+    }
+    return status;
 }
 
 int main(int argument_count, char **arguments)
@@ -583,7 +840,11 @@ int main(int argument_count, char **arguments)
     }
     if (argument_count == 4 && strcmp(arguments[1], "--format") == 0) {
         return run_document_from_format(arguments[2], arguments[3],
-                                        "build/document-output", NULL, true);
+                                        "build/document-output", NULL, true,
+                                        NULL);
+    }
+    if (argument_count == 4 && strcmp(arguments[1], "--parallel") == 0) {
+        return run_parallel_document(arguments[2], arguments[3], true);
     }
     if (argument_count == 5 && strcmp(arguments[1], "--resume") == 0) {
         return resume_checkpoint_document(arguments[2], arguments[3],
@@ -592,7 +853,8 @@ int main(int argument_count, char **arguments)
     if (argument_count == 4 &&
         strcmp(arguments[1], "--format-no-shell") == 0) {
         return run_document_from_format(arguments[2], arguments[3],
-                                        "build/document-output", NULL, false);
+                                        "build/document-output", NULL, false,
+                                        NULL);
     }
     if ((argument_count == 5 || argument_count == 6) &&
         strcmp(arguments[1], "--format-output") == 0) {
@@ -600,7 +862,7 @@ int main(int argument_count, char **arguments)
                                         arguments[4],
                                         argument_count == 6 ? arguments[5]
                                                             : NULL,
-                                        true);
+                                        true, NULL);
     }
     if ((argument_count == 5 || argument_count == 6) &&
         strcmp(arguments[1], "--format-output-no-shell") == 0) {
@@ -608,7 +870,7 @@ int main(int argument_count, char **arguments)
                                         arguments[4],
                                         argument_count == 6 ? arguments[5]
                                                             : NULL,
-                                        false);
+                                        false, NULL);
     }
 
     print_usage(stderr, arguments[0]);
