@@ -730,13 +730,291 @@ static void keep_the_heap(void)
 #endif
 }
 
+/* Copy a file byte for byte, so each chunk finds the run's .aux/.toc under its
+   own output directory where the resume looks for them. */
+static int parallel_copy_file(const char *source, const char *destination)
+{
+    FILE *in = fopen(source, "rb");
+    if (in == NULL) {
+        return -1;
+    }
+    FILE *out = fopen(destination, "wb");
+    if (out == NULL) {
+        (void)fclose(in);
+        return -1;
+    }
+    uint8_t buffer[65536];
+    size_t got;
+    int ok = 0;
+    while ((got = fread(buffer, 1U, sizeof(buffer), in)) != 0U) {
+        if (fwrite(buffer, 1U, got, out) != got) {
+            ok = -1;
+            break;
+        }
+    }
+    if (ferror(in)) {
+        ok = -1;
+    }
+    (void)fclose(in);
+    return fclose(out) == 0 ? ok : -1;
+}
+
+/* The checkpoint pages found in the cache, smallest first. Returns how many, or
+   -1 on trouble; fills `pages` (caller-sized `capacity`). */
+static int parallel_checkpoint_pages(const char *cache_dir, int *pages,
+                                     int capacity)
+{
+    DIR *dir = opendir(cache_dir);
+    if (dir == NULL) {
+        return -1;
+    }
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && count < capacity) {
+        int page = 0;
+        if (sscanf(entry->d_name, "ck-%d.bin", &page) == 1) {
+            pages[count++] = page;
+        }
+    }
+    (void)closedir(dir);
+    for (int i = 1; i < count; ++i) { /* insertion sort; a handful of entries */
+        int key = pages[i], j = i - 1;
+        while (j >= 0 && pages[j] > key) {
+            pages[j + 1] = pages[j];
+            --j;
+        }
+        pages[j + 1] = key;
+    }
+    return count;
+}
+
+/* Run one chunk in a child process: chunk 0 compiles the opening pages from
+   scratch (it alone pays the preamble), the rest resume their checkpoint; each
+   stops at its own last page and writes clay.pdf into its own directory. The
+   run's .aux/.toc/.out are copied in first so a resume resolves references and
+   the contents the same way the sequential build did. Returns the child's exit
+   status. */
+static int parallel_run_chunk(const char *format_file, const char *document_path,
+                              const char *output_directory,
+                              const char *cache_dir, const char *chunk_dir,
+                              int checkpoint_page, int stop_page,
+                              bool restricted_shell_escape)
+{
+    (void)mkdir(chunk_dir, 0700);
+    static const char *const carried[] = {"clay.aux", "clay.toc", "clay.out",
+                                          "clay.bbl", "clay.lof", "clay.lot"};
+    for (size_t i = 0U; i < sizeof(carried) / sizeof(carried[0]); ++i) {
+        char from[1024], to[1024];
+        (void)snprintf(from, sizeof(from), "%s/%s", output_directory,
+                       carried[i]);
+        (void)snprintf(to, sizeof(to), "%s/%s", chunk_dir, carried[i]);
+        (void)parallel_copy_file(from, to); /* absent files are fine */
+    }
+    char stop[32];
+    (void)snprintf(stop, sizeof(stop), "%d", stop_page);
+    (void)setenv("HSTEX_RESUME_STOP", stop, 1);
+    (void)unsetenv("HSTEX_CKPT_EVERY");
+    char log_path[1088];
+    (void)snprintf(log_path, sizeof(log_path), "%s/log", chunk_dir);
+    FILE *log = fopen(log_path, "wb");
+    if (log != NULL) {
+        (void)dup2(fileno(log), STDOUT_FILENO);
+        (void)dup2(fileno(log), STDERR_FILENO);
+        (void)fclose(log);
+    }
+    /* No terminal: an error in a chunk must abort at end-of-input rather than
+       stop for a prompt no one can answer, which would hang the parent's wait. */
+    FILE *null_in = fopen("/dev/null", "rb");
+    if (null_in != NULL) {
+        (void)dup2(fileno(null_in), STDIN_FILENO);
+        (void)fclose(null_in);
+    }
+    int status;
+    if (checkpoint_page == 0) {
+        status = run_document_from_format(format_file, document_path, chunk_dir,
+                                          "clay", restricted_shell_escape, NULL);
+    } else {
+        char checkpoint[1088];
+        (void)snprintf(checkpoint, sizeof(checkpoint), "%s/ck-%d.bin", cache_dir,
+                       checkpoint_page);
+        status = resume_checkpoint_document(checkpoint, chunk_dir, "clay");
+    }
+    return status;
+}
+
+/* Wait for a child, returning 0 only when it exited cleanly. */
+static int parallel_wait(pid_t child)
+{
+    if (child < 0) {
+        return -1;
+    }
+    int wstatus = 0;
+    while (waitpid(child, &wstatus, 0) < 0 && errno == EINTR) {
+    }
+    return WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0 ? 0 : -1;
+}
+
+/* Run `argv' (NULL-terminated) as a child and wait for it; 0 on a clean exit.
+   execvp is used so a missing tool just fails rather than needing a hard path;
+   the caller treats that as "assembly unavailable" and falls back. */
+static int parallel_spawn(char *const argv[])
+{
+    pid_t child = fork();
+    if (child == 0) {
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    return parallel_wait(child);
+}
+
+/* A warm run: fan the chapters out to fresh processes -- chunk 0 from scratch,
+   the rest resumed from their checkpoints -- each writing its own pages, then
+   assemble the pieces into one clay.pdf.
+
+   The last checkpoint is NOT resumed: a chunk that runs \end{document} finalizes
+   document-wide objects (hyperref/tagpdf) it never reserved, which only the
+   shared-file path of true tiling can carry. Instead the chunks cover the pages
+   up to the last checkpoint and the tail comes from the reference PDF the cold
+   run left (identical, source unchanged). The join itself is the pluggable
+   part -- pdfseparate to lift the tail, pdfunite to join, both from poppler --
+   and in-engine tiling (chunks writing one shared PDF, no join, and finalizing
+   in place) is what replaces all of this. A chunk failure or a missing tool
+   makes the caller fall back to a sequential compile, so a warm run is never
+   wrong, only -- in that case -- not faster. */
+static int run_parallel_warm(const char *format_file, const char *document_path,
+                             const char *output_directory,
+                             const char *cache_dir, int pages,
+                             bool restricted_shell_escape)
+{
+    int ckpts[1024];
+    int nck = parallel_checkpoint_pages(cache_dir, ckpts, 1024);
+    if (nck <= 0) {
+        return -1; /* no usable checkpoints; caller compiles sequentially */
+    }
+    /* One chunk per checkpoint boundary: chunk 0 is pages 1..ckpts[0] from
+       scratch, chunk i (i>=1) resumes ckpts[i-1] and stops at ckpts[i]. Together
+       they cover pages 1..ckpts[nck-1]; the pages after that are the tail. */
+    int nchunks = nck;
+    int tail_start = ckpts[nck - 1] + 1;
+    int tail_count = tail_start <= pages ? pages - tail_start + 1 : 0;
+    char (*chunk_dirs)[1024] = malloc((size_t)nchunks * sizeof(*chunk_dirs));
+    pid_t *children = malloc((size_t)nchunks * sizeof(*children));
+    if (chunk_dirs == NULL || children == NULL) {
+        free(chunk_dirs);
+        free(children);
+        return -1;
+    }
+    /* Each chunk deserializes a whole run's state -- a node arena and millions
+       of meanings -- so a dozen at once saturate memory bandwidth and run
+       slower than a sequential compile. Keep at most a handful in flight; the
+       cap can be overridden. A running window: launch up to the cap, and each
+       time one finishes launch the next. */
+    int cap = 8;
+    const char *cap_env = getenv("HSTEX_PARALLEL_JOBS");
+    if (cap_env != NULL) {
+        int asked = (int)strtol(cap_env, NULL, 10);
+        if (asked >= 1 && asked <= nchunks) {
+            cap = asked;
+        }
+    }
+    if (cap > nchunks) {
+        cap = nchunks;
+    }
+    int failures = 0, launched = 0, running = 0;
+    for (int i = 0; i < nchunks; ++i) {
+        children[i] = -1;
+    }
+    while (launched < nchunks || running > 0) {
+        while (running < cap && launched < nchunks) {
+            int i = launched++;
+            int checkpoint_page = i == 0 ? 0 : ckpts[i - 1];
+            int stop_page = ckpts[i];
+            (void)snprintf(chunk_dirs[i], sizeof(chunk_dirs[i]), "%s/chunk_%d",
+                           cache_dir, i);
+            pid_t child = fork();
+            if (child == 0) {
+                _exit(parallel_run_chunk(
+                    format_file, document_path, output_directory, cache_dir,
+                    chunk_dirs[i], checkpoint_page, stop_page,
+                    restricted_shell_escape));
+            }
+            if (child < 0) {
+                failures++;
+            } else {
+                children[i] = child;
+                running++;
+            }
+        }
+        int wstatus = 0;
+        pid_t done = waitpid(-1, &wstatus, 0);
+        if (done > 0) {
+            running--;
+            if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
+                failures++;
+            }
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    int result = -1;
+    if (failures == 0) {
+        char output_pdf[1024];
+        (void)snprintf(output_pdf, sizeof(output_pdf), "%s/clay.pdf",
+                       output_directory);
+        /* Lift the tail out of the reference PDF (the current clay.pdf, from the
+           cold run) BEFORE the join overwrites it; pdfseparate names each page
+           file by its own number. */
+        int have_tail = 1;
+        if (tail_count > 0) {
+            char first[16], last[16], pattern[1024];
+            (void)snprintf(first, sizeof(first), "%d", tail_start);
+            (void)snprintf(last, sizeof(last), "%d", pages);
+            (void)snprintf(pattern, sizeof(pattern), "%s/tail-%%d.pdf",
+                           cache_dir);
+            char *sep_argv[] = {(char *)"pdfseparate", (char *)"-f",
+                                first,   (char *)"-l",  last,
+                                output_pdf, pattern,      NULL};
+            have_tail = parallel_spawn(sep_argv) == 0;
+        }
+        if (have_tail) {
+            int parts = nchunks + tail_count;
+            char **argv = malloc((size_t)(parts + 3) * sizeof(*argv));
+            char (*paths)[1088] = malloc((size_t)parts * sizeof(*paths));
+            if (argv != NULL && paths != NULL) {
+                int argc = 0, p = 0;
+                argv[argc++] = (char *)"pdfunite";
+                for (int i = 0; i < nchunks; ++i, ++p) {
+                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/clay.pdf",
+                                   chunk_dirs[i]);
+                    argv[argc++] = paths[p];
+                }
+                for (int page = tail_start; page <= pages; ++page, ++p) {
+                    (void)snprintf(paths[p], sizeof(paths[p]), "%s/tail-%d.pdf",
+                                   cache_dir, page);
+                    argv[argc++] = paths[p];
+                }
+                argv[argc++] = output_pdf;
+                argv[argc] = NULL;
+                if (parallel_spawn(argv) == 0) {
+                    result = 0;
+                }
+            }
+            free(argv);
+            free(paths);
+        }
+    }
+    free(chunk_dirs);
+    free(children);
+    return result;
+}
+
 /* Compile a document the parallel way. A cold run -- no cache, or one built
    from different source -- compiles sequentially while dropping a checkpoint
    every stride pages, then records a manifest so the next run of the same
-   source finds the cache warm. The warm run's fan-out (resuming the chunks in
-   parallel and tiling their pages into one PDF) attaches here as it is built;
-   until then a warm run compiles sequentially over the intact cache, which is
-   correct and no slower than an ordinary run. */
+   source finds the cache warm. A warm run fans the chapters out to parallel
+   resume processes and joins their pages; if that cannot be done it falls back
+   to a sequential compile, which is correct and no slower than an ordinary
+   run. */
 static int run_parallel_document(const char *format_file,
                                  const char *document_path,
                                  bool restricted_shell_escape)
@@ -763,10 +1041,17 @@ static int run_parallel_document(const char *format_file,
 
     if (warm) {
         (void)fprintf(stderr,
-                      "hstex: warm checkpoint cache (%d pages, stride %d)\n",
+                      "hstex: warm checkpoint cache (%d pages, stride %d) -- "
+                      "resuming chapters in parallel\n",
                       cached_pages, cached_stride);
-        /* Parallel warm resume + tiling lands here; for now compile over the
-           intact cache without rewriting it. */
+        if (run_parallel_warm(format_file, document_path, output_directory,
+                              cache_dir, cached_pages,
+                              restricted_shell_escape) == 0) {
+            return 0;
+        }
+        (void)fprintf(stderr,
+                      "hstex: parallel resume unavailable -- compiling "
+                      "sequentially over the cache\n");
         return run_document_from_format(format_file, document_path,
                                         output_directory, NULL,
                                         restricted_shell_escape, NULL);
