@@ -3965,6 +3965,113 @@ static int checkpoint_read_vbox(FILE *in, struct hstex_vbox_builder *box)
                : 0;
 }
 
+/* A checkpoint is a large, compressible thing -- a node arena that is mostly
+   the same shape page after page -- so it is written deflated. The whole run
+   is serialized to an in-memory buffer (open_memstream) first, then that is
+   compressed and stored behind a short header (magic, then the original
+   length). Working in RAM, not a scratch file, keeps this off a /tmp that may
+   be a slow or nearly-full disk, and leaves the serializer -- which still
+   writes to a plain FILE -- and its many error exits untouched. */
+static const uint8_t HSTEX_CKPT_MAGIC[4] = {'H', 'K', 'Z', '1'};
+
+/* Deflate `raw`[0..raw_length) and store it at `path` behind the header. */
+static int checkpoint_deflate_buffer(const uint8_t *raw, size_t raw_length,
+                                     const char *path, char *error,
+                                     size_t error_capacity)
+{
+    uLong bound = compressBound((uLong)raw_length);
+    uint8_t *packed = malloc(bound == 0U ? 1U : (size_t)bound);
+    if (packed == NULL) {
+        return set_error(error, error_capacity, "checkpoint compress failed");
+    }
+    /* Level 1: a checkpoint is a throwaway cache, so fast deflate matters more
+       than the last few percent of size -- the arena packs an order of
+       magnitude smaller either way. */
+    uLongf packed_length = bound;
+    int zr = compress2(packed, &packed_length, raw, (uLong)raw_length, 1);
+    if (zr != Z_OK) {
+        free(packed);
+        return set_error(error, error_capacity, "checkpoint compress failed");
+    }
+    FILE *out = fopen(path, "wb");
+    if (out == NULL) {
+        free(packed);
+        return set_error(error, error_capacity, "cannot write %s", path);
+    }
+    uint64_t original = (uint64_t)raw_length;
+    if (fwrite(HSTEX_CKPT_MAGIC, 1U, sizeof(HSTEX_CKPT_MAGIC), out) !=
+            sizeof(HSTEX_CKPT_MAGIC) ||
+        fwrite(&original, sizeof(original), 1U, out) != 1U ||
+        fwrite(packed, 1U, (size_t)packed_length, out) !=
+            (size_t)packed_length) {
+        free(packed);
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write %s", path);
+    }
+    free(packed);
+    if (fclose(out) != 0) {
+        return set_error(error, error_capacity, "cannot finish %s", path);
+    }
+    return 0;
+}
+
+/* Read `path`, inflate it, and hand back the original bytes in a fresh buffer
+   the caller owns (freed by the caller). Non-zero on failure. */
+static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
+                                     size_t *out_length, char *error,
+                                     size_t error_capacity)
+{
+    *out_raw = NULL;
+    *out_length = 0U;
+    FILE *in = fopen(path, "rb");
+    if (in == NULL) {
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    uint8_t header[sizeof(HSTEX_CKPT_MAGIC) + sizeof(uint64_t)];
+    if (fread(header, 1U, sizeof(header), in) != sizeof(header) ||
+        memcmp(header, HSTEX_CKPT_MAGIC, sizeof(HSTEX_CKPT_MAGIC)) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "not a checkpoint: %s", path);
+    }
+    uint64_t original = 0U;
+    memcpy(&original, header + sizeof(HSTEX_CKPT_MAGIC), sizeof(original));
+    if (fseek(in, 0L, SEEK_END) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    long total = ftell(in);
+    if (total < (long)sizeof(header) || original > (uint64_t)SIZE_MAX) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "corrupt checkpoint %s", path);
+    }
+    size_t packed_length = (size_t)total - sizeof(header);
+    if (fseek(in, (long)sizeof(header), SEEK_SET) != 0) {
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    uint8_t *packed = malloc(packed_length == 0U ? 1U : packed_length);
+    if (packed == NULL ||
+        fread(packed, 1U, packed_length, in) != packed_length) {
+        free(packed);
+        (void)fclose(in);
+        return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    (void)fclose(in);
+    uint8_t *raw = malloc(original == 0U ? 1U : (size_t)original);
+    uLongf raw_length = (uLongf)original;
+    if (raw == NULL ||
+        uncompress(raw, &raw_length, packed, (uLong)packed_length) != Z_OK ||
+        raw_length != (uLongf)original) {
+        free(raw);
+        free(packed);
+        return set_error(error, error_capacity, "corrupt checkpoint %s", path);
+    }
+    free(packed);
+    *out_raw = raw;
+    *out_length = (size_t)original;
+    return 0;
+}
+
 int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                                   char *error, size_t error_capacity)
 {
@@ -3986,9 +4093,11 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                          "a checkpoint needs a clean page boundary "
                          "(no math, alignment, box, or conditional open)");
     }
-    FILE *out = fopen(path, "wb");
+    char *staging = NULL;
+    size_t staging_size = 0U;
+    FILE *out = open_memstream(&staging, &staging_size);
     if (out == NULL) {
-        return set_error(error, error_capacity, "cannot write %s", path);
+        return set_error(error, error_capacity, "cannot stage %s", path);
     }
     if (hstex_engine_format_to_file(engine, out) != 0) {
         (void)fclose(out);
@@ -4113,13 +4222,19 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
     }
     if (hstex_source_serialize(&engine->sources, out) != 0) {
         (void)fclose(out);
+        free(staging);
         return set_error(error, error_capacity,
                          "cannot write checkpoint reading position");
     }
+    /* The run is staged in `staging' now; compress it into place. */
     if (fclose(out) != 0) {
-        return set_error(error, error_capacity, "cannot finish %s", path);
+        free(staging);
+        return set_error(error, error_capacity, "cannot stage %s", path);
     }
-    return 0;
+    int rc = checkpoint_deflate_buffer((const uint8_t *)staging, staging_size,
+                                       path, error, error_capacity);
+    free(staging);
+    return rc;
 }
 
 int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
@@ -4129,9 +4244,20 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     if (engine == NULL || path == NULL) {
         return set_error(error, error_capacity, "invalid checkpoint resume");
     }
-    FILE *in = fopen(path, "rb");
+    /* Inflate the checkpoint into RAM and read it through a memory stream; from
+       here on the reader sees the same plain, seekable stream it always did.
+       `raw' backs that stream, so it must outlive it -- freed at the clean
+       finish; a resume that fails is fatal and lets the process reclaim it. */
+    uint8_t *raw = NULL;
+    size_t raw_length = 0U;
+    if (checkpoint_inflate_buffer(path, &raw, &raw_length, error,
+                                  error_capacity) != 0) {
+        return -1;
+    }
+    FILE *in = fmemopen(raw, raw_length, "rb");
     if (in == NULL) {
-        return set_error(error, error_capacity, "cannot read %s", path);
+        free(raw);
+        return set_error(error, error_capacity, "cannot stage checkpoint");
     }
     if (fseek(in, 0L, SEEK_END) != 0) {
         (void)fclose(in);
@@ -4367,6 +4493,7 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
         return -1;
     }
     (void)fclose(in);
+    free(raw);
     engine->active_vbox_builder = engine->contribution_builder;
     engine->active_hbox_builder =
         engine->building_paragraph ? engine->paragraph_builder : NULL;
