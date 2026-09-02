@@ -139,12 +139,17 @@ static int scenario(const char *name, struct hstex_lexical_state *lex,
         (void)fprintf(stderr, "%s: %s\n", name, error);
         return 1;
     }
+    /* The frame borrows this array rather than copying it (source->tokens
+       points straight at it), so it must outlive the serialize below -- hence
+       function scope, not the `if' block's. In the engine the borrowed tokens
+       live in the pool or a macro's store, which outlive the checkpoint the
+       same way. */
+    hstex_token inserted[] = {
+        hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'Z'),
+        hstex_token_character((uint8_t)HSTEX_CAT_LETTER, (uint8_t)'q'),
+        hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'7'),
+    };
     if (tokens) {
-        hstex_token inserted[] = {
-            hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'Z'),
-            hstex_token_character((uint8_t)HSTEX_CAT_LETTER, (uint8_t)'q'),
-            hstex_token_character((uint8_t)HSTEX_CAT_OTHER, (uint8_t)'7'),
-        };
         struct hstex_source_location origin = {42U, 3U};
         if (hstex_source_push_tokens(&stack, inserted, 3U, origin, error,
                                      sizeof(error)) != 0) {
