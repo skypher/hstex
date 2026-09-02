@@ -54640,6 +54640,38 @@ static void note_page_digest(const struct hstex_engine *engine)
     (void)fflush(log);
 }
 
+/* Beside each checkpoint, note where in the file being read it stands: the
+   file, the byte the reading has reached, and a hash of everything before that
+   byte. An incremental rebuild reads these to find the last checkpoint whose
+   consumed prefix an edit left untouched -- so an edit deep in one long file
+   still reuses the checkpoints before it, not merely those before the file
+   opened. */
+static void record_checkpoint_position(struct hstex_engine *engine,
+                                       const char *dir, int32_t page)
+{
+    struct hstex_file_source *file = hstex_source_current_file(&engine->sources);
+    if (file == NULL || file->path == NULL || file->mouth.data == NULL) {
+        return;
+    }
+    size_t cursor = file->mouth.next_line_offset;
+    if (cursor > file->mouth.length) {
+        cursor = file->mouth.length;
+    }
+    uint64_t hash = 0xcbf29ce484222325ULL; /* FNV-1a */
+    for (size_t index = 0U; index < cursor; ++index) {
+        hash ^= file->mouth.data[index];
+        hash *= 0x100000001b3ULL;
+    }
+    char path[600];
+    (void)snprintf(path, sizeof(path), "%s/positions", dir);
+    FILE *out = fopen(path, "ab");
+    if (out != NULL) {
+        (void)fprintf(out, "%d\t%zu\t%llu\t%s\n", page, cursor,
+                      (unsigned long long)hash, file->path);
+        (void)fclose(out);
+    }
+}
+
 /* At a page boundary, drop a checkpoint if one was asked for. HSTEX_CKPT is
    `<page>:<file>' -- one checkpoint, when that many pages have shipped;
    HSTEX_CKPT_EVERY is `<stride>:<dir>' -- one every `stride' pages, named
@@ -54698,6 +54730,7 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
         (void)snprintf(path, sizeof(path), "%s/ck-0.bin", stride_dir);
         if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
             engine->checkpoint_zero_done = true;
+            record_checkpoint_position(engine, stride_dir, 0);
         } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
             (void)fprintf(stderr, "CKPT page-0 declined: %s\n", err);
         }
@@ -54715,6 +54748,8 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
         (void)snprintf(path, sizeof(path), "%s/ck-%d.bin", stride_dir,
                        engine->shipped_pages);
         if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
+            record_checkpoint_position(engine, stride_dir,
+                                       engine->shipped_pages);
             engine->checkpoint_disk_next = engine->shipped_pages + stride;
         } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
             (void)fprintf(stderr, "CKPT declined at %d: %s\n",

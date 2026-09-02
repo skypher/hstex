@@ -1058,16 +1058,51 @@ static void parallel_record_sources(const char *cache_dir)
     free(notes);
 }
 
-/* Which checkpoint a warm-ish rebuild can resume from when the source has been
-   edited: the last one taken before the page any changed file first opened at.
-   Every page before that read only files the edit did not touch, so the
-   previous build's PDF prefix and the checkpoint's reading position are still
-   good and the rebuild need only run forward. Returns the checkpoint page, 0
-   for ck-0 (post-preamble), or -1 when no checkpoint predates the edit (an
-   early file changed, the source record is missing, or nothing tracked
-   changed) and the caller should fall back to a full cold rebuild. */
-static int parallel_incremental_reuse_page(const char *cache_dir,
-                                           const int *ckpts, int nck)
+/* The FNV-1a hash of a file's first `n' bytes, to compare against the prefix
+   hash a checkpoint recorded. Fails if the file is now shorter than `n' (the
+   edit cut into what the checkpoint had read), which counts as changed. */
+static int parallel_hash_file_prefix(const char *path, size_t n, uint64_t *hash)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    uint64_t value = 0xcbf29ce484222325ULL;
+    uint8_t buffer[65536];
+    size_t remaining = n;
+    int ok = 0;
+    while (remaining > 0U) {
+        size_t want = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        size_t got = fread(buffer, 1U, want, file);
+        for (size_t index = 0U; index < got; ++index) {
+            value ^= buffer[index];
+            value *= 0x100000001b3ULL;
+        }
+        if (got < want) {
+            ok = -1; /* shorter than the checkpoint had read */
+            break;
+        }
+        remaining -= got;
+    }
+    (void)fclose(file);
+    if (ok == 0) {
+        *hash = value;
+    }
+    return ok;
+}
+
+/* Which changed source files an edit touched, by first-open page. */
+struct parallel_changed_file {
+    char path[1024];
+    int first_page;
+};
+
+/* Read the source record, hashing each file again; fill `changed' with the
+   files whose content moved and return how many (up to `capacity'), or -1 if
+   the record is missing. */
+static int parallel_changed_files(const char *cache_dir,
+                                  struct parallel_changed_file *changed,
+                                  int capacity)
 {
     char path[600];
     (void)snprintf(path, sizeof(path), "%s/sources", cache_dir);
@@ -1075,15 +1110,11 @@ static int parallel_incremental_reuse_page(const char *cache_dir,
     if (file == NULL) {
         return -1;
     }
-    int edit_page = INT_MAX;
-    bool any_changed = false;
+    int count = 0;
     char line[1400];
-    while (fgets(line, sizeof(line), file) != NULL) {
+    while (fgets(line, sizeof(line), file) != NULL && count < capacity) {
         char *first = strchr(line, '\t');
-        if (first == NULL) {
-            continue;
-        }
-        char *second = strchr(first + 1, '\t');
+        char *second = first != NULL ? strchr(first + 1, '\t') : NULL;
         if (second == NULL) {
             continue;
         }
@@ -1098,25 +1129,93 @@ static int parallel_incremental_reuse_page(const char *cache_dir,
             file_path[--length] = '\0';
         }
         uint64_t current = 0xcbf29ce484222325ULL;
-        bool changed = parallel_hash_file(file_path, &current) != 0 ||
-                       current != stored;
-        if (changed) {
-            any_changed = true;
-            if (page < edit_page) {
-                edit_page = page;
-            }
+        if ((parallel_hash_file(file_path, &current) != 0 ||
+             current != stored) &&
+            length < sizeof(changed[0].path)) {
+            (void)snprintf(changed[count].path, sizeof(changed[count].path),
+                           "%s", file_path);
+            changed[count].first_page = page;
+            ++count;
         }
     }
     (void)fclose(file);
-    if (!any_changed) {
-        return -1; /* the mismatch was not in a tracked source; rebuild cold */
+    return count;
+}
+
+/* Which checkpoint a rebuild can resume from after an edit: the last one whose
+   consumed reading an edit left untouched. Each checkpoint recorded the file it
+   was reading, the byte it had reached, and a hash of everything before that
+   byte (the positions record); a checkpoint is reusable when every changed
+   file either opens after it or is the file it was reading with that prefix
+   still intact -- so an edit deep in one long file still reuses the checkpoints
+   before the edit, not just those before the file opened. Returns the page, 0
+   for ck-0, or -1 to fall back to a cold rebuild. */
+static int parallel_incremental_reuse_page(const char *cache_dir,
+                                           const int *ckpts, int nck)
+{
+    (void)ckpts;
+    (void)nck;
+    struct parallel_changed_file changed[256];
+    int changed_count = parallel_changed_files(cache_dir, changed,
+                                               (int)(sizeof(changed) /
+                                                     sizeof(changed[0])));
+    if (changed_count <= 0) {
+        return -1; /* record missing, or nothing tracked changed: rebuild cold */
+    }
+    char path[600];
+    (void)snprintf(path, sizeof(path), "%s/positions", cache_dir);
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
     }
     int reuse = -1;
-    for (int index = 0; index < nck; ++index) {
-        if (ckpts[index] < edit_page && ckpts[index] > reuse) {
-            reuse = ckpts[index];
+    char line[1400];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *a = strchr(line, '\t');
+        char *b = a != NULL ? strchr(a + 1, '\t') : NULL;
+        char *c = b != NULL ? strchr(b + 1, '\t') : NULL;
+        if (c == NULL) {
+            continue;
+        }
+        *a = '\0';
+        *b = '\0';
+        *c = '\0';
+        int page = (int)strtol(line, NULL, 10);
+        size_t cursor = (size_t)strtoull(a + 1, NULL, 10);
+        uint64_t prefix_hash = strtoull(b + 1, NULL, 10);
+        char *reading = c + 1;
+        size_t length = strlen(reading);
+        while (length > 0U &&
+               (reading[length - 1U] == '\n' || reading[length - 1U] == '\r')) {
+            reading[--length] = '\0';
+        }
+        if (page <= reuse) {
+            continue; /* already have one at least this far in */
+        }
+        bool reusable = true;
+        for (int index = 0; index < changed_count; ++index) {
+            const struct parallel_changed_file *edit = &changed[index];
+            if (edit->first_page > page) {
+                continue; /* this file opens after the checkpoint */
+            }
+            if (strcmp(edit->path, reading) == 0) {
+                uint64_t current = 0U;
+                if (parallel_hash_file_prefix(edit->path, cursor, &current) !=
+                        0 ||
+                    current != prefix_hash) {
+                    reusable = false; /* the edit is at or before the cursor */
+                    break;
+                }
+            } else {
+                reusable = false; /* consumed whole before this checkpoint */
+                break;
+            }
+        }
+        if (reusable) {
+            reuse = page;
         }
     }
+    (void)fclose(file);
     return reuse;
 }
 
