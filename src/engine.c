@@ -8709,16 +8709,30 @@ static int scan_cs_name_bytes(struct hstex_engine *engine, uint8_t **name,
         struct hstex_token_source *source = engine->sources.top;
         if (source != NULL) {
             bool room = true;
-            while (source->cursor < source->count &&
-                   hstex_token_kind_of(source->tokens[source->cursor]) ==
+            /* A run of letters standing together is taken in one go: its
+               length is measured, room for all of it is made once, and the
+               bytes go in without a capacity test at each -- nearly every
+               csname is such a run, so this is where most of the 3.6 million
+               names are built. */
+            uint32_t start = source->cursor;
+            uint32_t at = start;
+            while (at < source->count &&
+                   hstex_token_kind_of(source->tokens[at]) ==
                        HSTEX_TOKEN_CHARACTER) {
-                uint8_t character =
-                    hstex_token_character_code(source->tokens[source->cursor]);
-                ++source->cursor;
-                if (append_byte(&bytes, &count, &name_capacity, character,
-                                error, error_capacity) != 0) {
+                ++at;
+            }
+            size_t run = (size_t)(at - start);
+            if (run != 0U) {
+                if (reserve_byte_arena(&bytes, &name_capacity, 64U,
+                                       count + run, "csname", error,
+                                       error_capacity) != 0) {
                     room = false;
-                    break;
+                } else {
+                    for (uint32_t index = start; index < at; ++index) {
+                        bytes[count++] = hstex_token_character_code(
+                            source->tokens[index]);
+                    }
+                    source->cursor = at;
                 }
             }
             if (!room) {
