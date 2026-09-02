@@ -4102,6 +4102,64 @@ static void checkpoint_write_pdf_state(FILE *out,
     }
 }
 
+/* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
+   positioned at the section start and `length` bounds it. Mirrors the writer;
+   fields it does not yet cover a tiling resume will still be missing. Returns 0,
+   or non-zero on a short or corrupt section. */
+static int checkpoint_read_pdf_state(FILE *in, size_t length,
+                                     struct hstex_engine *engine, char *error,
+                                     size_t error_capacity)
+{
+    long start = ftell(in);
+    uint64_t written = 0U, object_count = 0U, offset_capacity = 0U;
+    int32_t counter = 0;
+    if (fread(&written, sizeof(written), 1U, in) != 1U ||
+        fread(&counter, sizeof(counter), 1U, in) != 1U ||
+        fread(&object_count, sizeof(object_count), 1U, in) != 1U ||
+        fread(&offset_capacity, sizeof(offset_capacity), 1U, in) != 1U ||
+        offset_capacity > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_offsets))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    engine->pdf_written = (size_t)written;
+    engine->pdf_object_counter = counter;
+    engine->pdf_object_count = (size_t)object_count;
+    if (offset_capacity != 0U) {
+        size_t n = (size_t)offset_capacity;
+        size_t *offs = realloc(engine->pdf_offsets, n * sizeof(*offs));
+        size_t *strms =
+            realloc(engine->pdf_object_streams, n * sizeof(*strms));
+        uint8_t *idx =
+            realloc(engine->pdf_object_stream_indices, n * sizeof(*idx));
+        if (offs != NULL) {
+            engine->pdf_offsets = offs;
+        }
+        if (strms != NULL) {
+            engine->pdf_object_streams = strms;
+        }
+        if (idx != NULL) {
+            engine->pdf_object_stream_indices = idx;
+        }
+        if (offs == NULL || strms == NULL || idx == NULL ||
+            fread(offs, sizeof(*offs), n, in) != n ||
+            fread(strms, sizeof(*strms), n, in) != n ||
+            fread(idx, sizeof(*idx), n, in) != n) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_offset_capacity = n;
+    }
+    /* Anything the writer added beyond what this reader knows is skipped, so the
+       section stays self-framing as it grows. */
+    long consumed = ftell(in) - start;
+    if (consumed < 0 || (uint64_t)consumed > (uint64_t)length) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (fseek(in, start + (long)length, SEEK_SET) != 0) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    return 0;
+}
+
 int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                                   char *error, size_t error_capacity)
 {
@@ -4536,14 +4594,20 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     engine->parshape_level = parshape_level;
     engine->parshape_used = (size_t)parshape_used;
     /* The PDF backend state follows, framed by its length. An ordinary resume
-       rebuilds a self-contained PDF and steps over it; only a tiling resume
-       reads it back (wired later). */
+       rebuilds a self-contained PDF and steps over it; a tiling resume
+       (HSTEX_TILE) reads it back so its objects continue the shared PDF. */
     uint64_t pdf_section = 0U;
     if (CKPT_READ(in, pdf_section) != 0) {
         (void)fclose(in);
         return set_error(error, error_capacity, "corrupt checkpoint pdf");
     }
-    if (fseek(in, (long)pdf_section, SEEK_CUR) != 0) {
+    if (getenv("HSTEX_TILE") != NULL) {
+        if (checkpoint_read_pdf_state(in, (size_t)pdf_section, engine, error,
+                                      error_capacity) != 0) {
+            (void)fclose(in);
+            return -1;
+        }
+    } else if (fseek(in, (long)pdf_section, SEEK_CUR) != 0) {
         (void)fclose(in);
         return set_error(error, error_capacity, "corrupt checkpoint pdf");
     }
