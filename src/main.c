@@ -694,11 +694,13 @@ static int parallel_read_manifest(const char *cache_dir, uint64_t *hash,
     return 0;
 }
 
-/* Remove a cache directory's files and the directory itself, so a cold run
-   starts from nothing rather than mixing checkpoints from two builds. */
-static void parallel_clear_cache(const char *cache_dir)
+/* Remove a directory tree -- the cache and its per-chunk subdirectories -- so a
+   cold run starts from nothing rather than mixing two builds' checkpoints or
+   leaving a stale chunk behind. One level of nesting is all the cache has, but
+   the recursion handles any. */
+static void parallel_remove_tree(const char *path)
 {
-    DIR *dir = opendir(cache_dir);
+    DIR *dir = opendir(path);
     if (dir != NULL) {
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
@@ -706,14 +708,20 @@ static void parallel_clear_cache(const char *cache_dir)
                 strcmp(entry->d_name, "..") == 0) {
                 continue;
             }
-            char path[1024];
-            (void)snprintf(path, sizeof(path), "%s/%s", cache_dir,
-                           entry->d_name);
-            (void)remove(path);
+            char child[1024];
+            (void)snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (remove(child) != 0) {
+                parallel_remove_tree(child); /* a non-empty directory */
+            }
         }
         (void)closedir(dir);
     }
-    (void)rmdir(cache_dir);
+    (void)rmdir(path);
+}
+
+static void parallel_clear_cache(const char *cache_dir)
+{
+    parallel_remove_tree(cache_dir);
 }
 
 /* A run takes and gives back the room for eight million definitions, and the
