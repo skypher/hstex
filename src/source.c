@@ -185,6 +185,11 @@ int hstex_source_serialize(const struct hstex_source_stack *stack, FILE *out)
         if (WRITE_SCALAR(out, kind) != 0) {
             return -1;
         }
+        if (frame->kind == HSTEX_SOURCE_BOUNDARY) {
+            /* A boundary carries nothing but its place -- the kind byte is
+               the whole of it. */
+            continue;
+        }
         if (frame->kind == HSTEX_SOURCE_FILE) {
             const struct hstex_file_source *file = frame->value.file;
             uint64_t path_length =
@@ -224,6 +229,16 @@ int hstex_source_serialize(const struct hstex_source_stack *stack, FILE *out)
             }
         }
     }
+    /* The stack's own tallies: how many files have run out, for the
+       \everyeof the engine inserts once for each, and how many frames have
+       ever been pushed, which a caller reads to tell whether something it ran
+       left a frame behind. */
+    uint64_t file_end_count = (uint64_t)stack->file_end_count;
+    uint64_t pushes = stack->pushes;
+    if (WRITE_SCALAR(out, file_end_count) != 0 ||
+        WRITE_SCALAR(out, pushes) != 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -253,6 +268,11 @@ int hstex_source_deserialize(struct hstex_source_stack *stack, FILE *in,
         }
         struct hstex_source_frame *frame = &stack->frames[stack->count];
         memset(frame, 0, sizeof(*frame));
+        if (kind == (uint8_t)HSTEX_SOURCE_BOUNDARY) {
+            frame->kind = HSTEX_SOURCE_BOUNDARY;
+            ++stack->count;
+            continue;
+        }
         if (kind == (uint8_t)HSTEX_SOURCE_FILE) {
             uint64_t path_length = 0U;
             if (READ_SCALAR(in, path_length) != 0 ||
@@ -347,6 +367,14 @@ int hstex_source_deserialize(struct hstex_source_stack *stack, FILE *in,
         }
         ++stack->count;
     }
+    uint64_t file_end_count = 0U;
+    uint64_t pushes = 0U;
+    if (READ_SCALAR(in, file_end_count) != 0 || READ_SCALAR(in, pushes) != 0) {
+        return set_error(error, error_capacity,
+                         "truncated source checkpoint tail");
+    }
+    stack->file_end_count = (size_t)file_end_count;
+    stack->pushes = pushes;
     note_top_frame(stack);
     return 0;
 }
