@@ -4355,6 +4355,14 @@ static void checkpoint_write_pdf_state(FILE *out,
     (void)fwrite(&open_action, sizeof(open_action), 1U, out);
     (void)fwrite(&outline_object, sizeof(outline_object), 1U, out);
     (void)fwrite(&engine->pdf_link, sizeof(engine->pdf_link), 1U, out);
+    /* The font lookup, so a chunk finds a font already numbered instead of
+       reserving it a second time and drifting every later object's number. */
+    uint64_t font_places = (uint64_t)engine->pdf_font_place_capacity;
+    (void)fwrite(&font_places, sizeof(font_places), 1U, out);
+    if (font_places != 0U) {
+        (void)fwrite(engine->pdf_font_places, sizeof(*engine->pdf_font_places),
+                     (size_t)font_places, out);
+    }
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -4884,6 +4892,24 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
     }
     engine->pdf_open_action = (size_t)open_action;
     engine->pdf_outline_object = (size_t)outline_object;
+    uint64_t font_places = 0U;
+    if (fread(&font_places, sizeof(font_places), 1U, in) != 1U ||
+        font_places > (uint64_t)(SIZE_MAX / sizeof(*engine->pdf_font_places))) {
+        return set_error(error, error_capacity, "corrupt checkpoint pdf state");
+    }
+    if (font_places != 0U) {
+        uint32_t *grown = realloc(engine->pdf_font_places,
+                                  (size_t)font_places * sizeof(*grown));
+        if (grown == NULL ||
+            fread(grown, sizeof(*grown), (size_t)font_places, in) !=
+                (size_t)font_places) {
+            engine->pdf_font_places = grown;
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        engine->pdf_font_places = grown;
+        engine->pdf_font_place_capacity = (size_t)font_places;
+    }
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
