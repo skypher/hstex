@@ -116,6 +116,16 @@ jobs:
         if: matrix.runner == 'ubuntu-24.04'
         run: tests/corpus/run-corpus.sh --stress --strict ./build/hstex
 
+      # The corpus above drives the engine directly, one pass. This runs it
+      # the way an installation does -- through hstex-pdflatex, twice, with
+      # the checkpoint path the driver takes by default -- and holds each
+      # document to what tests/corpus/driver-expectations.tsv pins it at.
+      - name: Run document corpus through the pdflatex driver
+        if: matrix.runner == 'ubuntu-24.04'
+        run: |
+          tests/corpus/run-driver-corpus.sh --strict \
+            ./build/hstex-pdflatex ./build/hstex
+
   clang:
     # The other compiler the engine is expected to build clean under.
     name: ubuntu-24.04 (clang)

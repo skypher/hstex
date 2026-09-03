@@ -17,7 +17,7 @@ already supported.
 | User command | `hstex-pdflatex`, using an installed TeX Live or MacTeX tree |
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
 | Adversarial corpus | All six pinned stress cases agree across 98 pages; CI runs the suite strictly |
-| Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and both strict document corpora |
+| Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, both strict document corpora, and the corpus through `hstex-pdflatex` |
 | Measured performance | 1.76× median and 1.67× aggregate lower wall time than pdfTeX over the release corpus, and lower peak RSS on every document ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract; not met |
 | First release target | Linux x86-64 |
@@ -106,6 +106,19 @@ CI treats any semantic disagreement as a failed gate:
 ```sh
 tests/corpus/run-corpus.sh --stress --strict ./build/hstex
 ```
+
+The same corpus is also run the way an installation runs it -- through
+`hstex-pdflatex`, twice per document, with the checkpoint path the driver
+takes by default:
+
+```sh
+tests/corpus/run-driver-corpus.sh --strict ./build/hstex-pdflatex ./build/hstex
+```
+
+Each document is held to `tests/corpus/driver-expectations.tsv`, which pins
+four documents as currently disagreeing and says what comes out wrong in
+each. The gate fails whichever way a document moves, so a repair is caught as
+surely as a regression.
 
 CI runs the adversarial suite with `--strict`; omitting it is useful while
 adding a newly pinned finding. Corpus identity, licenses, stdin profiles, and

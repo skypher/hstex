@@ -208,6 +208,33 @@ than the count of allocations suggested: glibc satisfies ninety thousand
 small requests out of a heap it already has, so what was removed was
 bookkeeping and rounding rather than work with the kernel.
 
+## The path an installation actually takes
+
+The public corpus drives the engine directly, `hstex --format`, one pass. That
+is not what an installed HSTeX does. The supported command is
+`hstex-pdflatex`, which builds a format cache and then compiles through the
+checkpoint path -- `bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL` -- so
+every green corpus run was exercising code a reader never reaches, and the
+code a reader does reach was gated by nothing.
+
+Run that way, four of the eleven LaTeX documents disagree with the reference
+given the same two passes. Three are the checkpoint path's own: `cfgguide`
+and `cyrguide` come out with the wrong table of contents, and `technote` with
+a corrupted named destination and a lost bookmark title; all three agree
+under `HSTEX_NO_PARALLEL=1`, which is what places the fault. The fourth,
+`usrguide-historic`, differs the same way with the checkpoint path off: it
+drops a marginal note on the second pass, so it belongs to the ordinary
+engine on a pass the one-pass corpus never reaches. All four reproduce on the
+engine as it stood at `6870489`, before any of this session's work.
+
+`tests/corpus/run-driver-corpus.sh` runs the corpus that way and holds each
+document to `driver-expectations.tsv`. Pinning rather than skipping is what
+makes it a gate: it fails whichever direction a document moves, so repairing
+one of these is noticed as surely as breaking another, and the pin is deleted
+when the document is fixed. A pinned `differs` records what comes out wrong
+and where the fault lives, so that it reads as a finding rather than a
+licence.
+
 ## A cached format a build cannot read
 
 The driver keeps a built format under a key hashed from the HSTeX version,
