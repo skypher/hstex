@@ -141,6 +141,56 @@ counted first and the table is sized once.
 
 Both strict corpora agree with the reference with all of these in place.
 
+## Register banks are written as far as they are set
+
+An engine accepts some thirty-two thousand of each kind of register, and the
+banks that hold them -- counts, dimens, glues, muglues, token registers,
+boxes, and a level beside each -- were written to a format at their full
+length whatever a format had put in them. Measured on a stock LaTeX format,
+that was 3.4 MB of a 13.0 MB file, nearly all of it zero, which is most of
+why the file compressed to 988 KB.
+
+A fresh engine callocs those banks, so an element that is all zero is one the
+reader would have made for itself. The writer now finds how far into the
+banks anything has been set -- judging an element by the same holes it clears
+before writing, so that padding a compiler left is not mistaken for content
+-- and writes one length and that many elements of each bank. The reader
+callocs the full capacity and reads the prefix into the front of it, so what
+the engine sees afterwards is what it saw before, and the rest of the bank
+costs neither a copy nor a page.
+
+The file's layout changed, so the magic is `HSTEX format 3`: a format written
+by an earlier build is refused with the message that already exists for one
+whose records are laid out differently, rather than being misread.
+
+The LaTeX format falls from 13,024,969 to 9,643,737 bytes, a quarter smaller,
+and peak RSS on `small2e` from 27.2 MB to 24.0 MB. The effect on warm
+document-pass timing is not distinguishable from run-to-run noise -- 0.6%
+over the corpus, with individual documents moving either way -- because the
+pages this saves were being touched once and never read. It is recorded here
+as a size and residency change, which is what it demonstrably is.
+
+## Why a run still starts one kpsewhich child
+
+The remaining child was measured to see whether the lookup could be taught to
+answer the names that start it. It cannot, on a stock TeX Live 2023.
+
+Of the names a LaTeX run puts to the finder, two kinds could be answered
+here: ones held twice in the lists, which the search path would settle
+(`latex-dev` is not on it, so `tex/latex/base` wins), and ones absent from
+lists that cover the whole of a searched path, as the `vf` path is. The kind
+that cannot is a bitmap font: `tcrm1000.600pk` resolves under
+`~/.texlive2023/texmf-var/fonts/pk`, a tree that is not in `TEXMFDBS` and is
+reached by walking the disk rather than by reading an `ls-R`. A black-box
+probe confirms the reference opens that same file, and `tcrm1000` has no
+Type 1 to use instead, so the lookup is real work and not a wasted probe.
+
+Six of the eight LaTeX corpus documents measured ask for such a name, so
+answering everything else would move where the child starts without removing
+it. Teaching the lookup to walk a non-`ls-R` tree would mean reproducing the
+tool's own recursive search, which is what asking the tool avoids. The child
+stays.
+
 An exact fresh-directory process trace over `testmath` compared baseline
 commit `fb3a1b8` with the candidate. The baseline used five lookup children:
 the restricted-shell allowlist, `TEXMFDBS`, a marker lookup, and two persistent

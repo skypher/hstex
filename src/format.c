@@ -19,7 +19,7 @@
    begun. See
    docs/DECISIONS.md, the-format-a-run-starts-from. */
 
-static const char hstex_format_magic[] = "HSTEX format 2\n";
+static const char hstex_format_magic[] = "HSTEX format 3\n";
 
 /* How wide the records a format carries are. A format written by one build
    and read by another whose records are laid out differently is not a format
@@ -162,6 +162,84 @@ static void transfer_array_cleared(struct format_stream *stream, void **base,
         }
         transfer(stream, element, size);
     }
+}
+
+/* HOW MANY OF A REGISTER BANK ARE WORTH WRITING. The banks are as long as
+   the register number an engine accepts -- some thirty-two thousand of each
+   -- and a format has set almost none of them: a fresh engine callocs them,
+   so an element that is all zero is one the reader would have made anyway.
+   Everything past the last one that is not is left out of the file, and the
+   reader gets it back from calloc without reading, copying, or touching a
+   page of it. Measured on a stock LaTeX format, that is 3.4 MB of 13 MB.
+
+   The bytes a compiler leaves between fields are not the engine's, so an
+   element is judged by the same holes the writer clears. */
+static size_t used_prefix(const void *base, size_t count, size_t size,
+                          const struct format_hole *holes, size_t hole_count)
+{
+    unsigned char element[512];
+    if (base == NULL || size == 0U || size > sizeof(element)) {
+        return count;
+    }
+    const unsigned char *from = base;
+    for (size_t index = count; index != 0U; --index) {
+        memcpy(element, from + (index - 1U) * size, size);
+        for (size_t which = 0U; which < hole_count; ++which) {
+            memset(element + holes[which].at, 0, holes[which].length);
+        }
+        for (size_t byte = 0U; byte < size; ++byte) {
+            if (element[byte] != 0U) {
+                return index;
+            }
+        }
+    }
+    return 0U;
+}
+
+/* One register bank: `prefix' elements in the file, `capacity' in memory. */
+static void transfer_registers(struct format_stream *stream, void **base,
+                               size_t capacity, size_t prefix, size_t size,
+                               const struct format_hole *holes,
+                               size_t hole_count)
+{
+    if (stream->failed) {
+        return;
+    }
+    if (stream->writing) {
+        if (hole_count == 0U) {
+            transfer(stream, *base, prefix * size);
+            return;
+        }
+        unsigned char element[512];
+        if (size > sizeof(element)) {
+            stream->failed = true;
+            return;
+        }
+        const unsigned char *from = *base;
+        for (size_t index = 0U; index < prefix && !stream->failed; ++index) {
+            memcpy(element, from + index * size, size);
+            for (size_t which = 0U; which < hole_count; ++which) {
+                memset(element + holes[which].at, 0, holes[which].length);
+            }
+            transfer(stream, element, size);
+        }
+        return;
+    }
+    free(*base);
+    *base = NULL;
+    if (capacity == 0U) {
+        return;
+    }
+    if (capacity > SIZE_MAX / size) {
+        stream->failed = true;
+        return;
+    }
+    *base = calloc(capacity, size);
+    if (*base == NULL) {
+        stream->failed = true;
+        return;
+    }
+    transfer(stream, *base, prefix * size);
 }
 
 /* Where a kind keeps an address, and how much of it there is to clear. */
@@ -370,19 +448,34 @@ static void transfer_format(struct format_stream *stream,
          sizeof(box_holes) / sizeof(*box_holes)},
         {(void **)&engine->box_levels, sizeof(*engine->box_levels), NULL, 0U},
     };
+    /* How far into the banks anything has been set. One length serves all of
+       them: they are indexed alike, and a register that is set is usually set
+       in more than one of them. */
+    size_t register_prefix = 0U;
+    if (stream->writing) {
+        for (size_t index = 0U;
+             index < sizeof(registers) / sizeof(registers[0]); ++index) {
+            size_t reached = used_prefix(*registers[index].base,
+                                         register_capacity,
+                                         registers[index].size,
+                                         registers[index].holes,
+                                         registers[index].hole_count);
+            if (reached > register_prefix) {
+                register_prefix = reached;
+            }
+        }
+    }
+    TRANSFER_VALUE(stream, register_prefix);
+    if (!stream->writing && register_prefix > register_capacity) {
+        stream->failed = true;
+    }
     for (size_t index = 0U;
          index < sizeof(registers) / sizeof(registers[0]) && !stream->failed;
          ++index) {
-        size_t count = register_capacity;
-        if (registers[index].holes == NULL) {
-            transfer_array(stream, registers[index].base, &count, NULL,
-                           registers[index].size, true);
-        } else {
-            transfer_array_cleared(stream, registers[index].base, &count, NULL,
-                                   registers[index].size, true,
-                                   registers[index].holes,
-                                   registers[index].hole_count);
-        }
+        transfer_registers(stream, registers[index].base, register_capacity,
+                           register_prefix, registers[index].size,
+                           registers[index].holes,
+                           registers[index].hole_count);
     }
     if (!stream->writing) {
         engine->count_capacity = register_capacity;

@@ -104,6 +104,30 @@ under "The trees a format remembers", "Finding a file", "A format is read
 where it lies", "Switching on a node without waiting for its copy", and
 "What a run that traces nothing pays".
 
+## Format size and residency
+
+A later change writes each register bank only as far as anything in it has
+been set, rather than at the full register count. It is recorded under
+"Register banks are written as far as they are set".
+
+| | Before | After |
+| --- | ---: | ---: |
+| LaTeX format on disk | 13,024,969 B | 9,643,737 B |
+| Peak RSS, `small2e` | 27.2 MB | 24.0 MB |
+| Peak RSS, `testmath` | 27.2 MB | 26.7 MB |
+| Corpus document-pass total | 1148.4 ms | 1141.8 ms |
+
+The document-pass effect, 0.6% with individual documents moving either way,
+is not distinguishable from run-to-run noise: the pages it saves were written
+once and never read again. The size and residency figures are the measured
+effect, and are why it was kept.
+
+The one `kpsewhich` child a LaTeX run still starts cannot be removed by
+teaching the lookup more: it is started by a bitmap font that resolves in a
+tree outside `TEXMFDBS`, reached by walking the disk rather than by an
+`ls-R`. "Why a run still starts one kpsewhich child" in `docs/DECISIONS.md`
+records the measurement.
+
 ## Against the milestone gate
 
 The gate in `docs/BENCHMARK_CONTRACT.md` is at least a 5× reduction in median
