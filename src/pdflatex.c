@@ -31,6 +31,7 @@ static void usage(FILE *stream)
         "  -jobname=NAME          use NAME for output files and \\jobname\n"
         "  -interaction=errorstopmode\n"
         "  -halt-on-error  -file-line-error  -no-shell-escape\n"
+        "  -interaction=batchmode|nonstopmode|scrollmode|errorstopmode\n"
         "  -output-format=pdf\n"
         "\n"
         "HSTeX options:\n"
@@ -634,6 +635,8 @@ int main(int argument_count, char **arguments)
     bool rebuild = false;
     bool restricted_shell_escape = true;
     bool halt_on_error = false;
+    bool file_line_error = false;
+    const char *interaction = NULL;
     bool options = true;
     for (int index = 1; index < argument_count; ++index) {
         const char *argument = arguments[index];
@@ -699,13 +702,32 @@ int main(int argument_count, char **arguments)
             halt_on_error = true;
             continue;
         }
-        if (options &&
-            (strcmp(argument, "-interaction=errorstopmode") == 0 ||
-             strcmp(argument, "--interaction=errorstopmode") == 0 ||
-             strcmp(argument, "-file-line-error") == 0 ||
-             strcmp(argument, "--file-line-error") == 0 ||
-             strcmp(argument, "-output-format=pdf") == 0 ||
-             strcmp(argument, "--output-format=pdf") == 0)) {
+        if (options && is_value_option(argument, "-interaction", "--interaction",
+                                       &value)) {
+            /* The four the reference names. Anything else is a mode this
+               does not have, and saying so is better than picking one. */
+            if (strcmp(value, "batchmode") != 0 &&
+                strcmp(value, "nonstopmode") != 0 &&
+                strcmp(value, "scrollmode") != 0 &&
+                strcmp(value, "errorstopmode") != 0) {
+                (void)fprintf(stderr,
+                              "hstex-pdflatex: unknown interaction mode: %s\n",
+                              value);
+                return 2;
+            }
+            interaction = value;
+            continue;
+        }
+        if (options && (strcmp(argument, "-file-line-error") == 0 ||
+                        strcmp(argument, "--file-line-error") == 0)) {
+            file_line_error = true;
+            continue;
+        }
+        /* This asks for what the driver produces anyway, so it is answered
+           rather than ignored; -output-format=dvi asks for what it does not
+           produce and falls through to the refusal below. */
+        if (options && (strcmp(argument, "-output-format=pdf") == 0 ||
+                        strcmp(argument, "--output-format=pdf") == 0)) {
             continue;
         }
         if (options &&
@@ -807,8 +829,12 @@ int main(int argument_count, char **arguments)
        A run that stops at an error writes nothing and exits nonzero, so the
        checkpoint cache is not wanted either: it would be a cache of half a
        document. */
-    if (halt_on_error && setenv("HSTEX_HALT_ON_ERROR", "1", 1) != 0) {
-        (void)fprintf(stderr, "hstex-pdflatex: cannot ask the engine to halt\n");
+    if ((halt_on_error && setenv("HSTEX_HALT_ON_ERROR", "1", 1) != 0) ||
+        (file_line_error && setenv("HSTEX_FILE_LINE_ERROR", "1", 1) != 0) ||
+        (interaction != NULL &&
+         setenv("HSTEX_INTERACTION", interaction, 1) != 0)) {
+        (void)fprintf(stderr,
+                      "hstex-pdflatex: cannot pass an option to the engine\n");
         return 1;
     }
     bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL && !halt_on_error;

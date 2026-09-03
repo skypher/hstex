@@ -2413,6 +2413,33 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
     if (halt != NULL && halt[0] != '\0' && strcmp(halt, "0") != 0) {
         engine->halt_on_error = true;
     }
+    /* How much a run says and whether it stops, as `-interaction' asks. The
+       engine starts in errorstopmode like the reference; a mode named here
+       replaces it. */
+    const char *asked_interaction = getenv("HSTEX_INTERACTION");
+    if (asked_interaction != NULL) {
+        static const struct {
+            const char *name;
+            enum hstex_interaction_mode mode;
+        } modes[] = {
+            {"batchmode", HSTEX_INTERACTION_BATCH},
+            {"nonstopmode", HSTEX_INTERACTION_NONSTOP},
+            {"scrollmode", HSTEX_INTERACTION_SCROLL},
+            {"errorstopmode", HSTEX_INTERACTION_ERROR_STOP},
+        };
+        for (size_t index = 0U; index < sizeof(modes) / sizeof(modes[0]);
+             ++index) {
+            if (strcmp(asked_interaction, modes[index].name) == 0) {
+                engine->interaction_mode = modes[index].mode;
+                break;
+            }
+        }
+    }
+    const char *file_line = getenv("HSTEX_FILE_LINE_ERROR");
+    if (file_line != NULL && file_line[0] != '\0' &&
+        strcmp(file_line, "0") != 0) {
+        engine->file_line_error = true;
+    }
     /* Where the run is to be handed to another process; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     const char *chunked = getenv("HSTEX_PARALLEL");
@@ -19356,6 +19383,22 @@ static void print_help(struct hstex_engine *engine, const char *const *help)
     print_line(engine);
 }
 
+/* The innermost file being read, for an error that names where it was met.
+   A macro body is not a place in a file, so the stack is walked down to the
+   file the expansion came from -- which is the one the reference names. */
+static const struct hstex_file_source *innermost_file(
+    const struct hstex_engine *engine)
+{
+    const struct hstex_source_stack *stack = &engine->sources;
+    for (size_t index = stack->count; index != 0U; --index) {
+        const struct hstex_source_frame *frame = &stack->frames[index - 1U];
+        if (frame->kind == HSTEX_SOURCE_FILE && frame->value.file != NULL) {
+            return frame->value.file;
+        }
+    }
+    return NULL;
+}
+
 static void tex_error_with_help(struct hstex_engine *engine,
                                 const char *const *help, const char *message)
 {
@@ -19373,7 +19416,19 @@ static void tex_error_with_help(struct hstex_engine *engine,
     }
     ++engine->error_count;
     print_fresh_line(engine);
-    print_text(engine, "! ");
+    const struct hstex_file_source *where =
+        engine->file_line_error ? innermost_file(engine) : NULL;
+    if (where != NULL && where->path != NULL) {
+        /* The reference names the file as it opened it, and a name with no
+           directory in it was opened in this one: measured, `t.tex' on the
+           command line is reported as `./t.tex'. A name that already says
+           where it is keeps what it says. */
+        const char *lead = strchr(where->path, '/') == NULL ? "./" : "";
+        print_formatted(engine, "%s%s:%u: ", lead, where->path,
+                        (unsigned)where->mouth.line_number);
+    } else {
+        print_text(engine, "! ");
+    }
     print_text(engine, message);
     print_byte(engine, '.');
     show_error_context(engine);

@@ -56,7 +56,9 @@ which is useful for testing an unpacked build alongside an installed release.
 | `-jobname=NAME`, `--jobname=NAME` | Supported |
 | `-interaction=errorstopmode` | Supported; this is HSTeX's current interaction mode |
 | `-halt-on-error` | Supported: stops at the first error, writes no output, exits nonzero |
-| `-file-line-error` | Accepted and ignored; messages keep their ordinary form |
+| `-file-line-error` | Supported: an error opens with the file and line it was met in |
+| `-interaction=MODE` | Supported for `batchmode`, `nonstopmode`, `scrollmode`, `errorstopmode`; any other mode is refused |
+| `-output-format=pdf` | Accepted: it asks for what the driver produces. `-output-format=dvi` is refused |
 | `-no-shell-escape` | Supported; disables the default TeX Live restricted-command profile |
 | `-output-format=pdf` | Supported |
 | `--format-cache=DIR`, `--rebuild-format` | HSTeX extensions |

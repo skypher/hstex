@@ -248,6 +248,42 @@ disagreement, since several stress documents are expected to report faults and
 the reference is already run with its status ignored. That is a change to the
 corpus runner as much as to the engine, and it is not made here.
 
+## Every option the driver takes does something
+
+An option the driver accepted and then ignored was as much a lie as one it
+did not document. Three were being dropped -- `-interaction=errorstopmode`,
+`-file-line-error`, and `-output-format=pdf` -- against a README that says
+unsupported options are refused rather than silently ignored. Worse, the
+`-interaction` values a build script actually passes were refused: only
+`errorstopmode` was matched, so `-interaction=nonstopmode`, the commonest of
+them, ended a run with "unsupported option" while the one mode this engine
+cannot perform, since nothing here reads a terminal, was the one accepted.
+
+Each now does what it says.
+
+`-interaction` takes the reference's four modes and hands the named one to
+the engine, which has had them all along and started in `errorstopmode`
+regardless. A fifth name is refused by name -- `unknown interaction mode` --
+rather than being rounded to whichever mode is nearest.
+
+`-file-line-error` opens an error with the file and line it was met in
+instead of with `! `, the context line under it unchanged. A probe of pdfTeX
+1.40.25 pins the form, including that a file named without a directory is
+reported as the reference opened it: `t.tex` on the command line comes back
+as `./t.tex`, while a name that already says where it is keeps what it says.
+The innermost *file* is what gets named, so an error inside a macro body
+names the file the expansion came from rather than nothing at all.
+
+`-output-format=pdf` is answered rather than ignored: it asks for what the
+driver produces. `-output-format=dvi` asks for what it does not, and is
+refused with everything else the driver has no answer for.
+
+Both new flags reach the engine as environment variables, for the reason
+`-halt-on-error` does: what the engine is given on its command line is
+positional. `tests/pdflatex/run-driver.sh` holds all of it -- a mode that
+works, a mode that is refused and says why, an error that names its file and
+line, and no error still opening with `! ` when the flag is on.
+
 ## The path an installation actually takes
 
 The public corpus drives the engine directly, `hstex --format`, one pass. That

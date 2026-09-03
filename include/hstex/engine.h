@@ -2192,6 +2192,10 @@ struct hstex_engine {
        writes no output and says so, and its exit status says so too. */
     bool halt_on_error;
     bool halted;
+    /* `-file-line-error': an error names the file and line it was met in,
+       where it would otherwise open with `! '. The context line under it is
+       unchanged, which is what the reference does. */
+    bool file_line_error;
     bool inner_mode;
     hstex_token after_assignment_token;
     struct hstex_source_location after_assignment_location;
