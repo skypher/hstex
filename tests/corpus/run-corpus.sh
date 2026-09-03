@@ -276,6 +276,11 @@ while IFS='	' read -r name format path want note input_profile; do
 
     # HSTeX over the same file.
     hs_log=$dir/hstex/hstex.log
+    # THE REFERENCE FAILS FOR A DOCUMENT WITH ERRORS AND SO DOES HSTEX. Both
+    # exit 1 where an error was reported, and several stress documents are
+    # expected to report one; the reference's status is already ignored here,
+    # so HSTeX's is read the same way. Anything past 1 is not a document
+    # reporting a fault but the engine coming apart, and still counts.
     hs_status=0
     ( cd "$dir/hstex"
       if [ "$format" = plain ]; then
@@ -308,7 +313,7 @@ while IFS='	' read -r name format path want note input_profile; do
         hs_output_dir=$dir/hstex/build/document-output
         hs_pdf=$hs_output_dir/$name.pdf
         pdf_output=none
-        if [ "$hs_status" -ne 0 ]; then
+        if [ "$hs_status" -gt 1 ]; then
             if [ -f "$ref_pdf" ] || [ -f "$hs_pdf" ]; then
                 pdf_output=differs
             fi
@@ -386,7 +391,7 @@ while IFS='	' read -r name format path want note input_profile; do
     ref_faults=$(wc -l <"$dir/ref.faults")
     hs_faults=$(wc -l <"$dir/hstex.faults")
 
-    if [ "$hs_status" -ne 0 ]; then
+    if [ "$hs_status" -gt 1 ]; then
         stop=$(grep -oE '[^ ]*\.(tex|ltx):[0-9]+:[0-9]+: .*' \
             "$hs_log" | tail -1)
         verdict="stopped: ${stop:-exit $hs_status}"

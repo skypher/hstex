@@ -239,14 +239,20 @@ document is not one a later run should resume.
 status, no output file, the fatal line in the log, and no report of the error
 after the stop.
 
-WHAT IS STILL NOT DONE. The exit status says nothing about errors unless a run
-halted, though the engine's own comment beside `history` says that history is
-what the exit status is made of. The reference exits 1 for a document with
-errors in any interaction mode; HSTeX exits 0. Making that true here means
-`tests/corpus/run-corpus.sh` must stop reading a nonzero status from HSTeX as a
-disagreement, since several stress documents are expected to report faults and
-the reference is already run with its status ignored. That is a change to the
-corpus runner as much as to the engine, and it is not made here.
+The exit status now says what the run came to, which the comment beside
+`history` always claimed it did. A probe pins the reference: a clean document
+and one that only draws a warning both exit 0, and one with an undefined
+control sequence exits 1 under `-interaction=nonstopmode`. History is 0 where
+nothing was wrong, 1 for a warning, 2 for an error reported and recovered
+from, and 3 where the run gave up, so a status of 1 is history of 2 or more.
+
+That needed the corpus runner changed as much as the engine. It read any
+nonzero status from HSTeX as a disagreement while ignoring the reference's,
+which was tenable only while HSTeX never failed; several stress documents
+report faults on purpose and both engines now exit 1 on them. It reads the
+two alike, and keeps the check where it means something: a status past 1 is
+not a document reporting a fault but the engine coming apart, and still
+counts as a disagreement.
 
 ## Every option the driver takes does something
 

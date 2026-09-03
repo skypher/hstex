@@ -411,9 +411,13 @@ static int run_document_from_format(const char *format_file,
     }
     size_t document_output_tokens = 0U;
     int status = drain_engine(&engine, document_path, &document_output_tokens);
-    /* A run that stopped at an error did not do what it was asked, whatever
-       the drain made of it. */
-    if (status == 0 && engine.halted) {
+    /* WHAT A RUN CAME TO IS ITS EXIT STATUS. The history is 0 where nothing
+       was wrong, 1 where something was worth a warning, 2 where an error was
+       reported and recovered from, and 3 where the run gave up. The reference
+       fails for the last two and succeeds for the first two, whatever
+       interaction mode it was in: measured, an undefined control sequence
+       exits 1 under -interaction=nonstopmode and an overfull box exits 0. */
+    if (status == 0 && engine.history >= 2) {
         status = 1;
     }
     if (status == 0) {
