@@ -1,5 +1,7 @@
 #include "hstex_config.h"
 
+#include "hstex/engine.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -414,6 +416,16 @@ static int format_fingerprint(const char *latex_ltx, const char *config,
     uint64_t hash = UINT64_C(14695981039346656037);
     hash = hash_text(hash, "hstex-pdflatex-format-v1");
     hash = hash_text(hash, HSTEX_VERSION);
+    /* What this build could read back. A format the engine would refuse --
+       written before the stream's shape changed, or by a build whose records
+       are laid out differently -- then lies under a key this build never
+       looks in, and is built afresh instead of being offered and refused.
+       The version alone did not settle it: two builds of the same version
+       read each other's formats only by luck. */
+    char identity[32];
+    (void)snprintf(identity, sizeof(identity), "%016" PRIx64,
+                   hstex_format_identity());
+    hash = hash_text(hash, identity);
     hash = hash_text(hash, latex_ltx);
     if (hash_file(&hash, latex_ltx, error, capacity) != 0) {
         return -1;

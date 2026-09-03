@@ -19,28 +19,10 @@
    begun. See
    docs/DECISIONS.md, the-format-a-run-starts-from. */
 
-static const char hstex_format_magic[] = "HSTEX format 3\n";
-
-/* How wide the records a format carries are. A format written by one build
-   and read by another whose records are laid out differently is not a format
-   at all, and saying so is better than reading nonsense out of it. */
-static uint64_t hstex_format_layout(void)
-{
-    const size_t widths[] = {
-        sizeof(struct hstex_engine),  sizeof(struct hstex_macro),
-        sizeof(struct hstex_meaning), sizeof(struct hstex_node),
-        sizeof(struct hstex_insert_detail),
-        sizeof(struct hstex_box),     sizeof(struct hstex_font),
-        sizeof(struct hstex_glue),    sizeof(struct hstex_save_entry),
-        sizeof(struct hstex_glyph_unicode),
-    };
-    uint64_t digest = UINT64_C(0xcbf29ce484222325);
-    for (size_t index = 0U; index < sizeof(widths) / sizeof(widths[0]);
-         ++index) {
-        digest = (digest ^ (uint64_t)widths[index]) * UINT64_C(0x100000001b3);
-    }
-    return digest;
-}
+/* The name the file gives itself and how wide its records are both live in
+   hstex/engine.h, so that the driver can key a cached format on them without
+   linking this. */
+static const char hstex_format_magic[] = HSTEX_FORMAT_MAGIC;
 
 static int format_error(char *error, size_t capacity, const char *format, ...)
     HSTEX_PRINTF_FORMAT(3, 4);

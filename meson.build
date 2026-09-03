@@ -97,7 +97,10 @@ hstex = executable(
 hstex_pdflatex = executable(
   'hstex-pdflatex',
   'src/pdflatex.c',
-  include_directories: generated_include,
+  # The driver links nothing of the engine; it reads hstex/engine.h for the
+  # identity of a format it could read, so that its cache key changes when
+  # that does.
+  include_directories: [public_include, generated_include],
   install: true,
 )
 

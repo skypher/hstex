@@ -2628,6 +2628,49 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
                                size_t error_capacity);
 void hstex_engine_destroy(struct hstex_engine *engine);
 
+/* WHAT MAKES A FORMAT FILE ONE THIS BUILD CAN READ. Two things: the name the
+   file gives itself, which changes when the order or shape of the stream
+   does, and the widths of the records it carries, which change when a struct
+   does. A build disagreeing about either cannot read the file and says so
+   rather than reading nonsense out of it.
+
+   Both are here, and not in the reader alone, because the driver keys a
+   cached format on them without linking the engine: a format a new build
+   cannot read then lies under a key that build never looks in, and is
+   rebuilt rather than offered and refused. See docs/DECISIONS.md,
+   a-cached-format-a-build-cannot-read. */
+#define HSTEX_FORMAT_MAGIC "HSTEX format 3\n"
+
+static inline uint64_t hstex_format_layout(void)
+{
+    const size_t widths[] = {
+        sizeof(struct hstex_engine),  sizeof(struct hstex_macro),
+        sizeof(struct hstex_meaning), sizeof(struct hstex_node),
+        sizeof(struct hstex_insert_detail),
+        sizeof(struct hstex_box),     sizeof(struct hstex_font),
+        sizeof(struct hstex_glue),    sizeof(struct hstex_save_entry),
+        sizeof(struct hstex_glyph_unicode),
+    };
+    uint64_t digest = UINT64_C(0xcbf29ce484222325);
+    for (size_t index = 0U; index < sizeof(widths) / sizeof(widths[0]);
+         ++index) {
+        digest = (digest ^ (uint64_t)widths[index]) * UINT64_C(0x100000001b3);
+    }
+    return digest;
+}
+
+/* The name and the widths together, for a caller that wants one number for
+   "a format this build could read". */
+static inline uint64_t hstex_format_identity(void)
+{
+    uint64_t digest = hstex_format_layout();
+    for (const char *at = HSTEX_FORMAT_MAGIC; *at != '\0'; ++at) {
+        digest = (digest ^ (uint64_t)(unsigned char)*at) *
+                 UINT64_C(0x100000001b3);
+    }
+    return digest;
+}
+
 /* The engine's state once the format source has been read, put by so that
    the next run need not read it again, and read back into a fresh engine.
    See docs/DECISIONS.md, the-format-a-run-starts-from. */

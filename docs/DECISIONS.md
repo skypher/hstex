@@ -170,6 +170,30 @@ over the corpus, with individual documents moving either way -- because the
 pages this saves were being touched once and never read. It is recorded here
 as a size and residency change, which is what it demonstrably is.
 
+## A cached format a build cannot read
+
+The driver keeps a built format under a key hashed from the HSTeX version,
+the resolved `latex.ltx` and `pdftexconfig.tex`, the search environment, and
+the identity of every `ls-R`. It decides to reuse one by `stat` alone --
+it does not read the file -- so a format the engine would refuse was still
+handed to it.
+
+Nothing in that key described the shape of the file. Two builds of the same
+version whose stream or record layout differed therefore computed the same
+key, and the second was given the first's format and failed on it: measured,
+`hstex-pdflatex` exited 1 with `pdflatex.hfmt is not a format` where a
+rebuild was what the situation called for. `--rebuild-format` recovered it,
+but only for someone who knew to ask.
+
+The key now includes what makes a format readable: the name the file gives
+itself and the widths of the records it carries, combined by
+`hstex_format_identity`. Both moved into `hstex/engine.h` so that the driver
+can read them without linking the engine. A format an engine could not read
+now lies under a key that engine never looks in, so it is built afresh, and
+the unreadable one is left where it is rather than being offered. Measured
+across the two builds either side of the change: exit 1 with the error
+before, exit 0 and a new key after.
+
 ## Why a run still starts one kpsewhich child
 
 The remaining child was measured to see whether the lookup could be taught to
