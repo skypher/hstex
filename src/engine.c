@@ -1472,8 +1472,18 @@ static void release_definition(struct hstex_engine *engine,
     if (macro->references == 0U || --macro->references != 0U) {
         return;
     }
-    token_block_free(macro->parameter_text, macro->parameter_count_tokens);
-    token_block_free(macro->replacement, macro->replacement_count);
+    /* A body cut from the block a format was read into is not this record's
+       to give back: the pool works out which list a body belongs on from its
+       length, and this one is not a block of its own. It stays where it is
+       until the engine gives the whole block back. */
+    if ((macro->bodies_borrowed & (uint8_t)HSTEX_MACRO_PARAMETER_BORROWED) ==
+        0U) {
+        token_block_free(macro->parameter_text, macro->parameter_count_tokens);
+    }
+    if ((macro->bodies_borrowed & (uint8_t)HSTEX_MACRO_REPLACEMENT_BORROWED) ==
+        0U) {
+        token_block_free(macro->replacement, macro->replacement_count);
+    }
     memset(macro, 0, sizeof(*macro));
     macro->next_free = engine->macro_free_list;
     engine->macro_free_list = identifier;
@@ -3539,9 +3549,27 @@ void hstex_engine_destroy(struct hstex_engine *engine)
         }
     }
     for (size_t index = 0U; index < engine->macro_count; ++index) {
-        free(engine->macros[index].parameter_text);
-        free(engine->macros[index].replacement);
+        const struct hstex_macro *macro = &engine->macros[index];
+        if ((macro->bodies_borrowed &
+             (uint8_t)HSTEX_MACRO_PARAMETER_BORROWED) == 0U) {
+            free(macro->parameter_text);
+        }
+        if ((macro->bodies_borrowed &
+             (uint8_t)HSTEX_MACRO_REPLACEMENT_BORROWED) == 0U) {
+            free(macro->replacement);
+        }
     }
+    /* And the blocks every borrowed body was cut from, once nothing is
+       looking at them. */
+    for (size_t index = 0U; index < engine->body_block_count; ++index) {
+        free(engine->body_blocks[index]);
+    }
+    free(engine->body_blocks);
+    engine->body_blocks = NULL;
+    engine->body_block_count = 0U;
+    engine->body_block_capacity = 0U;
+    engine->body_next = NULL;
+    engine->body_left = 0U;
     for (size_t index = 0U; index < engine->token_list_count; ++index) {
         free(engine->token_lists[index].tokens);
     }
@@ -13764,6 +13792,9 @@ static int scan_definition(struct hstex_engine *engine, bool inherent_global,
     macro->replacement_count = replacement.count;
     macro->parameter_count = parameter_count;
     macro->flags = engine->pending_macro_flags;
+    /* Both bodies were just asked for in the ordinary way, and a record that
+       has never held a format's is not always one that was cleared. */
+    macro->bodies_borrowed = 0U;
     macro->references = 0U;
     macro->next_free = 0U;
     count_macro_body(macro);

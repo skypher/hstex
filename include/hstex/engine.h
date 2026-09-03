@@ -751,6 +751,12 @@ enum hstex_macro_shape {
     HSTEX_MACRO_PLAIN_PARAMETERS = 1U << 0U
 };
 
+/* Which body of a definition was read into a format's own block. */
+enum {
+    HSTEX_MACRO_PARAMETER_BORROWED = 1U,
+    HSTEX_MACRO_REPLACEMENT_BORROWED = 2U,
+};
+
 struct hstex_macro {
     hstex_token *parameter_text;
     size_t parameter_count_tokens;
@@ -760,6 +766,12 @@ struct hstex_macro {
     uint8_t flags;
     /* See enum hstex_macro_shape. */
     uint8_t shape;
+    /* Which of the two bodies were handed out of the block a format was read
+       into rather than allocated one at a time. Such a body is not this
+       record's to give back: not to the token pool, whose lists are kept by
+       length, and not to the library, which never handed it out. It sits in
+       the byte the record had spare, so the record is no wider for it. */
+    uint8_t bodies_borrowed;
     /* What the body is made of, counted once when the definition is made
        rather than at every call: how many of its tokens stand for
        themselves, how often each argument is asked for, and how many
@@ -1780,6 +1792,19 @@ struct hstex_engine {
     struct hstex_macro *macros;
     size_t macro_count;
     size_t macro_capacity;
+    /* WHERE A BODY READ FROM A FORMAT LIVES. A stock LaTeX format holds some
+       forty-six thousand definitions, and asking the library for each body
+       of each of them is ninety thousand allocations before a document is
+       looked at. They are cut from a few blocks instead, and the definition
+       that holds one says so. The blocks are given back when the engine is,
+       so a body cut from one outlives every definition that held it; that
+       costs the room a redefined body would have returned, which is bounded
+       by the format itself. See docs/DECISIONS.md, where-a-body-is-kept. */
+    void **body_blocks;
+    size_t body_block_count;
+    size_t body_block_capacity;
+    unsigned char *body_next;
+    size_t body_left;
     /* The first record no meaning holds any more, one more than its index. */
     uint32_t macro_free_list;
     /* How many definitions have been made and how many records they needed,

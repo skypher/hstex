@@ -122,6 +122,14 @@ is not distinguishable from run-to-run noise: the pages it saves were written
 once and never read again. The size and residency figures are the measured
 effect, and are why it was kept.
 
+A later change again cuts a format's definition bodies from a few blocks
+rather than allocating each one, recorded under "Where a body is kept".
+Measured back to back on the same machine, thirteen of the fourteen documents
+got faster and one moved 0.5% the other way: 1.7% over the corpus, aggregate
+1.70x to 1.75x and median 1.82x to 1.84x, with `gentle` reaching parity at
+1.00x. Loading a format alone drops peak RSS from 24,576 KB to 23,680 KB and
+minor page faults from 3,952 to 3,692.
+
 The one `kpsewhich` child a LaTeX run still starts cannot be removed by
 teaching the lookup more: it is started by a bitmap font that resolves in a
 tree outside `TEXMFDBS`, reached by walking the disk rather than by an

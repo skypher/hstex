@@ -170,6 +170,44 @@ over the corpus, with individual documents moving either way -- because the
 pages this saves were being touched once and never read. It is recorded here
 as a size and residency change, which is what it demonstrably is.
 
+## Where a body is kept
+
+A definition's body is a run of tokens, and the engine keeps runs in free
+lists by length: the room a body is given is the least power of two that
+holds it, never fewer than eight, so that a body can be given back knowing
+only how long it is. Nothing carries a header saying how big it is, which is
+what makes `token_block_free(body, count)` enough.
+
+That rule is why a format's bodies were read one allocation at a time and
+rounded up the same way: a body the pool might later be given must be exactly
+as long as the pool will assume. A stock LaTeX format holds 46,251
+definitions, so reading one meant some ninety thousand allocations before a
+document had been looked at, each rounded up -- a body of nine tokens taking
+sixteen.
+
+A format's bodies are now cut from a few blocks the engine keeps, and the
+definition that holds one says which of its two bodies came from there. The
+bit sits in a byte `struct hstex_macro` already had spare, so the record is
+no wider and the file no different -- it is written as zero and settled again
+on the way in, because where a body was cut from is this process's business
+and not the file's. The two places that give a body back, `release_definition`
+and the engine's teardown, ask first: a borrowed body goes back to neither
+the pool nor the library, and the blocks are freed with the engine.
+
+Because a borrowed body is never given back, it need not be rounded to a
+length the pool would recognize, and is cut at exactly the size it needs. The
+cost is that a definition a run redefines does not return its room until the
+run ends; that is bounded by the format, which the run is holding anyway.
+
+Measured on the corpus, thirteen of the fourteen documents got faster and one
+moved 0.5% the other way, for 1.7% over the corpus -- aggregate 1.70x to
+1.75x against pdfTeX, median 1.82x to 1.84x. `gentle` reaches parity with the
+reference at 1.00x. Loading a format alone drops peak RSS from 24,576 KB to
+23,680 KB and minor page faults from 3,952 to 3,692. It is a smaller effect
+than the count of allocations suggested: glibc satisfies ninety thousand
+small requests out of a heap it already has, so what was removed was
+bookkeeping and rounding rather than work with the kernel.
+
 ## A cached format a build cannot read
 
 The driver keeps a built format under a key hashed from the HSTeX version,

@@ -240,6 +240,113 @@ static void transfer_registers(struct format_stream *stream, void **base,
      sizeof(struct type) - offsetof(struct type, last) -                   \
          sizeof(((struct type *)0)->last)}
 
+/* The room the engine's token pool would have given a run of this many: the
+   least power of two that holds it, never fewer than eight. A body the pool
+   may later be given back must have exactly this much, because the pool
+   works out which list a body belongs on from its length alone. */
+static size_t token_room(size_t count)
+{
+    size_t room = 8U;
+    while (room < count) {
+        room *= 2U;
+    }
+    return room;
+}
+
+/* A BLOCK TO CUT BODIES FROM. Everything a format's definitions hold is read
+   in one pass and none of it is given back before the engine is, so it is
+   cut from a few blocks rather than asked for one body at a time. A block is
+   never grown or moved, so what is cut from it stays where it was put.
+
+   The room asked for is exactly what the body needs. A body cut from here
+   never goes back to the token pool, whose lists are kept by length, so
+   nothing later reads the room around it and it need not be rounded up to a
+   length the pool would recognize. */
+enum { HSTEX_FORMAT_BODY_BLOCK = 1U << 18 };
+
+static void *body_take(struct hstex_engine *engine, size_t bytes)
+{
+    if (bytes == 0U) {
+        return NULL;
+    }
+    /* Every body is a run of tokens, so a block cut in whole tokens stays as
+       aligned as the block itself. */
+    bytes = (bytes + (sizeof(hstex_token) - 1U)) & ~(sizeof(hstex_token) - 1U);
+    if (bytes > engine->body_left) {
+        size_t wanted = bytes > (size_t)HSTEX_FORMAT_BODY_BLOCK
+                            ? bytes
+                            : (size_t)HSTEX_FORMAT_BODY_BLOCK;
+        if (engine->body_block_count == engine->body_block_capacity) {
+            size_t capacity = engine->body_block_capacity == 0U
+                                  ? 16U
+                                  : engine->body_block_capacity * 2U;
+            if (capacity > SIZE_MAX / sizeof(*engine->body_blocks)) {
+                return NULL;
+            }
+            void **grown = realloc(engine->body_blocks,
+                                   capacity * sizeof(*engine->body_blocks));
+            if (grown == NULL) {
+                return NULL;
+            }
+            engine->body_blocks = grown;
+            engine->body_block_capacity = capacity;
+        }
+        void *block = malloc(wanted);
+        if (block == NULL) {
+            return NULL;
+        }
+        engine->body_blocks[engine->body_block_count++] = block;
+        engine->body_next = block;
+        engine->body_left = wanted;
+    }
+    void *taken = engine->body_next;
+    engine->body_next += bytes;
+    engine->body_left -= bytes;
+    return taken;
+}
+
+/* One definition's body, cut from the block above where it can be. Where it
+   cannot -- the block could not be grown -- it is asked for the way every
+   other body read from a format used to be, and the record is not told it
+   borrowed anything, so it gives that one back as it always did. */
+static void transfer_body(struct format_stream *stream,
+                          struct hstex_engine *engine, hstex_token **tokens,
+                          size_t *count, uint8_t *borrowed, uint8_t bit)
+{
+    if (stream->writing) {
+        void *base = (void *)*tokens;
+        transfer_array(stream, &base, count, NULL, sizeof(**tokens), false);
+        *tokens = base;
+        return;
+    }
+    TRANSFER_VALUE(stream, *count);
+    if (stream->failed) {
+        return;
+    }
+    *tokens = NULL;
+    *borrowed = (uint8_t)(*borrowed & (uint8_t)~bit);
+    if (*count == 0U) {
+        return;
+    }
+    if (*count > SIZE_MAX / sizeof(**tokens)) {
+        stream->failed = true;
+        return;
+    }
+    size_t bytes = *count * sizeof(**tokens);
+    void *room = body_take(engine, bytes);
+    if (room != NULL) {
+        *borrowed = (uint8_t)(*borrowed | bit);
+    } else {
+        room = malloc(token_room(*count) * sizeof(**tokens));
+        if (room == NULL) {
+            stream->failed = true;
+            return;
+        }
+    }
+    *tokens = room;
+    transfer(stream, *tokens, bytes);
+}
+
 /* A body read from a format is put in the room the engine's own pool would
    have given it -- the least power of two that holds it, never fewer than
    eight -- so that when nothing holds it any more it can go back on the
@@ -261,14 +368,11 @@ static void transfer_tokens(struct format_stream *stream, hstex_token **tokens,
     if (*count == 0U) {
         return;
     }
-    size_t capacity = 8U;
-    while (capacity < *count) {
-        if (capacity > SIZE_MAX / 2U) {
-            stream->failed = true;
-            return;
-        }
-        capacity *= 2U;
+    if (*count > SIZE_MAX / 4U) {
+        stream->failed = true;
+        return;
     }
+    size_t capacity = token_room(*count);
     if (capacity > SIZE_MAX / sizeof(**tokens)) {
         stream->failed = true;
         return;
@@ -384,6 +488,9 @@ static void transfer_format(struct format_stream *stream,
     static const struct format_hole macro_holes[] = {
         FORMAT_ADDRESS(hstex_macro, parameter_text),
         FORMAT_ADDRESS(hstex_macro, replacement),
+        /* Where a body was cut from is this run's business and not the
+           file's; it is written as nothing and settled again on the way in. */
+        FORMAT_FIELD(hstex_macro, bodies_borrowed),
     };
     transfer_array_cleared(stream, &macros, &macro_count,
                            &engine->macro_capacity, sizeof(*engine->macros),
@@ -393,9 +500,12 @@ static void transfer_format(struct format_stream *stream,
     engine->macro_count = macro_count;
     for (size_t index = 0U; index < macro_count && !stream->failed; ++index) {
         struct hstex_macro *macro = &engine->macros[index];
-        transfer_tokens(stream, &macro->parameter_text,
-                        &macro->parameter_count_tokens);
-        transfer_tokens(stream, &macro->replacement, &macro->replacement_count);
+        transfer_body(stream, engine, &macro->parameter_text,
+                      &macro->parameter_count_tokens, &macro->bodies_borrowed,
+                      (uint8_t)HSTEX_MACRO_PARAMETER_BORROWED);
+        transfer_body(stream, engine, &macro->replacement,
+                      &macro->replacement_count, &macro->bodies_borrowed,
+                      (uint8_t)HSTEX_MACRO_REPLACEMENT_BORROWED);
     }
 
     size_t register_capacity = engine->count_capacity;
