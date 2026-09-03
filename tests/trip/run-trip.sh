@@ -169,11 +169,17 @@ compare_dvi() {
 }
 
 echo "trip.tex: $(wc -l <trip.tex) lines"
-if [ "$status1" -ne 0 ]; then
+# TRIP IS A DOCUMENT OF FAULTS, AND BOTH ENGINES FAIL ON IT. Reporting an
+# error is what trip.tex is for -- 249 diagnostics of it -- and an engine
+# whose exit status says what a run came to therefore exits 1 here. The
+# reference is run with its status ignored a few lines above for the same
+# reason. What is not expected is a status past that: a crash, or the
+# timeout's 124, is not a document reporting a fault.
+if [ "$status1" -gt 1 ]; then
     echo "hstex pass one exited $status1"
     failed=1
 fi
-if [ "$status2" -ne 0 ]; then
+if [ "$status2" -gt 1 ]; then
     echo "hstex pass two exited $status2"
     failed=1
 fi

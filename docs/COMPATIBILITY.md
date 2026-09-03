@@ -54,7 +54,6 @@ which is useful for testing an unpacked build alongside an installed release.
 | --- | --- |
 | `-output-directory=DIR`, `--output-directory=DIR` | Supported |
 | `-jobname=NAME`, `--jobname=NAME` | Supported |
-| `-interaction=errorstopmode` | Supported; this is HSTeX's current interaction mode |
 | `-halt-on-error` | Supported: stops at the first error, writes no output, exits nonzero |
 | `-file-line-error` | Supported: an error opens with the file and line it was met in |
 | `-interaction=MODE` | Supported for `batchmode`, `nonstopmode`, `scrollmode`, `errorstopmode`; any other mode is refused |

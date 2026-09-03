@@ -29,7 +29,6 @@ static void usage(FILE *stream)
         "Supported pdfLaTeX options:\n"
         "  -output-directory=DIR  write document outputs under DIR\n"
         "  -jobname=NAME          use NAME for output files and \\jobname\n"
-        "  -interaction=errorstopmode\n"
         "  -halt-on-error  -file-line-error  -no-shell-escape\n"
         "  -interaction=batchmode|nonstopmode|scrollmode|errorstopmode\n"
         "  -output-format=pdf\n"

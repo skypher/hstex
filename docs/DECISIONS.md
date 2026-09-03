@@ -246,6 +246,16 @@ control sequence exits 1 under `-interaction=nonstopmode`. History is 0 where
 nothing was wrong, 1 for a warning, 2 for an error reported and recovered
 from, and 3 where the run gave up, so a status of 1 is history of 2 or more.
 
+The Trip harness needed the same treatment and did not get it at first, so
+CI failed on 33759725847 while every local gate looked fine: the gate script
+was reading the last line of Trip's output rather than its exit status, and
+Trip had stopped printing its passing line. `trip.tex` is a document of
+faults -- 249 diagnostics is the point of it -- so both engines exit 1 there,
+and the harness had been failing HSTeX for a status it ignores in the
+reference a few lines above. It reads them alike now, and still fails on a
+status past 1, which is a crash or the timeout's 124 rather than a document
+reporting a fault.
+
 That needed the corpus runner changed as much as the engine. It read any
 nonzero status from HSTeX as a disagreement while ignoring the reference's,
 which was tenable only while HSTeX never failed; several stress documents
@@ -269,7 +279,10 @@ Each now does what it says.
 
 `-interaction` takes the reference's four modes and hands the named one to
 the engine, which has had them all along and started in `errorstopmode`
-regardless. A fifth name is refused by name -- `unknown interaction mode` --
+regardless. Both the usage text and the compatibility table kept a line from
+before that said only `errorstopmode` was taken, which read as `nonstopmode`
+being unsupported however plainly the new line beside it said otherwise; a
+superseded line is worse than no line, and both are gone. A fifth name is refused by name -- `unknown interaction mode` --
 rather than being rounded to whichever mode is nearest.
 
 `-file-line-error` opens an error with the file and line it was met in
