@@ -116,16 +116,6 @@ jobs:
         if: matrix.runner == 'ubuntu-24.04'
         run: tests/corpus/run-corpus.sh --stress --strict ./build/hstex
 
-      # The corpus above drives the engine directly, one pass. This runs it
-      # the way an installation does -- through hstex-pdflatex, twice, with
-      # the checkpoint path the driver takes by default -- and holds each
-      # document to what tests/corpus/driver-expectations.tsv pins it at.
-      - name: Run document corpus through the pdflatex driver
-        if: matrix.runner == 'ubuntu-24.04'
-        run: |
-          tests/corpus/run-driver-corpus.sh --strict \
-            ./build/hstex-pdflatex ./build/hstex
-
   clang:
     # The other compiler the engine is expected to build clean under.
     name: ubuntu-24.04 (clang)
@@ -185,6 +175,38 @@ jobs:
 
       - name: Run canonical Trip
         run: tests/trip/run-trip.sh ./build/hstex
+
+  driver-corpus:
+    # The corpus run the way an installation runs it: through hstex-pdflatex,
+    # twice per document, with the checkpoint path the driver takes by
+    # default. It is a job of its own rather than another step on the build,
+    # because it runs both engines twice over every document and put that job
+    # past its timeout when it shared one.
+    name: ubuntu-24.04 (driver corpus)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install LaTeX and comparison tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl ninja-build python3-venv \
+            texlive-latex-base texlive-latex-recommended \
+            texlive-fonts-recommended mupdf-tools poppler-utils
+          python3 -m venv "$HOME/meson"
+          "$HOME/meson/bin/pip" install --quiet --upgrade meson
+          echo "$HOME/meson/bin" >> "$GITHUB_PATH"
+
+      - name: Configure and build
+        run: |
+          meson setup build
+          meson compile -C build
+
+      - name: Run document corpus through the pdflatex driver
+        run: |
+          tests/corpus/run-driver-corpus.sh --strict \
+            ./build/hstex-pdflatex ./build/hstex
 
   freebsd:
     name: FreeBSD 15

@@ -304,7 +304,10 @@ engine on a pass the one-pass corpus never reaches. All four reproduce on the
 engine as it stood at `6870489`, before any of this session's work.
 
 `tests/corpus/run-driver-corpus.sh` runs the corpus that way and holds each
-document to `driver-expectations.tsv`. Pinning rather than skipping is what
+document to `driver-expectations.tsv`. It is a CI job of its own: run as
+another step on the build job it put that job past its forty-five minute
+timeout, because it compiles every document twice on each side rather than
+once. Pinning rather than skipping is what
 makes it a gate: it fails whichever direction a document moves, so repairing
 one of these is noticed as surely as breaking another, and the pin is deleted
 when the document is fixed. A pinned `differs` records what comes out wrong
