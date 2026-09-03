@@ -1,5 +1,7 @@
 #include "hstex/engine.h"
 
+#include "hstex/filedb.h"
+#include "hstex/input.h"
 #include "internal.h"
 
 #include <stdarg.h>
@@ -529,6 +531,12 @@ static void transfer_format(struct format_stream *stream,
                        sizeof(uint64_t), false);
         engine->soft_names = names;
     }
+
+    /* Where the installation keeps its filename databases, so that a run
+       starting from this format need not start a child to be told. It is
+       used only where the stamp still describes the trees on disk. */
+    transfer_string(stream, &engine->texmf_trees);
+    TRANSFER_VALUE(stream, engine->texmf_trees_stamp);
 }
 
 /* A format is written only from a run that has built nothing of its own, so
@@ -538,6 +546,26 @@ static bool engine_is_quiet(const struct hstex_engine *engine)
     return engine->save_count == 0U && engine->conditional_count == 0U &&
            engine->group_level == 0U && engine->shipped_pages == 0U &&
            engine->dvi_file == NULL && engine->pdf_file == NULL;
+}
+
+/* What a format is worth telling the next run about the installation it was
+   built against. Asking costs a child process, which a format build has
+   already paid for by the time it gets here, and saves one in every run
+   that starts from what is written. */
+static void remember_trees(struct hstex_engine *engine)
+{
+    const char *trees = hstex_file_db_trees();
+    if (trees == NULL || trees[0] == '\0') {
+        return;
+    }
+    char *kept = malloc(strlen(trees) + 1U);
+    if (kept == NULL) {
+        return;
+    }
+    memcpy(kept, trees, strlen(trees) + 1U);
+    free(engine->texmf_trees);
+    engine->texmf_trees = kept;
+    engine->texmf_trees_stamp = hstex_file_db_trees_stamp(kept);
 }
 
 int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
@@ -555,6 +583,7 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
     if (file == NULL) {
         return format_error(error, error_capacity, "cannot write %s", path);
     }
+    remember_trees(engine);
     struct format_stream stream = {0};
     stream.file = file;
     stream.writing = true;
@@ -574,6 +603,7 @@ int hstex_engine_format_to_file(struct hstex_engine *engine, FILE *file)
     if (engine == NULL || file == NULL) {
         return -1;
     }
+    remember_trees(engine);
     struct format_stream stream = {0};
     stream.file = file;
     stream.writing = true;
@@ -617,6 +647,7 @@ int hstex_engine_format_from_buffer(struct hstex_engine *engine,
     if (consumed != NULL) {
         *consumed = stream.at;
     }
+    hstex_file_db_offer_trees(engine->texmf_trees, engine->texmf_trees_stamp);
     return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
 }
 
@@ -626,42 +657,31 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
     if (engine == NULL || path == NULL) {
         return format_error(error, error_capacity, "invalid format read");
     }
-    FILE *file = fopen(path, "rb");
-    if (file == NULL) {
+    /* THE FORMAT IS READ WHERE IT LIES. What a run takes out of a format it
+       takes a record at a time, into room of its own; reading the file into
+       a second buffer first only moves the bytes twice and asks the kernel
+       for pages it then has to clear. Mapping the file hands the same bytes
+       out of the page cache, so a format is neither copied nor counted
+       against this run twice. */
+    struct hstex_input mapped;
+    char opened[256];
+    if (hstex_input_open(path, &mapped, opened, sizeof(opened)) != 0) {
         return format_error(error, error_capacity, "cannot read %s", path);
     }
-    if (fseek(file, 0L, SEEK_END) != 0) {
-        (void)fclose(file);
-        return format_error(error, error_capacity, "cannot read %s", path);
-    }
-    long length = ftell(file);
-    rewind(file);
-    if (length < 0) {
-        (void)fclose(file);
-        return format_error(error, error_capacity, "cannot read %s", path);
-    }
-    uint8_t *bytes = malloc((size_t)length == 0U ? 1U : (size_t)length);
-    if (bytes == NULL ||
-        fread(bytes, 1U, (size_t)length, file) != (size_t)length) {
-        free(bytes);
-        (void)fclose(file);
-        return format_error(error, error_capacity, "cannot read %s", path);
-    }
-    (void)fclose(file);
     struct format_stream stream = {0};
-    stream.bytes = bytes;
-    stream.length = (size_t)length;
+    stream.bytes = mapped.data;
+    stream.length = mapped.length;
     char magic[sizeof(hstex_format_magic)];
     transfer(&stream, magic, sizeof(magic));
     if (stream.failed || memcmp(magic, hstex_format_magic, sizeof(magic)) != 0) {
-        free(bytes);
+        hstex_input_close(&mapped);
         return format_error(error, error_capacity, "%s is not a format",
                                path);
     }
     uint64_t layout = 0U;
     transfer(&stream, &layout, sizeof(layout));
     if (stream.failed || layout != hstex_format_layout()) {
-        free(bytes);
+        hstex_input_close(&mapped);
         return format_error(error, error_capacity,
                             "%s was written by a build whose records are laid "
                             "out differently; build the format again",
@@ -688,10 +708,13 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
         engine->integer_parameter_levels[process_clock[index]] =
             clock_levels[index];
     }
-    free(bytes);
+    hstex_input_close(&mapped);
     if (stream.failed) {
         return format_error(error, error_capacity, "%s is not a format",
                                path);
     }
+    /* What this format was told about the installation, offered to the
+       lookup before the first name is asked for. */
+    hstex_file_db_offer_trees(engine->texmf_trees, engine->texmf_trees_stamp);
     return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
 }

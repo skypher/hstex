@@ -1902,6 +1902,12 @@ struct hstex_engine {
        kpsewhich rather than from an engine-private allowlist. */
     int32_t shell_escape_mode;
     char *shell_escape_commands;
+    /* The installation's filename-database trees, as they stood when this
+       format was built, and what they looked like on disk then. A run given
+       both learns where to look without starting a child to ask. See
+       src/filedb.c. */
+    char *texmf_trees;
+    uint64_t texmf_trees_stamp;
     /* An explicitly supplied \pdftrailerid seed.  A set, empty seed omits
        the ID; an unset seed selects pdfTeX's creation-date/output-name
        default. */

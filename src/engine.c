@@ -3692,6 +3692,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->output_directory);
     free(engine->output_name);
     free(engine->job_name);
+    free(engine->texmf_trees);
+    engine->texmf_trees = NULL;
     free(engine->shell_escape_commands);
     free(engine->pdf_trailer_id_seed);
     hstex_lexical_state_destroy(&engine->lexical_state);
@@ -6308,9 +6310,6 @@ enum { HSTEX_FINDER_ANSWER_MILLISECONDS = 5000 };
    run that builds engines by the hundred would wait all of them. */
 static bool hstex_finder_unusable = false;
 
-/* Whether the marker has been found to be a name the tool can find, which is
-   asked once per run rather than at every start; see finder_start. */
-static bool hstex_finder_marker_found = false;
 
 /* One line of what the tool says, without what ends it, or NULL where it has
    stopped talking, said nothing in the time it was given, or said a line
@@ -6382,27 +6381,12 @@ static bool finder_start(struct hstex_engine *engine)
     }
     /* The whole scheme rests on the marker being a name the tool finds, since
        what it says about the marker is what tells a name it found from one it
-       did not. Where the marker is not found the tool would answer the
-       opening question with nothing at all and wait to be asked another --
-       so it is looked for first by a child that ends on its own, which
-       answers or fails but never waits. Where it stands is a property of the
-       installation and not of this engine or of what the run has written
-       since, so it is looked for once and the answer kept: the tool is
-       started often enough that a child for each would cost more than the
-       one it is being started to save. */
-    if (!hstex_finder_marker_found) {
-        const char *listed = hstex_file_db_lookup(hstex_file_db_shared(),
-                                                  hstex_finder_marker);
-        char *marker_path = listed == NULL
-                                ? resolve_with_kpsewhich(hstex_finder_marker)
-                                : strdup(listed);
-        if (marker_path == NULL) {
-            hstex_finder_unusable = true;
-            return false;
-        }
-        free(marker_path);
-        hstex_finder_marker_found = true;
-    }
+       did not. The marker is passed to the tool on the command line, so the
+       tool answers it before it is asked anything at all, and that answer --
+       read below, under a bound, and required to be there -- is what says the
+       marker was found. A child of its own to ask the same question first
+       cost a tenth of a short run and could say nothing this one does not.
+       See docs/DECISIONS.md, finding-a-file. */
     finder->pending_held = 0U;
     int questions[2];
     int answers[2];
@@ -12372,7 +12356,22 @@ static bool command_is_expandable(enum hstex_command command);
 static int push_relax_before(struct hstex_engine *engine, hstex_token token,
                              struct hstex_source_location location, char *error,
                              size_t error_capacity);
-static void trace_command(struct hstex_engine *engine, hstex_token token);
+static void trace_command_traced(struct hstex_engine *engine,
+                                 hstex_token token);
+
+/* WHAT A RUN THAT TRACES NOTHING PAYS. \tracingcommands is off in every run
+   that is not being looked at, and the fifteen places that trace a command
+   are on the path every command takes. Asking here, where the answer is a
+   field already in cache, keeps a call that does nothing out of that path:
+   annotating a corpus run put the call alone at 0.75% of it. */
+static inline void trace_command(struct hstex_engine *engine,
+                                 hstex_token token)
+{
+    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] <= 0) {
+        return;
+    }
+    trace_command_traced(engine, token);
+}
 static void trace_words(struct hstex_engine *engine, const char *words);
 static int push_conditional(struct hstex_engine *engine, size_t *index,
                             char *error, size_t error_capacity);
@@ -21312,11 +21311,9 @@ static void trace_restore(struct hstex_engine *engine,
     (void)fflush(diagnostic_stream(engine));
 }
 
-static void trace_command(struct hstex_engine *engine, hstex_token token)
+static void trace_command_traced(struct hstex_engine *engine,
+                                 hstex_token token)
 {
-    if (engine->integer_parameters[HSTEX_INTEGER_TRACING_COMMANDS] <= 0) {
-        return;
-    }
     /* A math field is read by the field machinery rather than obeyed, so
        the token that fills one is not traced: measured, `$x^2$' traces the
        x and the ^ and not the 2. */
@@ -22293,8 +22290,15 @@ static int dvi_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
+        /* The kind is read from the arena, not from the copy just taken of
+           it. Switching on the copy makes the branch wait for the copy's own
+           stores to reach memory and come back again, which annotating a
+           corpus run put at more than half of what this loop costs. The
+           cases still read the copy, because what they call may move the
+           arena under them. */
+        const enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
         struct hstex_node node = engine->nodes[identifier - 1U];
-        switch (node.kind) {
+        switch (kind) {
         case HSTEX_NODE_CHARACTER:
         case HSTEX_NODE_LIGATURE: {
             /* The place comes first, then the font, then the character. */
@@ -22496,8 +22500,15 @@ static int dvi_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
+        /* The kind is read from the arena, not from the copy just taken of
+           it. Switching on the copy makes the branch wait for the copy's own
+           stores to reach memory and come back again, which annotating a
+           corpus run put at more than half of what this loop costs. The
+           cases still read the copy, because what they call may move the
+           arena under them. */
+        const enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
         struct hstex_node node = engine->nodes[identifier - 1U];
-        switch (node.kind) {
+        switch (kind) {
         case HSTEX_NODE_LIST: {
             if (node.value.list.node_count == 0U) {
                 engine->dvi_cur_v +=
@@ -27660,8 +27671,15 @@ static int pdf_hlist(struct hstex_engine *engine, const struct hstex_node *box,
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
+        /* The kind is read from the arena, not from the copy just taken of
+           it. Switching on the copy makes the branch wait for the copy's own
+           stores to reach memory and come back again, which annotating a
+           corpus run put at more than half of what this loop costs. The
+           cases still read the copy, because what they call may move the
+           arena under them. */
+        const enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
         struct hstex_node node = engine->nodes[identifier - 1U];
-        switch (node.kind) {
+        switch (kind) {
         case HSTEX_NODE_CHARACTER:
         case HSTEX_NODE_LIGATURE:
             if (pdf_place_character(engine, &node, here, base, error,
@@ -27801,8 +27819,15 @@ static int pdf_vlist(struct hstex_engine *engine, const struct hstex_node *box,
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
             continue;
         }
+        /* The kind is read from the arena, not from the copy just taken of
+           it. Switching on the copy makes the branch wait for the copy's own
+           stores to reach memory and come back again, which annotating a
+           corpus run put at more than half of what this loop costs. The
+           cases still read the copy, because what they call may move the
+           arena under them. */
+        const enum hstex_node_kind kind = engine->nodes[identifier - 1U].kind;
         struct hstex_node node = engine->nodes[identifier - 1U];
-        switch (node.kind) {
+        switch (kind) {
         case HSTEX_NODE_LIST: {
             int32_t shifted = left + packed_dimen(node.shift);
             /* A link that was opened in a box of this list gets a rectangle

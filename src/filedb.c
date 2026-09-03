@@ -125,6 +125,12 @@ static atomic_int shared_state;
 static struct hstex_file_db shared_database;
 static bool shared_usable;
 
+/* The list the database was built from, kept so that a format written by
+   this run can carry it, and the one a format has offered this run. */
+static char *shared_trees;
+static char *offered_trees;
+static uint64_t offered_stamp;
+
 static uint64_t name_hash(const uint8_t *name, size_t length)
 {
     uint64_t hash = UINT64_C(14695981039346656037);
@@ -193,18 +199,22 @@ static void chain(struct hstex_file_db *database, uint32_t identifier)
     database->slots[slot] = identifier;
 }
 
-/* Room for one more name, kept at twice what is held so a walk of the
-   slots stops soon after it starts. */
-static int reserve_slots(struct hstex_file_db *database)
+/* Room for `wanted' names, kept at twice what is held so a walk of the
+   slots stops soon after it starts. Growing rehashes everything already
+   held, so a caller that knows how many are coming says so and pays it
+   once: the trees of a stock installation hold some forty thousand names,
+   and letting the table find that by doubling hashed half of them twice
+   over before the last name was in. */
+static int reserve_slots_for(struct hstex_file_db *database, size_t wanted)
 {
     if (database->slot_capacity != 0U &&
-        database->entry_count + 1U <= database->slot_capacity / 2U) {
+        wanted <= database->slot_capacity / 2U) {
         return 0;
     }
     size_t capacity = database->slot_capacity == 0U
                           ? (size_t)HSTEX_FILE_DB_INITIAL_SLOTS
                           : database->slot_capacity * 2U;
-    while (database->entry_count + 1U > capacity / 2U) {
+    while (wanted > capacity / 2U) {
         if (capacity > SIZE_MAX / 2U) {
             return -1;
         }
@@ -221,6 +231,11 @@ static int reserve_slots(struct hstex_file_db *database)
         chain(database, (uint32_t)(index + 1U));
     }
     return 0;
+}
+
+static int reserve_slots(struct hstex_file_db *database)
+{
+    return reserve_slots_for(database, database->entry_count + 1U);
 }
 
 /* One file, under the directory the list is in the middle of. */
@@ -311,6 +326,26 @@ static int load_tree(struct hstex_file_db *database, const char *tree)
     size_t length = input.length;
     size_t at = 0U;
     int status = 0;
+    /* What the list holds, before any of it is read: a name to a line, and
+       never more. Saying so once is what keeps the table from being built
+       again every time it fills. A count that cannot be made is not a
+       fault -- the table grows as it always did. */
+    size_t lines = 0U;
+    for (const uint8_t *scan = data, *end = data + length; scan < end;) {
+        const uint8_t *newline = memchr(scan, '\n', (size_t)(end - scan));
+        ++lines;
+        if (newline == NULL) {
+            break;
+        }
+        scan = newline + 1;
+    }
+    if (lines != 0U) {
+        (void)reserve_slots_for(database, database->entry_count + lines);
+        (void)reserve_entries(database, database->entry_count + lines);
+        (void)reserve_bytes(database,
+                            database->byte_count + length +
+                                lines * (tree_length + 2U));
+    }
     while (at < length) {
         size_t end = at;
         while (end < length && data[end] != (uint8_t)'\n') {
@@ -457,43 +492,116 @@ static bool environment_is_plain(void)
     return getenv("HSTEX_NO_FILE_DB") == NULL;
 }
 
-/* The trees, as the tool writes them: a braced list, comma separated, each
-   with the `!!' that says to trust the list rather than walk the tree. */
+/* One tree of the list, as the tool writes them: a braced list, comma
+   separated, each with the `!!' that says to trust the list rather than
+   walk the tree. `at' is left after the tree it returns; false says the
+   list is spent. What is walked here is walked the same way by everything
+   that walks it, so that a stamp describes the trees that were loaded. */
+static bool next_tree(const char **at, const char **tree, size_t *length)
+{
+    const char *scan = *at;
+    if (scan == NULL) {
+        return false;
+    }
+    while (*scan == '{' || *scan == ',' || *scan == ' ') {
+        ++scan;
+    }
+    if (*scan == '\0' || *scan == '}') {
+        *at = scan;
+        return false;
+    }
+    if (scan[0] == '!' && scan[1] == '!') {
+        scan += 2;
+    }
+    const char *end = scan;
+    while (*end != '\0' && *end != ',' && *end != '}') {
+        ++end;
+    }
+    size_t taken = (size_t)(end - scan);
+    while (taken != 0U && scan[taken - 1U] == '/') {
+        --taken;
+    }
+    *tree = scan;
+    *length = taken;
+    *at = end;
+    return true;
+}
+
 static void load_all(struct hstex_file_db *database, const char *trees)
 {
-    size_t at = 0U;
-    if (trees[at] == '{') {
-        ++at;
+    const char *at = trees;
+    const char *tree = NULL;
+    size_t length = 0U;
+    while (next_tree(&at, &tree, &length)) {
+        if (length == 0U) {
+            continue;
+        }
+        char *copy = malloc(length + 1U);
+        if (copy != NULL) {
+            memcpy(copy, tree, length);
+            copy[length] = '\0';
+            (void)load_tree(database, copy);
+            free(copy);
+        }
     }
-    while (trees[at] != '\0' && trees[at] != '}') {
-        while (trees[at] == ',' || trees[at] == ' ') {
-            ++at;
+}
+
+uint64_t hstex_file_db_trees_stamp(const char *trees)
+{
+    if (trees == NULL) {
+        return 0U;
+    }
+    uint64_t digest = UINT64_C(14695981039346656037);
+    const char *at = trees;
+    const char *tree = NULL;
+    size_t length = 0U;
+    while (next_tree(&at, &tree, &length)) {
+        for (size_t index = 0U; index < length; ++index) {
+            digest = (digest ^ (uint64_t)(uint8_t)tree[index]) *
+                     UINT64_C(1099511628211);
         }
-        if (trees[at] == '!' && trees[at + 1U] == '!') {
-            at += 2U;
+        /* What the tree is worth to a run is its list; a tree whose list is
+           gone, or that never had one, stamps as itself and nothing more. */
+        char *list = malloc(length + 6U);
+        intmax_t marks[2] = {-1, -1};
+        if (list != NULL) {
+            memcpy(list, tree, length);
+            memcpy(list + length, "/ls-R", 6U);
+            struct stat status;
+            if (stat(list, &status) == 0) {
+                marks[0] = (intmax_t)status.st_size;
+                marks[1] = (intmax_t)status.st_mtime;
+            }
+            free(list);
         }
-        size_t end = at;
-        while (trees[end] != '\0' && trees[end] != ',' && trees[end] != '}') {
-            ++end;
-        }
-        size_t length = end - at;
-        while (length != 0U && trees[at + length - 1U] == '/') {
-            --length;
-        }
-        if (length != 0U) {
-            char *tree = malloc(length + 1U);
-            if (tree != NULL) {
-                memcpy(tree, trees + at, length);
-                tree[length] = '\0';
-                (void)load_tree(database, tree);
-                free(tree);
+        for (size_t which = 0U; which < 2U; ++which) {
+            uint64_t value = (uint64_t)marks[which];
+            for (size_t byte = 0U; byte < sizeof(value); ++byte) {
+                digest = (digest ^ ((value >> (byte * 8U)) & 0xffU)) *
+                         UINT64_C(1099511628211);
             }
         }
-        at = end;
-        if (trees[at] == ',') {
-            ++at;
-        }
     }
+    return digest;
+}
+
+void hstex_file_db_offer_trees(const char *trees, uint64_t stamp)
+{
+    if (trees == NULL || trees[0] == '\0' ||
+        atomic_load_explicit(&shared_state, memory_order_acquire) != 0) {
+        return;
+    }
+    free(offered_trees);
+    offered_trees = strdup(trees);
+    offered_stamp = stamp;
+}
+
+const char *hstex_file_db_trees(void)
+{
+    if (shared_trees == NULL && environment_is_plain()) {
+        (void)hstex_file_db_shared();
+    }
+    return shared_trees;
 }
 
 const struct hstex_file_db *hstex_file_db_shared(void)
@@ -515,11 +623,26 @@ const struct hstex_file_db *hstex_file_db_shared(void)
                find the lists ready. */
             return NULL;
         }
-        char *trees = ask_variable("TEXMFDBS");
+        /* A list a format offered is used where it still describes the
+           trees on disk. Where it does not, or where none was offered, the
+           tool is asked as before: the cost of being wrong here is a child
+           process, not a wrong answer. */
+        char *trees = NULL;
+        if (offered_trees != NULL &&
+            hstex_file_db_trees_stamp(offered_trees) == offered_stamp) {
+            trees = offered_trees;
+        } else {
+            free(offered_trees);
+        }
+        offered_trees = NULL;
+        if (trees == NULL) {
+            trees = ask_variable("TEXMFDBS");
+        }
         if (trees != NULL) {
             load_all(&shared_database, trees);
-            free(trees);
         }
+        free(shared_trees);
+        shared_trees = trees;
         shared_usable = shared_database.entry_count != 0U;
         atomic_store_explicit(&shared_state, 2, memory_order_release);
     }

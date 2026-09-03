@@ -52,6 +52,95 @@ checks that the finder process identifier is unchanged. The GCC release suite,
 the 14-document strict corpus, and the six-document stress corpus all pass
 with the change.
 
+The marker is verified by the finder it starts rather than by a process of
+its own. `kpsewhich -interactive latex.ltx` answers its command-line name
+before it reads anything from standard input, so the first line the finder
+says is the marker's answer: a finder that says nothing there is a finder
+that cannot be talked to this way, which is what the separate check was
+looking for. The check could not be skipped on the strength of the `ls-R`
+data alone, because a stock TeX Live 2023 tree lists `latex.ltx` twice --
+under `tex/latex/base` and `tex/latex-dev/base` -- and a name held twice is
+one the lookup declines to settle. Measured on that installation, the
+separate check ran on every LaTeX run and cost 11.1 ms of a 71.9 ms
+`small2e`. Both strict corpora agree with the reference without it.
+
+## The trees a format remembers
+
+The lookup needs to know which trees keep an `ls-R`, which is the value of
+`TEXMFDBS`. Asking `kpsewhich` for it costs a child process that reads and
+hashes those same lists to answer a question about configuration: measured
+on TeX Live 2023, 9.7 ms, paid by every run including plain ones that ask
+nothing else.
+
+A format records the value its build was given, and a run starting from that
+format is offered it instead of asking. What makes this sound is that
+`hstex-pdflatex` already keys its format cache on the `TEXMFDBS` string and
+on the device, inode, size and modification time of every `ls-R` it names, so
+a format is reused only where those are unchanged. For a format used directly,
+the offer carries a stamp over the same sizes and modification times, checked
+before the list is believed; a stamp that no longer matches falls back to the
+child process. A list that is wrong in the other direction costs nothing
+either: the lookup answers only names it can settle unambiguously, so a name
+absent from a stale list, or held twice across one, goes to the tool exactly
+as it did before.
+
+Measured over the strict corpus, the trees a format remembers and the marker
+above together take `small2e` from 71.9 ms to 49.7 ms and `gentle` -- which
+asked for the value and nothing else -- from 52.1 ms to 41.6 ms.
+
+## A format is read where it lies
+
+A format was read by taking its length, allocating that many bytes, and
+reading the file into them, after which every record was copied a second
+time out of that buffer and into the room the engine keeps it in. The first
+copy buys nothing: the reader already takes one record at a time, and asking
+for thirteen megabytes of fresh anonymous memory makes the kernel clear
+pages that are immediately overwritten. Annotating a run of an empty LaTeX
+document put the read and the faulting it caused at about a seventh of the
+whole run.
+
+The file is mapped instead, through the same `src/input.c` that maps a
+document, and the records are taken straight out of the mapping. Nothing
+retains a pointer into it -- every array is copied into the engine's own
+storage as before -- so the mapping is closed as soon as the format has been
+read. Measured on TeX Live 2023, loading the 13 MB LaTeX format fell from
+22.9 ms to 17.1 ms, and both strict corpora agree with the reference.
+
+## Switching on a node without waiting for its copy
+
+The four loops that walk a finished list -- two writing DVI, two writing PDF
+-- take each node by value, because what they call while holding it may move
+the arena the node lives in. The switch that follows then read the kind back
+out of the copy just written to the stack, and the branch had to wait for
+those stores to reach memory and come back. Annotating a `gentle` run put
+that one comparison and its branch at more than half of what the DVI walker
+cost, which was itself the largest single cost in the run.
+
+The kind is now read from the arena directly, as a separate load, and only
+the switch uses it; the cases still read the copy, so nothing holds a pointer
+across a call that could move the arena. The copy and the branch then have no
+dependency between them. `gentle`, the corpus's one long plain document, went
+from 52.1 ms to 41.6 ms with this and the tracing gate below, against the
+reference's 40.6 ms.
+
+## What a run that traces nothing pays
+
+`\tracingcommands` is off in every run that is not being looked at, and the
+fifteen places that trace a command sit on the path every command takes.
+The test was inside the traced function, so a run that traces nothing still
+made the call: 0.75% of a corpus run, spent deciding to do nothing. The test
+is now an inline gate on the parameter, which is a field already in cache,
+and the body it guards is unchanged.
+
+Separately, the filename database sized its hash table by doubling from
+32,768 slots, rehashing everything held at each step. A stock installation
+holds about forty thousand names, so half of them were hashed twice over
+before the last was in. The lists are mapped before they are parsed, so the
+number of lines in them -- an upper bound on the names they hold -- is
+counted first and the table is sized once.
+
+Both strict corpora agree with the reference with all of these in place.
+
 An exact fresh-directory process trace over `testmath` compared baseline
 commit `fb3a1b8` with the candidate. The baseline used five lookup children:
 the restricted-shell allowlist, `TEXMFDBS`, a marker lookup, and two persistent

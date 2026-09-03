@@ -18,11 +18,17 @@ already supported.
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
 | Adversarial corpus | All six pinned stress cases agree across 98 pages; CI runs the suite strictly |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, and both strict document corpora |
-| Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract |
+| Measured performance | 1.76× median and 1.67× aggregate lower wall time than pdfTeX over the release corpus, and lower peak RSS on every document ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
+| Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract; not met |
 | First release target | Linux x86-64 |
 
-The project will publish a headline speedup only after measuring it under the
-full benchmark contract.
+The corpus has been measured under the full benchmark contract. Over the
+fourteen release documents HSTeX is faster than pdfTeX on thirteen, by 1.76×
+at the median and 1.67× summed over the corpus, and it uses less memory on
+every one. `gentle`, the corpus's one long plain document, is level with the
+reference at 0.95×. That is short of the 5× milestone, and the per-document
+figures, the machine, the build, and every individual run time are recorded in
+[`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
 
 ## Requirements
 
@@ -158,7 +164,9 @@ every individual wall time. Final-pass and fresh three-pass-plus-BibTeX
 results are separate, as are ordinary and persistent-process results.
 
 The authoritative procedure is
-[`docs/BENCHMARK_CONTRACT.md`](docs/BENCHMARK_CONTRACT.md).
+[`docs/BENCHMARK_CONTRACT.md`](docs/BENCHMARK_CONTRACT.md), and the latest
+measurement taken under it is
+[`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
 
 ## Source use and provenance
 
@@ -180,6 +188,8 @@ or exact source version and location in
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — execution and data design
 - [`docs/BENCHMARK_CONTRACT.md`](docs/BENCHMARK_CONTRACT.md) — correctness and
   timing rules
+- [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) — the latest
+  measurement taken under that contract
 - [`docs/RELEASING.md`](docs/RELEASING.md) — release procedure
 - [`NOTICE`](NOTICE) and
   [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — attribution and
