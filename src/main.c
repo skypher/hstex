@@ -576,10 +576,45 @@ static int parallel_hash_file(const char *path, uint64_t *hash)
 /* True for the source extensions a build reads; the outputs it writes
    (.aux, .toc, .log, .pdf, ...) are deliberately excluded, since they change
    every run and would make the cache always look stale. */
+static bool parallel_is_state_name(const char *name);
+
+/* WHAT A RUN READS, NOT ONLY WHAT SOMEBODY WROTE. A cache is worth resuming
+   only where everything the run would read again is unchanged, and a run
+   reads more than its sources: the auxiliary state a previous pass left is
+   read back at the start of the next one, and reading a different .toc is
+   what makes a second pass differ from a first. Leaving those out made a
+   second run look warm when it was not, so pages typeset before the table of
+   contents existed were reused and the contents never appeared -- measured
+   on cfgguide and cyrguide, whose first page came back missing every entry.
+   See docs/DECISIONS.md, what-makes-a-checkpoint-cache-warm. */
 static bool parallel_is_source_name(const char *name)
 {
-    static const char *const exts[] = {".tex", ".sty", ".cls", ".ltx",
-                                       ".def", ".clo", ".bib", ".cfg"};
+    static const char *const exts[] = {
+        ".tex", ".sty", ".cls", ".ltx", ".def", ".clo", ".bib", ".cfg",
+    };
+    const char *dot = strrchr(name, '.');
+    if (dot != NULL) {
+        for (size_t index = 0U; index < sizeof(exts) / sizeof(exts[0]);
+             ++index) {
+            if (strcmp(dot, exts[index]) == 0) {
+                return true;
+            }
+        }
+    }
+    return parallel_is_state_name(name);
+}
+
+/* WHAT A PASS LEAVES FOR THE NEXT ONE. These are read back at the start of a
+   run, before anything is set, so a change in one of them can move any page
+   -- which is the whole reason a second pass differs from a first. They
+   count towards whether a cache is still good, and a change in one of them
+   is never a change an incremental rebuild may reuse pages across. */
+static bool parallel_is_state_name(const char *name)
+{
+    static const char *const exts[] = {
+        ".aux", ".toc", ".lof", ".lot", ".out", ".bbl", ".ind", ".nav",
+        ".snm", ".brf", ".gls", ".glo",
+    };
     const char *dot = strrchr(name, '.');
     if (dot == NULL) {
         return false;
@@ -1102,6 +1137,28 @@ struct parallel_changed_file {
     int first_page;
 };
 
+static int parallel_changed_files(const char *cache_dir,
+                                 struct parallel_changed_file *changed,
+                                 int capacity);
+
+/* Whether any of what a previous pass left has moved since the cache was
+   built. Such a change is not one pages may be reused across. */
+static bool parallel_state_changed(const char *cache_dir)
+{
+    struct parallel_changed_file changed[256];
+    int count = parallel_changed_files(cache_dir, changed,
+                                       (int)(sizeof(changed) /
+                                             sizeof(changed[0])));
+    for (int index = 0; index < count; ++index) {
+        const char *name = strrchr(changed[index].path, '/');
+        name = name == NULL ? changed[index].path : name + 1;
+        if (parallel_is_state_name(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Read the source record, hashing each file again; fill `changed' with the
    files whose content moved and return how many (up to `capacity'), or -1 if
    the record is missing. */
@@ -1341,7 +1398,13 @@ static int run_parallel_document(const char *format_file,
                                &cached_pages) == 0) {
         int ckpts[1024];
         int nck = parallel_checkpoint_pages(cache_dir, ckpts, 1024);
-        int reuse = nck > 0
+        /* Only an edit to something somebody wrote may reuse pages. What a
+           previous pass left is read before the first page is set, so a
+           change there can move any page: measured, cfgguide and cyrguide
+           came back with an empty table of contents because page one was
+           reused from the pass that wrote the .toc rather than set again
+           from it. */
+        int reuse = nck > 0 && !parallel_state_changed(cache_dir)
                         ? parallel_incremental_reuse_page(cache_dir, ckpts, nck)
                         : -1;
         if (reuse >= 0) {

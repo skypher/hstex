@@ -284,6 +284,41 @@ positional. `tests/pdflatex/run-driver.sh` holds all of it -- a mode that
 works, a mode that is refused and says why, an error that names its file and
 line, and no error still opening with `! ` when the flag is on.
 
+## What makes a checkpoint cache warm
+
+Two of the four documents the driver gate pinned came from the same
+misunderstanding of what a run reads. A cache was judged still good by
+hashing the document and the files somebody wrote beside it -- `.tex`,
+`.sty`, `.cls` and their like. But a run reads more than that: the auxiliary
+state a previous pass left is read back at the start of the next one, and
+reading a different `.toc` is the whole reason a second pass differs from a
+first. Leaving it out made a second run look warm when it was not, so pages
+set before the table of contents existed were reused and the contents never
+appeared.
+
+Those files now count towards the hash, and they are also never a change an
+incremental rebuild may reuse pages across: an edit to a source has a place
+in the document and pages before it can stand, while what a pass left is read
+before the first page is set and can move any of them.
+
+Separately, a destination name restored from a checkpoint was allocated
+without room for a terminator and left unterminated, where every other path
+allocates `length + 1` and terminates. What reads a name reads it as a
+string, so `technote` came back with `section.0.1?"{` in place of
+`section.0.1`, and lost the bookmark that pointed at it. `technote` agrees
+with the reference now and its pin is gone.
+
+WHAT IS LEFT. `cfgguide` and `cyrguide` still differ, and not for either of
+those reasons. A second pass over them run sequentially agrees with the
+reference; the same pass run in parallel does not, whichever directory the
+output goes to, so it is neither the cache nor where files are written. Chunk
+workers open write streams the way the carrier does -- nothing tests
+`parallel_is_worker` on that path -- so more than one process truncates a
+file that one of them has still to read, and the `.toc` a chunk reads for
+page one can be the empty one another chunk just opened. Deciding which
+process owns an auxiliary write in a chunked run is a change to the design of
+that feature rather than a repair to it, and is not made here.
+
 ## The path an installation actually takes
 
 The public corpus drives the engine directly, `hstex --format`, one pass. That

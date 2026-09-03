@@ -4846,13 +4846,20 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
                              "corrupt checkpoint pdf state");
         }
         if (name_length != 0U) {
-            dest->name = malloc((size_t)name_length);
+            /* Room for the terminator the writer does not send. A name is
+               made with one everywhere else -- see the allocation beside
+               `entry->name[length] = 0' -- and what reads one reads it as a
+               string, so a name restored without it ran on into whatever
+               followed: measured, `section.0.1' came back as
+               `section.0.1?"{'. */
+            dest->name = malloc((size_t)name_length + 1U);
             if (dest->name == NULL ||
                 fread(dest->name, 1U, (size_t)name_length, in) !=
                     (size_t)name_length) {
                 return set_error(error, error_capacity,
                                  "corrupt checkpoint pdf state");
             }
+            dest->name[name_length] = '\0';
         }
         dest->length = (size_t)name_length;
         if (fread(&number, sizeof(number), 1U, in) != 1U ||
