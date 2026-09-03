@@ -56,3 +56,42 @@ if grep -q 'building native format' "$work/second.stdout"; then
     echo "driver rebuilt an unchanged native format" >&2
     exit 1
 fi
+
+# -halt-on-error stops at the first error, writes nothing, and says so. The
+# flag was accepted and discarded once, so a document with three undefined
+# control sequences came out as a finished PDF and a successful exit: what is
+# checked here is the reference's own answer to the same document -- one
+# fault reported, no PDF, and a status that says the run failed.
+cat >"$work/broken.tex" <<'BROKEN'
+\documentclass{article}
+\begin{document}
+Before.
+\undefinedcommandone
+\undefinedcommandtwo
+\newpage
+After.
+\end{document}
+BROKEN
+
+if HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+    "$driver" -halt-on-error -output-directory="$work/halt" \
+    -jobname=halt "$work/broken.tex" >"$work/halt.stdout" 2>&1; then
+    echo "-halt-on-error reported success on a document with errors" >&2
+    exit 1
+fi
+if [ -e "$work/halt/halt.pdf" ]; then
+    echo "-halt-on-error left an output file behind" >&2
+    exit 1
+fi
+if ! grep -q '^!  ==> Fatal error occurred, no output PDF file produced!' \
+        "$work/halt/halt.log"; then
+    echo "-halt-on-error did not say what the run came to" >&2
+    cat "$work/halt/halt.log" >&2
+    exit 1
+fi
+# The second undefined control sequence is past the stop and must not be
+# reported: a run that halted read no further.
+if grep -q 'undefinedcommandtwo' "$work/halt/halt.log"; then
+    echo "-halt-on-error carried on past the first error" >&2
+    exit 1
+fi

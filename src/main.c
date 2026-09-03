@@ -411,6 +411,11 @@ static int run_document_from_format(const char *format_file,
     }
     size_t document_output_tokens = 0U;
     int status = drain_engine(&engine, document_path, &document_output_tokens);
+    /* A run that stopped at an error did not do what it was asked, whatever
+       the drain made of it. */
+    if (status == 0 && engine.halted) {
+        status = 1;
+    }
     if (status == 0) {
         if (pages_out != NULL) {
             *pages_out = engine.shipped_pages;

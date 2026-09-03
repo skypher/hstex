@@ -208,6 +208,46 @@ than the count of allocations suggested: glibc satisfies ninety thousand
 small requests out of a heap it already has, so what was removed was
 bookkeeping and rounding rather than work with the kernel.
 
+## Stopping at the first error
+
+`-halt-on-error` was accepted by the driver and then dropped on the floor: the
+argument matched a list whose only action was `continue`, nothing was set, and
+nothing reached the engine, which had no such mode to reach. A document with
+three undefined control sequences therefore came out of `hstex-pdflatex
+-halt-on-error` as a finished PDF and a zero exit, where the reference gives
+one fault, no PDF, and a status of 1. `docs/COMPATIBILITY.md` listed the flag
+as supported throughout, and `--help` advertised it. A build script gating on
+that status passed a broken document.
+
+The reference is the specification, and a probe of pdfTeX 1.40.25 pins it: the
+error and its context line are printed and the help text after them is not,
+because there is nobody being helped; the run then reports what it came to as
+`!  ==> Fatal error occurred, no output PDF file produced!`, writes no output
+file, and exits 1.
+
+HSTeX now does the same. The engine takes the mode from
+`HSTEX_HALT_ON_ERROR`, which the driver sets from the flag -- the engine's own
+arguments are positional, so a variable is what there is room for. At the
+first error `tex_error_with_help` prints the error and its context, skips the
+help, and gives up the way the hundredth error already did; the end of the run
+says what it came to; and what was written of an output file is removed, so
+that "no output PDF file produced" is true of the directory and not only of
+the log. The checkpoint cache is not written either: a cache of half a
+document is not one a later run should resume.
+
+`tests/pdflatex/run-driver.sh` holds it to all four of those -- a failing
+status, no output file, the fatal line in the log, and no report of the error
+after the stop.
+
+WHAT IS STILL NOT DONE. The exit status says nothing about errors unless a run
+halted, though the engine's own comment beside `history` says that history is
+what the exit status is made of. The reference exits 1 for a document with
+errors in any interaction mode; HSTeX exits 0. Making that true here means
+`tests/corpus/run-corpus.sh` must stop reading a nonzero status from HSTeX as a
+disagreement, since several stress documents are expected to report faults and
+the reference is already run with its status ignored. That is a change to the
+corpus runner as much as to the engine, and it is not made here.
+
 ## The path an installation actually takes
 
 The public corpus drives the engine directly, `hstex --format`, one pass. That

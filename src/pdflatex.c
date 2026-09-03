@@ -633,6 +633,7 @@ int main(int argument_count, char **arguments)
     const char *document = NULL;
     bool rebuild = false;
     bool restricted_shell_escape = true;
+    bool halt_on_error = false;
     bool options = true;
     for (int index = 1; index < argument_count; ++index) {
         const char *argument = arguments[index];
@@ -693,11 +694,14 @@ int main(int argument_count, char **arguments)
             rebuild = true;
             continue;
         }
+        if (options && (strcmp(argument, "-halt-on-error") == 0 ||
+                        strcmp(argument, "--halt-on-error") == 0)) {
+            halt_on_error = true;
+            continue;
+        }
         if (options &&
             (strcmp(argument, "-interaction=errorstopmode") == 0 ||
              strcmp(argument, "--interaction=errorstopmode") == 0 ||
-             strcmp(argument, "-halt-on-error") == 0 ||
-             strcmp(argument, "--halt-on-error") == 0 ||
              strcmp(argument, "-file-line-error") == 0 ||
              strcmp(argument, "--file-line-error") == 0 ||
              strcmp(argument, "-output-format=pdf") == 0 ||
@@ -798,7 +802,16 @@ int main(int argument_count, char **arguments)
        in parallel. HSTEX_NO_PARALLEL=1 reverts to a plain sequential compile
        for anyone who does not want the cache. Either way the engine writes the
        same job.pdf into the output directory. */
-    bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL;
+    /* `-halt-on-error' reaches the engine as an environment variable rather
+       than an argument, because what the engine is given here is positional.
+       A run that stops at an error writes nothing and exits nonzero, so the
+       checkpoint cache is not wanted either: it would be a cache of half a
+       document. */
+    if (halt_on_error && setenv("HSTEX_HALT_ON_ERROR", "1", 1) != 0) {
+        (void)fprintf(stderr, "hstex-pdflatex: cannot ask the engine to halt\n");
+        return 1;
+    }
+    bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL && !halt_on_error;
     const char *mode =
         parallel ? (restricted_shell_escape ? "--parallel-output"
                                             : "--parallel-output-no-shell")

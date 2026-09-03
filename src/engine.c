@@ -2407,6 +2407,12 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
     } else if (dead_nodes != NULL && strcmp(dead_nodes, "poison") == 0) {
         engine->dead_node_check = HSTEX_DEAD_NODES_POISONED;
     }
+    /* Stop at the first error. The driver turns `-halt-on-error' into this,
+       and a run started here directly can ask for it the same way. */
+    const char *halt = getenv("HSTEX_HALT_ON_ERROR");
+    if (halt != NULL && halt[0] != '\0' && strcmp(halt, "0") != 0) {
+        engine->halt_on_error = true;
+    }
     /* Where the run is to be handed to another process; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     const char *chunked = getenv("HSTEX_PARALLEL");
@@ -19371,6 +19377,20 @@ static void tex_error_with_help(struct hstex_engine *engine,
     print_text(engine, message);
     print_byte(engine, '.');
     show_error_context(engine);
+    if (engine->halt_on_error) {
+        /* The reference prints the error and its context and stops there --
+           no help, because there is nobody being helped: measured, a run
+           with -halt-on-error logs the two lines above and goes straight to
+           its statistics. What it came to is said at the end of the run,
+           where the reference says it. */
+        print_line(engine);
+        (void)fflush(diagnostic_stream(engine));
+        engine->history = 3;
+        engine->end_requested = true;
+        engine->gave_up = true;
+        engine->halted = true;
+        return;
+    }
     print_help(engine, help);
     if (engine->error_count == HSTEX_ERROR_LIMIT) {
         /* A run this far gone is not worth going on with; the reference
@@ -51860,11 +51880,20 @@ int hstex_engine_run(struct hstex_engine *engine,
         return -1;
     }
     int closed = pdf_close(engine, error, error_capacity);
+    /* "no output PDF file produced" has to be true of the directory and not
+       only of the log, so what was written of one is taken away again. */
+    if (engine->halted && engine->output_name != NULL) {
+        (void)remove(engine->output_name);
+    }
     /* What the reference says a run came to. See docs/DECISIONS.md,
        what-a-run-says-at-its-end. */
     if (!engine->parallel_is_worker) {
         print_fresh_line(engine);
-        if (engine->shipped_pages == 0 || engine->output_name == NULL) {
+        if (engine->halted) {
+            print_text(engine,
+                       "!  ==> Fatal error occurred, no output PDF file "
+                       "produced!");
+        } else if (engine->shipped_pages == 0 || engine->output_name == NULL) {
             print_text(engine, "No pages of output.");
         } else {
             size_t bytes = engine->pdf_written != 0U ? engine->pdf_written

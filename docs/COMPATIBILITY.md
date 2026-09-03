@@ -55,7 +55,8 @@ which is useful for testing an unpacked build alongside an installed release.
 | `-output-directory=DIR`, `--output-directory=DIR` | Supported |
 | `-jobname=NAME`, `--jobname=NAME` | Supported |
 | `-interaction=errorstopmode` | Supported; this is HSTeX's current interaction mode |
-| `-halt-on-error`, `-file-line-error` | Supported |
+| `-halt-on-error` | Supported: stops at the first error, writes no output, exits nonzero |
+| `-file-line-error` | Accepted and ignored; messages keep their ordinary form |
 | `-no-shell-escape` | Supported; disables the default TeX Live restricted-command profile |
 | `-output-format=pdf` | Supported |
 | `--format-cache=DIR`, `--rebuild-format` | HSTeX extensions |

@@ -2187,6 +2187,11 @@ struct hstex_engine {
        recoverable-errors. */
     int32_t error_count;
     int32_t history;
+    /* Stop at the first error rather than recovering from it: `-halt-on-error'
+       through the driver, HSTEX_HALT_ON_ERROR here. A run that stops this way
+       writes no output and says so, and its exit status says so too. */
+    bool halt_on_error;
+    bool halted;
     bool inner_mode;
     hstex_token after_assignment_token;
     struct hstex_source_location after_assignment_location;
