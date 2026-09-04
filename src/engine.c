@@ -14598,7 +14598,12 @@ static void move_children(struct hstex_engine *engine, struct node_move *to,
                           struct hstex_node *node)
 {
     switch (node->kind) {
+    /* A \vadjust still standing in a paragraph holds its material the way a
+       box does, and it moves the same way; left where it was, the range
+       points into the arena that was given back, and the line breaker finds
+       nothing there to move behind the line. */
     case HSTEX_NODE_LIST:
+    case HSTEX_NODE_ADJUST:
         node->value.list.node_start = move_list(
             engine, to, node->value.list.node_start, node->value.list.node_count);
         break;

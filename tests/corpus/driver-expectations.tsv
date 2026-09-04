@@ -8,4 +8,3 @@
 # regression: when one of these is repaired, delete its line.
 #
 # document	expected	what comes out wrong, and where it lives
-usrguide-historic	differs	one marginal note placement is missed on page 25, and every later note is one slot late. Pagination is identical: pages 25 and 26 hold the same text, and the only differences in the whole document are page 25 losing "New description 2001/06/01", page 27 carrying that date where the reference carries 1995/12/01, and page 29 reading "New description" where the reference reads "New feature". Not the checkpoint path and not the reference being unsettled: it differs with HSTEX_NO_PARALLEL=1 and against a fixpoint reference. A plain marginpar at a page boundary agrees, in vertical and in horizontal mode, at every filler length swept, so the trigger needs the queue state this document builds up.

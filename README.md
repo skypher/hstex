@@ -116,9 +116,9 @@ tests/corpus/run-driver-corpus.sh --strict ./build/hstex-pdflatex ./build/hstex
 ```
 
 Each document is held to `tests/corpus/driver-expectations.tsv`, which pins
-four documents as currently disagreeing and says what comes out wrong in
-each. The gate fails whichever way a document moves, so a repair is caught as
-surely as a regression.
+any document currently disagreeing and says what comes out wrong in it; every
+document agrees today, so it pins none. The gate fails whichever way a
+document moves, so a repair is caught as surely as a regression.
 
 CI runs the adversarial suite with `--strict`; omitting it is useful while
 adding a newly pinned finding. Corpus identity, licenses, stdin profiles, and

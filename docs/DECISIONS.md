@@ -351,57 +351,61 @@ were wrong.
 
 ## The marginal note usrguide-historic places late
 
-The one document the driver gate still pins, and what is known about it, so
-that the next attempt starts from the measurements rather than making them
-again.
+The one document the driver gate pinned, and what turned out to be wrong. It
+was not the page builder.
 
-The whole document differs in three places and they are one shift. Page 25
-loses `New description 2001/06/01`; page 27 carries that date where the
-reference carries `1995/12/01`; page 29 reads `New description` where the
-reference reads `New feature`. One placement is missed at page 25 and every
-note after it is one slot late.
+The whole document differed in three places and they were one shift. Page 25
+lost `New description 2001/06/01`; page 27 carried that date where the
+reference carries `1995/12/01`; page 29 read `New description` where the
+reference reads `New feature`. One placement was missed at page 25 and every
+note after it was one slot late. Pagination was not what differed: pages 25
+and 26 hold the same text on both sides, and the page breaks agree.
 
-Pagination is not what differs. Pages 25 and 26 hold the same text on both
-sides, and the sentence the note is anchored to -- `There are therefore some
-extra short-form ligatures...`, the paragraph after `\NEWdescription` at
-line 1321 -- is on page 25 in both. The page breaks agree; what differs is
-whether the note was attached to the page being shipped.
+WHAT THE TRACES SHOWED. Both engines were made to log every marginpar as
+LaTeX creates it (`\@xympar`) and as the output routine places it
+(`\@addmarginpar`). The creations were identical, thirty-five on the same
+pages; the placements were not, the reference calling `\@addmarginpar` on
+page 25 and hstex not. `\tracingpages` then put the two page builders side
+by side: 1357 identical lines, and then the reference sees a penalty of
+-10004 after the first line of the paragraph at 40pt on page 25, holds the
+page, restarts it at `\vsize=\maxdimen` on an empty box, sees -10002 and
+places the note -- which is what `\end@float` at latex.ltx:14442 emits
+through `\vadjust{\penalty-\@Miv \vbox{}\penalty\@floatpenalty}` for a
+marginpar written inside a paragraph -- and hstex sees the 400-penalty that
+follows the line, with nothing between. Every later event lines up at the
+same page totals, so the group was not late: it was gone. A trace of the
+contribution list confirmed the paragraph arriving as glue, box, penalty,
+glue, box, with no adjust material behind its first line; and a trace at the
+line breaker's hand-off, where a `\vadjust` node's material moves out of
+the line and behind it, caught the drop: the node's range began at item
+27792 of a list arena that by then held 1146.
 
-Four things it is not, each measured rather than reasoned. It is not the
-checkpoint path: it differs the same way under `HSTEX_NO_PARALLEL=1`. It is
-not the reference being unsettled, which is what `cfgguide` and `cyrguide`
-turned out to be: it differs against a reference run to its fixpoint. It is
-not `\outputpenalty`: a probe firing the output routine on `\penalty-10002`
-and then `\penalty-10000` gets `-10002` and `-10000` from both engines. And
-it is not a marginal note at a page boundary in the ordinary way: a swept
-range of filler lengths, in vertical mode and in the `\hskip 1sp
-\marginpar` form the class actually uses, agrees at every length.
+WHAT IT WAS. Nodes and their lists live in arenas that are compacted every
+eighth page (`compact_nodes`), by walking every root and moving what is
+reachable into fresh arenas. The walk reaches a paragraph still being built,
+and moves the nodes in it; for each node it also moves the lists the node
+holds -- a box's, a discretionary's, an insertion's, a leader's box -- so
+that the node still names its material afterwards. A `\vadjust` node holds
+its material the same way a box does, and was not in that list. Its range
+was left naming the old arena, which was gone; at the hand-off the range
+exceeded the new arena and the node was skipped, so the line was appended
+with nothing behind it and the marginpar's penalties never reached the page
+builder. Page 24 is the third multiple of eight, and `\NEWdescription` on
+line 1328 wrote its `\vadjust` after page 24 shipped and before its line
+was broken, which is the state the drop needed and why no shorter document
+reproduced it: cut from the front by even four pages, the compaction lands
+elsewhere.
 
-So the trigger needs the queue state this document builds -- it places five
-notes on page 22 alone -- and no smaller document reproducing it has been
-found.
+The fix is one case: an adjust node's list moves with it, as a box's does.
+With it, the two `\tracingpages` streams are identical over the whole
+document, the driver gate finds every document agreeing, and the pin is
+gone.
 
-WHAT A TRACE OF THE MARGINPARS SHOWS. Both engines were made to log every
-marginpar as LaTeX creates it (`\@xympar`) and as the output routine places
-it (`\@addmarginpar`), with the page counter at each. The creations are
-identical -- thirty-five, the same page for every one, including the single
-one on page 25 at a page total of 29.94pt, right after the page-24 break. The
-placements are not: the reference calls `\@addmarginpar` on page 25 and
-hstex does not, so hstex places thirty-four where the reference places
-thirty-five, and every note from page 25 on is one placement behind.
-
-The marginpar is not discarded. A marginpar emits a float penalty of -10002,
-which the page builder fires the output routine on; a trace of every such
-penalty shows none discarded on an empty page and every one fired. What the
-trace shows instead is a gap: the output fires while page 24 is built and
-again while page 26 is built, and never while page 25 is built. So the
-page-25 marginpar's penalty is contributed after page 25 has already been
-shipped, and lands on a later page -- a divergence in when the page builder
-ships page 25 relative to when the paragraph carrying the marginpar is
-contributed, not in whether the penalty is seen. That is where the next
-attempt starts; it was not chased into a page-builder change on a mechanism
-not yet pinned to one decision, three earlier readings of these documents
-having each been wrong from reasoning ahead of the measurement.
+Three earlier readings of this document -- a chunk race, a dropped marginpar
+in the page builder, the checkpoint path -- were each wrong from reasoning
+ahead of the measurement. What found it was diffing what the two engines
+themselves report, first LaTeX's own marginpar macros, then `\tracingpages`,
+and then following the one node that differed.
 
 ## Two caches beside the format cache
 
@@ -488,9 +492,9 @@ given the same two passes. Three are the checkpoint path's own: `cfgguide`
 and `cyrguide` come out with the wrong table of contents, and `technote` with
 a corrupted named destination and a lost bookmark title; all three agree
 under `HSTEX_NO_PARALLEL=1`, which is what places the fault. The fourth,
-`usrguide-historic`, differs the same way with the checkpoint path off: it
-drops a marginal note on the second pass, so it belongs to the ordinary
-engine on a pass the one-pass corpus never reaches. All four reproduce on the
+`usrguide-historic`, differed the same way with the checkpoint path off: it
+dropped a marginal note, so it belonged to the ordinary engine (the arena
+compaction; see the-marginal-note-usrguide-historic-places-late). All four reproduce on the
 engine as it stood at `6870489`, before any of this session's work.
 
 `tests/corpus/run-driver-corpus.sh` runs the corpus that way and holds each
