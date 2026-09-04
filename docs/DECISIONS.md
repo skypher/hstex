@@ -382,6 +382,74 @@ notes on page 22 alone -- and no smaller document reproducing it has been
 found. Nothing in the page builder was changed on a hypothesis that could not
 be reproduced.
 
+## Two caches beside the format cache
+
+The floor of a LaTeX run, measured on an empty document, was 42.7 ms: 16.5
+loading the format, 11.3 the one `kpsewhich` child the class lookup starts,
+and 14.9 reading and obeying the class and `\begin{document}`. The last two
+are the same on every run of the same document, and the driver spent a
+further thirty milliseconds before the engine started, asking `kpsewhich`
+three questions about the installation. Both are now kept.
+
+THE INSTALLATION RECORD. Where `latex.ltx` is, where `pdftexconfig.tex` is,
+and which trees keep an `ls-R` are properties of the installation, and each
+cost a child that read and hashed the `ls-R` files to answer. They are kept
+in `installation` under the cache root, beside a stamp over every `ls-R` the
+tree list names and the search environment -- the same stamp the format key
+already uses -- and used again while the stamp holds. A stamp that does not
+hold costs the three children and never a wrong answer, and the format key
+still hashes the files themselves, so what is trusted is only where they
+are. Measured, the driver's own children went from three to none, and a
+sequential run of `small2e` through `hstex-pdflatex` from about 96 ms to
+48.8 ms -- the driver's overhead over the engine is essentially gone.
+
+THE PREAMBLE CACHE. The installation format carries `latex.ltx`; what a
+document's preamble adds is the same every run and is put by too, keyed on
+the format it sits on, the document's absolute path and its text up to
+`\begin{document}`, and every source file beside it that the preamble could
+have read. The state is taken at the first read of the document's own
+`.aux`, from inside `\begin{document}`: everything before that read is
+preamble, and the `.aux` is read after resuming, so what a pass leaves for
+the next is never baked in. The existing page-zero checkpoint would not do
+here, because it is taken after that read. The hook sits on both routes a
+file is pushed by -- `\input` goes straight onto the source stack, which
+the first attempt missed. A first run of a document has no `.aux` to read
+and so cannot put the preamble by; the driver's default path settles the
+`.aux` inside one invocation and puts it by on the second pass, the
+sequential path on the second run.
+
+Taking the state up cost more than it saved at first: a checkpoint is
+deflated at level 1, right for a chunk written once and read once, and
+inflating the whole of the engine's state on every run took 65.9 ms against
+52.7 for reading the class afresh. A preamble is written once and read on
+every later run, so it is kept raw, under a magic of its own. Then the
+resume still copied the state three times -- into a buffer, into a second
+buffer through `fmemopen`, and record by record into the engine -- so it is
+now mapped and read where it lies, as the format is. Resuming then costs
+45.6 ms against 55.5 fresh at the engine, and 48.8 against 55.7 through the
+driver's sequential path, with the documents byte-identical. The remaining
+child is the finder that the `.vf` and `.pk` lookups start after the
+preamble, which no preamble cache can remove.
+
+WHY IT IS OFF. Run under the driver gate it failed two documents it had
+passed. Settled sequentially over four runs, resuming on the third and the
+fourth, `cfgguide` and `cyrguide` come out one pass behind a fixpoint
+reference -- the table of contents carries the page numbers of the pass
+before -- where the same four runs without the cache agree, and the `.toc`
+and `.aux` files left on disk are identical either way. So the resumed
+engine reads the same files and sets a different first page from them, and
+the cause is not found. The cache is opt-in, `HSTEX_PREAMBLE_CACHE=1`, until
+it is; the machinery -- the hook, the raw checkpoint, the mapped resume --
+stays, measured and tested on a document without a table of contents, for
+the next attempt to start from.
+
+The default path's warm runs resume chunk checkpoints and never reach the
+preamble in any case; only its cold passes would take it up. `tests/pdflatex/run-driver.sh` holds all of it: the
+record's four lines, a third sequential run opted in taking the preamble up,
+and a fourth reading the class afresh into the same directory coming out the
+same bytes -- the same directory because the trailer ID is seeded from the
+output's name, which is what the first two forms of that check tripped on.
+
 ## The path an installation actually takes
 
 The public corpus drives the engine directly, `hstex --format`, one pass. That

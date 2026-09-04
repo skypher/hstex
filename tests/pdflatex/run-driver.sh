@@ -133,3 +133,56 @@ if grep -q '^! Undefined control sequence' "$work/fileline/fileline.log"; then
     echo "-file-line-error left an error opening with \"! \"" >&2
     exit 1
 fi
+
+# Two caches beside the format cache. The installation record keeps what
+# kpsewhich answered about where latex.ltx and pdftexconfig.tex are and which
+# trees keep an ls-R, under a stamp over those lists; it exists after a first
+# run and holds four lines. The preamble cache keeps a document's state from
+# just before its .aux is first read: a first run cannot take it (there is no
+# .aux to read yet), a second writes it, a third takes it up and must produce
+# the same document as a run that read the class afresh.
+test -s "$work/cache/installation"
+if [ "$(wc -l <"$work/cache/installation")" -ne 4 ]; then
+    echo "the installation record does not hold four lines" >&2
+    cat "$work/cache/installation" >&2
+    exit 1
+fi
+# The documents are compared byte for byte below, so the clock is pinned:
+# a PDF carries the time it was made.
+SOURCE_DATE_EPOCH=1767261600
+FORCE_SOURCE_DATE=1
+export SOURCE_DATE_EPOCH FORCE_SOURCE_DATE
+# The sequential path is the one that reads the preamble from the cache on
+# every run; the default path's warm runs resume chunk checkpoints instead
+# and only its cold passes take the preamble up.
+# Opted in: the preamble cache is off by default while it is measured
+# unsound on documents with a table of contents; the plumbing is held here on
+# a document without one.
+for pass in 1 2 3; do
+    HSTEX_NO_PARALLEL=1 HSTEX_PREAMBLE_CACHE=1 run_driver \
+        "$work/pre$pass.stdout" -output-directory="$work/pre" -jobname=pre \
+        "$source"
+done
+if ! grep -q 'preamble taken up' "$work/pre/pre.log"; then
+    echo "the third run did not take up the preamble put by" >&2
+    grep -n 'preamble' "$work/pre/pre.log" >&2
+    exit 1
+fi
+if ! ls "$work/cache/preambles"/*/preamble.ckpt >/dev/null 2>&1; then
+    echo "no preamble checkpoint was put by" >&2
+    exit 1
+fi
+# The control is a fourth run of the same job, into the same directory,
+# reading the same settled .aux, told to read the class afresh. The trailer
+# ID is seeded from the output's name, so the directory has to be the same
+# one; what is left to differ is where the preamble came from, and the
+# documents must be the same bytes.
+cp "$work/pre/pre.pdf" "$work/pre-cached.pdf"
+HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+    HSTEX_NO_PARALLEL=1 \
+    "$driver" -output-directory="$work/pre" -jobname=pre "$source" \
+    >"$work/fresh.stdout" 2>&1
+if ! cmp -s "$work/pre-cached.pdf" "$work/pre/pre.pdf"; then
+    echo "a run from the preamble cache differs from a fresh one" >&2
+    exit 1
+fi

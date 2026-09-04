@@ -130,6 +130,16 @@ got faster and one moved 0.5% the other way: 1.7% over the corpus, aggregate
 1.00x. Loading a format alone drops peak RSS from 24,576 KB to 23,680 KB and
 minor page faults from 3,952 to 3,692.
 
+The driver, `hstex-pdflatex`, is not what the contract times, and it had an
+overhead of its own that the engine numbers above do not show: three
+`kpsewhich` children before the engine started, about thirty milliseconds.
+Those are now answered from a record kept beside the format cache,
+recorded under "Two caches beside the format cache". Measured through the
+driver's sequential path on `small2e`: about 96 ms before, 55.7 ms after,
+against the engine's own 55.5 ms. A preamble cache built there as well takes
+that to 48.8 ms but is off by default, being measured unsound on documents
+with a table of contents.
+
 The one `kpsewhich` child a LaTeX run still starts cannot be removed by
 teaching the lookup more: it is started by a bitmap font that resolves in a
 tree outside `TEXMFDBS`, reached by walking the disk rather than by an

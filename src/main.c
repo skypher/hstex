@@ -385,20 +385,56 @@ static int run_document_from_format(const char *format_file,
     }
     if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
         hstex_engine_set_output_directory(&engine, output_directory, error,
-                                          sizeof(error)) != 0 ||
-        hstex_engine_read_format(&engine, format_file, error, sizeof(error)) !=
-            0 ||
-        hstex_engine_set_restricted_shell_escape(
-            &engine, restricted_shell_escape, error, sizeof(error)) != 0) {
+                                          sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex: %s\n",
                       error[0] == '\0' ? "cannot prepare document output"
                                        : error);
         hstex_engine_destroy(&engine);
         return 1;
     }
-    if (hstex_engine_begin_job(&engine, document_path, error, sizeof(error)) !=
-        0) {
-        (void)fprintf(stderr, "hstex: %s\n", error);
+    /* A preamble put by from an earlier run of this document is taken up
+       where HSTEX_PREAMBLE_CKPT names one that exists: the engine's state
+       from just before the .aux was first read, the class and packages
+       already obeyed. Where taking it up fails for any reason the run
+       starts from the format as it always did, so a stale or unreadable
+       file costs the preamble and never the document. */
+    bool resumed = false;
+    const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
+    if (preamble != NULL && preamble[0] != '\0' &&
+        access(preamble, R_OK) == 0) {
+        if (hstex_engine_resume_checkpoint(&engine, preamble, error,
+                                           sizeof(error)) == 0 &&
+            hstex_engine_set_restricted_shell_escape(
+                &engine, restricted_shell_escape, error, sizeof(error)) == 0) {
+            resumed = true;
+            (void)fprintf(stderr, "hstex: preamble taken up from %s\n",
+                          preamble);
+        } else {
+            (void)fprintf(stderr,
+                          "hstex: preamble at %s not taken up (%s); "
+                          "reading it afresh\n",
+                          preamble, error[0] == '\0' ? "unreadable" : error);
+            hstex_engine_destroy(&engine);
+            error[0] = '\0';
+            if (hstex_engine_init(&engine, error, sizeof(error)) != 0 ||
+                hstex_engine_set_output_directory(&engine, output_directory,
+                                                  error, sizeof(error)) != 0) {
+                (void)fprintf(stderr, "hstex: %s\n", error);
+                hstex_engine_destroy(&engine);
+                return 1;
+            }
+        }
+    }
+    if (!resumed &&
+        (hstex_engine_read_format(&engine, format_file, error, sizeof(error)) !=
+             0 ||
+         hstex_engine_set_restricted_shell_escape(
+             &engine, restricted_shell_escape, error, sizeof(error)) != 0 ||
+         hstex_engine_begin_job(&engine, document_path, error,
+                                sizeof(error)) != 0)) {
+        (void)fprintf(stderr, "hstex: %s\n",
+                      error[0] == '\0' ? "cannot prepare document output"
+                                       : error);
         hstex_engine_destroy(&engine);
         return 1;
     }

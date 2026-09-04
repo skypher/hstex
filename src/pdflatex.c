@@ -2,6 +2,7 @@
 
 #include "hstex/engine.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -410,6 +411,7 @@ static void hash_environment(uint64_t *hash)
 }
 
 static int format_fingerprint(const char *latex_ltx, const char *config,
+                              const char *known_trees, char **trees_out,
                               uint64_t *fingerprint, char *error,
                               size_t capacity)
 {
@@ -435,14 +437,19 @@ static int format_fingerprint(const char *latex_ltx, const char *config,
         return -1;
     }
     hash_environment(&hash);
-    char *trees = NULL;
-    if (query_kpsewhich("--var-value=TEXMFDBS", &trees, error, capacity) !=
-        0) {
+    char *trees = known_trees == NULL ? NULL : copy_string(known_trees);
+    if (trees == NULL &&
+        query_kpsewhich("--var-value=TEXMFDBS", &trees, error, capacity) !=
+            0) {
         return -1;
     }
     hash = hash_text(hash, trees);
     hash_texmf_database_indexes(&hash, trees);
-    free(trees);
+    if (trees_out != NULL) {
+        *trees_out = trees;
+    } else {
+        free(trees);
+    }
     *fingerprint = hash;
     return 0;
 }
@@ -483,12 +490,223 @@ static char *cache_root(const char *requested, char *error, size_t capacity)
     return absolute_path(root, error, capacity);
 }
 
+
+/* WHAT THE INSTALLATION ANSWERED LAST TIME. Three questions the driver puts
+   to kpsewhich before the engine starts -- where latex.ltx is, where
+   pdftexconfig.tex is, and which trees keep an ls-R -- each cost a child
+   process that reads and hashes the ls-R files to answer: measured, about
+   thirty milliseconds of every run, on a document the engine sets in
+   forty-seven. The answers are properties of the installation, so they are
+   kept in the cache root beside a stamp over every ls-R they name and the
+   search environment, and used again while the stamp still holds. A stamp
+   that does not hold costs the three children, never a wrong answer; and the
+   format key still hashes the files themselves, so what is trusted here is
+   only where they are. */
+struct installation_record {
+    char *latex_ltx;
+    char *config;
+    char *trees;
+};
+
+static uint64_t installation_stamp(const char *trees)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+    hash = hash_text(hash, "hstex-pdflatex-installation-v1");
+    hash_environment(&hash);
+    hash = hash_text(hash, trees);
+    hash_texmf_database_indexes(&hash, trees);
+    return hash;
+}
+
+static void installation_record_free(struct installation_record *record)
+{
+    free(record->latex_ltx);
+    free(record->config);
+    free(record->trees);
+    record->latex_ltx = record->config = record->trees = NULL;
+}
+
+/* One line each: stamp, latex.ltx, pdftexconfig.tex, trees. */
+static bool installation_record_load(const char *cache,
+                                     struct installation_record *record)
+{
+    record->latex_ltx = record->config = record->trees = NULL;
+    char *path = join_path(cache, "installation");
+    if (path == NULL) {
+        return false;
+    }
+    FILE *in = fopen(path, "r");
+    free(path);
+    if (in == NULL) {
+        return false;
+    }
+    char line[4][4096];
+    for (size_t index = 0U; index < 4U; ++index) {
+        if (fgets(line[index], sizeof(line[index]), in) == NULL) {
+            (void)fclose(in);
+            return false;
+        }
+        line[index][strcspn(line[index], "\r\n")] = '\0';
+    }
+    (void)fclose(in);
+    uint64_t stamp = strtoull(line[0], NULL, 16);
+    if (line[1][0] == '\0' || line[2][0] == '\0' || line[3][0] == '\0' ||
+        stamp != installation_stamp(line[3])) {
+        return false;
+    }
+    record->latex_ltx = copy_string(line[1]);
+    record->config = copy_string(line[2]);
+    record->trees = copy_string(line[3]);
+    if (record->latex_ltx == NULL || record->config == NULL ||
+        record->trees == NULL) {
+        installation_record_free(record);
+        return false;
+    }
+    return true;
+}
+
+static void installation_record_save(const char *cache,
+                                     const struct installation_record *record)
+{
+    char *path = join_path(cache, "installation");
+    if (path == NULL) {
+        return;
+    }
+    size_t length = strlen(path) + sizeof(".tmp");
+    char *temporary = malloc(length);
+    if (temporary == NULL) {
+        free(path);
+        return;
+    }
+    (void)snprintf(temporary, length, "%s.tmp", path);
+    FILE *out = fopen(temporary, "w");
+    if (out != NULL) {
+        (void)fprintf(out, "%016" PRIx64 "\n%s\n%s\n%s\n",
+                      installation_stamp(record->trees), record->latex_ltx,
+                      record->config, record->trees);
+        if (fclose(out) == 0) {
+            (void)rename(temporary, path);
+        }
+    }
+    free(temporary);
+    free(path);
+}
+
+/* Where a document's preamble is put by, or NULL where it cannot be keyed
+   (a document with no \begin{document} has no preamble to put by). The key
+   folds in the format path, whose own directory is the installation key;
+   the document's absolute path, because the checkpoint reopens it by name;
+   the bytes up to and including \begin{document}; and every source file
+   beside the document, since the preamble may \usepackage one of them. */
+static char *preamble_checkpoint_path(const char *cache, const char *format,
+                                      const char *document, char *error,
+                                      size_t capacity)
+{
+    char *absolute = absolute_path(document, error, capacity);
+    if (absolute == NULL) {
+        return NULL;
+    }
+    FILE *in = fopen(absolute, "rb");
+    if (in == NULL) {
+        free(absolute);
+        return NULL;
+    }
+    uint64_t hash = UINT64_C(14695981039346656037);
+    hash = hash_text(hash, "hstex-pdflatex-preamble-v1");
+    hash = hash_text(hash, format);
+    hash = hash_text(hash, absolute);
+    static const char marker[] = "\\begin{document}";
+    size_t matched = 0U;
+    bool found = false;
+    int c;
+    while ((c = fgetc(in)) != EOF) {
+        uint8_t byte = (uint8_t)c;
+        hash = fnv1a64_update(hash, &byte, 1U);
+        if ((char)c == marker[matched]) {
+            if (marker[++matched] == '\0') {
+                found = true;
+                break;
+            }
+        } else {
+            matched = (char)c == marker[0] ? 1U : 0U;
+        }
+    }
+    (void)fclose(in);
+    if (!found) {
+        free(absolute);
+        return NULL;
+    }
+    /* Every source beside the document, by name and content, in an order
+       that does not depend on how the directory is read. */
+    char *slash = strrchr(absolute, '/');
+    char *directory = slash == NULL ? NULL : absolute;
+    if (slash != NULL) {
+        *slash = '\0';
+    }
+    DIR *dir = opendir(directory == NULL ? "." : directory);
+    if (dir != NULL) {
+        uint64_t folded = 0U;
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            const char *dot = strrchr(entry->d_name, '.');
+            if (dot == NULL ||
+                (strcmp(dot, ".tex") != 0 && strcmp(dot, ".sty") != 0 &&
+                 strcmp(dot, ".cls") != 0 && strcmp(dot, ".clo") != 0 &&
+                 strcmp(dot, ".def") != 0 && strcmp(dot, ".cfg") != 0 &&
+                 strcmp(dot, ".fd") != 0 && strcmp(dot, ".ldf") != 0)) {
+                continue;
+            }
+            char *path = join_path(directory == NULL ? "." : directory,
+                                   entry->d_name);
+            if (path == NULL) {
+                continue;
+            }
+            uint64_t one = hash_text(UINT64_C(14695981039346656037),
+                                     entry->d_name);
+            char ignored[64];
+            (void)hash_file(&one, path, ignored, sizeof(ignored));
+            folded ^= one;
+            free(path);
+        }
+        (void)closedir(dir);
+        uint8_t bytes[8];
+        for (size_t index = 0U; index < 8U; ++index) {
+            bytes[index] = (uint8_t)(folded >> (index * 8U));
+        }
+        hash = fnv1a64_update(hash, bytes, sizeof(bytes));
+    }
+    free(absolute);
+    char key[32];
+    (void)snprintf(key, sizeof(key), "%016" PRIx64, hash);
+    if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
+        (void)fprintf(stderr,
+                      "hstex-pdflatex: preamble key %s (format %s, document "
+                      "%s)\n",
+                      key, format, document);
+    }
+    char *root = join_path(cache, "preambles");
+    char *where = root == NULL ? NULL : join_path(root, key);
+    free(root);
+    if (where == NULL) {
+        return NULL;
+    }
+    if (make_directory_tree(where, error, capacity) != 0) {
+        free(where);
+        return NULL;
+    }
+    char *file = join_path(where, "preamble.ckpt");
+    free(where);
+    return file;
+}
+
 static int build_or_load_format(const char *engine, const char *latex_ltx,
                                 const char *cache, bool rebuild,
+                                struct installation_record *known,
                                 char **format, char *error, size_t capacity)
 {
-    char *config = NULL;
-    if (query_kpsewhich("pdftexconfig.tex", &config, error, capacity) != 0) {
+    char *config = known->config == NULL ? NULL : copy_string(known->config);
+    if (config == NULL &&
+        query_kpsewhich("pdftexconfig.tex", &config, error, capacity) != 0) {
         return -1;
     }
     char *absolute_config = absolute_path(config, error, capacity);
@@ -497,12 +715,28 @@ static int build_or_load_format(const char *engine, const char *latex_ltx,
         return -1;
     }
     uint64_t fingerprint = 0U;
-    if (format_fingerprint(latex_ltx, absolute_config, &fingerprint, error,
-                           capacity) != 0) {
+    char *trees = NULL;
+    if (format_fingerprint(latex_ltx, absolute_config, known->trees, &trees,
+                           &fingerprint, error, capacity) != 0) {
         free(absolute_config);
         return -1;
     }
-    free(absolute_config);
+    /* Everything the record needs is in hand; keep it for the next run. */
+    if (known->trees == NULL) {
+        struct installation_record fresh = {
+            copy_string(latex_ltx), absolute_config, trees};
+        if (fresh.latex_ltx != NULL) {
+            installation_record_save(cache, &fresh);
+        }
+        free(fresh.latex_ltx);
+        trees = NULL;
+        absolute_config = NULL;
+        free(fresh.config);
+        free(fresh.trees);
+    } else {
+        free(trees);
+        free(absolute_config);
+    }
     char key[32];
     (void)snprintf(key, sizeof(key), "%016" PRIx64, fingerprint);
     char *formats = join_path(cache, "formats");
@@ -764,9 +998,20 @@ int main(int argument_count, char **arguments)
         free(job_name);
         return 2;
     }
-    char *latex_ltx = NULL;
-    if (query_kpsewhich("latex.ltx", &latex_ltx, error, sizeof(error)) != 0) {
+    char *cache = cache_root(requested_cache, error, sizeof(error));
+    if (cache == NULL) {
         (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
+        free(job_name);
+        return 1;
+    }
+    struct installation_record known;
+    bool remembered = installation_record_load(cache, &known);
+    char *latex_ltx = remembered ? copy_string(known.latex_ltx) : NULL;
+    if (latex_ltx == NULL &&
+        query_kpsewhich("latex.ltx", &latex_ltx, error, sizeof(error)) != 0) {
+        (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
+        installation_record_free(&known);
+        free(cache);
         free(job_name);
         return 1;
     }
@@ -774,13 +1019,8 @@ int main(int argument_count, char **arguments)
     free(latex_ltx);
     if (absolute_latex == NULL) {
         (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
-        free(job_name);
-        return 1;
-    }
-    char *cache = cache_root(requested_cache, error, sizeof(error));
-    if (cache == NULL) {
-        (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
-        free(absolute_latex);
+        installation_record_free(&known);
+        free(cache);
         free(job_name);
         return 1;
     }
@@ -789,7 +1029,8 @@ int main(int argument_count, char **arguments)
         engine = "hstex";
     }
     char *format = NULL;
-    if (build_or_load_format(engine, absolute_latex, cache, rebuild, &format,
+    if (build_or_load_format(engine, absolute_latex, cache, rebuild,
+                             &known, &format,
                              error, sizeof(error)) != 0) {
         (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
         free(cache);
@@ -836,6 +1077,35 @@ int main(int argument_count, char **arguments)
                       "hstex-pdflatex: cannot pass an option to the engine\n");
         return 1;
     }
+    /* THE PREAMBLE CACHE, BESIDE THE FORMAT CACHE. The installation format
+       carries latex.ltx; what a document's own preamble adds -- the class,
+       the packages, everything before \begin{document} -- is the same every
+       run and is put by too, under a key made of the format it sits on, the
+       document's own path and preamble text, and every source file beside
+       the document that the preamble could have read. A run that finds the
+       file takes the state up and skips the class; a run that does not
+       leaves the file behind for the next. A halted run leaves nothing. */
+    /* OPT-IN, NOT DEFAULT. Resuming a preamble is measured unsound on a
+       document with a table of contents -- cfgguide and cyrguide, settled
+       sequentially and resuming on their third and fourth runs, come out one
+       pass behind a fixpoint reference where the same runs without the
+       cache agree -- and the cause is not found. It stays available for
+       measurement and for the next attempt, and off for everyone else. See
+       docs/DECISIONS.md, two-caches-beside-the-format-cache. */
+    if (!halt_on_error && getenv("HSTEX_PREAMBLE_CACHE") != NULL) {
+        char *preamble = preamble_checkpoint_path(cache, format, document,
+                                                  error, sizeof(error));
+        if (preamble != NULL) {
+            if (setenv("HSTEX_PREAMBLE_CKPT", preamble, 1) != 0) {
+                (void)fprintf(stderr,
+                              "hstex-pdflatex: cannot pass the preamble "
+                              "cache to the engine\n");
+                free(preamble);
+                return 1;
+            }
+            free(preamble);
+        }
+    }
     bool parallel = getenv("HSTEX_NO_PARALLEL") == NULL && !halt_on_error;
     const char *mode =
         parallel ? (restricted_shell_escape ? "--parallel-output"
@@ -857,5 +1127,6 @@ int main(int argument_count, char **arguments)
     free(cache);
     free(absolute_latex);
     free(job_name);
+    installation_record_free(&known);
     return status;
 }

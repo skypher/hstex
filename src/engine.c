@@ -1,6 +1,7 @@
 #include "hstex/engine.h"
 
 #include "hstex/filedb.h"
+#include "hstex/input.h"
 
 #include "hstex/catcode.h"
 #include "hstex_config.h"
@@ -3782,6 +3783,38 @@ static char *job_name_from_path(const char *path)
     return name;
 }
 
+/* THE PREAMBLE, PUT BY FOR THE NEXT RUN. The first thing a run reads of its
+   own is its .aux, from inside \begin{document}; everything before that read
+   is the preamble, and the preamble is the same every run of the same
+   document. Where HSTEX_PREAMBLE_CKPT names a file that does not exist yet,
+   the state just before that read is written to it, and a later run of the
+   document takes it up instead of reading the class and the packages again.
+   The .aux itself is read after resuming, so what a pass leaves for the next
+   is never baked in; a run that resumed the file finds it present and writes
+   nothing. Called before a file is pushed, from both places that push one:
+   \input pushes straight onto the source stack. */
+static void put_by_preamble_before(struct hstex_engine *engine,
+                                   const char *path)
+{
+    const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
+    if (preamble == NULL || preamble[0] == '\0' || engine->job_name == NULL ||
+        access(preamble, F_OK) == 0) {
+        return;
+    }
+    const char *base = strrchr(path, '/');
+    base = base == NULL ? path : base + 1;
+    size_t job_length = strlen(engine->job_name);
+    if (strncmp(base, engine->job_name, job_length) != 0 ||
+        strcmp(base + job_length, ".aux") != 0) {
+        return;
+    }
+    char why[256];
+    if (hstex_engine_write_checkpoint(engine, preamble, why, sizeof(why)) != 0 &&
+        getenv("HSTEX_CKPT_DEBUG") != NULL) {
+        (void)fprintf(stderr, "CKPT preamble declined: %s\n", why);
+    }
+}
+
 int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                            char *error, size_t error_capacity)
 {
@@ -3796,6 +3829,7 @@ int hstex_engine_push_file(struct hstex_engine *engine, const char *path,
                              "job-name allocation failed");
         }
     }
+    put_by_preamble_before(engine, path);
     int status = hstex_source_push_file(&engine->sources, path, error,
                                         error_capacity);
     if (status != 0) {
@@ -4036,6 +4070,35 @@ static int checkpoint_read_vbox(FILE *in, struct hstex_vbox_builder *box)
    be a slow or nearly-full disk, and leaves the serializer -- which still
    writes to a plain FILE -- and its many error exits untouched. */
 static const uint8_t HSTEX_CKPT_MAGIC[4] = {'H', 'K', 'Z', '1'};
+/* The same bytes left as they are. A chunk checkpoint is written once and
+   read once, so the writing is what should be fast and level-1 deflate is
+   right for it. A preamble put by is written once and read on every later
+   run of the document, and inflating the whole of the engine's state each
+   time cost more than the class file it saved: measured, resuming a deflated
+   preamble took 65.9 ms against 52.7 ms for reading the class afresh. */
+static const uint8_t HSTEX_CKPT_RAW_MAGIC[4] = {'H', 'K', 'R', '1'};
+
+static int checkpoint_write_raw_buffer(const uint8_t *raw, size_t raw_length,
+                                       const char *path, char *error,
+                                       size_t error_capacity)
+{
+    FILE *out = fopen(path, "wb");
+    if (out == NULL) {
+        return set_error(error, error_capacity, "cannot write %s", path);
+    }
+    uint64_t original = (uint64_t)raw_length;
+    if (fwrite(HSTEX_CKPT_RAW_MAGIC, 1U, sizeof(HSTEX_CKPT_RAW_MAGIC), out) !=
+            sizeof(HSTEX_CKPT_RAW_MAGIC) ||
+        fwrite(&original, sizeof(original), 1U, out) != 1U ||
+        fwrite(raw, 1U, raw_length, out) != raw_length) {
+        (void)fclose(out);
+        return set_error(error, error_capacity, "cannot write %s", path);
+    }
+    if (fclose(out) != 0) {
+        return set_error(error, error_capacity, "cannot finish %s", path);
+    }
+    return 0;
+}
 
 /* Deflate `raw`[0..raw_length) and store it at `path` behind the header. */
 static int checkpoint_deflate_buffer(const uint8_t *raw, size_t raw_length,
@@ -4080,22 +4143,34 @@ static int checkpoint_deflate_buffer(const uint8_t *raw, size_t raw_length,
 
 /* Read `path`, inflate it, and hand back the original bytes in a fresh buffer
    the caller owns (freed by the caller). Non-zero on failure. */
+/* Where the checkpoint was kept raw, the bytes are handed back out of a
+   mapping of the file rather than a copy of it, and `mapping' says so; the
+   caller closes the mapping instead of freeing the bytes. A deflated one is
+   inflated into a fresh buffer as before, and `mapping' is left closed. */
 static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
-                                     size_t *out_length, char *error,
+                                     size_t *out_length,
+                                     struct hstex_input *mapping, char *error,
                                      size_t error_capacity)
 {
     *out_raw = NULL;
     *out_length = 0U;
+    mapping->data = NULL;
+    mapping->length = 0U;
+    mapping->storage = HSTEX_INPUT_STORAGE_NONE;
     FILE *in = fopen(path, "rb");
     if (in == NULL) {
         return set_error(error, error_capacity, "cannot read %s", path);
     }
     uint8_t header[sizeof(HSTEX_CKPT_MAGIC) + sizeof(uint64_t)];
     if (fread(header, 1U, sizeof(header), in) != sizeof(header) ||
-        memcmp(header, HSTEX_CKPT_MAGIC, sizeof(HSTEX_CKPT_MAGIC)) != 0) {
+        (memcmp(header, HSTEX_CKPT_MAGIC, sizeof(HSTEX_CKPT_MAGIC)) != 0 &&
+         memcmp(header, HSTEX_CKPT_RAW_MAGIC, sizeof(HSTEX_CKPT_RAW_MAGIC)) !=
+             0)) {
         (void)fclose(in);
         return set_error(error, error_capacity, "not a checkpoint: %s", path);
     }
+    bool is_raw =
+        memcmp(header, HSTEX_CKPT_RAW_MAGIC, sizeof(HSTEX_CKPT_RAW_MAGIC)) == 0;
     uint64_t original = 0U;
     memcpy(&original, header + sizeof(HSTEX_CKPT_MAGIC), sizeof(original));
     if (fseek(in, 0L, SEEK_END) != 0) {
@@ -4111,6 +4186,19 @@ static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
     if (fseek(in, (long)sizeof(header), SEEK_SET) != 0) {
         (void)fclose(in);
         return set_error(error, error_capacity, "cannot read %s", path);
+    }
+    if (is_raw) {
+        (void)fclose(in);
+        if (packed_length != (size_t)original ||
+            hstex_input_open(path, mapping, error, error_capacity) != 0 ||
+            mapping->length != sizeof(header) + packed_length) {
+            hstex_input_close(mapping);
+            return set_error(error, error_capacity, "corrupt checkpoint %s",
+                             path);
+        }
+        *out_raw = (uint8_t *)(uintptr_t)(mapping->data + sizeof(header));
+        *out_length = packed_length;
+        return 0;
     }
     uint8_t *packed = malloc(packed_length == 0U ? 1U : packed_length);
     if (packed == NULL ||
@@ -5325,7 +5413,13 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
         free(staging);
         return set_error(error, error_capacity, "cannot stage %s", path);
     }
-    int rc = checkpoint_deflate_buffer((const uint8_t *)staging, staging_size,
+    const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
+    bool keep_raw = preamble != NULL && strcmp(preamble, path) == 0;
+    int rc = keep_raw
+                 ? checkpoint_write_raw_buffer((const uint8_t *)staging,
+                                               staging_size, path, error,
+                                               error_capacity)
+                 : checkpoint_deflate_buffer((const uint8_t *)staging, staging_size,
                                        path, error, error_capacity);
     free(staging);
     return rc;
@@ -5344,40 +5438,32 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
        finish; a resume that fails is fatal and lets the process reclaim it. */
     uint8_t *raw = NULL;
     size_t raw_length = 0U;
-    if (checkpoint_inflate_buffer(path, &raw, &raw_length, error,
+    struct hstex_input mapping;
+    if (checkpoint_inflate_buffer(path, &raw, &raw_length, &mapping, error,
                                   error_capacity) != 0) {
         return -1;
     }
+    /* THE STATE IS READ WHERE IT LIES. The format part is taken straight
+       out of `raw' -- a mapping of the file where the checkpoint was kept
+       raw -- and the page state after it is read through a stream over the
+       same bytes, positioned past what the format reader consumed. Reading
+       the whole of it into a second buffer first, as this once did, copied
+       the engine's state three times over before any of it was used. */
     FILE *in = fmemopen(raw, raw_length, "rb");
     if (in == NULL) {
-        free(raw);
+        if (mapping.storage != HSTEX_INPUT_STORAGE_NONE) {
+            hstex_input_close(&mapping);
+        } else {
+            free(raw);
+        }
         return set_error(error, error_capacity, "cannot stage checkpoint");
     }
-    if (fseek(in, 0L, SEEK_END) != 0) {
-        (void)fclose(in);
-        return set_error(error, error_capacity, "cannot read %s", path);
-    }
-    long length = ftell(in);
-    rewind(in);
-    if (length < 0) {
-        (void)fclose(in);
-        return set_error(error, error_capacity, "cannot read %s", path);
-    }
-    uint8_t *bytes = malloc((size_t)length == 0U ? 1U : (size_t)length);
-    if (bytes == NULL ||
-        fread(bytes, 1U, (size_t)length, in) != (size_t)length) {
-        free(bytes);
-        (void)fclose(in);
-        return set_error(error, error_capacity, "cannot read %s", path);
-    }
     size_t consumed = 0U;
-    if (hstex_engine_format_from_buffer(engine, bytes, (size_t)length, &consumed,
+    if (hstex_engine_format_from_buffer(engine, raw, raw_length, &consumed,
                                         error, error_capacity) != 0) {
-        free(bytes);
         (void)fclose(in);
         return -1;
     }
-    free(bytes);
     if (fseek(in, (long)consumed, SEEK_SET) != 0) {
         (void)fclose(in);
         return set_error(error, error_capacity, "corrupt checkpoint offset");
@@ -5605,7 +5691,11 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
         return -1;
     }
     (void)fclose(in);
-    free(raw);
+    if (mapping.storage != HSTEX_INPUT_STORAGE_NONE) {
+        hstex_input_close(&mapping);
+    } else {
+        free(raw);
+    }
     engine->active_vbox_builder = engine->contribution_builder;
     engine->active_hbox_builder =
         engine->building_paragraph ? engine->paragraph_builder : NULL;
@@ -6786,6 +6876,7 @@ static int execute_input(struct hstex_engine *engine, char *error,
         free(filename);
         return status;
     }
+    put_by_preamble_before(engine, path);
     int status = hstex_source_push_file(&engine->sources, path, error,
                                         error_capacity);
     if (status == 0) {
