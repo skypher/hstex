@@ -12,7 +12,10 @@
 # This runs each document the way that command does -- twice, so that the
 # cross-references and the checkpoint cache are both warm, which is the state
 # the second and every later run of an edit loop is in -- and compares what
-# comes out against the same reference given the same two passes.
+# comes out against the reference settled the same way. Both sides are taken
+# to their fixpoint: the driver reaches one inside a single invocation, so
+# holding the reference to two passes compares a settled document against an
+# unsettled one and calls the difference a fault.
 #
 # Usage: tests/corpus/run-driver-corpus.sh [--strict] [DRIVER] [ENGINE]
 #
@@ -27,7 +30,7 @@ usage() {
 Usage: tests/corpus/run-driver-corpus.sh [OPTIONS] [DRIVER] [ENGINE]
 
 Run the public corpus through hstex-pdflatex, twice per document, and compare
-what it produces with the reference given the same two passes.
+what it produces with the reference taken to the same fixpoint.
 
 Options:
   --strict      exit nonzero when a document stops matching its pinned result
@@ -105,9 +108,24 @@ while IFS='	' read -r name format path want note input_profile; do
     cp "$work/src/$input_file" "$dir/ref/"
     cp "$work/src/$input_file" "$dir/hstex/"
 
-    ( cd "$dir/ref"
-      pdflatex -interaction=nonstopmode "$input_file" >/dev/null 2>&1 || :
-      pdflatex -interaction=nonstopmode "$input_file" >/dev/null 2>&1 || : )
+    # BOTH SIDES ARE COMPARED WHERE THEY SETTLE. The driver's cold path
+    # recompiles until the .aux stops changing, inside the one invocation, so
+    # two runs of it leave a document at its fixpoint. Two runs of the
+    # reference do not, and comparing those two states made cfgguide and
+    # cyrguide look wrong when what differed was how many passes each side had
+    # had -- a table of contents holding the page numbers of the pass before
+    # is a correct second pass, not a fault. So the reference is run to its
+    # own fixpoint, by the bound the driver uses for its own.
+    settled=none
+    for pass in 1 2 3 4 5 6; do
+        ( cd "$dir/ref"
+          pdflatex -interaction=nonstopmode "$input_file" >/dev/null 2>&1 || : )
+        now=$(cksum <"$dir/ref/$name.aux" 2>/dev/null || echo none)
+        if [ "$pass" -gt 1 ] && [ "$now" = "$settled" ]; then
+            break
+        fi
+        settled=$now
+    done
     ( cd "$dir/hstex"
       "$driver" --format-cache="$cache" "$input_file" >pass1.log 2>&1 || :
       "$driver" --format-cache="$cache" "$input_file" >pass2.log 2>&1 || : )

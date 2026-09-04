@@ -327,16 +327,27 @@ string, so `technote` came back with `section.0.1?"{` in place of
 `section.0.1`, and lost the bookmark that pointed at it. `technote` agrees
 with the reference now and its pin is gone.
 
-WHAT IS LEFT. `cfgguide` and `cyrguide` still differ, and not for either of
-those reasons. A second pass over them run sequentially agrees with the
-reference; the same pass run in parallel does not, whichever directory the
-output goes to, so it is neither the cache nor where files are written. Chunk
-workers open write streams the way the carrier does -- nothing tests
-`parallel_is_worker` on that path -- so more than one process truncates a
-file that one of them has still to read, and the `.toc` a chunk reads for
-page one can be the empty one another chunk just opened. Deciding which
-process owns an auxiliary write in a chunked run is a change to the design of
-that feature rather than a repair to it, and is not made here.
+`cfgguide` and `cyrguide` were never faults at all, and the gate was wrong
+about them rather than the engine. The driver's cold path recompiles until
+the `.aux` stops changing, inside the one invocation, so two runs of the
+driver leave a document standing at its fixpoint. Two runs of the reference
+do not. Holding a settled document against an unsettled one and calling the
+difference a defect is what the gate was doing: a table of contents carrying
+the page numbers of the pass before is a correct second pass, not a fault.
+Run the reference to its own fixpoint and both documents agree, so both are
+unpinned and the gate settles each side by the bound the driver uses for its
+own.
+
+Three readings of those two documents were wrong before this one, and each
+was arrived at by reasoning from a mechanism rather than by measuring it.
+That chunk workers raced on the `.toc`: a trace shows one process opening it,
+and the two reads returning 1360 and then 1365 bytes, which is a pass reading
+what the pass before it wrote. That a marginal note was dropped: both sides
+carry thirteen, counted by label and date rather than by grepping a string
+that also occurs in the body. That it was the checkpoint path: it is not the
+checkpoint path, the cache, or the output directory. What settles a question
+like this is the measurement that would come out differently if the guess
+were wrong.
 
 ## The path an installation actually takes
 

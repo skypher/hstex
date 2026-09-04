@@ -8,6 +8,4 @@
 # regression: when one of these is repaired, delete its line.
 #
 # document	expected	what comes out wrong, and where it lives
-cfgguide	differs	table of contents. A parallel second pass mishandles the .toc it reads: the same pass run sequentially agrees, whatever the output directory. Chunk workers open write streams like the carrier does.
-cyrguide	differs	table of contents, with section numbers wrong. Same cause as cfgguide.
 usrguide-historic	differs	a marginal note ("New description", "2001/06/01") is dropped on the second pass. NOT the checkpoint path: HSTEX_NO_PARALLEL=1 differs the same way, so this is the ordinary engine on a pass the one-pass corpus never reaches.
