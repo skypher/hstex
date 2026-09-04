@@ -135,10 +135,9 @@ overhead of its own that the engine numbers above do not show: three
 `kpsewhich` children before the engine started, about thirty milliseconds.
 Those are now answered from a record kept beside the format cache,
 recorded under "Two caches beside the format cache". Measured through the
-driver's sequential path on `small2e`: about 96 ms before, 55.7 ms after,
-against the engine's own 55.5 ms. A preamble cache built there as well takes
-that to 48.8 ms but is off by default, being measured unsound on documents
-with a table of contents.
+driver's sequential path on `small2e`: about 96 ms before, 55.7 ms with the
+record alone, 48.8 ms with the preamble cache as well, against the engine's
+own 55.5 ms fresh and 45.6 ms resumed.
 
 The one `kpsewhich` child a LaTeX run still starts cannot be removed by
 teaching the lookup more: it is started by a bitmap font that resolves in a

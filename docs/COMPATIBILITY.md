@@ -53,11 +53,10 @@ asks nothing of `kpsewhich` before the engine starts. `preambles/<key>/`
 holds a document's state from just before its `.aux` is first read -- the
 class and packages already obeyed -- keyed on the format, the document's
 path and preamble text, and the source files beside it; a later run of the
-document takes it up instead of reading the class again. It is off unless
-`HSTEX_PREAMBLE_CACHE=1` asks for it: resuming a preamble is measured unsound
-on documents with a table of contents, and a first run of a document has no
-`.aux` yet and cannot put its preamble by in any case. `HSTEX_NO_PARALLEL=1`
-compiles sequentially without the checkpoint cache.
+document takes it up instead of reading the class again. A first run of a
+document has no `.aux` yet and cannot put its preamble by. `HSTEX_NO_PARALLEL=1`
+compiles sequentially without the checkpoint cache, and
+`HSTEX_NO_PREAMBLE_CACHE=1` leaves the preamble cache alone.
 
 `HSTEX_ENGINE=/absolute/path/to/hstex` selects a particular engine binary,
 which is useful for testing an unpacked build alongside an installed release.

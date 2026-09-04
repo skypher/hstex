@@ -402,10 +402,36 @@ static int run_document_from_format(const char *format_file,
     const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
     if (preamble != NULL && preamble[0] != '\0' &&
         access(preamble, R_OK) == 0) {
+        /* THE READ THE CHECKPOINT STOOD IN FOR. The preamble was put by from
+           inside \input, after the name of the .aux had been read and before
+           the file was pushed, so what is taken up is a run that has decided
+           to read its .aux and not yet done so. A resumed run that went on
+           from there simply never read it: measured on cfgguide, the log
+           named the file twice where a fresh run named it three times, and
+           the table of contents came out a pass behind. The push is made
+           again here, by the name the run would have used. */
+        char aux_name[600];
+        const char *base = strrchr(document_path, '/');
+        base = base == NULL ? document_path : base + 1;
+        (void)snprintf(aux_name, sizeof(aux_name), "%s.aux",
+                       job_name != NULL ? job_name : base);
+        char *dot = job_name == NULL ? strrchr(aux_name, '.') : NULL;
+        if (dot != NULL && dot != aux_name && strcmp(dot, ".aux") != 0) {
+            /* `paper.tex' gives `paper.aux', not `paper.tex.aux'. */
+            char *tail = strstr(aux_name, ".tex.aux");
+            if (tail != NULL) {
+                memcpy(tail, ".aux", sizeof(".aux"));
+            }
+        }
         if (hstex_engine_resume_checkpoint(&engine, preamble, error,
                                            sizeof(error)) == 0 &&
             hstex_engine_set_restricted_shell_escape(
-                &engine, restricted_shell_escape, error, sizeof(error)) == 0) {
+                &engine, restricted_shell_escape, error, sizeof(error)) == 0 &&
+            (job_name == NULL ||
+             hstex_engine_set_job_name(&engine, job_name, error,
+                                       sizeof(error)) == 0) &&
+            hstex_engine_push_input(&engine, aux_name, error, sizeof(error)) ==
+                0) {
             resumed = true;
             (void)fprintf(stderr, "hstex: preamble taken up from %s\n",
                           preamble);

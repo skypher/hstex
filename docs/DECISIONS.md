@@ -431,21 +431,24 @@ driver's sequential path, with the documents byte-identical. The remaining
 child is the finder that the `.vf` and `.pk` lookups start after the
 preamble, which no preamble cache can remove.
 
-WHY IT IS OFF. Run under the driver gate it failed two documents it had
-passed. Settled sequentially over four runs, resuming on the third and the
-fourth, `cfgguide` and `cyrguide` come out one pass behind a fixpoint
-reference -- the table of contents carries the page numbers of the pass
-before -- where the same four runs without the cache agree, and the `.toc`
-and `.aux` files left on disk are identical either way. So the resumed
-engine reads the same files and sets a different first page from them, and
-the cause is not found. The cache is opt-in, `HSTEX_PREAMBLE_CACHE=1`, until
-it is; the machinery -- the hook, the raw checkpoint, the mapped resume --
-stays, measured and tested on a document without a table of contents, for
-the next attempt to start from.
+THE READ THE CHECKPOINT STOOD IN FOR. Run under the driver gate it first
+failed two documents it had passed: settled sequentially over four runs and
+resuming on the third and fourth, `cfgguide` and `cyrguide` came out one pass
+behind a fixpoint reference where the same runs without the cache agreed,
+with the `.toc` and `.aux` on disk byte-identical either way. The log said
+why: a fresh run names its `.aux` three times, the resumed run twice. The
+checkpoint is taken inside `\input`, after the name of the `.aux` has been
+read and before the file is pushed, so what is taken up is a run that has
+decided to read its `.aux` and not yet done so -- and a run that simply went
+on from there never read it. A document without cross-references cannot
+tell; one with a table of contents sets it from the pass before. The push is
+made again on resume, by the name the run would have used, and all three of
+`cfgguide`, `cyrguide` and `technote` agree with the reference resumed.
+`HSTEX_NO_PREAMBLE_CACHE=1` turns the cache off.
 
 The default path's warm runs resume chunk checkpoints and never reach the
 preamble in any case; only its cold passes would take it up. `tests/pdflatex/run-driver.sh` holds all of it: the
-record's four lines, a third sequential run opted in taking the preamble up,
+record's four lines, a third sequential run taking the preamble up,
 and a fourth reading the class afresh into the same directory coming out the
 same bytes -- the same directory because the trailer ID is seeded from the
 output's name, which is what the first two forms of that check tripped on.

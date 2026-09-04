@@ -155,13 +155,9 @@ export SOURCE_DATE_EPOCH FORCE_SOURCE_DATE
 # The sequential path is the one that reads the preamble from the cache on
 # every run; the default path's warm runs resume chunk checkpoints instead
 # and only its cold passes take the preamble up.
-# Opted in: the preamble cache is off by default while it is measured
-# unsound on documents with a table of contents; the plumbing is held here on
-# a document without one.
 for pass in 1 2 3; do
-    HSTEX_NO_PARALLEL=1 HSTEX_PREAMBLE_CACHE=1 run_driver \
-        "$work/pre$pass.stdout" -output-directory="$work/pre" -jobname=pre \
-        "$source"
+    HSTEX_NO_PARALLEL=1 run_driver "$work/pre$pass.stdout" \
+        -output-directory="$work/pre" -jobname=pre "$source"
 done
 if ! grep -q 'preamble taken up' "$work/pre/pre.log"; then
     echo "the third run did not take up the preamble put by" >&2
@@ -178,7 +174,7 @@ fi
 # one; what is left to differ is where the preamble came from, and the
 # documents must be the same bytes.
 cp "$work/pre/pre.pdf" "$work/pre-cached.pdf"
-HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache \
+HSTEX_ENGINE=$engine HSTEX_CACHE_DIR=$work/cache HSTEX_NO_PREAMBLE_CACHE=1 \
     HSTEX_NO_PARALLEL=1 \
     "$driver" -output-directory="$work/pre" -jobname=pre "$source" \
     >"$work/fresh.stdout" 2>&1

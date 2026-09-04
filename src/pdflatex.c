@@ -1085,14 +1085,7 @@ int main(int argument_count, char **arguments)
        the document that the preamble could have read. A run that finds the
        file takes the state up and skips the class; a run that does not
        leaves the file behind for the next. A halted run leaves nothing. */
-    /* OPT-IN, NOT DEFAULT. Resuming a preamble is measured unsound on a
-       document with a table of contents -- cfgguide and cyrguide, settled
-       sequentially and resuming on their third and fourth runs, come out one
-       pass behind a fixpoint reference where the same runs without the
-       cache agree -- and the cause is not found. It stays available for
-       measurement and for the next attempt, and off for everyone else. See
-       docs/DECISIONS.md, two-caches-beside-the-format-cache. */
-    if (!halt_on_error && getenv("HSTEX_PREAMBLE_CACHE") != NULL) {
+    if (!halt_on_error && getenv("HSTEX_NO_PREAMBLE_CACHE") == NULL) {
         char *preamble = preamble_checkpoint_path(cache, format, document,
                                                   error, sizeof(error));
         if (preamble != NULL) {
