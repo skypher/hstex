@@ -349,6 +349,39 @@ checkpoint path, the cache, or the output directory. What settles a question
 like this is the measurement that would come out differently if the guess
 were wrong.
 
+## The marginal note usrguide-historic places late
+
+The one document the driver gate still pins, and what is known about it, so
+that the next attempt starts from the measurements rather than making them
+again.
+
+The whole document differs in three places and they are one shift. Page 25
+loses `New description 2001/06/01`; page 27 carries that date where the
+reference carries `1995/12/01`; page 29 reads `New description` where the
+reference reads `New feature`. One placement is missed at page 25 and every
+note after it is one slot late.
+
+Pagination is not what differs. Pages 25 and 26 hold the same text on both
+sides, and the sentence the note is anchored to -- `There are therefore some
+extra short-form ligatures...`, the paragraph after `\NEWdescription` at
+line 1321 -- is on page 25 in both. The page breaks agree; what differs is
+whether the note was attached to the page being shipped.
+
+Four things it is not, each measured rather than reasoned. It is not the
+checkpoint path: it differs the same way under `HSTEX_NO_PARALLEL=1`. It is
+not the reference being unsettled, which is what `cfgguide` and `cyrguide`
+turned out to be: it differs against a reference run to its fixpoint. It is
+not `\outputpenalty`: a probe firing the output routine on `\penalty-10002`
+and then `\penalty-10000` gets `-10002` and `-10000` from both engines. And
+it is not a marginal note at a page boundary in the ordinary way: a swept
+range of filler lengths, in vertical mode and in the `\hskip 1sp
+\marginpar` form the class actually uses, agrees at every length.
+
+So the trigger needs the queue state this document builds -- it places five
+notes on page 22 alone -- and no smaller document reproducing it has been
+found. Nothing in the page builder was changed on a hypothesis that could not
+be reproduced.
+
 ## The path an installation actually takes
 
 The public corpus drives the engine directly, `hstex --format`, one pass. That
