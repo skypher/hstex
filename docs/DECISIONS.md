@@ -379,8 +379,29 @@ range of filler lengths, in vertical mode and in the `\hskip 1sp
 
 So the trigger needs the queue state this document builds -- it places five
 notes on page 22 alone -- and no smaller document reproducing it has been
-found. Nothing in the page builder was changed on a hypothesis that could not
-be reproduced.
+found.
+
+WHAT A TRACE OF THE MARGINPARS SHOWS. Both engines were made to log every
+marginpar as LaTeX creates it (`\@xympar`) and as the output routine places
+it (`\@addmarginpar`), with the page counter at each. The creations are
+identical -- thirty-five, the same page for every one, including the single
+one on page 25 at a page total of 29.94pt, right after the page-24 break. The
+placements are not: the reference calls `\@addmarginpar` on page 25 and
+hstex does not, so hstex places thirty-four where the reference places
+thirty-five, and every note from page 25 on is one placement behind.
+
+The marginpar is not discarded. A marginpar emits a float penalty of -10002,
+which the page builder fires the output routine on; a trace of every such
+penalty shows none discarded on an empty page and every one fired. What the
+trace shows instead is a gap: the output fires while page 24 is built and
+again while page 26 is built, and never while page 25 is built. So the
+page-25 marginpar's penalty is contributed after page 25 has already been
+shipped, and lands on a later page -- a divergence in when the page builder
+ships page 25 relative to when the paragraph carrying the marginpar is
+contributed, not in whether the penalty is seen. That is where the next
+attempt starts; it was not chased into a page-builder change on a mechanism
+not yet pinned to one decision, three earlier readings of these documents
+having each been wrong from reasoning ahead of the measurement.
 
 ## Two caches beside the format cache
 
