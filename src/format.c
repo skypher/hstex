@@ -738,9 +738,29 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
     TRANSFER_VALUE(stream, font->hyphen_character);
     TRANSFER_VALUE(stream, font->skew_character);
     TRANSFER_VALUE(stream, font->checksum);
+    TRANSFER_VALUE(stream, font->expand_ratio);
+    TRANSFER_VALUE(stream, font->expand_step);
+    TRANSFER_VALUE(stream, font->stretch_font);
+    TRANSFER_VALUE(stream, font->shrink_font);
+    TRANSFER_VALUE(stream, font->base_font);
+    TRANSFER_VALUE(stream, font->next_expanded);
+    TRANSFER_VALUE(stream, font->auto_expand);
+    TRANSFER_VALUE(stream, font->independent);
+    TRANSFER_VALUE(stream, font->virtual_owner);
+    /* The packets of a virtual font belong to the output driver and are read
+       again when wanted; what a checkpoint keeps is whether the font had been
+       read as a virtual one, since the reference's \pdffontexpand expands
+       the locals of a font it knows as virtual. See docs/DECISIONS.md,
+       resumed-chunks-and-the-copies-of-a-virtual-font. */
+    uint8_t virtual_state = font->virtual_state;
+    TRANSFER_VALUE(stream, virtual_state);
     if (!stream->writing) {
         font->virtual_font = NULL;
-        font->virtual_state = 0U;
+        font->virtual_state =
+            virtual_state == 3U /* HSTEX_VIRTUAL_LOADED */ ||
+                    virtual_state == 4U /* HSTEX_VIRTUAL_KNOWN */
+                ? 4U
+                : 0U;
     }
 }
 

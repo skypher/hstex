@@ -1798,3 +1798,249 @@ the lookup now weighs only the copies the kind is searched under. Names a
 searched tree does hold twice, as `latex.ltx` is with `tex/latex-dev`
 present, are still the search path's to settle, and the test asks them the
 way the engine does, along that path.
+
+## Font expansion
+
+microtype asks pdfTeX for font expansion, and clay.tex (a 116-page amsart
+paper set in Palatino with microtype) stopped at its preamble with 25
+undefined `\pdffontexpand`s and came out four pages short. HSTeX now carries
+the reference's font expansion: `\pdffontexpand <font> <stretch> <shrink>
+<step> [autoexpand]`, `\pdfadjustspacing`, `\efcode` and `\pdfcopyfont`. An
+auto-expanded copy is the base font's metrics with every width, italic
+correction and kern scaled by round_xn_over_d(w, 1000+e, 1000); a copy that
+is not automatic is the TFM named `<base>+e` or `<base>-e`. The copies hang
+off the base in a chain, each remembering its ratio, and the two at the
+limits are made when `\pdffontexpand` is executed. With `\pdfadjustspacing=2`
+the line breaker totals, over a line, what each character could stretch or
+shrink (the difference between its width in the limit copy and in its own
+font, times its `\efcode` over 1000) and what each font kern between two
+characters of one font could, and takes that off the shortfall before the
+badness is worked out: when the fonts could make up more than the whole
+shortfall, the shortfall becomes half of their total divided by the number
+of steps, as the reference's try_break does. When a line is set, the excess
+over its natural width is divided by the fonts' total, in thousandths, and
+every character whose `\efcode` is not zero moves to the copy expanded by
+that part of its font's limit, rounded to the step and clamped at the
+limits; a font kern between two characters is the expanded copy's kern only
+when both characters ended in the same font, so a kern whose right-hand
+character kept another font keeps its width, as the reference's does. The
+per-paragraph check that every expanded font on the paragraph shares one
+step, and that the limits do not exceed what the step allows, gives the
+reference's "pdfTeX error (font expansion)" messages. Public pdfTeX source
+(`pdftex.web` at the TeX Live 2023.0 tag: read_expand_font,
+set_expand_params, auto_expand_font, copy_expand_params, expand_font,
+fix_expand_value, check_expand_pars, char_stretch, char_shrink,
+kern_stretch, kern_shrink, try_break's adjustment of the shortfall, hpack in
+its cal_expand_ratio and subst_ex_font modes, do_subst_font) was consulted
+for the arithmetic and its order. Measured: the text arrays of the plain
+probes with cmr10 expanded 20/20/5 (an expanded line, a virtual font with
+protrusion, three fonts numbered, 3146 arrays) and of the microtype
+documents are byte-identical with the reference's, and all 116 pages of
+clay.tex agree.
+
+## The text state of an expanded font
+
+Black-box pdfTeX: a line set in a copy expanded by e opens its text array
+with `a 0 0 1 x y Tm`, a being (1000+e)/1000 to three decimals, and the
+`Tf` is written only when the font resource or the size changes -- not for
+every change of expansion, since every copy of a font shares the base
+font's object, the copies being one PDF font at one size. Advances inside
+an expanded array are the character's expanded width brought back to the
+unexpanded scale by round_xn_over_d(w, 1000, 1000+e), so that the
+positions come out where the reference puts them. HSTeX wrote a `Tf` in
+front of every `Tm` between copies of one font. Public pdfTeX source
+(pdf_set_font, pdf_set_textmatrix, pdf_print_real, adv_char_width,
+pdf_init_font's sharing of an object between a font and its auto-expanded
+copies) was consulted; the arrays now match the reference's byte for byte.
+
+## Virtual fonts under expansion
+
+When a virtual font is expanded, the reference gives each of the fonts its
+packets draw on the virtual font's expansion when it first reads the
+virtual font's file (vf_def_font), which makes those local fonts and their
+limit copies new internal fonts at that moment, and an expanded copy of a
+virtual font draws on fresh local copies of its own (auto_expand_vf) rather
+than on a chain. HSTeX does both, so that `/F` numbers -- which are the
+reference's internal font numbers -- come out where the reference puts
+them. Measured on three microtype documents with mathpazo: the font
+resource names agree with the reference's on every page.
+
+## `\pdffontname`, `\pdffontobjnum` and `\pdffontsize`
+
+Black-box pdfTeX: `\pdffontname\f` is the bare number of the font resource
+`\f` is written under, which is the internal number of the first font to
+share its object -- `[1,1,1,1]` for cmr10 loaded at four sizes;
+`\pdffontobjnum` is the object number; `\pdffontsize` is the size with
+`pt`. HSTeX had written the number with an `F` in front of it.
+
+## What the last letter of a word is set against
+
+Black-box pdfTeX: a run-in heading ending in `strategy.` lost the kern
+between the `y` and the full stop when the word was hyphenated in HSTeX.
+The reference remembers, as hyf_bchar, what follows a word it hyphenates:
+a character of the same font that is not a letter -- the full stop -- so
+the word's last letter is set against it when the word is put back
+together; the font's boundary character when a ligature ended the word
+with its right boundary, or a font kern followed the word, in which case
+the kern belongs to the range the hyphenated word replaces; and nothing
+after a plain letter. HSTeX set every word against nothing, and put back a
+trailing font kern in front of a word that then received a second one
+(218 kerns against the reference's 108 on the probe). Public pdfTeX
+source (the setting of hyf_bchar in line_break and its use in
+reconstitute) was consulted.
+
+## The command count in a format's identity
+
+Every mathpazo document reported "horizontal command \textfont used
+outside horizontal mode" after new primitives had been added: the format
+cache was written before them, its command numbers stood for other
+commands, and the format's identity did not see the difference. The
+identity digest now folds in the size of the command enumeration, and the
+format's magic is 11.
+
+## A ligature at the margin under expansion
+
+Black-box pdfTeX: in a plain paragraph set in cmr10 expanded 20/20/5 with
+`\pdfprotrudechars=2` and `\pdfadjustspacing=2`, a line ending in the `--`
+ligature at a discretionary is weighed at b=3407 with the ligature's
+`\lpcode` at 0 and at b=3919 with it at 1000 -- as if the fonts could not
+stretch at all -- and at b=3803 with it at 100; without expansion, or with
+a plain character in place of the ligature, the `\lpcode` changes
+nothing. When both protrusion and expansion are on, the reference adds to
+a line's stretch and shrink a variation for each of its two margin
+characters: the protrusion a fresh character node in the limit copy would
+have, against the protrusion of the node it found. It reads both with the
+`\lpcode`, whichever margin the character stands at, and for a ligature
+the node it found is the word inside the ligature node, which is not a
+character node, so its protrusion reads as nothing: the stretch loses, and
+the shrink gains, the ligature's `\lpcode` times its quad, and the line
+weighs differently. A plain character reads the same both ways and changes
+nothing. Public pdfTeX source (try_break's "Calculate variations of
+marginal kerns", cal_margin_kern_var, char_pw, do_subst_font, and hpack's
+handling of margin kerns, which works on the fresh node a margin kern
+carries and so sees no difference) was consulted. clay.tex broke a line
+after `By Banach--` on two pages where the reference did not; both pages
+now agree.
+
+## What a break is weighed against at the margins
+
+When the reference weighs a break for protrusion it does not look for the
+margin characters the way it looks when it sets the line. Weighing a break
+at a discretionary that puts text before the break, it takes that text's
+last node, and nothing else, as the right margin; weighing the line that
+would start after a discretionary that puts text after the break, it takes
+that text's first node as the left margin; and weighing any other line it
+first steps past everything discardable at the line's start -- glue,
+kerns, penalties and the nodes that fence a formula -- before searching
+for the character. Setting a line it searches from the first node as it
+stands, so a first line that opens with glue is weighed with its first
+character's protrusion and set without it. Black-box pdfTeX: the run-in
+subsection heading `13.4. Structural completion ...` opens with a zero
+glue and a `1` whose `\lpcode` is 50; the reference weighs the first
+break at b=110 and HSTeX weighed it at b=96, the width of that protrusion
+apart, and set the paragraph in one pass where the reference needed two.
+Public pdfTeX source (total_pw, find_protchar_left with and without its
+discardable-skipping argument, post_line_break) was consulted.
+
+## A kern inside a formula is not a break
+
+Black-box pdfTeX: a theorem head `... after Hörmander / Combes--Duclos).
+Let $M$ ... $f\colon M\to\R$ ...` is broken after `/` by the reference;
+HSTeX broke it inside `$f\colon$`, at the `\mkern` that `\colon` puts in
+front of the colon, which is followed by glue. A kern is a place to break
+only when the glue after it is one too, and glue inside a formula is not:
+the reference's kern_break asks for auto_breaking, which the node that
+opens a formula turns off. HSTeX checked the glue but not the formula.
+
+## A ratio that rounds to nothing
+
+Black-box pdfTeX: a line whose natural width is 136sp short of its width,
+under expansion, is set with no glue stretch at all -- the reference's
+box display shows no "glue set" and its `Td` to the next word is 82.723bp
+where HSTeX, stretching the glue by 0.00014, wrote 82.724. The
+reference's hpack, asked for the expansion ratio, returns as soon as it
+has divided the excess by the fonts' total, before the glue is set and
+before any underfull or overfull report, and packs the list a second time
+only when the ratio is not zero; a line off by less than half a thousandth
+of what its fonts could give therefore keeps its natural glue, states the
+line's width, and says nothing. Public pdfTeX source (hpack's stretch and
+shrink settings under cal_expand_ratio, and its exit) was consulted.
+
+## Codes a font shares with its expanded copies
+
+The reference gives an expanded copy the base font's tables of `\lpcode`,
+`\rpcode` and `\efcode` themselves (copy_expand_params copies the base
+addresses), so a code set on any font in the chain, before or after the
+copies are made, is what every font in the chain reads. HSTeX copied the
+tables when a copy was made; a code set on a font now goes to the base and
+every copy.
+
+## A margin kern is not a kern
+
+Black-box pdfTeX: after `\setbox3\lastbox` on a one-line paragraph whose
+first character protrudes, `\hbox{\unhbox3\unskip\unskip\unpenalty\unkern}`
+is 213.85371pt wide with no margin kern inside it; HSTeX kept the left
+margin kern and measured 210.55371pt. The reference's margin kern is a node
+type of its own: unpackage drops every margin kern from a list it unboxes
+(`\unhbox` and `\unhcopy` alike); `\unkern` passes one by, `\lastkern`
+reads it as 0pt, and `\lastnodetype` reports it as 15, the number past the
+types TeX has. amsart's `\@makecaption` sets a caption as a paragraph,
+takes its last line back with `\lastbox`, unboxes it and centres it: every
+one-line caption in clay.tex stood 0.18bp left of the reference's. Public
+pdfTeX source (unpackage, delete_last, the last_item cases) was consulted;
+the caption page now agrees.
+
+## The copies a margin character makes
+
+The reference's do_subst_font moves a fresh copy of a margin character to
+the copy of its font at the whole of the stretch or of the shrink -- the
+limit copy scaled by the character's `\efcode` -- and makes that copy when
+there is none: while a break is weighed (cal_margin_kern_var, for the
+leftmost and rightmost characters of the line), and while a line is set
+(hpack's margin_kern_node case, for each margin kern's character). Nothing
+is read off the copy that would differ, but it takes a place in the font
+table, and the file names its fonts by those places. clay.tex's fonts came
+out numbered one less than the reference's from page 82 on (probed with
+`\pdffontname` on a fresh font at every paragraph: the reference had made
+three fonts across one paragraph, HSTeX two). HSTeX makes the same copies at
+the same moments, and every page's font resource names agree with the
+reference's.
+
+## A bitmap font is one font at each size
+
+Black-box pdfTeX: `\pdffontname` on ecrm1000 at 10pt, at 12pt and at 10pt
+again is `1,2,1` -- a font the map does not know is drawn from bitmaps
+made for its size, so each size is a font object of its own, where a font
+the map knows is one object at every size (`1,1,1,1` for cmr10 at four
+sizes). HSTeX gave every size of a bitmap font the first size's object.
+Public pdfTeX source (pdf_init_font, isscalable) was consulted.
+
+## Font queries refuse a virtual font
+
+Black-box pdfTeX: `\pdffontname\font` and `\pdffontobjnum\font` with a
+virtual font selected stop the run with "pdfTeX error (font): command
+cannot be used with virtual font", after reading the font's file to find
+out (pdf_check_vf_cur_val). HSTeX answered them; it now reads the file and
+refuses as the reference does. `\pdffontsize` asks nothing of the file.
+
+## Resumed chunks and the copies of a virtual font
+
+A chunk resumed from a checkpoint reads a virtual font's file again when it
+first sets the font, since the packets are the output driver's and not the
+checkpoint's. Two things about that reading moved the fonts loaded after it
+along the table, so that clay.tex set in parallel named its fonts from page
+101 on by numbers the reference did not use (F681 for the reference's F577,
+and F668 for F670 on the last page), while the same document set in one
+process named every font as the reference does. First, for an expanded copy
+of a virtual font the reading made a second set of local copies -- the
+reference makes one set per expanded virtual font, and so had the cold run,
+whose set sat in the restored font table unused: each local copy now
+remembers the expanded virtual font it was made for, the checkpoint carries
+that, and the reading finds the cold run's copies. Second, the reference's
+`\pdffontexpand` expands the locals of a font it already knows as virtual
+(read_expand_font's vf_expand_local_fonts), which the cold run had done for
+a math font whose file it had read pages earlier; the resumed chunk had
+forgotten that the font was virtual and expanded nothing, two copies short.
+The checkpoint now keeps whether a font had been read as a virtual one, and
+`\pdffontexpand` on such a font reads the file again before it expands the
+locals.

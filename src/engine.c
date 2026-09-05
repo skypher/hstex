@@ -11,6 +11,7 @@
 #include "type1.h"
 
 #include <errno.h>
+#include <float.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <poll.h>
@@ -1334,7 +1335,8 @@ static int find_or_create_font(struct hstex_engine *engine, const char *name,
                                char *error, size_t error_capacity)
 {
     for (size_t index = 0U; index < engine->font_count; ++index) {
-        if (engine->fonts[index].size == size &&
+        if (!engine->fonts[index].independent &&
+            engine->fonts[index].size == size &&
             strcmp(engine->fonts[index].name, name) == 0) {
             *identifier = (uint32_t)(index + 1U);
             return 0;
@@ -2763,6 +2765,8 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"pdfobj", HSTEX_COMMAND_PDF_OBJECT},
         {"pdfrefobj", HSTEX_COMMAND_PDF_REF_OBJECT},
         {"pdfliteral", HSTEX_COMMAND_PDF_LITERAL},
+        {"pdffontexpand", HSTEX_COMMAND_PDF_FONT_EXPAND},
+        {"pdfcopyfont", HSTEX_COMMAND_PDF_COPY_FONT},
         {"pdfsave", HSTEX_COMMAND_PDF_SAVE},
         {"pdfsetmatrix", HSTEX_COMMAND_PDF_SET_MATRIX},
         {"pdfrestore", HSTEX_COMMAND_PDF_RESTORE},
@@ -2779,6 +2783,9 @@ int hstex_engine_init_extended(struct hstex_engine *engine,
         {"hyphenchar", HSTEX_COMMAND_HYPHEN_CHAR},
         {"skewchar", HSTEX_COMMAND_SKEW_CHAR},
         {"fontname", HSTEX_COMMAND_FONT_NAME},
+        {"pdffontname", HSTEX_COMMAND_PDF_FONT_NAME},
+        {"pdffontobjnum", HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER},
+        {"pdffontsize", HSTEX_COMMAND_PDF_FONT_SIZE},
         {"prevdepth", HSTEX_COMMAND_PREV_DEPTH},
     };
     for (size_t index = 0U; index < sizeof(primitives) / sizeof(primitives[0]);
@@ -8297,7 +8304,10 @@ static int dimen_from_meaning(struct hstex_engine *engine,
             return 1;
         }
         const struct hstex_node *node = last_item_node(engine);
-        *value = node != NULL && node->kind == HSTEX_NODE_KERN ? node->width : 0;
+        *value = node != NULL && node->kind == HSTEX_NODE_KERN &&
+                         node->value.kern.margin == 0U
+                     ? node->width
+                     : 0;
         return 1;
     }
     if (meaning->command == HSTEX_COMMAND_FONT_CHAR_DIMEN) {
@@ -10312,6 +10322,87 @@ static int expand_font_name(struct hstex_engine *engine,
                 vector_destroy(&expansion);
                 return -1;
             }
+        }
+    }
+    if (push_owned_vector(engine, &expansion, location, error,
+                          error_capacity) != 0) {
+        vector_destroy(&expansion);
+        return -1;
+    }
+    return 0;
+}
+
+static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
+                                             uint32_t identifier, char *error,
+                                             size_t error_capacity);
+
+/* \pdffontname, \pdffontobjnum and \pdffontsize: the name a font goes by in
+   the file's resources (`F' and the number, that of the font it shares its
+   object with), the number of that object, and the size the font was loaded
+   at, as \fontname writes a size. */
+enum hstex_virtual_state {
+    HSTEX_VIRTUAL_UNCHECKED = 0,
+    HSTEX_VIRTUAL_PHYSICAL,
+    HSTEX_VIRTUAL_LOADING,
+    HSTEX_VIRTUAL_LOADED,
+    /* Read as a virtual font before a checkpoint was taken; the packets
+       are not in memory and the file is read again when they are wanted.
+       What the reference remembers as pdf_font_type = virtual_font_type. */
+    HSTEX_VIRTUAL_KNOWN,
+};
+
+static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
+                             char *error, size_t error_capacity);
+
+static int expand_pdf_font_query(struct hstex_engine *engine,
+                                 enum hstex_command which,
+                                 struct hstex_source_location location,
+                                 char *error, size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    char text[64];
+    int length = 0;
+    if (which == HSTEX_COMMAND_PDF_FONT_SIZE) {
+        length = format_scaled_value(font->size, "pt", text, sizeof(text));
+    } else {
+        /* The reference reads the font's file first and refuses a virtual
+           font: pdf_check_vf_cur_val. */
+        if (load_virtual_font(engine, identifier, error, error_capacity) != 0) {
+            return -1;
+        }
+        font = font_by_identifier(engine, identifier);
+        if (font->virtual_state == HSTEX_VIRTUAL_LOADED) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font): command cannot be used "
+                             "with virtual font");
+        }
+        struct hstex_pdf_font *entry =
+            pdf_font_entry(engine, identifier, error, error_capacity);
+        if (entry == NULL) {
+            return -1;
+        }
+        /* The reference writes the number alone: the `F' is the resource
+           prefix, which \pdffontname leaves to the document. */
+        length = which == HSTEX_COMMAND_PDF_FONT_NAME
+                     ? snprintf(text, sizeof(text), "%u",
+                                (unsigned int)entry->number)
+                     : snprintf(text, sizeof(text), "%zu", entry->object);
+    }
+    if (length < 0 || (size_t)length >= sizeof(text)) {
+        return set_error(error, error_capacity, "could not format a font query");
+    }
+    struct hstex_token_vector expansion = {0};
+    for (int index = 0; index < length; ++index) {
+        if (vector_push(&expansion,
+                        hstex_token_character((uint8_t)HSTEX_CAT_OTHER,
+                                              (uint8_t)text[index]),
+                        error, error_capacity) != 0) {
+            vector_destroy(&expansion);
+            return -1;
         }
     }
     if (push_owned_vector(engine, &expansion, location, error,
@@ -13096,6 +13187,12 @@ static int expand_token_once(struct hstex_engine *engine, hstex_token token,
     if (meaning->command == HSTEX_COMMAND_FONT_NAME) {
         return expand_font_name(engine, location, error, error_capacity);
     }
+    if (meaning->command == HSTEX_COMMAND_PDF_FONT_NAME ||
+        meaning->command == HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER ||
+        meaning->command == HSTEX_COMMAND_PDF_FONT_SIZE) {
+        return expand_pdf_font_query(engine, meaning->command, location, error,
+                                     error_capacity);
+    }
     /* Which \if this is, for a message the skipped text may draw later.
        A conditional is expandable, so the main loop's own token is stale
        by the time one is opened. */
@@ -13616,6 +13713,15 @@ static enum hstex_engine_result next_expanded_inner(
         if (meaning->command == HSTEX_COMMAND_FONT_NAME) {
             if (expand_font_name(engine, *location, error, error_capacity) !=
                 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        }
+        if (meaning->command == HSTEX_COMMAND_PDF_FONT_NAME ||
+            meaning->command == HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER ||
+            meaning->command == HSTEX_COMMAND_PDF_FONT_SIZE) {
+            if (expand_pdf_font_query(engine, meaning->command, *location,
+                                      error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -14351,6 +14457,478 @@ static int font_identifier_name(struct hstex_engine *engine,
     return hstex_symbol_intern(&engine->lexical_state.symbols,
                                HSTEX_SYMBOL_REGULAR, spelled, count,
                                identifier, error, error_capacity);
+}
+
+
+static int expand_virtual_locals(struct hstex_engine *engine,
+                                 uint32_t identifier, char *error,
+                                 size_t error_capacity);
+
+/* FONT EXPANSION: the reference's \pdffontexpand. A font given limits and a
+   step gets a copy of itself expanded by each limit; when a paragraph is
+   broken, the line breaker counts how much each line could gain or lose by
+   expanding its characters, and when a line is packed its characters are
+   moved to a copy expanded by the ratio that fits. An automatically expanded
+   copy is made from the base font's metrics -- every width, italic
+   correction and kern scaled by (1000 + e)/1000, rounded as the reference
+   rounds -- and shares the base's program in the file, drawn with the text
+   matrix scaled. See docs/DECISIONS.md, font-expansion. */
+
+/* TeX's round_xn_over_d: x * n / d, rounded, for n and d positive and small
+   enough that the products stay below 2^31. */
+static int32_t expand_round_xn_over_d(int32_t x, int32_t n, int32_t d)
+{
+    bool positive = x >= 0;
+    uint64_t magnitude = positive ? (uint64_t)x : (uint64_t)(-(int64_t)x);
+    uint64_t t = (magnitude % 32768U) * (uint64_t)n;
+    uint64_t u = (magnitude / 32768U) * (uint64_t)n + t / 32768U;
+    uint64_t v = (u % (uint64_t)d) * 32768U + t % 32768U;
+    u = 32768U * (u / (uint64_t)d) + v / (uint64_t)d;
+    v %= (uint64_t)d;
+    if (2U * v >= (uint64_t)d) {
+        ++u;
+    }
+    return positive ? (int32_t)u : -(int32_t)u;
+}
+
+/* The reference's ext_xn_over_d: x * n / d in floating point, rounded half
+   away from zero. */
+static int32_t expand_ext_xn_over_d(int64_t x, int64_t n, int64_t d)
+{
+    double ratio = ((double)x * (double)n) / (double)d;
+    if (ratio > DBL_EPSILON) {
+        ratio += 0.5;
+    } else {
+        ratio -= 0.5;
+    }
+    return (int32_t)ratio;
+}
+
+/* The name an expanded copy goes by: the base's name, then the ratio with
+   its sign, as `cmr10+20' or `cmr10-15'. */
+static char *expanded_font_name(const char *base, int32_t ratio)
+{
+    size_t length = strlen(base);
+    char *name = malloc(length + 16U);
+    if (name == NULL) {
+        return NULL;
+    }
+    (void)snprintf(name, length + 16U, "%s%s%d", base, ratio > 0 ? "+" : "",
+                   (int)ratio);
+    return name;
+}
+
+static void *copied_bytes(const void *source, size_t bytes)
+{
+    if (source == NULL || bytes == 0U) {
+        return NULL;
+    }
+    void *copy = malloc(bytes);
+    if (copy != NULL) {
+        memcpy(copy, source, bytes);
+    }
+    return copy;
+}
+
+/* A font record copied from another, with its own arrays; `name' is taken
+   over. With a nonzero ratio the widths, italic corrections and kerns are
+   those of the source scaled by (1000 + ratio)/1000, which is how the
+   reference makes an auto-expanded font (auto_expand_font). The copy is not
+   yet expandable itself and not yet linked to anything. */
+static int copy_font_record(struct hstex_engine *engine, uint32_t source_id,
+                            char *name, int32_t ratio, uint32_t *identifier,
+                            char *error, size_t error_capacity)
+{
+    if (name == NULL) {
+        return set_error(error, error_capacity, "font-name allocation failed");
+    }
+    if (engine->font_count >= (size_t)INT32_MAX ||
+        reserve_fonts(engine, engine->font_count + 1U, error,
+                      error_capacity) != 0) {
+        free(name);
+        return set_error(error, error_capacity, "too many fonts");
+    }
+    const struct hstex_font *source = font_by_identifier(engine, source_id);
+    if (source == NULL) {
+        free(name);
+        return set_error(error, error_capacity, "invalid font to copy");
+    }
+    struct hstex_font *font = &engine->fonts[engine->font_count];
+    *font = *source;
+    font->name = name;
+    font->pdf_attribute = source->pdf_attribute == NULL
+                              ? NULL
+                              : copied_bytes(source->pdf_attribute,
+                                             strlen(source->pdf_attribute) + 1U);
+    font->characters = copied_bytes(
+        source->characters,
+        (size_t)HSTEX_FONT_CHARACTER_COUNT * sizeof(*source->characters));
+    font->lig_kern = copied_bytes(source->lig_kern,
+                                  source->lig_kern_count *
+                                      sizeof(*source->lig_kern));
+    font->kerns = copied_bytes(source->kerns,
+                               source->kern_count * sizeof(*source->kerns));
+    font->extensibles = copied_bytes(source->extensibles,
+                                     source->extensible_count *
+                                         sizeof(*source->extensibles));
+    font->dimens = copied_bytes(source->dimens,
+                                source->dimen_count * sizeof(*source->dimens));
+    font->dimen_capacity = source->dimen_count;
+    font->virtual_font = NULL;
+    font->virtual_state = 0U;
+    font->expand_ratio = 0;
+    font->expand_step = 0;
+    font->stretch_font = 0U;
+    font->shrink_font = 0U;
+    font->base_font = 0U;
+    font->next_expanded = 0U;
+    font->auto_expand = false;
+    font->independent = false;
+    if ((source->characters != NULL && font->characters == NULL) ||
+        (source->lig_kern_count != 0U && font->lig_kern == NULL) ||
+        (source->kern_count != 0U && font->kerns == NULL) ||
+        (source->extensible_count != 0U && font->extensibles == NULL) ||
+        (source->dimen_count != 0U && font->dimens == NULL)) {
+        free(font->name);
+        free(font->pdf_attribute);
+        free(font->characters);
+        free(font->lig_kern);
+        free(font->kerns);
+        free(font->extensibles);
+        free(font->dimens);
+        memset(font, 0, sizeof(*font));
+        return set_error(error, error_capacity, "font copy allocation failed");
+    }
+    if (ratio != 0 && font->characters != NULL) {
+        for (size_t code = 0U; code < (size_t)HSTEX_FONT_CHARACTER_COUNT;
+             ++code) {
+            struct hstex_char_metric *metric = &font->characters[code];
+            metric->width =
+                expand_round_xn_over_d(metric->width, 1000 + ratio, 1000);
+            metric->italic =
+                expand_round_xn_over_d(metric->italic, 1000 + ratio, 1000);
+        }
+    }
+    if (ratio != 0) {
+        for (size_t index = 0U; index < font->kern_count; ++index) {
+            font->kerns[index] =
+                expand_round_xn_over_d(font->kerns[index], 1000 + ratio, 1000);
+        }
+    }
+    ++engine->font_count;
+    *identifier = (uint32_t)engine->font_count;
+    return 0;
+}
+
+/* The copy of `base_id' expanded by `ratio' thousandths -- a nonzero
+   multiple of the base's step -- made if there is none yet: from the base's
+   own metrics for an automatically expanded font, and from the metrics file
+   of that name otherwise, as the reference's load_expand_font. The copy
+   carries the base's protrusion and expansion codes, and joins the base's
+   chain. */
+static int expanded_font(struct hstex_engine *engine, uint32_t base_id,
+                         int32_t ratio, uint32_t *result, char *error,
+                         size_t error_capacity)
+{
+    const struct hstex_font *base = font_by_identifier(engine, base_id);
+    if (base == NULL) {
+        return set_error(error, error_capacity, "font expansion: invalid font");
+    }
+    for (uint32_t k = base->next_expanded; k != 0U;) {
+        const struct hstex_font *copy = font_by_identifier(engine, k);
+        if (copy == NULL) {
+            break;
+        }
+        if (copy->expand_ratio == ratio) {
+            *result = k;
+            return 0;
+        }
+        k = copy->next_expanded;
+    }
+    uint32_t k = 0U;
+    char *name = expanded_font_name(base->name, ratio);
+    if (name == NULL) {
+        return set_error(error, error_capacity, "font-name allocation failed");
+    }
+    if (base->auto_expand) {
+        if (copy_font_record(engine, base_id, name, ratio, &k, error,
+                             error_capacity) != 0) {
+            return -1;
+        }
+    } else {
+        int32_t size = base->size;
+        int status = find_or_create_font(engine, name, size, &k, error,
+                                         error_capacity);
+        if (status != 0) {
+            (void)set_error(error, error_capacity,
+                            "font expansion: cannot load expanded font %s",
+                            name);
+            free(name);
+            return -1;
+        }
+        base = font_by_identifier(engine, base_id);
+        struct hstex_font *loaded = font_by_identifier(engine, k);
+        if (base->characters != NULL && loaded->characters != NULL) {
+            for (size_t code = 0U; code < (size_t)HSTEX_FONT_CHARACTER_COUNT;
+                 ++code) {
+                loaded->characters[code].left_protrusion =
+                    base->characters[code].left_protrusion;
+                loaded->characters[code].right_protrusion =
+                    base->characters[code].right_protrusion;
+                loaded->characters[code].expansion_factor =
+                    base->characters[code].expansion_factor;
+            }
+        }
+        free(name);
+    }
+    struct hstex_font *mutable_base = font_by_identifier(engine, base_id);
+    struct hstex_font *copy = font_by_identifier(engine, k);
+    copy->expand_ratio = ratio;
+    copy->expand_step = mutable_base->expand_step;
+    copy->auto_expand = mutable_base->auto_expand;
+    copy->base_font = base_id;
+    copy->next_expanded = mutable_base->next_expanded;
+    mutable_base->next_expanded = k;
+    *result = k;
+    return 0;
+}
+
+/* The multiple of the font's step nearest to `ratio', within the limits the
+   font was expanded with; the reference's fix_expand_value. */
+static int32_t fix_expand_value(const struct hstex_engine *engine,
+                                const struct hstex_font *font, int32_t ratio)
+{
+    if (ratio == 0) {
+        return 0;
+    }
+    bool negative = ratio < 0;
+    if (negative) {
+        ratio = -ratio;
+    }
+    const struct hstex_font *limit = font_by_identifier(
+        (struct hstex_engine *)engine,
+        negative ? font->shrink_font : font->stretch_font);
+    int32_t maximum = limit == NULL ? 0
+                      : negative    ? -limit->expand_ratio
+                                    : limit->expand_ratio;
+    if (ratio > maximum) {
+        ratio = maximum;
+    } else if (font->expand_step > 0 && ratio % font->expand_step > 0) {
+        ratio = font->expand_step *
+                expand_round_xn_over_d(ratio, 1, font->expand_step);
+    }
+    return negative ? -ratio : ratio;
+}
+
+/* The font `identifier' expanded by `ratio' thousandths, any value between
+   the shrink and stretch limits; the identifier itself when nothing is to be
+   done. The reference's expand_font. */
+static int expand_font_by(struct hstex_engine *engine, uint32_t identifier,
+                          int32_t ratio, uint32_t *result, char *error,
+                          size_t error_capacity)
+{
+    *result = identifier;
+    if (ratio == 0) {
+        return 0;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL) {
+        return 0;
+    }
+    ratio = fix_expand_value(engine, font, ratio);
+    if (ratio == 0) {
+        return 0;
+    }
+    if (font->next_expanded == 0U) {
+        return set_error(error, error_capacity,
+                         "font expansion: uninitialized pdf_font_elink");
+    }
+    return expanded_font(engine, identifier, ratio, result, error,
+                         error_capacity);
+}
+
+/* Give a font its expansion: the step, whether copies are made from its own
+   metrics, and a copy at each nonzero limit. The reference's
+   set_expand_params. */
+static int set_expand_params(struct hstex_engine *engine, uint32_t identifier,
+                             bool auto_expand, int32_t stretch_limit,
+                             int32_t shrink_limit, int32_t step, char *error,
+                             size_t error_capacity)
+{
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    font->expand_step = step;
+    font->auto_expand = auto_expand;
+    uint32_t copy = 0U;
+    if (stretch_limit > 0) {
+        if (expanded_font(engine, identifier, stretch_limit, &copy, error,
+                          error_capacity) != 0) {
+            return -1;
+        }
+        font_by_identifier(engine, identifier)->stretch_font = copy;
+    }
+    if (shrink_limit > 0) {
+        if (expanded_font(engine, identifier, -shrink_limit, &copy, error,
+                          error_capacity) != 0) {
+            return -1;
+        }
+        font_by_identifier(engine, identifier)->shrink_font = copy;
+    }
+    return 0;
+}
+
+static int32_t clamp_int(int32_t value, int32_t low, int32_t high)
+{
+    return value < low ? low : value > high ? high : value;
+}
+
+/* \pdffontexpand <font> <stretch> <shrink> <step> [autoexpand]. The
+   reference's read_expand_font: the limits are cut to multiples of the step,
+   a font expanded before must be given the same figures again, and a font
+   that is itself an expanded copy cannot be expanded. Each fault is fatal to
+   the run, as the reference's pdf_error is. */
+static int execute_pdf_font_expand(struct hstex_engine *engine, char *error,
+                                   size_t error_capacity)
+{
+    uint32_t identifier = 0U;
+    if (scan_font_identifier(engine, &identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    if (font == NULL || strcmp(font->name, "nullfont") == 0) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): invalid font identifier");
+    }
+    if (font->base_font != 0U) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): \\pdffontexpand cannot "
+                         "be used this way (the base font has been expanded)");
+    }
+    int32_t stretch_limit = 0, shrink_limit = 0, step = 0;
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_integer(engine, &stretch_limit, error, error_capacity) != 0 ||
+        scan_integer(engine, &shrink_limit, error, error_capacity) != 0 ||
+        scan_integer(engine, &step, error, error_capacity) != 0) {
+        return -1;
+    }
+    stretch_limit = clamp_int(stretch_limit, 0, 1000);
+    shrink_limit = clamp_int(shrink_limit, 0, 500);
+    step = clamp_int(step, 0, 100);
+    if (step == 0) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): invalid step");
+    }
+    stretch_limit -= stretch_limit % step;
+    shrink_limit -= shrink_limit % step;
+    if (stretch_limit == 0 && shrink_limit == 0) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): invalid limit(s)");
+    }
+    bool auto_expand = false;
+    if (try_keyword(engine, "autoexpand", &auto_expand, error,
+                    error_capacity) != 0) {
+        return -1;
+    }
+    if (auto_expand) {
+        /* The reference scans an optional space after the keyword. */
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        enum hstex_engine_result taken = hstex_engine_next_expanded(
+            engine, &token, &location, error, error_capacity);
+        if (taken == HSTEX_ENGINE_ERROR) {
+            return -1;
+        }
+        if (taken == HSTEX_ENGINE_TOKEN && !token_is_space(token) &&
+            push_one(engine, token, location, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    font = font_by_identifier(engine, identifier);
+    if (font->expand_ratio != 0) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): this font has been "
+                         "expanded by another font so it cannot be used now");
+    }
+    if (font->expand_step != 0) {
+        const struct hstex_font *stretch =
+            font_by_identifier(engine, font->stretch_font);
+        const struct hstex_font *shrink =
+            font_by_identifier(engine, font->shrink_font);
+        if (font->expand_step != step) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): font has been "
+                             "expanded with different expansion step");
+        }
+        if ((stretch == NULL && stretch_limit != 0) ||
+            (stretch != NULL && stretch->expand_ratio != stretch_limit)) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): font has been "
+                             "expanded with different stretch limit");
+        }
+        if ((shrink == NULL && shrink_limit != 0) ||
+            (shrink != NULL && -shrink->expand_ratio != shrink_limit)) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): font has been "
+                             "expanded with different shrink limit");
+        }
+        if (font->auto_expand != auto_expand) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): font has been "
+                             "expanded with different auto expansion value");
+        }
+        return 0;
+    }
+    if (set_expand_params(engine, identifier, auto_expand, stretch_limit,
+                          shrink_limit, step, error, error_capacity) != 0) {
+        return -1;
+    }
+    /* A virtual font that has already been read has local fonts of its
+       own; they are expanded the same way, as the reference's
+       vf_expand_local_fonts does. */
+    return expand_virtual_locals(engine, identifier, error, error_capacity);
+}
+
+/* \pdfcopyfont <control sequence> = <font>: a new font with the same
+   metrics, under a name of its own, that \pdffontexpand may be given
+   separately. The reference's make_font_copy. */
+static int scan_font_copy(struct hstex_engine *engine, char *error,
+                          size_t error_capacity)
+{
+    hstex_token target = 0U;
+    if (scan_target_control_sequence(engine, &target, error,
+                                     error_capacity) != 0) {
+        return -1;
+    }
+    bool declared_global = assignment_is_global(engine, engine->pending_global);
+    uint32_t source = 0U;
+    if (scan_optional_equals(engine, error, error_capacity) != 0 ||
+        scan_font_identifier(engine, &source, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *font = font_by_identifier(engine, source);
+    if (font == NULL) {
+        return set_error(error, error_capacity, "\\pdfcopyfont: invalid font");
+    }
+    if (font->expand_ratio != 0 || font->expand_step != 0) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (\\pdfcopyfont): cannot copy an "
+                         "expanded font");
+    }
+    uint32_t copy = 0U;
+    char *name = copied_bytes(font->name, strlen(font->name) + 1U);
+    if (copy_font_record(engine, source, name, 0, &copy, error,
+                         error_capacity) != 0) {
+        return -1;
+    }
+    struct hstex_font *made = font_by_identifier(engine, copy);
+    made->independent = true;
+    made->identifier_cs = hstex_token_control_sequence_id(target);
+    struct hstex_meaning meaning = {
+        .command = HSTEX_COMMAND_FONT_GIVEN,
+        .level = 0U,
+        .value = {.integer = (int32_t)copy},
+    };
+    return set_meaning(engine, hstex_token_control_sequence_id(target), meaning,
+                       declared_global, error, error_capacity);
 }
 
 static int scan_font_definition(struct hstex_engine *engine, char *error,
@@ -17011,6 +17589,11 @@ static int execute_remove_last(struct hstex_engine *engine, int32_t kind,
         return 0;
     }
     if (node == NULL || node->kind != (enum hstex_node_kind)kind) {
+        return 0;
+    }
+    /* A margin kern is its own kind of node in the reference, so \unkern
+       passes it by; see docs/DECISIONS.md, a-margin-kern-is-not-a-kern. */
+    if (node->kind == HSTEX_NODE_KERN && node->value.kern.margin != 0U) {
         return 0;
     }
     if (last_node_is_replaced_by_a_discretionary(engine)) {
@@ -20230,6 +20813,12 @@ static void show_character(struct hstex_engine *engine,
     } else if (font != NULL && font->name != NULL) {
         print_text(engine, font->name);
     }
+    /* An expanded copy is shown as its base with the ratio after it, as the
+       reference's print_font_identifier does. */
+    if (font != NULL && font->expand_ratio != 0) {
+        print_formatted(engine, " (%s%d)", font->expand_ratio > 0 ? "+" : "",
+                        (int)font->expand_ratio);
+    }
     print_byte(engine, ' ');
     show_ascii(engine, (uint8_t)node->value.character.character);
 }
@@ -21387,6 +21976,9 @@ static bool command_is_expandable(enum hstex_command command)
     case HSTEX_COMMAND_EXPANDED:
     case HSTEX_COMMAND_FI:
     case HSTEX_COMMAND_FONT_NAME:
+    case HSTEX_COMMAND_PDF_FONT_NAME:
+    case HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER:
+    case HSTEX_COMMAND_PDF_FONT_SIZE:
     case HSTEX_COMMAND_JOB_NAME:
     case HSTEX_COMMAND_MACRO:
     case HSTEX_COMMAND_MARK_TEXT:
@@ -24195,12 +24787,6 @@ static bool pdf_font_suffix(const char *name, const char *suffix)
            strcmp(name + name_length - suffix_length, suffix) == 0;
 }
 
-enum hstex_virtual_state {
-    HSTEX_VIRTUAL_UNCHECKED = 0,
-    HSTEX_VIRTUAL_PHYSICAL,
-    HSTEX_VIRTUAL_LOADING,
-    HSTEX_VIRTUAL_LOADED,
-};
 
 enum {
     HSTEX_VF_ID = 202,
@@ -24350,8 +24936,8 @@ static int vf_append_subfont(struct hstex_virtual_font *virtual_font,
 
 static int vf_read_subfont(struct hstex_engine *engine,
                            struct hstex_virtual_font *virtual_font,
-                           struct hstex_vf_reader *reader, uint8_t command,
-                           int32_t virtual_size, char *error,
+                           uint32_t owner, struct hstex_vf_reader *reader,
+                           uint8_t command, int32_t virtual_size, char *error,
                            size_t error_capacity)
 {
     size_t number_width = (size_t)(command - HSTEX_DVI_FNT_DEF1) + 1U;
@@ -24402,14 +24988,32 @@ static int vf_read_subfont(struct hstex_engine *engine,
                                         : (int32_t)(uint32_t)number_bits;
     (void)checksum;
     (void)design_size;
+    /* A local font of a virtual font that may be expanded may be expanded
+       the same way, and is given its limits the moment it is loaded, as the
+       reference's vf_def_font does: the copies take their places in the
+       font table right after it. */
+    const struct hstex_font *owning = font_by_identifier(engine, owner);
+    if (owning != NULL && owning->expand_step != 0) {
+        const struct hstex_font *stretch =
+            font_by_identifier(engine, owning->stretch_font);
+        const struct hstex_font *shrink =
+            font_by_identifier(engine, owning->shrink_font);
+        int32_t stretch_limit = stretch == NULL ? 0 : stretch->expand_ratio;
+        int32_t shrink_limit = shrink == NULL ? 0 : -shrink->expand_ratio;
+        if (set_expand_params(engine, identifier, owning->auto_expand,
+                              stretch_limit, shrink_limit, owning->expand_step,
+                              error, error_capacity) != 0) {
+            return -1;
+        }
+    }
     return vf_append_subfont(virtual_font, number, identifier, error,
                              error_capacity);
 }
 
 static int parse_virtual_font(struct hstex_engine *engine,
                               struct hstex_virtual_font *virtual_font,
-                              const char *name, int32_t size, char *error,
-                              size_t error_capacity)
+                              uint32_t owner, const char *name, int32_t size,
+                              char *error, size_t error_capacity)
 {
     struct hstex_vf_reader reader = {
         .bytes = virtual_font->bytes,
@@ -24462,7 +25066,7 @@ static int parse_virtual_font(struct hstex_engine *engine,
                                  "font definition follows a packet in %s",
                                  name);
             }
-            if (vf_read_subfont(engine, virtual_font, &reader,
+            if (vf_read_subfont(engine, virtual_font, owner, &reader,
                                 (uint8_t)command, size, error,
                                 error_capacity) != 0) {
                 return -1;
@@ -24520,6 +25124,94 @@ static int parse_virtual_font(struct hstex_engine *engine,
 }
 
 static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
+                             char *error, size_t error_capacity);
+
+/* An expanded copy of a virtual font is the base's packets drawn in copies
+   of the base's local fonts expanded by the same ratio: the reference's
+   auto_expand_vf. The base is loaded first; a base that turns out not to be
+   virtual leaves the copy physical, as it is. */
+static int load_expanded_virtual_font(struct hstex_engine *engine,
+                                      uint32_t identifier, char *error,
+                                      size_t error_capacity)
+{
+    struct hstex_font *font = font_by_identifier(engine, identifier);
+    uint32_t base_id = font->base_font;
+    int32_t ratio = font->expand_ratio;
+    if (load_virtual_font(engine, base_id, error, error_capacity) != 0) {
+        return -1;
+    }
+    const struct hstex_font *base = font_by_identifier(engine, base_id);
+    font = font_by_identifier(engine, identifier);
+    if (base == NULL || base->virtual_state != HSTEX_VIRTUAL_LOADED ||
+        base->virtual_font == NULL) {
+        font->virtual_state = HSTEX_VIRTUAL_PHYSICAL;
+        return 0;
+    }
+    struct hstex_virtual_font *copy = calloc(1U, sizeof(*copy));
+    if (copy == NULL) {
+        return set_error(error, error_capacity, "virtual-font allocation failed");
+    }
+    *copy = *base->virtual_font;
+    copy->bytes = copied_bytes(base->virtual_font->bytes,
+                               base->virtual_font->byte_count);
+    copy->subfonts = calloc(base->virtual_font->subfont_count == 0U
+                                ? 1U
+                                : base->virtual_font->subfont_count,
+                            sizeof(*copy->subfonts));
+    if ((base->virtual_font->byte_count != 0U && copy->bytes == NULL) ||
+        copy->subfonts == NULL) {
+        destroy_virtual_font(copy);
+        return set_error(error, error_capacity, "virtual-font allocation failed");
+    }
+    size_t count = base->virtual_font->subfont_count;
+    for (size_t index = 0U; index < count; ++index) {
+        /* The base's record may move while a copy is made, so it is fetched
+           again each time round. */
+        const struct hstex_virtual_font *base_vf =
+            font_by_identifier(engine, base_id)->virtual_font;
+        int32_t number = base_vf->subfonts[index].number;
+        uint32_t local = base_vf->subfonts[index].identifier;
+        /* The reference makes a new copy of each local font for each
+           expanded copy of the virtual font, whether or not one of that
+           ratio exists, and does not chain it: so does this, so that the
+           fonts take the same places in the table. */
+        uint32_t expanded = 0U;
+        /* A chunk resumed from a checkpoint reads the virtual font again,
+           and must come to the copies the cold run made for it rather than
+           make a second set, or the fonts after them move along the table. */
+        for (size_t k = 0U; k < engine->font_count; ++k) {
+            if (engine->fonts[k].virtual_owner == identifier &&
+                engine->fonts[k].base_font == local &&
+                engine->fonts[k].expand_ratio == ratio) {
+                expanded = (uint32_t)(k + 1U);
+                break;
+            }
+        }
+        const struct hstex_font *local_font = font_by_identifier(engine, local);
+        if (expanded == 0U &&
+            copy_font_record(engine, local,
+                             expanded_font_name(local_font->name, ratio), ratio,
+                             &expanded, error, error_capacity) != 0) {
+            destroy_virtual_font(copy);
+            return -1;
+        }
+        struct hstex_font *made = font_by_identifier(engine, expanded);
+        made->expand_ratio = ratio;
+        made->expand_step = font_by_identifier(engine, base_id)->expand_step;
+        made->auto_expand = true;
+        made->base_font = local;
+        made->virtual_owner = identifier;
+        copy->subfonts[index].number = number;
+        copy->subfonts[index].identifier = expanded;
+    }
+    copy->subfont_count = count;
+    font = font_by_identifier(engine, identifier);
+    font->virtual_font = copy;
+    font->virtual_state = HSTEX_VIRTUAL_LOADED;
+    return 0;
+}
+
+static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
                              char *error, size_t error_capacity)
 {
     struct hstex_font *font = font_by_identifier(engine, identifier);
@@ -24533,6 +25225,10 @@ static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
     if (font->virtual_state == HSTEX_VIRTUAL_LOADING) {
         return set_error(error, error_capacity,
                          "recursive virtual-font loading: %s", font->name);
+    }
+    if (font->base_font != 0U) {
+        return load_expanded_virtual_font(engine, identifier, error,
+                                          error_capacity);
     }
     char *name = strdup(font->name);
     int32_t size = font->size;
@@ -24574,7 +25270,8 @@ static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
                                        error_capacity);
     free(path);
     if (status == 0) {
-        status = parse_virtual_font(engine, virtual_font, name, size, error,
+        status = parse_virtual_font(engine, virtual_font, identifier, name, size,
+                                    error,
                                     error_capacity);
     }
     font = font_by_identifier(engine, identifier);
@@ -24594,6 +25291,45 @@ static int load_virtual_font(struct hstex_engine *engine, uint32_t identifier,
     }
     free(name);
     return status;
+}
+
+/* Give the local fonts of a virtual font that has been read the expansion
+   the virtual font itself has; the reference's vf_expand_local_fonts. */
+static int expand_virtual_locals(struct hstex_engine *engine,
+                                 uint32_t identifier, char *error,
+                                 size_t error_capacity)
+{
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    /* A font read as virtual before a checkpoint is one the reference knows
+       as virtual: its locals are expanded as they would have been, which
+       takes reading the file again. */
+    if (font != NULL && font->virtual_state == HSTEX_VIRTUAL_KNOWN &&
+        load_virtual_font(engine, identifier, error, error_capacity) != 0) {
+        return -1;
+    }
+    font = font_by_identifier(engine, identifier);
+    if (font == NULL || font->virtual_state != HSTEX_VIRTUAL_LOADED ||
+        font->virtual_font == NULL || font->expand_step == 0) {
+        return 0;
+    }
+    size_t count = font->virtual_font->subfont_count;
+    for (size_t index = 0U; index < count; ++index) {
+        const struct hstex_font *owning = font_by_identifier(engine, identifier);
+        uint32_t local = owning->virtual_font->subfonts[index].identifier;
+        const struct hstex_font *stretch =
+            font_by_identifier(engine, owning->stretch_font);
+        const struct hstex_font *shrink =
+            font_by_identifier(engine, owning->shrink_font);
+        int32_t stretch_limit = stretch == NULL ? 0 : stretch->expand_ratio;
+        int32_t shrink_limit = shrink == NULL ? 0 : -shrink->expand_ratio;
+        if (set_expand_params(engine, local, owning->auto_expand, stretch_limit,
+                              shrink_limit, owning->expand_step, error,
+                              error_capacity) != 0 ||
+            expand_virtual_locals(engine, local, error, error_capacity) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int pdf_load_font_map(struct hstex_engine *engine, char *error,
@@ -24873,6 +25609,12 @@ static int pdf_reserve_shared_cmap(struct hstex_engine *engine,
     }
     if (font->pdf_no_builtin_to_unicode) {
         return 0;
+    }
+    if (font->base_font != 0U) {
+        const struct hstex_font *base = font_by_identifier(engine, font->base_font);
+        if (base != NULL) {
+            font = base;
+        }
     }
     char *postscript = NULL;
     char *encoding_file = NULL;
@@ -26603,6 +27345,28 @@ static int pdf_write_physical_fonts(struct hstex_engine *engine, char *error,
     return status;
 }
 
+static int pdf_font_map_entry(struct hstex_engine *engine, const char *tfm,
+                              char **postscript, char **encoding,
+                              char **font_file, char *error,
+                              size_t error_capacity);
+
+/* Whether the map has the font, which is what makes it one the file can
+   draw at any size from one object. */
+static bool pdf_font_named_is_scalable(struct hstex_engine *engine,
+                                       const char *name)
+{
+    char *postscript = NULL;
+    char *encoding_file = NULL;
+    char *font_file = NULL;
+    char ignored[64];
+    int status = pdf_font_map_entry(engine, name, &postscript, &encoding_file,
+                                    &font_file, ignored, sizeof(ignored));
+    free(postscript);
+    free(encoding_file);
+    free(font_file);
+    return status == 0;
+}
+
 /* The font's place among the ones the file names, adding it if it is new. */
 static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
                                              uint32_t identifier, char *error,
@@ -26620,7 +27384,28 @@ static struct hstex_pdf_font *pdf_font_entry(struct hstex_engine *engine,
         (void)set_error(error, error_capacity, "invalid font");
         return NULL;
     }
-    for (size_t index = 0U; index < engine->pdf_font_count; ++index) {
+    /* An expanded copy is its base font in the file, drawn with the text
+       matrix scaled; the reference shares the font object. See
+       docs/DECISIONS.md, font-expansion. */
+    if (font->base_font != 0U) {
+        struct hstex_pdf_font *base =
+            pdf_font_entry(engine, font->base_font, error, error_capacity);
+        if (base == NULL) {
+            return NULL;
+        }
+        if (remember_pdf_font_place(engine, identifier,
+                                    (size_t)(base - engine->pdf_fonts)) != 0) {
+            (void)set_error(error, error_capacity, "PDF font allocation failed");
+            return NULL;
+        }
+        return base;
+    }
+    /* Only a font the map knows is one font at every size; a bitmap font's
+       glyphs are drawn for one size, so each size is a font of its own, as
+       the reference's pdf_init_font has it (isscalable). */
+    bool scalable = pdf_font_named_is_scalable(engine, font->name);
+    for (size_t index = 0U; scalable && index < engine->pdf_font_count;
+         ++index) {
         const struct hstex_font *other = font_by_identifier(
             engine, engine->pdf_fonts[index].identifier);
         if (other != NULL && strcmp(other->name, font->name) == 0) {
@@ -26995,6 +27780,45 @@ static int64_t pdf_text_offset(const struct hstex_font *font, int32_t text_h,
     return -s;
 }
 
+/* The same two, for text the matrix scales by (1000 + a)/1000: the
+   reference's adv_char_width and pdf_begin_string with pdf_cur_Tm_a set --
+   the width and the difference are first taken back to the unscaled space,
+   and what the pen moves by is scaled forward again. */
+static int32_t pdf_scaled_glyph_advance(const struct hstex_font *font,
+                                        uint32_t code, int32_t a)
+{
+    int32_t size = pdf_stated_size(font);
+    int32_t width = packed_dimen(font->characters[code].width);
+    int64_t out = 0;
+    int64_t s = pdf_divide_scaled(expand_round_xn_over_d(width, 1000, 1000 + a),
+                                  size, 4, &out);
+    int32_t magnitude = (int32_t)(s < 0 ? -s : s);
+    int32_t s_out = expand_round_xn_over_d(
+        expand_round_xn_over_d(size, magnitude, 10000), 1000 + a, 1000);
+    return s < 0 ? -s_out : s_out;
+}
+
+static int64_t pdf_scaled_text_offset(const struct hstex_font *font, int32_t a,
+                                      int32_t text_h, int32_t h,
+                                      int64_t *pen_after)
+{
+    int32_t size = pdf_stated_size(font);
+    int64_t out = 0;
+    int64_t s = pdf_divide_scaled(
+        expand_round_xn_over_d(h - text_h, 1000, 1000 + a), size, 3, &out);
+    int64_t s_out = 0;
+    if (s > -32768 && s < 32768) {
+        int32_t magnitude = (int32_t)(s < 0 ? -s : s);
+        s_out = expand_round_xn_over_d(
+            expand_round_xn_over_d(size, magnitude, 1000), 1000 + a, 1000);
+        if (s < 0) {
+            s_out = -s_out;
+        }
+    }
+    *pen_after = (int64_t)text_h + s_out;
+    return -s;
+}
+
 /* Whether a step is long enough for the file to name at all: the file
    prints so many decimals of a big point, and a step that comes to less
    than one of those in the last place it prints is no step. See
@@ -27021,12 +27845,18 @@ static bool pdf_font_goes_as_bitmap(struct hstex_engine *engine,
                                     const struct hstex_font *font)
 {
     if (entry->kind == 0U) {
+        const struct hstex_font *named =
+            font->base_font != 0U ? font_by_identifier(engine, font->base_font)
+                                  : font;
+        if (named == NULL) {
+            named = font;
+        }
         char *postscript = NULL;
         char *encoding_file = NULL;
         char *font_file = NULL;
         char ignored[64];
         int status =
-            pdf_font_map_entry(engine, font->name, &postscript, &encoding_file,
+            pdf_font_map_entry(engine, named->name, &postscript, &encoding_file,
                                &font_file, ignored, sizeof(ignored));
         free(postscript);
         free(encoding_file);
@@ -27067,6 +27897,9 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
         engine->pdf_in_text = true;
         engine->pdf_placed = false;
         engine->pdf_font_chosen = false;
+        engine->pdf_text_matrix_a = 0;
+        engine->pdf_last_font_number = 0U;
+        engine->pdf_last_font_size = 0;
     }
     /* A glyph the file cannot tell from the line it is already on stays on
        it: a step shorter than the last place the file prints would come to
@@ -27075,13 +27908,33 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
     bool names = pdf_step_names_a_place(
         engine, (engine->pdf_height - v) - engine->pdf_line_v);
     bool moved = !engine->pdf_placed || names;
-    if (!engine->pdf_font_chosen || engine->pdf_text_font != identifier) {
-        if (pdf_end_array(engine, error, error_capacity) != 0 ||
-            pdf_formatted(engine, error, error_capacity, "/F%u ",
-                          (unsigned int)entry->number) != 0 ||
-            pdf_font_size(engine, font->size, error, error_capacity) != 0 ||
-            pdf_text(engine, " Tf ", error, error_capacity) != 0) {
+    bool font_changed =
+        !engine->pdf_font_chosen || engine->pdf_text_font != identifier;
+    /* The scaling the text matrix is to carry: what it carries now while
+       the font stays, and for a new font its expansion ratio when it is an
+       auto-expanded copy, else none. The reference's pdf_new_Tm_a. */
+    int32_t new_a = !font_changed ? engine->pdf_text_matrix_a
+                    : font->auto_expand && font->base_font != 0U
+                        ? font->expand_ratio
+                        : 0;
+    if (font_changed) {
+        if (pdf_end_array(engine, error, error_capacity) != 0) {
             return -1;
+        }
+        /* The file is told the font only when the resource or the size is
+           not the one it was last told: an expanded copy shares both with
+           its base. The reference's pdf_set_font. */
+        if (!engine->pdf_font_chosen ||
+            engine->pdf_last_font_number != entry->number ||
+            engine->pdf_last_font_size != font->size) {
+            if (pdf_formatted(engine, error, error_capacity, "/F%u ",
+                              (unsigned int)entry->number) != 0 ||
+                pdf_font_size(engine, font->size, error, error_capacity) != 0 ||
+                pdf_text(engine, " Tf ", error, error_capacity) != 0) {
+                return -1;
+            }
+            engine->pdf_last_font_number = entry->number;
+            engine->pdf_last_font_size = font->size;
         }
         engine->pdf_text_font = identifier;
         engine->pdf_font_chosen = true;
@@ -27092,7 +27945,11 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
        docs/DECISIONS.md, the-correction-an-array-cannot-carry. */
     if (!moved && h != engine->pdf_text_h) {
         int64_t pen_after = 0;
-        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
+        int64_t offset =
+            engine->pdf_text_matrix_a != 0
+                ? pdf_scaled_text_offset(font, engine->pdf_text_matrix_a,
+                                         engine->pdf_text_h, h, &pen_after)
+                : pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
         if (offset > HSTEX_PDF_OFFSET_LIMIT ||
             offset < -HSTEX_PDF_OFFSET_LIMIT) {
             moved = true;
@@ -27110,6 +27967,44 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
             pdf_text(engine, " ", error, error_capacity) != 0) {
             return -1;
         }
+        /* Text an expanded font sets, and the first text after it, is
+           placed by a text matrix that carries the scaling, from the page's
+           own corner; the reference's pdf_set_textmatrix. See
+           docs/DECISIONS.md, font-expansion. */
+        if (new_a != 0 || engine->pdf_text_matrix_a != 0) {
+            int32_t digits = pdf_digits(engine);
+            int64_t across_out = 0;
+            int64_t across = pdf_divide_scaled(h, HSTEX_ONE_HUNDRED_BP,
+                                               digits + 2, &across_out);
+            int64_t down_out = 0;
+            int64_t down = pdf_divide_scaled(engine->pdf_height - v,
+                                             HSTEX_ONE_HUNDRED_BP, digits + 2,
+                                             &down_out);
+            char text[96];
+            size_t length = pdf_format_units(text, sizeof(text), 1000 + new_a, 3);
+            memcpy(text + length, " 0 0 1 ", 7U);
+            length += 7U;
+            length += pdf_format_units(text + length, sizeof(text) - length,
+                                       across, digits);
+            text[length++] = ' ';
+            length += pdf_format_units(text + length, sizeof(text) - length,
+                                       down, digits);
+            memcpy(text + length, " Tm ", 4U);
+            length += 4U;
+            if (pdf_bytes(engine, text, length, error, error_capacity) != 0) {
+                return -1;
+            }
+            engine->pdf_origin_h = across;
+            engine->pdf_origin_v = down;
+            engine->pdf_line_h = (int32_t)across_out;
+            engine->pdf_line_v = (int32_t)down_out;
+            engine->pdf_text_h = engine->pdf_line_h;
+            engine->pdf_text_matrix_a = new_a;
+            engine->pdf_placed = true;
+            moved = false;
+        }
+    }
+    if (moved) {
         /* The first place in a text object is measured from the page's own
            corner; the ones after it from the place before, and the
            difference is worked out before it is rounded. */
@@ -27175,7 +28070,11 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
     }
     if (h != engine->pdf_text_h) {
         int64_t pen_after = engine->pdf_text_h;
-        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
+        int64_t offset =
+            engine->pdf_text_matrix_a != 0
+                ? pdf_scaled_text_offset(font, engine->pdf_text_matrix_a,
+                                         engine->pdf_text_h, h, &pen_after)
+                : pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
         if (offset != 0) {
             char rendered[24];
             size_t rendered_length = pdf_decimal(rendered, offset);
@@ -27216,6 +28115,8 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
             ? pdf_pk_glyph_advance(font, code,
                                    (uint32_t)pdf_pk_resolution(engine),
                                    pdf_digits(engine))
+        : engine->pdf_text_matrix_a != 0
+            ? pdf_scaled_glyph_advance(font, code, engine->pdf_text_matrix_a)
             : pdf_glyph_advance(font, code);
     return 0;
 }
@@ -32944,13 +33845,25 @@ static int scan_font_char_code_assignment(struct hstex_engine *engine,
         return set_error(error, error_capacity, "bad character code (%d)",
                          code);
     }
-    struct hstex_char_metric *metric = &font->characters[(size_t)code];
-    if (subtype == (int32_t)HSTEX_FONT_CODE_LEFT_PROTRUSION) {
-        metric->left_protrusion = value;
-    } else if (subtype == (int32_t)HSTEX_FONT_CODE_RIGHT_PROTRUSION) {
-        metric->right_protrusion = value;
-    } else {
-        metric->expansion_factor = value;
+    /* A font and its expanded copies hold these codes in common: the
+       reference gives every copy the base font's tables, so a code set on
+       any of them is seen by all. See docs/DECISIONS.md,
+       a-ligature-at-the-margin-under-expansion. */
+    uint32_t member = font->base_font != 0U ? font->base_font : identifier;
+    while (member != 0U) {
+        struct hstex_font *shared = font_by_identifier(engine, member);
+        if (shared == NULL || shared->characters == NULL) {
+            break;
+        }
+        struct hstex_char_metric *metric = &shared->characters[(size_t)code];
+        if (subtype == (int32_t)HSTEX_FONT_CODE_LEFT_PROTRUSION) {
+            metric->left_protrusion = value;
+        } else if (subtype == (int32_t)HSTEX_FONT_CODE_RIGHT_PROTRUSION) {
+            metric->right_protrusion = value;
+        } else {
+            metric->expansion_factor = value;
+        }
+        member = shared->next_expanded;
     }
     return 0;
 }
@@ -36542,7 +37455,9 @@ static int32_t last_node_type(const struct hstex_node *node)
     case HSTEX_NODE_GLUE:
         return 11;
     case HSTEX_NODE_KERN:
-        return 12;
+        /* A margin kern is a node type of the reference's own, past the
+           ones TeX numbers, and \lastnodetype reports it as 15. */
+        return node->value.kern.margin != 0U ? 15 : 12;
     case HSTEX_NODE_LIGATURE:
         return 7;
     case HSTEX_NODE_UNSET:
@@ -37374,6 +38289,16 @@ static int execute_unbox(struct hstex_engine *engine, int32_t subtype,
                              "box %d refers outside the list arena", index);
         }
         uint32_t identifier = engine->list_items[slot];
+        /* The kerns that let a line's first and last characters stick out
+           past the margins belong to the line as it was set, not to its
+           text: unboxing leaves them out, as the reference's unpackage
+           does. See docs/DECISIONS.md, a-margin-kern-is-not-a-kern. */
+        if (!vertical && identifier != 0U &&
+            (size_t)identifier <= engine->node_count &&
+            engine->nodes[identifier - 1U].kind == HSTEX_NODE_KERN &&
+            engine->nodes[identifier - 1U].value.kern.margin != 0U) {
+            continue;
+        }
         int status = vertical
                          ? append_vbox_item(engine, identifier, error,
                                             error_capacity)
@@ -38256,6 +39181,12 @@ struct hstex_break_totals {
     int64_t width;
     int64_t stretch[4];
     int64_t shrink;
+    /* What the line could gain or lose by expanding its fonts; the
+       reference's total_font_stretch and total_font_shrink, kept only while
+       \pdfadjustspacing is above one. See docs/DECISIONS.md,
+       font-expansion. */
+    int64_t font_stretch;
+    int64_t font_shrink;
 };
 
 /* One break that a later line could start from. */
@@ -38272,12 +39203,15 @@ struct hstex_break_record {
     int32_t entry_width;
     uint32_t entry_start;
     uint16_t entry_count;
+    int32_t entry_font_stretch;
+    int32_t entry_font_shrink;
     /* This break is a discretionary's, which is what \brokenpenalty and the
        double-hyphen demerits are about. */
     bool hyphenated;
     /* How much narrower a line starting here is for letting its first
-       character stick out past the margin. */
+       character stick out past the margin, and the character it is. */
     int32_t left_kern;
+    uint32_t left_character;
 };
 
 /* Everything a breakpoint contributes beyond its position. */
@@ -38289,6 +39223,11 @@ struct hstex_break_site {
     int32_t entry_width;
     uint32_t entry_start;
     uint16_t entry_count;
+    /* What those two texts could gain or lose by font expansion. */
+    int32_t pre_font_stretch;
+    int32_t pre_font_shrink;
+    int32_t entry_font_stretch;
+    int32_t entry_font_shrink;
     /* Where the next line begins, or SIZE_MAX to work it out by pruning. */
     size_t start;
     bool hyphenated;
@@ -38331,6 +39270,12 @@ struct hstex_break_state {
     size_t *rebuilt;
     size_t rebuilt_count;
     size_t rebuilt_capacity;
+    /* The one step and the one pair of limits every expandable font in the
+       paragraph must share; -1 until the first such font is met. The
+       reference's cur_font_step, max_stretch_ratio and max_shrink_ratio. */
+    int32_t cur_font_step;
+    int32_t max_stretch_ratio;
+    int32_t max_shrink_ratio;
 };
 
 /* Glue that shrinks without limit would let a paragraph of any length fit
@@ -38653,6 +39598,470 @@ static int reserve_active_breaks(struct hstex_break_state *state, char *error,
     return 0;
 }
 
+static int64_t pdf_divide_scaled(int64_t s, int64_t m, int digits,
+                                 int64_t *out);
+
+/* Whether `font' takes part in font expansion in this paragraph: it was
+   given a step and a limit, and they are the step and limits every other
+   expandable font in the paragraph has. A disagreement is fatal to the run,
+   as it is in the reference (check_expand_pars). */
+static int check_expand_pars(struct hstex_engine *engine,
+                             struct hstex_break_state *state,
+                             const struct hstex_font *font, bool *expandable,
+                             char *error, size_t error_capacity)
+{
+    *expandable = false;
+    if (font == NULL || font->expand_step == 0 ||
+        (font->stretch_font == 0U && font->shrink_font == 0U)) {
+        return 0;
+    }
+    if (state->cur_font_step < 0) {
+        state->cur_font_step = font->expand_step;
+    } else if (state->cur_font_step != font->expand_step) {
+        return set_error(error, error_capacity,
+                         "pdfTeX error (font expansion): using fonts with "
+                         "different step of expansion in one paragraph is not "
+                         "allowed");
+    }
+    const struct hstex_font *limit =
+        font_by_identifier(engine, font->stretch_font);
+    if (limit != NULL) {
+        if (state->max_stretch_ratio < 0) {
+            state->max_stretch_ratio = limit->expand_ratio;
+        } else if (state->max_stretch_ratio != limit->expand_ratio) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): using fonts with "
+                             "different limit of expansion in one paragraph is "
+                             "not allowed");
+        }
+    }
+    limit = font_by_identifier(engine, font->shrink_font);
+    if (limit != NULL) {
+        if (state->max_shrink_ratio < 0) {
+            state->max_shrink_ratio = -limit->expand_ratio;
+        } else if (state->max_shrink_ratio != -limit->expand_ratio) {
+            return set_error(error, error_capacity,
+                             "pdfTeX error (font expansion): using fonts with "
+                             "different limit of expansion in one paragraph is "
+                             "not allowed");
+        }
+    }
+    *expandable = true;
+    return 0;
+}
+
+/* How much wider a character may be set, and how much narrower: the
+   difference between its width in the copy expanded by the limit and in the
+   font, scaled by its expansion code. The reference's char_stretch and
+   char_shrink. */
+static int32_t char_expansion(struct hstex_engine *engine,
+                              const struct hstex_font *font, uint32_t code,
+                              bool stretch)
+{
+    if (font == NULL || font->characters == NULL ||
+        code >= (uint32_t)HSTEX_FONT_CHARACTER_COUNT) {
+        return 0;
+    }
+    const struct hstex_font *limit = font_by_identifier(
+        engine, stretch ? font->stretch_font : font->shrink_font);
+    int32_t factor = font->characters[code].expansion_factor;
+    if (limit == NULL || limit->characters == NULL || factor <= 0) {
+        return 0;
+    }
+    int32_t difference =
+        stretch ? limit->characters[code].width - font->characters[code].width
+                : font->characters[code].width - limit->characters[code].width;
+    return difference > 0 ? expand_round_xn_over_d(difference, factor, 1000)
+                          : 0;
+}
+
+/* The kern a font's program gives between two characters, or nothing: the
+   reference's get_kern, which walks past a ligature instruction for the pair
+   rather than stopping at it. */
+static int32_t font_kern_between(const struct hstex_font *font, uint8_t left,
+                                 uint8_t right)
+{
+    if (font == NULL || font->characters == NULL || font->lig_kern_count == 0U ||
+        font->characters[left].tag != 1) {
+        return 0;
+    }
+    size_t step = (size_t)font->characters[left].remainder;
+    if (step >= font->lig_kern_count) {
+        return 0;
+    }
+    if (font->lig_kern[step].skip > 128U) {
+        step = (size_t)font->lig_kern[step].operation * 256U +
+               (size_t)font->lig_kern[step].remainder;
+        if (step >= font->lig_kern_count) {
+            return 0;
+        }
+    }
+    for (;;) {
+        const struct hstex_lig_kern *entry = &font->lig_kern[step];
+        if (entry->next == right && entry->skip <= 128U &&
+            entry->operation >= 128U) {
+            size_t index = (size_t)(entry->operation - 128U) * 256U +
+                           (size_t)entry->remainder;
+            return index < font->kern_count ? font->kerns[index] : 0;
+        }
+        if (entry->skip == 0U) {
+            ++step;
+        } else if (entry->skip >= 128U) {
+            return 0;
+        } else {
+            step += (size_t)entry->skip + 1U;
+        }
+        if (step >= font->lig_kern_count) {
+            return 0;
+        }
+    }
+}
+
+static bool node_is_a_character(const struct hstex_node *node)
+{
+    return node->kind == HSTEX_NODE_CHARACTER ||
+           node->kind == HSTEX_NODE_LIGATURE;
+}
+
+/* How much a font kern between two characters would change if their font
+   were expanded by its limit: the kern the expanded copy gives, against the
+   kern that stands, scaled by the left character's expansion code. The
+   reference's kern_stretch and kern_shrink, which want the kern directly
+   after a character and directly before one of the same font. */
+static int32_t kern_expansion(struct hstex_engine *engine,
+                              const struct hstex_node *left,
+                              const struct hstex_node *kern,
+                              const struct hstex_node *right, bool stretch)
+{
+    if (left == NULL || right == NULL || !node_is_a_character(left) ||
+        !node_is_a_character(right) ||
+        left->value.character.font != right->value.character.font) {
+        return 0;
+    }
+    const struct hstex_font *font =
+        font_by_identifier(engine, left->value.character.font);
+    if (font == NULL || font->characters == NULL) {
+        return 0;
+    }
+    const struct hstex_font *limit = font_by_identifier(
+        engine, stretch ? font->stretch_font : font->shrink_font);
+    if (limit == NULL) {
+        return 0;
+    }
+    uint8_t l = (uint8_t)left->value.character.character;
+    uint8_t r = (uint8_t)right->value.character.character;
+    int32_t expanded = font_kern_between(limit, l, r);
+    int32_t factor = font->characters[l].expansion_factor;
+    return stretch ? expand_round_xn_over_d(expanded - kern->width, factor, 1000)
+                   : expand_round_xn_over_d(kern->width - expanded, factor, 1000);
+}
+
+/* A kern the font's program put between two characters: not one the
+   document wrote, nor one at a margin. */
+static bool node_is_font_kern(const struct hstex_node *node)
+{
+    return node->kind == HSTEX_NODE_KERN && !node->explicit_kern &&
+           node->value.kern.margin == 0U;
+}
+
+/* What a run of list items -- the text a discretionary holds -- could gain
+   or lose by font expansion. */
+static int list_run_expansion(struct hstex_engine *engine,
+                              struct hstex_break_state *state, uint32_t start,
+                              uint16_t count, int32_t *stretch, int32_t *shrink,
+                              char *error, size_t error_capacity)
+{
+    int64_t up = 0, down = 0;
+    *stretch = 0;
+    *shrink = 0;
+    if (count == 0U || (size_t)start + count > engine->list_item_count) {
+        return 0;
+    }
+    const struct hstex_node *previous = NULL;
+    for (uint16_t index = 0U; index < count; ++index) {
+        uint32_t identifier = engine->list_items[start + index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            previous = NULL;
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node_is_a_character(node)) {
+            const struct hstex_font *font =
+                font_by_identifier(engine, node->value.character.font);
+            bool expandable = false;
+            if (check_expand_pars(engine, state, font, &expandable, error,
+                                  error_capacity) != 0) {
+                return -1;
+            }
+            if (expandable) {
+                up += char_expansion(engine, font,
+                                     node->value.character.character, true);
+                down += char_expansion(engine, font,
+                                       node->value.character.character, false);
+            }
+            previous = node;
+            continue;
+        }
+        if (node_is_font_kern(node) && previous != NULL &&
+            index + 1U < count) {
+            uint32_t after = engine->list_items[start + index + 1U];
+            const struct hstex_node *next =
+                after != 0U && (size_t)after <= engine->node_count
+                    ? &engine->nodes[after - 1U]
+                    : NULL;
+            up += kern_expansion(engine, previous, node, next, true);
+            down += kern_expansion(engine, previous, node, next, false);
+        }
+        previous = NULL;
+    }
+    *stretch = (int32_t)up;
+    *shrink = (int32_t)down;
+    return 0;
+}
+
+/* The shortfall a line is weighed by once its fonts may expand: what the
+   fonts can give is taken off it, and a line the fonts alone could fill is
+   left short by half a step's worth, so that it is not called perfect. The
+   reference's adjustment of |shortfall| in try_break. */
+static int64_t expansion_shortfall(const struct hstex_break_state *state,
+                                   int64_t shortfall,
+                                   const struct hstex_break_totals *totals)
+{
+    if (shortfall == 0 || state->cur_font_step <= 0) {
+        return shortfall;
+    }
+    if (shortfall > 0 && totals->font_stretch > 0) {
+        if (totals->font_stretch > shortfall) {
+            int64_t steps = state->max_stretch_ratio / state->cur_font_step;
+            return steps > 0 ? (totals->font_stretch / steps) / 2 : shortfall;
+        }
+        return shortfall - totals->font_stretch;
+    }
+    if (shortfall < 0 && totals->font_shrink > 0) {
+        if (totals->font_shrink > -shortfall) {
+            int64_t steps = state->max_shrink_ratio / state->cur_font_step;
+            return steps > 0 ? -((totals->font_shrink / steps) / 2) : shortfall;
+        }
+        return shortfall + totals->font_shrink;
+    }
+    return shortfall;
+}
+
+/* Set a line's fonts to the expansion that fits it: the reference's hpack
+   in its cal_expand_ratio and subst_ex_font modes. With the line's natural
+   width against the width it must have, the ratio is what part of the fonts'
+   whole stretch (or shrink) would close the gap, in thousandths -- taken
+   only when the line's glue is finite -- and every character whose
+   expansion code is not zero moves to the copy of its font expanded by that
+   part of the font's limit, rounded to the step; a font kern between two
+   such characters becomes the expanded copy's kern. The line is then set
+   with the glue it has, as any line is. */
+static int margin_substitute_font(struct hstex_engine *engine,
+                                  const struct hstex_node *node, int32_t ratio,
+                                  uint32_t *result, char *error,
+                                  size_t error_capacity);
+
+/* The character a margin kern in a line being set stands for: the one the
+   search that made the kern found, looked for again the same way. Zero when
+   the node is not a margin kern. */
+static uint32_t margin_kern_character(struct hstex_engine *engine,
+                                      const struct hstex_hbox_builder *builder,
+                                      size_t index)
+{
+    uint32_t identifier = builder->node_identifiers[index];
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0U;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    if (node->kind != HSTEX_NODE_KERN ||
+        (node->value.kern.margin != 1U && node->value.kern.margin != 2U)) {
+        return 0U;
+    }
+    bool stopped = false;
+    return node->value.kern.margin == 1U
+               ? protruding_character(engine, builder->node_identifiers,
+                                      index + 1U, builder->count, true,
+                                      &stopped)
+               : protruding_character(engine, builder->node_identifiers, 0U,
+                                      index, false, &stopped);
+}
+
+static int expand_line_fonts(struct hstex_engine *engine,
+                             struct hstex_hbox_builder *builder, int32_t target,
+                             bool *natural, char *error, size_t error_capacity)
+{
+    *natural = false;
+    int64_t font_stretch = 0, font_shrink = 0;
+    size_t previous_character = SIZE_MAX;
+    for (size_t index = 0U; index < builder->count; ++index) {
+        uint32_t identifier = builder->node_identifiers[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        const struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node_is_a_character(node)) {
+            const struct hstex_font *font =
+                font_by_identifier(engine, node->value.character.font);
+            font_stretch += char_expansion(
+                engine, font, node->value.character.character, true);
+            font_shrink += char_expansion(
+                engine, font, node->value.character.character, false);
+            previous_character = index;
+        } else if (node_is_font_kern(node) && previous_character + 1U == index &&
+                   index + 1U < builder->count) {
+            uint32_t after = builder->node_identifiers[index + 1U];
+            const struct hstex_node *next =
+                after != 0U && (size_t)after <= engine->node_count
+                    ? &engine->nodes[after - 1U]
+                    : NULL;
+            const struct hstex_node *left =
+                &engine->nodes[builder->node_identifiers[previous_character] - 1U];
+            font_stretch += kern_expansion(engine, left, node, next, true);
+            font_shrink += kern_expansion(engine, left, node, next, false);
+        }
+    }
+    /* A margin kern carries its character in the reference, and hpack moves
+       a copy of that character to the copies of its font at the whole of
+       the stretch and of the shrink while it takes the totals -- which
+       makes those copies if they are not there yet -- and, when it sets the
+       line, to the copy at the line's ratio. See docs/DECISIONS.md,
+       the-copies-a-margin-character-makes. */
+    for (size_t index = 0U; index < builder->count; ++index) {
+        uint32_t margin_character =
+            margin_kern_character(engine, builder, index);
+        if (margin_character == 0U) {
+            continue;
+        }
+        const struct hstex_node *character =
+            &engine->nodes[margin_character - 1U];
+        uint32_t made = 0U;
+        if (margin_substitute_font(engine, character, 1000, &made, error,
+                                   error_capacity) != 0 ||
+            margin_substitute_font(engine, character, -1000, &made, error,
+                                   error_capacity) != 0) {
+            return -1;
+        }
+    }
+    struct hstex_glue total =
+        list_total_glue(engine, builder->node_identifiers, builder->count);
+    int64_t excess = (int64_t)target - builder->width;
+    int64_t out = 0;
+    int64_t ratio = 0;
+    bool weighed = false;
+    if (excess > 0 && total.stretch_order == 0U && font_stretch > 0) {
+        ratio = pdf_divide_scaled(excess, font_stretch, 3, &out);
+        weighed = true;
+    } else if (excess < 0 && total.shrink_order == 0U && font_shrink > 0) {
+        ratio = pdf_divide_scaled(excess, font_shrink, 3, &out);
+        weighed = true;
+    }
+    if (ratio == 0) {
+        /* A RATIO THAT ROUNDS TO NOTHING LEAVES THE GLUE ALONE. The
+           reference's hpack, asked for the ratio, returns as soon as it has
+           it -- before the glue is set and before any underfull or overfull
+           report -- and packs the list again only when the ratio is not
+           zero. A line that is off by less than half a thousandth of what
+           its fonts could give is therefore set at its natural glue, its
+           width stated as the line's, and nothing said about it. See
+           docs/DECISIONS.md, a-ratio-that-rounds-to-nothing. */
+        *natural = weighed;
+        return 0;
+    }
+    if (ratio > 1000) {
+        ratio = 1000;
+    } else if (ratio < -1000) {
+        ratio = -1000;
+    }
+    for (size_t index = 0U; index < builder->count; ++index) {
+        uint32_t margin_character =
+            margin_kern_character(engine, builder, index);
+        if (margin_character != 0U) {
+            uint32_t made = 0U;
+            if (margin_substitute_font(engine,
+                                       &engine->nodes[margin_character - 1U],
+                                       (int32_t)ratio, &made, error,
+                                       error_capacity) != 0) {
+                return -1;
+            }
+        }
+    }
+    previous_character = SIZE_MAX;
+    int64_t width = 0;
+    for (size_t index = 0U; index < builder->count; ++index) {
+        uint32_t identifier = builder->node_identifiers[index];
+        if (identifier == 0U || (size_t)identifier > engine->node_count) {
+            continue;
+        }
+        struct hstex_node *node = &engine->nodes[identifier - 1U];
+        if (node_is_a_character(node)) {
+            uint32_t code = node->value.character.character;
+            const struct hstex_font *font =
+                font_by_identifier(engine, node->value.character.font);
+            if (font != NULL && font->characters != NULL &&
+                code < (uint32_t)HSTEX_FONT_CHARACTER_COUNT &&
+                font->characters[code].expansion_factor != 0) {
+                int32_t factor = font->characters[code].expansion_factor;
+                const struct hstex_font *limit = font_by_identifier(
+                    engine, ratio > 0 ? font->stretch_font : font->shrink_font);
+                if (limit != NULL) {
+                    int32_t maximum = ratio > 0 ? limit->expand_ratio
+                                                : -limit->expand_ratio;
+                    uint32_t replacement = node->value.character.font;
+                    if (expand_font_by(engine, node->value.character.font,
+                                       expand_ext_xn_over_d(ratio * factor,
+                                                            maximum, 1000000),
+                                       &replacement, error,
+                                       error_capacity) != 0) {
+                        return -1;
+                    }
+                    if (replacement != node->value.character.font) {
+                        const struct hstex_font *expanded =
+                            font_by_identifier(engine, replacement);
+                        node->value.character.font = replacement;
+                        if (expanded != NULL && expanded->characters != NULL) {
+                            node->width = expanded->characters[code].width;
+                        }
+                    }
+                }
+            }
+            previous_character = index;
+        } else if (node_is_font_kern(node) && previous_character + 1U == index &&
+                   index + 1U < builder->count) {
+            uint32_t after = builder->node_identifiers[index + 1U];
+            const struct hstex_node *next =
+                after != 0U && (size_t)after <= engine->node_count
+                    ? &engine->nodes[after - 1U]
+                    : NULL;
+            const struct hstex_node *left =
+                &engine->nodes[builder->node_identifiers[previous_character] - 1U];
+            /* The reference asks kern_stretch (or kern_shrink) of the kern as
+               the list now stands -- the character before it already moved
+               to its expanded copy, the one after it not yet -- and only
+               when that is anything takes the kern the left character's font
+               now gives. With the two characters in different fonts it is
+               nothing, so a font kern keeps the width it had; that is what
+               the reference does, and the lines agree only if this does. */
+            const struct hstex_font *left_font =
+                font_by_identifier(engine, left->value.character.font);
+            if (next != NULL && node_is_a_character(next) && left_font != NULL &&
+                kern_expansion(engine, left, node, next, ratio > 0) != 0) {
+                node->width = font_kern_between(
+                    left_font, (uint8_t)left->value.character.character,
+                    (uint8_t)next->value.character.character);
+            }
+        }
+        bool sizeless = node->kind == HSTEX_NODE_WHATSIT ||
+                        node->kind == HSTEX_NODE_INSERT ||
+                        node->kind == HSTEX_NODE_MARK ||
+                        node->kind == HSTEX_NODE_ADJUST;
+        if (!sizeless) {
+            width += packed_dimen(node->width);
+        }
+    }
+    builder->width = width;
+    return 0;
+}
+
 /* The badness and fitness of a line that runs short or long by `shortfall`,
    with `totals` the glue it has available. */
 static int32_t line_badness(int64_t shortfall,
@@ -38695,32 +40104,80 @@ static int32_t line_badness(int64_t shortfall,
 /* The kern that goes in front of a line starting here, so that its first
    character may stick out past the left margin. A line that begins with what
    a discretionary put after the break looks there first. */
-static int32_t line_left_kern(struct hstex_engine *engine,
-                              const uint32_t *items, size_t count,
-                              size_t start,
-                              const struct hstex_break_site *site)
+/* When `weighing' is set this is what the reference's total_pw looks at
+   while it weighs a break: the first node of the text a discretionary puts
+   after the break, and nothing else when that node is not a character.
+   Otherwise it is the character the finished line is set with, which is
+   searched for past whatever is stepped over. See docs/DECISIONS.md,
+   a-ligature-at-the-margin-under-expansion. */
+static uint32_t line_left_character(struct hstex_engine *engine,
+                                    const uint32_t *items, size_t count,
+                                    size_t start,
+                                    const struct hstex_break_site *site,
+                                    bool weighing)
 {
     uint32_t character = 0U;
     bool stopped = false;
     if (site->entry_count != 0U &&
         (size_t)site->entry_start + site->entry_count <=
             engine->list_item_count) {
+        if (weighing) {
+            uint32_t first = engine->list_items[site->entry_start];
+            if (first != 0U && (size_t)first <= engine->node_count &&
+                node_is_a_character(&engine->nodes[first - 1U])) {
+                return first;
+            }
+            return 0U;
+        }
         character = protruding_character(
             engine, engine->list_items, site->entry_start,
             (size_t)site->entry_start + site->entry_count, true, &stopped);
     }
     if (character == 0U && !stopped && start < count) {
+        if (weighing) {
+            /* Weighing a break, the reference first steps past whatever is
+               discardable at the line's start -- glue, kerns, penalties and
+               the nodes that fence a formula -- and only then looks for the
+               character; setting the line, it does not, so a first line
+               that opens with glue is weighed with its first character's
+               protrusion and set without it. */
+            while (start + 1U < count) {
+                uint32_t next = items[start];
+                if (next == 0U || (size_t)next > engine->node_count) {
+                    break;
+                }
+                enum hstex_node_kind kind = engine->nodes[next - 1U].kind;
+                if (kind != HSTEX_NODE_GLUE && kind != HSTEX_NODE_KERN &&
+                    kind != HSTEX_NODE_PENALTY && kind != HSTEX_NODE_MATH) {
+                    break;
+                }
+                ++start;
+            }
+        }
         character = protruding_character(engine, items, start, count, true,
                                          &stopped);
     }
-    return protrusion_kern(engine, character, true);
+    return character;
+}
+
+static int32_t line_left_kern(struct hstex_engine *engine,
+                              const uint32_t *items, size_t count,
+                              size_t start,
+                              const struct hstex_break_site *site)
+{
+    return protrusion_kern(
+        engine, line_left_character(engine, items, count, start, site, false),
+        true);
 }
 
 /* The kern that goes at the end of a line breaking here. A line that ends at
    a discretionary ends with the text that goes before the break. */
-static int32_t line_right_kern(struct hstex_engine *engine,
-                               const uint32_t *items, size_t count,
-                               size_t breakpoint)
+/* With `weighing' set, a break at a discretionary that puts text before the
+   break is weighed with that text's last node and nothing else, as the
+   reference's total_pw does. */
+static uint32_t line_right_character(struct hstex_engine *engine,
+                                     const uint32_t *items, size_t count,
+                                     size_t breakpoint, bool weighing)
 {
     uint32_t character = 0U;
     bool stopped = false;
@@ -38733,6 +40190,16 @@ static int32_t line_right_kern(struct hstex_engine *engine,
         node->value.disc.pre_count != 0U &&
         (size_t)node->value.disc.pre_start + node->value.disc.pre_count <=
             engine->list_item_count) {
+        if (weighing) {
+            uint32_t last =
+                engine->list_items[(size_t)node->value.disc.pre_start +
+                                   node->value.disc.pre_count - 1U];
+            if (last != 0U && (size_t)last <= engine->node_count &&
+                node_is_a_character(&engine->nodes[last - 1U])) {
+                return last;
+            }
+            return 0U;
+        }
         character = protruding_character(
             engine, engine->list_items, node->value.disc.pre_start,
             (size_t)node->value.disc.pre_start + node->value.disc.pre_count,
@@ -38742,7 +40209,95 @@ static int32_t line_right_kern(struct hstex_engine *engine,
         character = protruding_character(engine, items, 0U, breakpoint, false,
                                          &stopped);
     }
-    return protrusion_kern(engine, character, false);
+    return character;
+}
+
+static int32_t line_right_kern(struct hstex_engine *engine,
+                               const uint32_t *items, size_t count,
+                               size_t breakpoint)
+{
+    return protrusion_kern(
+        engine, line_right_character(engine, items, count, breakpoint, false),
+        false);
+}
+
+/* What the copies of a font expanded to its limits would change about the
+   room a character at a margin takes: the reference's cal_margin_kern_var,
+   which weighs a break with these when both expansion and protrusion are
+   on. The reference takes the character's own protrusion from a fresh
+   character node carrying the expanded copy, and the node's protrusion from
+   the node it found -- which, for a ligature, is the word inside the
+   ligature node and not a character node at all, so it reads as nothing.
+   Both readings use the \lpcode whichever margin the character stands at.
+   For a plain character the two readings agree and nothing changes; for a
+   ligature whose font a limit copy would replace, the stretch loses and
+   the shrink gains its \lpcode protrusion. See docs/DECISIONS.md,
+   a-ligature-at-the-margin-under-expansion. */
+/* The copy of a character's font that the reference's do_subst_font moves
+   a fresh copy of the character to, at the whole of the stretch (ratio
+   1000) or of the shrink (ratio -1000): the limit copy scaled by the
+   character's \efcode, made if there is none yet. The making is what
+   matters even where nothing is read off the copy -- the reference makes
+   these copies while it weighs breaks and sets lines, and the copies take
+   their places in the font table, which the file names its fonts by. */
+static int margin_substitute_font(struct hstex_engine *engine,
+                                  const struct hstex_node *node, int32_t ratio,
+                                  uint32_t *result, char *error,
+                                  size_t error_capacity)
+{
+    uint32_t identifier = node->value.character.font;
+    *result = identifier;
+    const struct hstex_font *font = font_by_identifier(engine, identifier);
+    uint32_t code = node->value.character.character;
+    if (font == NULL || font->characters == NULL ||
+        code >= (uint32_t)HSTEX_FONT_CHARACTER_COUNT) {
+        return 0;
+    }
+    int32_t factor = font->characters[code].expansion_factor;
+    if (factor == 0) {
+        return 0;
+    }
+    const struct hstex_font *limit = font_by_identifier(
+        engine, ratio > 0 ? font->stretch_font : font->shrink_font);
+    if (limit == NULL) {
+        return 0;
+    }
+    int32_t maximum = ratio > 0 ? limit->expand_ratio : -limit->expand_ratio;
+    return expand_font_by(engine, identifier,
+                          expand_ext_xn_over_d((int64_t)ratio * factor, maximum,
+                                               1000000),
+                          result, error, error_capacity);
+}
+
+static int margin_kern_variation(struct hstex_engine *engine,
+                                 uint32_t identifier, int64_t *stretch,
+                                 int64_t *shrink, char *error,
+                                 size_t error_capacity)
+{
+    if (identifier == 0U || (size_t)identifier > engine->node_count) {
+        return 0;
+    }
+    const struct hstex_node *node = &engine->nodes[identifier - 1U];
+    if (!node_is_a_character(node)) {
+        return 0;
+    }
+    int32_t protrusion = node->kind == HSTEX_NODE_LIGATURE
+                             ? -protrusion_kern(engine, identifier, true)
+                             : 0;
+    uint32_t stretched = 0U, shrunk = 0U;
+    if (margin_substitute_font(engine, node, 1000, &stretched, error,
+                               error_capacity) != 0 ||
+        margin_substitute_font(engine, node, -1000, &shrunk, error,
+                               error_capacity) != 0) {
+        return -1;
+    }
+    if (stretched != node->value.character.font) {
+        *stretch -= protrusion;
+    }
+    if (shrunk != node->value.character.font) {
+        *shrink += protrusion;
+    }
+    return 0;
 }
 
 /* print_nl: a newline first unless the output already stands at one. */
@@ -38775,6 +40330,10 @@ static void trace_font(struct hstex_engine *engine,
         print_bytes(engine, (const char *)name, length);
     } else if (metrics != NULL && metrics->name != NULL) {
         print_text(engine, metrics->name);
+    }
+    if (metrics != NULL && metrics->expand_ratio != 0) {
+        print_formatted(engine, " (%s%d)", metrics->expand_ratio > 0 ? "+" : "",
+                        (int)metrics->expand_ratio);
     }
     print_byte(engine, ' ');
     trace->column = true;
@@ -39010,9 +40569,14 @@ static int create_break_records(struct hstex_engine *engine,
         record->entry_width = site->entry_width;
         record->entry_start = site->entry_start;
         record->entry_count = site->entry_count;
+        record->entry_font_stretch = site->entry_font_stretch;
+        record->entry_font_shrink = site->entry_font_shrink;
         record->hyphenated = site->hyphenated;
-        record->left_kern =
-            protruding ? line_left_kern(engine, items, count, start, site) : 0;
+        record->left_character =
+            protruding
+                ? line_left_character(engine, items, count, start, site, true)
+                : 0U;
+        record->left_kern = protrusion_kern(engine, record->left_character, true);
         if (state->trace.active) {
             trace_newline(engine, &state->trace);
             print_formatted(engine, "@@%zu: line %d.%zu%s t=%lld -> @@%zu\n",
@@ -39075,10 +40639,13 @@ static int try_break_at(struct hstex_engine *engine,
     /* The break that ends the paragraph is measured without the kern that
        lets its last character stick out, even though the line is set with
        one; see docs/DECISIONS.md, the-last-line-is-measured-square. */
-    int32_t right_kern =
+    uint32_t right_character =
         protruding && breakpoint < count
-            ? line_right_kern(engine, items, count, breakpoint)
-            : 0;
+            ? line_right_character(engine, items, count, breakpoint, true)
+            : 0U;
+    int32_t right_kern = protrusion_kern(engine, right_character, false);
+    bool expanding =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_ADJUST_SPACING] > 1;
 
     state->rebuilt_count = 0U;
     for (size_t slot = 0U; slot < state->active_count; ++slot) {
@@ -39115,17 +40682,38 @@ static int try_break_at(struct hstex_engine *engine,
         }
         totals.shrink += state->totals[breakpoint].shrink -
                          state->totals[record->start].shrink;
+        totals.font_stretch += (int64_t)record->entry_font_stretch +
+                               site->pre_font_stretch +
+                               state->totals[breakpoint].font_stretch -
+                               state->totals[record->start].font_stretch;
+        totals.font_shrink += (int64_t)record->entry_font_shrink +
+                              site->pre_font_shrink +
+                              state->totals[breakpoint].font_shrink -
+                              state->totals[record->start].font_shrink;
         uint8_t fitness = (uint8_t)HSTEX_FIT_DECENT;
-        int32_t badness =
-            /* EVERY CANDIDATE IS WEIGHED AGAINST ITS OWN LINE'S WIDTH. A
-               break that would start line five is measured against line
-               five, not against whatever line the first active node happens
-               to sit on -- which only shows where \parshape or \hangindent
-               makes the widths differ. */
-            line_badness((int64_t)line_width_for(engine, record->line + 1) -
-                             totals.width,
-                         &totals, &fitness);
-
+        /* EVERY CANDIDATE IS WEIGHED AGAINST ITS OWN LINE'S WIDTH. A break
+           that would start line five is measured against line five, not
+           against whatever line the first active node happens to sit on --
+           which only shows where \parshape or \hangindent makes the widths
+           differ. What the fonts could give is taken off the shortfall
+           first; see docs/DECISIONS.md, font-expansion. */
+        int64_t shortfall =
+            (int64_t)line_width_for(engine, record->line + 1) - totals.width;
+        if (expanding && shortfall != 0) {
+            if (protruding &&
+                (margin_kern_variation(engine, record->left_character,
+                                       &totals.font_stretch,
+                                       &totals.font_shrink, error,
+                                       error_capacity) != 0 ||
+                 margin_kern_variation(engine, right_character,
+                                       &totals.font_stretch,
+                                       &totals.font_shrink, error,
+                                       error_capacity) != 0)) {
+                return -1;
+            }
+            shortfall = expansion_shortfall(state, shortfall, &totals);
+        }
+        int32_t badness = line_badness(shortfall, &totals, &fitness);
         bool artificial = false;
         bool stays_active = true;
         if (badness > HSTEX_INFINITE_BADNESS || penalty == HSTEX_EJECT_PENALTY) {
@@ -39347,7 +40935,9 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
     if (engine->integer_parameters[HSTEX_INTEGER_PDF_PROTRUDE_CHARS] >= 2) {
         struct hstex_break_site opening = {0};
         opening.start = SIZE_MAX;
-        first->left_kern = line_left_kern(engine, items, count, 0U, &opening);
+        first->left_character =
+            line_left_character(engine, items, count, 0U, &opening, true);
+        first->left_kern = protrusion_kern(engine, first->left_character, true);
     }
     state->active[state->active_count++] = state->record_count;
     ++state->record_count;
@@ -39375,7 +40965,10 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                         engine->nodes[next - 1U].kind == HSTEX_NODE_GLUE;
             }
         } else if (node->kind == HSTEX_NODE_KERN) {
-            if (node->explicit_kern && index + 1U < count) {
+            /* A kern inside a formula is no more a place to break than the
+               glue there is: the reference's kern_break asks for
+               auto_breaking as well as the glue that follows. */
+            if (node->explicit_kern && automatic && index + 1U < count) {
                 uint32_t next = items[index + 1U];
                 legal = next != 0U && (size_t)next <= engine->node_count &&
                         engine->nodes[next - 1U].kind == HSTEX_NODE_GLUE;
@@ -39401,6 +40994,19 @@ static int find_paragraph_breaks(struct hstex_engine *engine,
                 node->value.disc.post_count);
             site.entry_start = node->value.disc.post_start;
             site.entry_count = node->value.disc.post_count;
+            if (engine->integer_parameters[HSTEX_INTEGER_PDF_ADJUST_SPACING] > 1 &&
+                (list_run_expansion(engine, state, node->value.disc.pre_start,
+                                    node->value.disc.pre_count,
+                                    &site.pre_font_stretch,
+                                    &site.pre_font_shrink, error,
+                                    error_capacity) != 0 ||
+                 list_run_expansion(engine, state, node->value.disc.post_start,
+                                    node->value.disc.post_count,
+                                    &site.entry_font_stretch,
+                                    &site.entry_font_shrink, error,
+                                    error_capacity) != 0)) {
+                return -1;
+            }
             size_t after = index + 1U + node->value.disc.replace_count;
             if (after > count) {
                 after = count;
@@ -39757,9 +41363,27 @@ static int emit_paragraph_lines(struct hstex_engine *engine,
                paragraph began on. */
             int32_t previous_pack = engine->pack_begin_line;
             engine->pack_begin_line = engine->paragraph_line;
-            status = finalize_hbox(engine, &builder, true, false,
-                                   line_width_for(engine, numbered), &box,
-                                   error, error_capacity);
+            bool natural = false;
+            if (engine->integer_parameters[HSTEX_INTEGER_PDF_ADJUST_SPACING] > 0) {
+                status = expand_line_fonts(engine, &builder,
+                                           line_width_for(engine, numbered),
+                                           &natural, error, error_capacity);
+            }
+            if (status == 0) {
+                bool quietly = engine->packing_quietly;
+                int32_t badness = engine->badness;
+                if (natural) {
+                    engine->packing_quietly = true;
+                }
+                status = finalize_hbox(engine, &builder, true, false,
+                                       line_width_for(engine, numbered), &box,
+                                       error, error_capacity);
+                if (natural) {
+                    engine->packing_quietly = quietly;
+                    engine->badness = badness;
+                    memset(&box.glue, 0, sizeof(box.glue));
+                }
+            }
             engine->pack_begin_line = previous_pack;
         }
         free(builder.node_identifiers);
@@ -39837,6 +41461,9 @@ static int measure_break_totals(struct hstex_engine *engine,
                          "break totals allocation failed");
     }
     state->shrink_error_at = SIZE_MAX;
+    bool expanding =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_ADJUST_SPACING] > 1;
+    size_t previous_character = SIZE_MAX;
     for (size_t index = 0U; index < count; ++index) {
         state->totals[index + 1U] = state->totals[index];
         uint32_t identifier = items[index];
@@ -39845,6 +41472,37 @@ static int measure_break_totals(struct hstex_engine *engine,
         }
         const struct hstex_node *node = &engine->nodes[identifier - 1U];
         state->totals[index + 1U].width += packed_dimen(node->width);
+        if (expanding) {
+            if (node_is_a_character(node)) {
+                const struct hstex_font *font =
+                    font_by_identifier(engine, node->value.character.font);
+                bool expandable = false;
+                if (check_expand_pars(engine, state, font, &expandable, error,
+                                      error_capacity) != 0) {
+                    return -1;
+                }
+                if (expandable) {
+                    state->totals[index + 1U].font_stretch += char_expansion(
+                        engine, font, node->value.character.character, true);
+                    state->totals[index + 1U].font_shrink += char_expansion(
+                        engine, font, node->value.character.character, false);
+                }
+                previous_character = index;
+            } else if (node_is_font_kern(node) &&
+                       previous_character + 1U == index && index + 1U < count) {
+                uint32_t after = items[index + 1U];
+                const struct hstex_node *next =
+                    after != 0U && (size_t)after <= engine->node_count
+                        ? &engine->nodes[after - 1U]
+                        : NULL;
+                const struct hstex_node *left =
+                    &engine->nodes[items[previous_character] - 1U];
+                state->totals[index + 1U].font_stretch +=
+                    kern_expansion(engine, left, node, next, true);
+                state->totals[index + 1U].font_shrink +=
+                    kern_expansion(engine, left, node, next, false);
+            }
+        }
         if (node->kind == HSTEX_NODE_GLUE) {
             uint8_t up = node->value.glue.stretch_order;
             if (up < 4U) {
@@ -39880,6 +41538,12 @@ struct hstex_word {
     size_t positions[HSTEX_MAX_HYPHENATED_WORD];
     size_t count;
     uint32_t font;
+    /* What the word's last letter is set against when the word is set
+       again: the reference's hyf_bchar. -1 is nothing, -2 the font's own
+       boundary character, and a character code is the character of the
+       same font that stood right after the word -- a full stop, say --
+       which the reference kerns the word's last letter against. */
+    int32_t right_bchar;
     /* One past the last letter's node. */
     size_t end;
 };
@@ -40001,6 +41665,7 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
         return false;
     }
     word->font = font;
+    word->right_bchar = -1;
     while (index < count) {
         uint32_t identifier = items[index];
         if (identifier == 0U || (size_t)identifier > engine->node_count) {
@@ -40010,11 +41675,37 @@ static bool read_hyphenatable_word(struct hstex_engine *engine,
         if (node->kind == HSTEX_NODE_CHARACTER ||
             node->kind == HSTEX_NODE_LIGATURE) {
             if (!take_word_letters(engine, node, font, word, index)) {
+                /* The character of the word's own font that ends the word
+                   -- one whose \lccode is zero -- is what its last letter
+                   is set against; the reference's hyf_bchar. A ligature
+                   gives its first component. A character of another font
+                   leaves it as it was. */
+                if (node->value.character.font == font) {
+                    word->right_bchar =
+                        node->kind == HSTEX_NODE_LIGATURE &&
+                                node->value.character.original_count != 0U
+                            ? (int32_t)node->value.character.originals[0]
+                            : (int32_t)(node->value.character.character & 0xFFU);
+                }
                 break;
             }
             word->end = index + 1U;
-        } else if (node->kind == HSTEX_NODE_KERN && !node->explicit_kern) {
-            /* A kern the font asked for stays inside the word. */
+            /* After a letter there is nothing to set the word against; a
+               ligature the right boundary took part in brings the boundary
+               back. */
+            word->right_bchar =
+                node->kind == HSTEX_NODE_LIGATURE &&
+                        (node->value.character.boundary & 1U) != 0U
+                    ? -2
+                    : -1;
+        } else if (node->kind == HSTEX_NODE_KERN && !node->explicit_kern &&
+                   node->value.kern.margin == 0U) {
+            /* A kern the font asked for stays inside the word -- one after
+               the last letter too, which the reference takes into the word
+               (hb) and sets again from the program rather than leaving in
+               place -- and the word is then set against the boundary. */
+            word->end = index + 1U;
+            word->right_bchar = -2;
         } else {
             break;
         }
@@ -40256,31 +41947,27 @@ static int lig_emit_reconstituted(void *context,
 static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
                                const struct hstex_lig_item *seed,
                                const uint8_t *characters, size_t count,
-                               bool from_left_boundary,
-                               bool to_right_boundary,
+                               bool from_left_boundary, int32_t right_bchar,
                                uint32_t *identifiers, size_t capacity,
                                size_t *written, char *error,
                                size_t error_capacity);
 
 static int reconstitute_characters(struct hstex_engine *engine, uint32_t font,
                                    const uint8_t *characters, size_t count,
-                                   bool from_left_boundary,
-                                   bool to_right_boundary,
+                                   bool from_left_boundary, int32_t right_bchar,
                                    uint32_t *identifiers, size_t capacity,
                                    size_t *written, char *error,
                                    size_t error_capacity)
 {
     return reconstitute_seeded(engine, font, NULL, characters, count,
-                               from_left_boundary, to_right_boundary,
-                               identifiers, capacity, written, error,
-                               error_capacity);
+                               from_left_boundary, right_bchar, identifiers,
+                               capacity, written, error, error_capacity);
 }
 
 static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
                                const struct hstex_lig_item *seed,
                                const uint8_t *characters, size_t count,
-                               bool from_left_boundary,
-                               bool to_right_boundary,
+                               bool from_left_boundary, int32_t right_bchar,
                                uint32_t *identifiers, size_t capacity,
                                size_t *written, char *error,
                                size_t error_capacity)
@@ -40345,8 +42032,14 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
     /* The word ends, so the character beyond its right end takes part in the
        program one last time, exactly as it does where the word was first
        set. See docs/DECISIONS.md, boundary-characters. */
-    if (to_right_boundary && metrics->boundary_character >= 0 &&
-        metrics->boundary_character <= 255) {
+    /* What stands beyond the word's right end: the font's boundary, or the
+       character of the same font that followed the word, which the last
+       letter is kerned against (the reference's hyf_bchar); neither is set
+       here, so the item is marked as the boundary is. */
+    bool to_right_boundary = right_bchar == -2 &&
+                             metrics->boundary_character >= 0 &&
+                             metrics->boundary_character <= 255;
+    if (to_right_boundary || right_bchar >= 0) {
         if (work_count == HSTEX_LIG_WORK) {
             engine->lig_left_hit = left_hit;
             engine->lig_right_hit = right_hit;
@@ -40354,7 +42047,9 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
             return set_error(error, error_capacity,
                              "a word set again does not fit");
         }
-        lig_item_plain(&work[work_count], (uint8_t)metrics->boundary_character,
+        lig_item_plain(&work[work_count],
+                       right_bchar >= 0 ? (uint8_t)right_bchar
+                                        : (uint8_t)metrics->boundary_character,
                        false);
         work[work_count].is_boundary = true;
         ++work_count;
@@ -40367,7 +42062,8 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
     /* Whatever is still held simply goes into the list. */
     for (size_t item = 0U; status == 0 && item < work_count; ++item) {
         engine->lig_last_of_word =
-            to_right_boundary && lig_nothing_after(work, work_count, item);
+            (to_right_boundary || right_bchar >= 0) &&
+            lig_nothing_after(work, work_count, item);
         if (lig_emit_reconstituted(&place, &work[item], false, 0, error,
                                    error_capacity) != 0) {
             status = -1;
@@ -40380,26 +42076,6 @@ static int reconstitute_seeded(struct hstex_engine *engine, uint32_t font,
 }
 
 
-/* WHETHER A WORD SET AGAIN MEETS THE BOUNDARY BEYOND ITS RIGHT END. The
-   reference looks at what the word was made of the first time: only where a
-   node the boundary took part in stands at the word's end does the boundary
-   take part again. A word whose boundary was cancelled -- `11\noboundary'
-   -- ends in a plain character and stays without one. See
-   docs/DECISIONS.md, what-follows-a-break-in-a-word. */
-static bool word_meets_right_boundary(const struct hstex_engine *engine,
-                                      const uint32_t *items, size_t end)
-{
-    if (end == 0U) {
-        return false;
-    }
-    uint32_t last = items[end - 1U];
-    if (last == 0U || (size_t)last > engine->node_count) {
-        return false;
-    }
-    const struct hstex_node *node = &engine->nodes[last - 1U];
-    return node->kind == HSTEX_NODE_LIGATURE &&
-           node->value.character.boundary != 0U;
-}
 
 /* And whether it meets the boundary beyond its LEFT end, which is settled
    the same way: only where the word's first node is a ligature the boundary
@@ -40547,9 +42223,7 @@ static int rebuild_word_before_breaking(struct hstex_engine *engine,
     size_t made = 0U;
     if (reconstitute_seeded(engine, word->font, seeded ? &seed_item : NULL,
                             word->letters, word->count,
-                            !seeded && meets_left,
-                            word_meets_right_boundary(engine, *items,
-                                                      word->end),
+                            !seeded && meets_left, word->right_bchar,
                             rebuilt, room, &made, error,
                             error_capacity) != 0) {
         free(rebuilt);
@@ -40871,13 +42545,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 if (reconstitute_seeded(engine, word.font,
                                         seeded ? &seed_item : NULL, taken,
                                         count_before, from_boundary,
-                                        true, behind, room, &made_before,
+                                        -2, behind, room, &made_before,
                                         error, error_capacity) != 0 ||
                     reconstitute_characters(engine, word.font,
                                             word.letters + letter,
                                             word.count - letter, true,
-                                            word_meets_right_boundary(
-                                                engine, items, word.end),
+                                            word.right_bchar,
                                             ahead, room, &made_after, error,
                                             error_capacity) != 0) {
                     free(ahead);
@@ -41078,7 +42751,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                            reconstitution as it does to the one after the
                            break. */
                         if (reconstitute_characters(engine, word.font, letters,
-                                                    letter_count, false, true,
+                                                    letter_count, false, -2,
                                                     pre, 48U, &pre_count, error,
                                                     error_capacity) != 0 ||
                             store_list_run(engine, pre, pre_count, &start,
@@ -41121,9 +42794,7 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                     size_t made_after = 0U;
                     if (reconstitute_characters(
                             engine, word.font, word.letters + letter,
-                            word.count - letter, true,
-                            word_meets_right_boundary(engine, items,
-                                                      word.end),
+                            word.count - letter, true, word.right_bchar,
                             ahead, 48U, &made_after, error,
                             error_capacity) != 0) {
                         status = -1;
@@ -41223,12 +42894,12 @@ static int hyphenate_paragraph(struct hstex_engine *engine,
                 }
                 if (status == 0 && post != NULL && inside < original_count &&
                     reconstitute_characters(engine, word.font, before,
-                                            before_count, false, false, pre,
+                                            before_count, false, -1, pre,
                                             48U, &pre_count, error,
                                             error_capacity) == 0 &&
                     reconstitute_characters(engine, word.font,
                                             word.letters + cut,
-                                            word.count - cut, false, false,
+                                            word.count - cut, false, -1,
                                             post, room, &post_count, error,
                                             error_capacity) == 0) {
                     /* HOW FAR THE TWO BRANCHES RUN BEFORE THEY FALL BACK
@@ -41362,6 +43033,9 @@ static int break_paragraph(struct hstex_engine *engine,
     size_t count = paragraph->count;
     const uint32_t *items = paragraph->node_identifiers;
     struct hstex_break_state state = {0};
+    state.cur_font_step = -1;
+    state.max_stretch_ratio = -1;
+    state.max_shrink_ratio = -1;
     /* \leftskip and \rightskip are looked at first, and their fault comes
        out before the first pass: measured, a \rightskip that shrinks without
        limit draws its line above `@firstpass' where a glue in the list draws
@@ -51488,6 +53162,7 @@ static bool command_assigns(enum hstex_command command)
     case HSTEX_COMMAND_DIMEN_REGISTER:
     case HSTEX_COMMAND_DIVIDE:
     case HSTEX_COMMAND_EDEF:
+    case HSTEX_COMMAND_PDF_COPY_FONT:
     case HSTEX_COMMAND_FONT:
     case HSTEX_COMMAND_FONT_CHAR_CODE:
     case HSTEX_COMMAND_FONT_DIMEN:
@@ -53867,6 +55542,13 @@ handle_token:
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
+        case HSTEX_COMMAND_PDF_COPY_FONT:
+            if (finish_assignment(engine,
+                                  scan_font_copy(engine, error, error_capacity),
+                                  error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
         case HSTEX_COMMAND_SET_BOX:
             if (finish_assignment(
                     engine, execute_set_box(engine, error, error_capacity), error,
@@ -54153,6 +55835,11 @@ handle_token:
             continue;
         case HSTEX_COMMAND_PDF_LITERAL:
             if (execute_pdf_literal(engine, error, error_capacity) != 0) {
+                return HSTEX_ENGINE_ERROR;
+            }
+            continue;
+        case HSTEX_COMMAND_PDF_FONT_EXPAND:
+            if (execute_pdf_font_expand(engine, error, error_capacity) != 0) {
                 return HSTEX_ENGINE_ERROR;
             }
             continue;
@@ -54695,6 +56382,7 @@ handle_token:
                 continue;
             }
             return HSTEX_ENGINE_TOKEN;
+        case HSTEX_COMMAND_ENUM_END:
         case HSTEX_COMMAND_UNDEFINED:
             report_undefined_control_sequence(engine);
             continue;
@@ -54728,6 +56416,9 @@ handle_token:
         case HSTEX_COMMAND_STRING:
         case HSTEX_COMMAND_JOB_NAME:
         case HSTEX_COMMAND_FONT_NAME:
+        case HSTEX_COMMAND_PDF_FONT_NAME:
+        case HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER:
+        case HSTEX_COMMAND_PDF_FONT_SIZE:
             return (enum hstex_engine_result)set_error(
                 error, error_capacity, "expandable primitive escaped expansion");
         case HSTEX_COMMAND_END_CS_NAME: {

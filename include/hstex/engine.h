@@ -241,6 +241,11 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_OBJECT,
     HSTEX_COMMAND_PDF_REF_OBJECT,
     HSTEX_COMMAND_PDF_LITERAL,
+    HSTEX_COMMAND_PDF_FONT_EXPAND,
+    HSTEX_COMMAND_PDF_FONT_NAME,
+    HSTEX_COMMAND_PDF_FONT_OBJECT_NUMBER,
+    HSTEX_COMMAND_PDF_FONT_SIZE,
+    HSTEX_COMMAND_PDF_COPY_FONT,
     HSTEX_COMMAND_PDF_LAST_NUMBER,
     HSTEX_COMMAND_LAST_ITEM,
     HSTEX_COMMAND_PDF_DEST,
@@ -319,6 +324,10 @@ enum hstex_command {
     HSTEX_COMMAND_PDF_RESTORE,
     /* Appended so native formats retain every earlier command number. */
     HSTEX_COMMAND_PDF_FILE_MOD_DATE,
+    /* Not a command: the count of them, folded into the format layout so
+       that a format written by a build with other command numbers is
+       rebuilt rather than misread. */
+    HSTEX_COMMAND_ENUM_END,
 };
 
 /* \unhbox, \unhcopy, \unvbox and \unvcopy: which direction, and whether the
@@ -959,6 +968,27 @@ struct hstex_font {
        virtual font. */
     struct hstex_virtual_font *virtual_font;
     uint8_t virtual_state;
+    /* Font expansion, the reference's \pdffontexpand. A base font that may
+       be expanded has a step and, for each limit it was given, a copy of
+       itself expanded by that limit; an expanded copy knows its ratio in
+       thousandths and the base it came from, and the copies of one base are
+       chained. An `independent' font is a \pdfcopyfont copy, which no lookup
+       by name and size may answer with. See docs/DECISIONS.md,
+       font-expansion. */
+    int32_t expand_ratio;
+    int32_t expand_step;
+    uint32_t stretch_font;
+    uint32_t shrink_font;
+    uint32_t base_font;
+    uint32_t next_expanded;
+    bool auto_expand;
+    bool independent;
+    /* For a copy of a local font made for an expanded copy of a virtual
+       font: that expanded copy. The reference makes one such copy for each
+       expanded virtual font, and a chunk resumed from a checkpoint must find
+       the copy the cold run made rather than make another; see
+       docs/DECISIONS.md, virtual-fonts-under-expansion. */
+    uint32_t virtual_owner;
 };
 
 /* One movement the page description has already written, so that a movement
@@ -2131,6 +2161,15 @@ struct hstex_engine {
     int32_t pdf_text_v;
     uint32_t pdf_text_font;
     bool pdf_font_chosen;
+    /* The font resource and size the file's text was last told, so that a
+       change of font that keeps both -- an expanded copy of the font in use
+       -- writes no Tf; the reference's pdf_last_f and pdf_last_fs. */
+    uint32_t pdf_last_font_number;
+    int32_t pdf_last_font_size;
+    /* The horizontal scaling the file's text matrix carries for an
+       expanded font, in thousandths above one thousand; zero when the text
+       is set by Td alone. The reference's pdf_cur_Tm_a. */
+    int32_t pdf_text_matrix_a;
     int32_t pdf_height;
     enum hstex_mode mode;
     int32_t prev_depth;
@@ -2708,7 +2747,7 @@ void hstex_engine_destroy(struct hstex_engine *engine);
    cannot read then lies under a key that build never looks in, and is
    rebuilt rather than offered and refused. See docs/DECISIONS.md,
    a-cached-format-a-build-cannot-read. */
-#define HSTEX_FORMAT_MAGIC "HSTEX format 9\n"
+#define HSTEX_FORMAT_MAGIC "HSTEX format 12\n"
 /* THE ADDRESS A FORMAT IS WRITTEN FOR. The pointers in its definition
    records are written as if the stream began here, and a run maps the file
    here when the address is free -- which on a 47-bit address space it
@@ -2731,6 +2770,10 @@ static inline uint64_t hstex_format_layout(void)
          ++index) {
         digest = (digest ^ (uint64_t)widths[index]) * UINT64_C(0x100000001b3);
     }
+    /* The meanings a format carries name commands by number; a build that
+       numbers them differently must not read it. */
+    digest = (digest ^ (uint64_t)HSTEX_COMMAND_ENUM_END) *
+             UINT64_C(0x100000001b3);
     return digest;
 }
 

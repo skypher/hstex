@@ -451,6 +451,271 @@ static int test_let_bound_word(void)
     return status;
 }
 
+/* A ligature at the margin under expansion; see docs/DECISIONS.md, a-ligature-at-the-margin-under-expansion. Both texts are the
+   reference's: the source was run through pdfTeX in extended INITEX mode
+   and its transcript is what is expected. */
+static int test_expansion_margin_ligature(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\defaulthyphenchar=45 \\font\\f=cmr10 \\f ",
+        "\\pdffontexpand\\f 20 20 5 autoexpand \\pdfprotrudechars=2 ",
+        "\\pdfadjustspacing=2 \\tolerance=10000 \\pretolerance=-1 \\p",
+        "arindent=0pt \\hsize=100pt \\lpcode\\f123=1000 \\rpcode\\f123",
+        "=1000 \\tracingparagraphs=1 \\setbox0\\vbox{aa aa aa aa aa-",
+        "-aa aa\\par}\\lpcode\\f123=0 \\setbox0\\vbox{aa aa aa aa aa--",
+        "aa aa\\par}\\lpcode\\f123=100 \\setbox0\\vbox{aa aa aa aa aa-",
+        "-aa aa\\par}\\end",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "[]\\f aa \n@ via @@0 b=10000 p=0 d=100000000\n@@1: line 1.0",
+        " t=100000000 -> @@0\naa \n@ via @@0 b=10000 p=0 d=10000000",
+        "0\n@ via @@1 b=10000 p=0 d=100000000\n@@2: line 1.0 t=1000",
+        "00000 -> @@0\naa \n@ via @@0 b=10000 p=0 d=100000000\n@ via",
+        " @@1 b=10000 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=100",
+        "000000\n@@3: line 1.0 t=100000000 -> @@0\naa \n@ via @@0 b=",
+        "10000 p=0 d=100000000\n@ via @@1 b=10000 p=0 d=100000000\n",
+        "@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=10000 p=0 ",
+        "d=100000000\n@@4: line 1.0 t=100000000 -> @@0\naa--\n@\\disc",
+        "retionary via @@0 b=10000 p=0 d=100000000\n@\\discretionar",
+        "y via @@1 b=10000 p=0 d=100000000\n@\\discretionary via @@",
+        "2 b=10000 p=0 d=100000000\n@\\discretionary via @@3 b=1000",
+        "0 p=0 d=100000000\n@\\discretionary via @@4 b=10000 p=0 d=",
+        "100000000\n@@5: line 1.0- t=100000000 -> @@0\naa \n@ via @@",
+        "0 b=2846 p=0 d=8099716\n@ via @@1 b=10000 p=0 d=100000000",
+        "\n@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=10000 p=0",
+        " d=100000000\n@ via @@4 b=10000 p=0 d=100000000\n@ via @@5",
+        " b=10000 p=0 d=100000000\n@@6: line 1.0 t=8099716 -> @@0\n",
+        "aa\n@\\par via @@0 b=55 p=-10000 d=3025\n@\\par via @@1 b=28",
+        "46 p=-10000 d=8099716\n@\\par via @@2 b=10000 p=-10000 d=1",
+        "00000000\n@\\par via @@3 b=10000 p=-10000 d=100000000\n@\\pa",
+        "r via @@4 b=10000 p=-10000 d=100000000\n@\\par via @@5 b=1",
+        "0000 p=-10000 d=100000000\n@\\par via @@6 b=10000 p=-10000",
+        " d=100000000\n@@7: line 1.1- t=3025 -> @@0\n\n\nLoose \\hbox ",
+        "(badness 55) in paragraph at lines 1--1\n[]\\f (+20) aa aa",
+        " aa aa aa--aa aa\n\n\\hbox(4.30554+0.0)x100.0, glue set 0.8",
+        "1998 []\n\n[]\\f aa \n@ via @@0 b=10000 p=0 d=100000000\n@@1:",
+        " line 1.0 t=100000000 -> @@0\naa \n@ via @@0 b=10000 p=0 d",
+        "=100000000\n@ via @@1 b=10000 p=0 d=100000000\n@@2: line 1",
+        ".0 t=100000000 -> @@0\naa \n@ via @@0 b=10000 p=0 d=100000",
+        "000\n@ via @@1 b=10000 p=0 d=100000000\n@ via @@2 b=10000 ",
+        "p=0 d=100000000\n@@3: line 1.0 t=100000000 -> @@0\naa \n@ v",
+        "ia @@0 b=10000 p=0 d=100000000\n@ via @@1 b=10000 p=0 d=1",
+        "00000000\n@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=1",
+        "0000 p=0 d=100000000\n@@4: line 1.0 t=100000000 -> @@0\naa",
+        "--\n@\\discretionary via @@0 b=10000 p=0 d=100000000\n@\\dis",
+        "cretionary via @@1 b=10000 p=0 d=100000000\n@\\discretiona",
+        "ry via @@2 b=10000 p=0 d=100000000\n@\\discretionary via @",
+        "@3 b=10000 p=0 d=100000000\n@\\discretionary via @@4 b=100",
+        "00 p=0 d=100000000\n@@5: line 1.0- t=100000000 -> @@0\naa ",
+        "\n@ via @@0 b=2846 p=0 d=8099716\n@ via @@1 b=10000 p=0 d=",
+        "100000000\n@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=",
+        "10000 p=0 d=100000000\n@ via @@4 b=10000 p=0 d=100000000\n",
+        "@ via @@5 b=10000 p=0 d=100000000\n@@6: line 1.0 t=809971",
+        "6 -> @@0\naa\n@\\par via @@0 b=55 p=-10000 d=3025\n@\\par via",
+        " @@1 b=2846 p=-10000 d=8099716\n@\\par via @@2 b=10000 p=-",
+        "10000 d=100000000\n@\\par via @@3 b=10000 p=-10000 d=10000",
+        "0000\n@\\par via @@4 b=10000 p=-10000 d=100000000\n@\\par vi",
+        "a @@5 b=10000 p=-10000 d=100000000\n@\\par via @@6 b=10000",
+        " p=-10000 d=100000000\n@@7: line 1.1- t=3025 -> @@0\n\n\nLoo",
+        "se \\hbox (badness 55) in paragraph at lines 1--1\n[]\\f (+",
+        "20) aa aa aa aa aa--aa aa\n\n\\hbox(4.30554+0.0)x100.0, glu",
+        "e set 0.81998 []\n\n[]\\f aa \n@ via @@0 b=10000 p=0 d=10000",
+        "0000\n@@1: line 1.0 t=100000000 -> @@0\naa \n@ via @@0 b=10",
+        "000 p=0 d=100000000\n@ via @@1 b=10000 p=0 d=100000000\n@@",
+        "2: line 1.0 t=100000000 -> @@0\naa \n@ via @@0 b=10000 p=0",
+        " d=100000000\n@ via @@1 b=10000 p=0 d=100000000\n@ via @@2",
+        " b=10000 p=0 d=100000000\n@@3: line 1.0 t=100000000 -> @@",
+        "0\naa \n@ via @@0 b=10000 p=0 d=100000000\n@ via @@1 b=1000",
+        "0 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=100000000\n@ vi",
+        "a @@3 b=10000 p=0 d=100000000\n@@4: line 1.0 t=100000000 ",
+        "-> @@0\naa--\n@\\discretionary via @@0 b=10000 p=0 d=100000",
+        "000\n@\\discretionary via @@1 b=10000 p=0 d=100000000\n@\\di",
+        "scretionary via @@2 b=10000 p=0 d=100000000\n@\\discretion",
+        "ary via @@3 b=10000 p=0 d=100000000\n@\\discretionary via ",
+        "@@4 b=10000 p=0 d=100000000\n@@5: line 1.0- t=100000000 -",
+        "> @@0\naa \n@ via @@0 b=2846 p=0 d=8099716\n@ via @@1 b=100",
+        "00 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=100000000\n@ v",
+        "ia @@3 b=10000 p=0 d=100000000\n@ via @@4 b=10000 p=0 d=1",
+        "00000000\n@ via @@5 b=10000 p=0 d=100000000\n@@6: line 1.0",
+        " t=8099716 -> @@0\naa\n@\\par via @@0 b=55 p=-10000 d=3025\n",
+        "@\\par via @@1 b=2846 p=-10000 d=8099716\n@\\par via @@2 b=",
+        "10000 p=-10000 d=100000000\n@\\par via @@3 b=10000 p=-1000",
+        "0 d=100000000\n@\\par via @@4 b=10000 p=-10000 d=100000000",
+        "\n@\\par via @@5 b=10000 p=-10000 d=100000000\n@\\par via @@",
+        "6 b=10000 p=-10000 d=100000000\n@@7: line 1.1- t=3025 -> ",
+        "@@0\n\n\nLoose \\hbox (badness 55) in paragraph at lines 1--",
+        "1\n[]\\f (+20) aa aa aa aa aa--aa aa\n\n\\hbox(4.30554+0.0)x1",
+        "00.0, glue set 0.81998 []\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* A kern inside a formula is not a break; see docs/DECISIONS.md, a-kern-inside-a-formula-is-not-a-break. Both texts are the
+   reference's: the source was run through pdfTeX in extended INITEX mode
+   and its transcript is what is expected. */
+static int test_kern_in_formula_is_no_break(void)
+{
+    static const char *const source[] = {
+        "\\catcode`\\$=3 \\tracingonline=1 \\font\\f=cmr10 \\f \\textfon",
+        "t0=\\f \\scriptfont0=\\f \\scriptscriptfont0=\\f \\textfont1=\\",
+        "f \\scriptfont1=\\f \\scriptscriptfont1=\\f \\font\\s=cmsy10 \\",
+        "textfont2=\\s \\scriptfont2=\\s \\scriptscriptfont2=\\s \\font",
+        "\\e=cmex10 \\textfont3=\\e \\scriptfont3=\\e \\scriptscriptfon",
+        "t3=\\e \\tolerance=10000 \\pretolerance=-1 \\hsize=60pt \\par",
+        "indent=0pt \\tracingparagraphs=1 \\setbox0\\vbox{aaaaaaaaaa",
+        "aaa $a\\mkern3mu\\mskip6mu b$ aaaaaaaaa\\par}\\end",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "[]\\f aaaaaaaaaaaaa \n@ via @@0 b=* p=0 d=*\n@@1: line 1.3 ",
+        "t=0 -> @@0\n$a b$\n@\\math via @@1 b=10000 p=0 d=100000000\n",
+        "@@2: line 2.0 t=100000000 -> @@1\n aaaaaaaaa\n@\\par via @@",
+        "2 b=10000 p=-10000 d=*\n@@3: line 3.0- t=100000000 -> @@2",
+        "\n\n\nOverfull \\hbox (5.0002pt too wide) in paragraph at li",
+        "nes 1--1\n[]\\f aaaaaaaaaaaaa\n\n\\hbox(4.30554+0.0)x60.0 []\n",
+        "\n\nUnderfull \\hbox (badness 10000) in paragraph at lines ",
+        "1--1\n\\f a b$\n\n\\hbox(6.94444+0.0)x60.0 []\n\n\nUnderfull \\hb",
+        "ox (badness 10000) in paragraph at lines 1--1\n\\f aaaaaaa",
+        "aa\n\n\\hbox(4.30554+0.0)x60.0 []\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* What a break is weighed against at the margins; see docs/DECISIONS.md, what-a-break-is-weighed-against-at-the-margins. Both texts are the
+   reference's: the source was run through pdfTeX in extended INITEX mode
+   and its transcript is what is expected. */
+static int test_weighing_skips_leading_glue(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\pdfprotrudechars=2 \\font\\f=cmr10 \\f \\l",
+        "pcode\\f`T=500 \\tolerance=10000 \\pretolerance=-1 \\hsize=1",
+        "00pt \\parindent=0pt \\tracingparagraphs=1 \\showboxdepth=1",
+        "0 \\showboxbreadth=100 \\setbox0\\vbox{\\hskip0pt Table one ",
+        "two three four\\par}\\showbox0 \\end",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "[] \n@ via @@0 b=10000 p=0 d=100000000\n@@1: line 1.0 t=10",
+        "0000000 -> @@0\n\\f Table \n@ via @@0 b=10000 p=0 d=1000000",
+        "00\n@ via @@1 b=10000 p=0 d=100000000\n@@2: line 1.0 t=100",
+        "000000 -> @@0\none \n@ via @@0 b=10000 p=0 d=100000000\n@ v",
+        "ia @@1 b=10000 p=0 d=100000000\n@ via @@2 b=10000 p=0 d=1",
+        "00000000\n@@3: line 1.0 t=100000000 -> @@0\ntwo \n@ via @@0",
+        " b=10000 p=0 d=100000000\n@ via @@1 b=10000 p=0 d=1000000",
+        "00\n@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=10000 p",
+        "=0 d=100000000\n@@4: line 1.0 t=100000000 -> @@0\nthree \n@",
+        " via @@0 b=1762 p=0 d=3104644\n@ via @@1 b=4673 p=0 d=218",
+        "36929\n@ via @@2 b=10000 p=0 d=100000000\n@ via @@3 b=1000",
+        "0 p=0 d=100000000\n@ via @@4 b=10000 p=0 d=100000000\n@@5:",
+        " line 1.0 t=3104644 -> @@0\nfour\n@\\par via @@1 b=26 p=-10",
+        "000 d=676\n@\\par via @@2 b=6078 p=-10000 d=36942084\n@\\par",
+        " via @@3 b=10000 p=-10000 d=100000000\n@\\par via @@4 b=10",
+        "000 p=-10000 d=100000000\n@\\par via @@5 b=10000 p=-10000 ",
+        "d=100000000\n@@6: line 2.3- t=100000676 -> @@1\n\n\nUnderful",
+        "l \\hbox (badness 10000) in paragraph at lines 1--1\n[]\n\n\\",
+        "hbox(0.0+0.0)x100.0\n.\\hbox(0.0+0.0)x0.0\n.\\glue(\\rightski",
+        "p) 0.0\n\n\nTight \\hbox (badness 26) in paragraph at lines ",
+        "1--1\n\\f Table one two three four\n\n\\hbox(6.94444+0.0)x100",
+        ".0, glue set - 0.63753\n.\\kern-5.00002 (left margin)\n.\\f ",
+        "T\n.\\kern-0.83334\n.\\f a\n.\\f b\n.\\f l\n.\\f e\n.\\glue 3.33333 ",
+        "plus 1.66666 minus 1.11111\n.\\f o\n.\\f n\n.\\f e\n.\\glue 3.33",
+        "333 plus 1.66666 minus 1.11111\n.\\f t\n.\\kern-0.27779\n.\\f ",
+        "w\n.\\kern-0.27779\n.\\f o\n.\\glue 3.33333 plus 1.66666 minus",
+        " 1.11111\n.\\f t\n.\\f h\n.\\f r\n.\\f e\n.\\f e\n.\\glue 3.33333 pl",
+        "us 1.66666 minus 1.11111\n.\\f f\n.\\f o\n.\\f u\n.\\f r\n.\\penal",
+        "ty 10000\n.\\glue(\\parfillskip) 0.0\n.\\glue(\\rightskip) 0.0",
+        "\n\n> \\box0=\n\\vbox(6.94444+0.0)x100.0\n.\\hbox(0.0+0.0)x100.",
+        "0\n..\\hbox(0.0+0.0)x0.0\n..\\glue(\\rightskip) 0.0\n.\\glue(\\l",
+        "ineskip) 0.0\n.\\hbox(6.94444+0.0)x100.0, glue set - 0.637",
+        "53\n..\\kern-5.00002 (left margin)\n..\\f T\n..\\kern-0.83334\n",
+        "..\\f a\n..\\f b\n..\\f l\n..\\f e\n..\\glue 3.33333 plus 1.66666",
+        " minus 1.11111\n..\\f o\n..\\f n\n..\\f e\n..\\glue 3.33333 plus",
+        " 1.66666 minus 1.11111\n..\\f t\n..\\kern-0.27779\n..\\f w\n..\\",
+        "kern-0.27779\n..\\f o\n..\\glue 3.33333 plus 1.66666 minus 1",
+        ".11111\n..\\f t\n..\\f h\n..\\f r\n..\\f e\n..\\f e\n..\\glue 3.3333",
+        "3 plus 1.66666 minus 1.11111\n..\\f f\n..\\f o\n..\\f u\n..\\f r",
+        "\n..\\penalty 10000\n..\\glue(\\parfillskip) 0.0\n..\\glue(\\rig",
+        "htskip) 0.0\n\n! OK.\nl.1 ...0pt Table one two three four\\p",
+        "ar}\\showbox0 \n                                          ",
+        "        \\end\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* A ratio that rounds to nothing; see docs/DECISIONS.md, a-ratio-that-rounds-to-nothing. Both texts are the
+   reference's: the source was run through pdfTeX in extended INITEX mode
+   and its transcript is what is expected. */
+static int test_expansion_ratio_rounds_to_nothing(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\pdfadjustspacing=2 \\font\\f=cmr10 \\f \\p",
+        "dffontexpand\\f 20 20 5 autoexpand \\hbadness=10000 \\toler",
+        "ance=10000 \\pretolerance=-1 \\parindent=0pt \\showboxdepth",
+        "=10 \\showboxbreadth=100 \\hsize=\\dimexpr 50.00002pt+2sp\\r",
+        "elax \\setbox0\\vbox{aa aa aa aa aa\\par}\\showbox0 \\end",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "> \\box0=\n\\vbox(8.61108+0.0)x50.00005\n.\\hbox(4.30554+0.0)",
+        "x50.00005\n..\\hbox(0.0+0.0)x0.0\n..\\f a\n..\\f a\n..\\glue 3.3",
+        "3333 plus 1.66666 minus 1.11111\n..\\f a\n..\\f a\n..\\glue 3.",
+        "33333 plus 1.66666 minus 1.11111\n..\\f a\n..\\f a\n..\\glue 3",
+        ".33333 plus 1.66666 minus 1.11111\n..\\f a\n..\\f a\n..\\glue(",
+        "\\rightskip) 0.0\n.\\glue(\\lineskip) 0.0\n.\\hbox(4.30554+0.0",
+        ")x50.00005\n..\\f (+20) a\n..\\f (+20) a\n..\\penalty 10000\n..",
+        "\\glue(\\parfillskip) 0.0\n..\\glue(\\rightskip) 0.0\n\n! OK.\nl",
+        ".1 ...\\setbox0\\vbox{aa aa aa aa aa\\par}\\showbox0 \n      ",
+        "                                            \\end\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
+/* A margin kern is not a kern; see docs/DECISIONS.md, a-margin-kern-is-not-a-kern. Both texts are the
+   reference's: the source was run through pdfTeX in extended INITEX mode
+   and its transcript is what is expected. */
+static int test_margin_kern_is_not_a_kern(void)
+{
+    static const char *const source[] = {
+        "\\tracingonline=1 \\pdfprotrudechars=2 \\font\\f=cmr10 \\f \\l",
+        "pcode\\f`T=330 \\rpcode\\f`.=500 \\showboxdepth=10 \\showboxb",
+        "readth=100 \\hbadness=10000 \\setbox1\\vbox{\\hsize=200pt \\n",
+        "oindent Table one. Some text.\\par \\global\\setbox3\\lastbo",
+        "x}\\setbox3\\hbox{\\unhbox3 \\message{[\\the\\lastnodetype]}\\u",
+        "nskip\\unskip\\unpenalty\\message{[\\the\\lastkern|\\the\\lastn",
+        "odetype]}\\unkern\\message{[\\the\\lastnodetype]}}\\showbox3 ",
+        "\\setbox4\\vbox{\\hsize=200pt \\noindent Table one. Some tex",
+        "t.\\par \\global\\setbox5\\lastbox}\\setbox5\\hbox{\\unhcopy5}\\",
+        "showbox5 \\end",
+        NULL,
+    };
+    static const char *const expected[] = {
+        "[11] [0.0pt|0] [0]\n> \\box3=\n\\hbox(6.94444+0.0)x95.55573\n",
+        ".\\f T\n.\\kern-0.83334\n.\\f a\n.\\f b\n.\\f l\n.\\f e\n.\\glue 3.33",
+        "333 plus 1.66666 minus 1.11111\n.\\f o\n.\\f n\n.\\f e\n.\\f .\n.",
+        "\\glue 3.33333 plus 1.66666 minus 1.11111\n.\\f S\n.\\f o\n.\\f",
+        " m\n.\\f e\n.\\glue 3.33333 plus 1.66666 minus 1.11111\n.\\f t",
+        "\n.\\f e\n.\\f x\n.\\f t\n.\\f .\n\n! OK.\nl.1 ...ern\\message{[\\the",
+        "\\lastnodetype]}}\\showbox3 \n                             ",
+        "                     \\setbox4\\vbox{\\hsize=200pt...\n\n\n> \\",
+        "box5=\n\\hbox(6.94444+0.0)x95.55573\n.\\f T\n.\\kern-0.83334\n.",
+        "\\f a\n.\\f b\n.\\f l\n.\\f e\n.\\glue 3.33333 plus 1.66666 minus",
+        " 1.11111\n.\\f o\n.\\f n\n.\\f e\n.\\f .\n.\\glue 3.33333 plus 1.6",
+        "6666 minus 1.11111\n.\\f S\n.\\f o\n.\\f m\n.\\f e\n.\\glue 3.3333",
+        "3 plus 1.66666 minus 1.11111\n.\\f t\n.\\f e\n.\\f x\n.\\f t\n.\\f",
+        " .\n.\\penalty 10000\n.\\glue(\\parfillskip) 0.0\n.\\glue(\\righ",
+        "tskip) 0.0\n\n! OK.\nl.1 ...\\lastbox}\\setbox5\\hbox{\\unhcopy",
+        "5}\\showbox5 \n                                           ",
+        "       \\end\n\n",
+        NULL,
+    };
+    return run_document_parts(source, expected);
+}
+
 /* Page totals; see docs/DECISIONS.md, the-page-builder. */
 /* How a packed box's glue was set. The reference only shows this through
    \showbox, so the four numbers are read off its "glue set" line and the
@@ -25681,7 +25946,7 @@ int main(int argument_count, char **arguments)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_let_bound_word() != 0 || test_showbox() != 0 || test_recoverable_errors() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_let_bound_word() != 0 || test_showbox() != 0 || test_expansion_margin_ligature() != 0 || test_kern_in_formula_is_no_break() != 0 || test_weighing_skips_leading_glue() != 0 || test_expansion_ratio_rounds_to_nothing() != 0 || test_margin_kern_is_not_a_kern() != 0 || test_recoverable_errors() != 0 ||
         test_paragraph_display() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||
