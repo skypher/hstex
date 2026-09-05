@@ -3688,6 +3688,15 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     free(engine->pdf_outlines);
     finder_stop(engine);
+    /* The children writing checkpoints finish before this run is over:
+       whoever reads the cache next reads it complete. */
+    for (size_t index = 0U; index < engine->checkpoint_writer_count; ++index) {
+        int status = 0;
+        while (waitpid(engine->checkpoint_writers[index], &status, 0) < 0 &&
+               errno == EINTR) {
+        }
+    }
+    engine->checkpoint_writer_count = 0U;
     free(engine->pdf_out_buffer);
     free(engine->pdf_current_object);
 #if HSTEX_HAVE_LIBDEFLATE
@@ -4112,7 +4121,15 @@ static int checkpoint_write_raw_buffer(const uint8_t *raw, size_t raw_length,
                                        const char *path, char *error,
                                        size_t error_capacity)
 {
-    FILE *out = fopen(path, "wb");
+    /* Written beside its name and moved into place whole, so that a reader
+       listing the cache never sees a checkpoint half written -- the writer
+       may be a child still at work while this run goes on. */
+    char temporary[1100];
+    if (snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", path,
+                 (long)getpid()) >= (int)sizeof(temporary)) {
+        return set_error(error, error_capacity, "checkpoint path too long");
+    }
+    FILE *out = fopen(temporary, "wb");
     if (out == NULL) {
         return set_error(error, error_capacity, "cannot write %s", path);
     }
@@ -4122,9 +4139,11 @@ static int checkpoint_write_raw_buffer(const uint8_t *raw, size_t raw_length,
         fwrite(&original, sizeof(original), 1U, out) != 1U ||
         fwrite(raw, 1U, raw_length, out) != raw_length) {
         (void)fclose(out);
+        (void)unlink(temporary);
         return set_error(error, error_capacity, "cannot write %s", path);
     }
-    if (fclose(out) != 0) {
+    if (fclose(out) != 0 || rename(temporary, path) != 0) {
+        (void)unlink(temporary);
         return set_error(error, error_capacity, "cannot finish %s", path);
     }
     return 0;
@@ -5333,10 +5352,43 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
                          "a checkpoint needs a clean page boundary "
                          "(no math, alignment, box, or conditional open)");
     }
+    struct timespec ckpt_started;
+    (void)clock_gettime(CLOCK_MONOTONIC, &ckpt_started);
+    /* A SNAPSHOT, TAKEN BY FORKING. Staging a checkpoint copies eleven
+       megabytes of state and writing it took fifty milliseconds deflated;
+       a cold run of testmath spent 214 of its 507 ms on four of them. The
+       child has this run's memory as it stands, copy-on-write, and stages
+       and writes it while this run goes on; the parent pays the fork and
+       the pages it touches before the child is done. The child leaves by
+       _exit, flushing nothing of the parent's. A fleet run resumes a
+       checkpoint while the run that wrote it is still going, so it writes
+       in place as before; so does a run asked to by HSTEX_CKPT_SYNC. */
+    bool in_child = false;
+    if (getenv("HSTEX_FLEET") == NULL && getenv("HSTEX_CKPT_SYNC") == NULL &&
+        engine->checkpoint_writer_count <
+            sizeof(engine->checkpoint_writers) /
+                sizeof(engine->checkpoint_writers[0])) {
+        pid_t child = fork();
+        if (child > 0) {
+            engine->checkpoint_writers[engine->checkpoint_writer_count++] = child;
+            if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
+                struct timespec forked;
+                (void)clock_gettime(CLOCK_MONOTONIC, &forked);
+                (void)fprintf(stderr, "CKPT forked %s: %.2f ms\n", path,
+                              (double)(forked.tv_sec - ckpt_started.tv_sec) * 1e3 +
+                                  (double)(forked.tv_nsec - ckpt_started.tv_nsec) / 1e6);
+            }
+            return 0;
+        }
+        in_child = child == 0;
+    }
     char *staging = NULL;
     size_t staging_size = 0U;
     FILE *out = open_memstream(&staging, &staging_size);
     if (out == NULL) {
+        if (in_child) {
+            _exit(1);
+        }
         return set_error(error, error_capacity, "cannot stage %s", path);
     }
     if (hstex_engine_format_to_file(engine, out) != 0) {
@@ -5497,15 +5549,28 @@ int hstex_engine_write_checkpoint(struct hstex_engine *engine, const char *path,
         free(staging);
         return set_error(error, error_capacity, "cannot stage %s", path);
     }
-    const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
-    bool keep_raw = preamble != NULL && strcmp(preamble, path) == 0;
+    /* Raw, and read where it lies by whoever resumes it; deflating cost
+       fifty milliseconds a checkpoint and the reader a copy. Asked to by
+       HSTEX_CKPT_DEFLATE, a run still writes them small. */
+    bool keep_raw = getenv("HSTEX_CKPT_DEFLATE") == NULL;
     int rc = keep_raw
                  ? checkpoint_write_raw_buffer((const uint8_t *)staging,
                                                staging_size, path, error,
                                                error_capacity)
                  : checkpoint_deflate_buffer((const uint8_t *)staging, staging_size,
                                        path, error, error_capacity);
+    if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
+        struct timespec ckpt_ended;
+        (void)clock_gettime(CLOCK_MONOTONIC, &ckpt_ended);
+        (void)fprintf(stderr, "CKPT wrote %s: %zu bytes staged, %s, %.1f ms\n",
+                      path, staging_size, keep_raw ? "raw" : "deflated",
+                      (double)(ckpt_ended.tv_sec - ckpt_started.tv_sec) * 1e3 +
+                          (double)(ckpt_ended.tv_nsec - ckpt_started.tv_nsec) / 1e6);
+    }
     free(staging);
+    if (in_child) {
+        _exit(rc == 0 ? 0 : 1);
+    }
     return rc;
 }
 

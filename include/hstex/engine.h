@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 /* The tool that says where a file is, kept alive between questions. Starting
    it costs twelve milliseconds -- it reads the configuration and the file
@@ -2566,6 +2567,11 @@ struct hstex_engine {
        one, so a warm run's first chunk resumes it instead of re-reading the
        whole preamble. Per run, so init zeroes it. */
     bool checkpoint_zero_done;
+    /* Children writing checkpoints: a snapshot is taken by forking, and the
+       child stages and writes it while this run goes on. Reaped when the
+       engine is destroyed, before anything reads the cache. */
+    pid_t checkpoint_writers[64];
+    size_t checkpoint_writer_count;
     /* Chunks parked at page boundaries and released together; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     int32_t parallel_chunk;

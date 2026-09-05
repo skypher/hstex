@@ -699,6 +699,36 @@ driver gate once did, and reported four documents differing on that
 account; it settles the reference to its fixpoint now, and the one
 document that still differed was technote, above.
 
+## A checkpoint taken by forking, and written raw
+
+A first run of a document through the driver was slower than pdfTeX -- 468
+ms against 215 on testmath -- and stayed slower on the second. The cold run
+compiles to its `.aux` fixpoint, two passes here, and drops a checkpoint at
+page zero and every stride while it does. Timed one by one, each checkpoint
+staged eleven megabytes of state and deflated it: 50 to 66 ms apiece, four
+of them, 214 of the run's 507 ms.
+
+The write is now a snapshot taken by forking. The child has the run's memory
+as it stands, copy-on-write, and stages and writes the checkpoint while the
+parent goes on; the parent pays the fork -- 0.3 to 0.6 ms -- and the page
+copies for whatever it touches before the child is done. The child leaves by
+`_exit`, so nothing of the parent's is flushed twice. The parent reaps its
+writers when the engine is destroyed, before anything reads the cache, and
+a checkpoint is written beside its name and moved into place whole, so a
+reader listing the cache never sees one half written. A fleet run resumes a
+checkpoint while the run that wrote it is still going, so it writes in place
+as before; `HSTEX_CKPT_SYNC=1` asks any run to.
+
+And the checkpoint is written raw. Deflating it cost the writer fifty
+milliseconds and the reader an inflation and a copy; a raw checkpoint is
+mapped and read where it lies, which is how the preamble checkpoint was
+already read. `HSTEX_CKPT_DEFLATE=1` writes them small again. The cache of a
+forty-page document holds two eleven-megabyte files rather than two of two.
+
+The cold run of testmath takes 314 ms, from 507; the warm run 128, against
+the reference's 215 for one pass. What remains of the cold run is the two
+passes themselves.
+
 ## What a format carries built, and what is read where it lies
 
 The floor of a LaTeX run -- an empty document, engine only -- was 40.7 ms.
