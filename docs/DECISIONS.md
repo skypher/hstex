@@ -1759,3 +1759,14 @@ while the files are the ones the cache was built against: clsguide with its
 empty table of contents, and come back a page short after the one pass a
 settled document gets. When they have moved the run goes cold and to the
 fixpoint.
+
+## The compression level
+
+`\pdfcompresslevel` is handed to libdeflate as its level, 0 to 9. Measured
+on usrguide-historic (33 pages) and testmath (41 pages), the best of five
+runs from a warm cache at each level: level 1 takes 114ms and 116ms and
+writes 425786 and 466570 bytes, level 6 119ms and 120ms for 417147 and
+453495, level 9 120ms and 123ms for 415436 and 450458. The whole of the
+compression is worth some six milliseconds of a run, and the file the
+default level writes is the smallest, so the level stays what the document
+asks for.

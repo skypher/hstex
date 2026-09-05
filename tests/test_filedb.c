@@ -2,6 +2,7 @@
 #include "test_cli.h"
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -58,6 +59,37 @@ int main(int argument_count, char **arguments)
               "answered with a path that is not the name asked for");
     }
     check(answered > 0, "answered nothing at all for a LaTeX installation");
+    if (answered == 0) {
+        /* Say what the database was built from, so a failure on another
+           installation can be read from its log alone. */
+        const char *trees = hstex_file_db_trees();
+        (void)fprintf(stderr, "test_filedb: trees: %s\n",
+                      trees == NULL ? "(none)" : trees);
+        const char *cursor = trees;
+        while (cursor != NULL && *cursor != '\0') {
+            const char *end = strchr(cursor, ':');
+            size_t length = end == NULL ? strlen(cursor) : (size_t)(end - cursor);
+            const char *tree = cursor;
+            if (length >= 2U && tree[0] == '!' && tree[1] == '!') {
+                tree += 2;
+                length -= 2U;
+            }
+            char path[1200];
+            if (length < sizeof(path) - 6U) {
+                memcpy(path, tree, length);
+                memcpy(path + length, "/ls-R", 6U);
+                struct stat status;
+                if (stat(path, &status) == 0) {
+                    (void)fprintf(stderr, "test_filedb: %s: %lld bytes\n", path,
+                                  (long long)status.st_size);
+                } else {
+                    (void)fprintf(stderr, "test_filedb: %s: %s\n", path,
+                                  strerror(errno));
+                }
+            }
+            cursor = end == NULL ? cursor + length + (tree - cursor) : end + 1;
+        }
+    }
 
     /* A metric is answered from where metrics live, an input from where
        inputs live, and the documentation that sits beside them is not an
