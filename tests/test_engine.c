@@ -406,6 +406,51 @@ static int run_document_page(const char *const *source,
     return status;
 }
 
+/* A control sequence \\let to a letter stays inside the word it follows, so
+   the reference kerns `A\\v' as it kerns AV and ligates `f\\i' as fi; see
+   docs/DECISIONS.md, let-bound-characters-inside-a-word. */
+static int test_let_bound_word(void)
+{
+    static const char source[] =
+        "\\font\\f=cmr10 \\f \\let\\v=V \\let\\i=i \\chardef\\a=`A "
+        "\\setbox0=\\hbox{AV}\\setbox1=\\hbox{A\\v}\\setbox2=\\hbox{fi}"
+        "\\setbox3=\\hbox{f\\i}\\setbox4=\\hbox{\\a\\v}\\setbox5=\\hbox{A\\relax V}%";
+    char path[64];
+    if (open_snippet(source, path) != 0) {
+        return 1;
+    }
+    char error[512] = {0};
+    struct hstex_engine engine;
+    if (prepare_engine(&engine, path, true, error, sizeof(error)) != 0) {
+        (void)unlink(path);
+        return 1;
+    }
+    enum hstex_engine_result result;
+    do {
+        hstex_token token = 0U;
+        struct hstex_source_location location;
+        result = hstex_engine_next_output(&engine, &token, &location, error,
+                                          sizeof(error));
+    } while (result == HSTEX_ENGINE_TOKEN);
+    int status = result != HSTEX_ENGINE_EOF;
+    const struct hstex_box *boxes = engine.boxes;
+    if (status == 0 &&
+        (boxes[1].width != boxes[0].width || boxes[3].width != boxes[2].width ||
+         boxes[4].width != boxes[0].width ||
+         /* \\relax ends the word: no kern, so the box is wider. */
+         boxes[5].width <= boxes[0].width)) {
+        (void)fprintf(stderr,
+                      "let-bound word: AV %d A\\v %d fi %d f\\i %d \\a\\v %d "
+                      "A\\relax V %d\n",
+                      boxes[0].width, boxes[1].width, boxes[2].width,
+                      boxes[3].width, boxes[4].width, boxes[5].width);
+        status = 1;
+    }
+    hstex_engine_destroy(&engine);
+    (void)unlink(path);
+    return status;
+}
+
 /* Page totals; see docs/DECISIONS.md, the-page-builder. */
 /* How a packed box's glue was set. The reference only shows this through
    \showbox, so the four numbers are read off its "glue set" line and the
@@ -25636,7 +25681,7 @@ int main(int argument_count, char **arguments)
         test_middle_delimiters() != 0 || test_nonscript() != 0 ||
         test_ending_a_paragraph() != 0 ||
         test_expansion_spaces() != 0 ||
-        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_showbox() != 0 || test_recoverable_errors() != 0 ||
+        test_oversize_boxes() != 0 || test_page_totals() != 0 || test_output_routine() != 0 || test_vsplit() != 0 || test_glue_set() != 0 || test_let_bound_word() != 0 || test_showbox() != 0 || test_recoverable_errors() != 0 ||
         test_paragraph_display() != 0 || test_characters() != 0 || test_horizontal_glue() != 0 ||
         test_unboxing_and_colour_stacks() != 0 || test_every_eof() != 0 || test_expanded_is_plain() != 0 || test_meaning_prefixes() != 0 ||
         test_last_node_and_pdf_objects() != 0 ||

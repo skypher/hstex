@@ -290,7 +290,12 @@ while IFS='	' read -r name format path want note input_profile; do
           "$engine" --format "$plainfmt" "run-$name.tex" \
               <../stdin.txt >hstex.log 2>&1
       else
-          "$engine" --format "$hfmt" "$input_file" \
+          # The reference writes beside its source, and so do the tools its
+          # documents run through \write18: imakeidx's `makeindex \jobname.idx'
+          # looks for the .idx in the working directory. Give HSTeX the same
+          # output directory so the comparison is of the engines and not of
+          # where they were told to write.
+          "$engine" --format-output "$hfmt" "$input_file" . \
               <../stdin.txt >hstex.log 2>&1
       fi ) || hs_status=$?
 
@@ -310,7 +315,7 @@ while IFS='	' read -r name format path want note input_profile; do
         fi
     else
         ref_pdf=$dir/ref/$name.pdf
-        hs_output_dir=$dir/hstex/build/document-output
+        hs_output_dir=$dir/hstex
         hs_pdf=$hs_output_dir/$name.pdf
         pdf_output=none
         if [ "$hs_status" -gt 1 ]; then
@@ -490,7 +495,7 @@ time_median() {
               "$engine" --format "$plainfmt" "run-$tm_name.tex" \
                   <stdin.txt >/dev/null 2>&1 || :
           else
-              "$engine" --format "$hfmt" "$tm_input_file" \
+              "$engine" --format-output "$hfmt" "$tm_input_file" . \
                   <stdin.txt >/dev/null 2>&1 || :
           fi ) || :
         tm_ended=$(date +%s%N)

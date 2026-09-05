@@ -985,6 +985,11 @@ struct hstex_pdf_font {
     size_t pk_encoding;
     size_t pk_char_procs;
     uint32_t pk_resolution;
+    /* Whether the font goes out as a bitmap font, settled from the map the
+       first time a glyph of it is set: zero until then, one for a scalable
+       program, two for a bitmap font. Not carried by a checkpoint; a resumed
+       run settles it again. */
+    uint8_t kind;
 };
 
 /* One PostScript encoding shared by all mapped TeX fonts that name it. */

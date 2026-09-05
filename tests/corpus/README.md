@@ -41,6 +41,9 @@ disagreement without failing by default; CI runs both manifests with
 | `subeqn` | LaTeX | 2 pages | AMS nested equation numbering, tags, and indirect cross-references |
 | `technote` | LaTeX | 4 pages | The AMS documented-source class, short verbatim, and math internals |
 | `tools-overview` | LaTeX | 2 pages | `calc`, `hyperref`, PDF strings, tables, and the LaTeX tools bundle |
+| `clsguide` | LaTeX | 36 pages | The current class and package writer guide: `csquotes` quotation marks measured against the letter after them, T1 fonts as bitmaps, nested `tabular` |
+| `fntguide` | LaTeX | 44 pages | The font selection guide: font tables, `\wd` and `\ht` assignments to boxes, encodings |
+| `amsldoc` | LaTeX | 42 pages | The AMS user's guide: displayed alignments inside lists and every `amsmath` environment |
 | `ltxcheck` | LaTeX | 0 pages | 64 scripted terminal returns drive LaTeX's interactive installation and file-lookup diagnostic |
 
 The LaTeX Project files are distributed under the LaTeX Project Public

@@ -120,7 +120,10 @@ while IFS='	' read -r name format path want note input_profile; do
     for pass in 1 2 3 4 5 6; do
         ( cd "$dir/ref"
           pdflatex -interaction=nonstopmode "$input_file" >/dev/null 2>&1 || : )
-        now=$(cksum <"$dir/ref/$name.aux" 2>/dev/null || echo none)
+        # Every state file a pass leaves, not the .aux alone: a .toc that
+        # grows a page settles a pass after the .aux does.
+        now=$(cat "$dir/ref/$name".aux "$dir/ref/$name".toc "$dir/ref/$name".lof \
+                  "$dir/ref/$name".lot "$dir/ref/$name".out 2>/dev/null | cksum)
         if [ "$pass" -gt 1 ] && [ "$now" = "$settled" ]; then
             break
         fi

@@ -1475,6 +1475,43 @@ static void parallel_default_job(const char *document_path, char *out,
     out[length] = '\0';
 }
 
+/* THE FIXPOINT IS EVERY STATE FILE, NOT THE .AUX ALONE. A pass leaves more
+   than its .aux for the next: the .toc, the .out, the lists of figures and
+   tables. A document whose table of contents grows by a page on its second
+   pass has an .aux that has settled while its .toc has not, and a loop that
+   watched the .aux stopped a pass early: fntguide came out at 43 pages
+   where the reference, taken to its fixpoint, has 45. Every state file of
+   the job is folded in, by name and content; one that is absent folds in
+   as absent. Returns whether any exists. */
+static bool parallel_hash_state_files(const char *output_directory,
+                                      const char *job_name, uint64_t *hash)
+{
+    static const char *const kinds[] = {".aux", ".toc", ".lof", ".lot",
+                                        ".out", ".bbl", ".ind", ".nav",
+                                        ".snm", ".brf", ".gls", ".glo"};
+    uint64_t total = 0xcbf29ce484222325ULL;
+    bool any = false;
+    for (size_t index = 0U; index < sizeof(kinds) / sizeof(kinds[0]); ++index) {
+        char path[1200];
+        (void)snprintf(path, sizeof(path), "%s/%s%s", output_directory,
+                       job_name, kinds[index]);
+        uint64_t one = 0xcbf29ce484222325ULL;
+        for (const char *c = kinds[index]; *c != '\0'; ++c) {
+            one ^= (uint8_t)*c;
+            one *= 0x100000001b3ULL;
+        }
+        if (parallel_hash_file(path, &one) == 0) {
+            any = true;
+        } else {
+            one ^= 0xffU;
+            one *= 0x100000001b3ULL;
+        }
+        total ^= one;
+    }
+    *hash = total;
+    return any;
+}
+
 static int run_parallel_document(const char *format_file,
                                  const char *document_path,
                                  const char *output_directory,
@@ -1503,10 +1540,18 @@ static int run_parallel_document(const char *format_file,
     }
     uint64_t cached_hash = 0U;
     int cached_stride = 0, cached_pages = 0;
+    /* A warm run resumes checkpoints taken against what the previous pass
+       left, and its chapters read the .toc and the rest of it from disk as
+       they go. It stands only while those files are the ones the cache was
+       built against: measured, clsguide with its .aux and .toc removed
+       resumed the page-zero checkpoint, read an empty table of contents at
+       \tableofcontents, and came back a page short with its labels changed
+       after the one pass a settled document gets. When they have moved the
+       run goes cold and to the fixpoint. */
     bool warm =
         parallel_read_manifest(cache_dir, &cached_hash, &cached_stride,
                                &cached_pages) == 0 &&
-        cached_hash == hash;
+        cached_hash == hash && !parallel_state_changed(cache_dir);
 
     if (warm) {
         (void)fprintf(stderr,
@@ -1586,8 +1631,9 @@ static int run_parallel_document(const char *format_file,
        the fixpoint already, and a warm run of a settled document is one
        pass, not a pass and a pass to confirm it. Measured on testmath
        through the driver: 297 ms for two passes where one is 150. */
-    uint64_t previous_aux = 0xcbf29ce484222325ULL;
-    bool have_previous = parallel_hash_file(aux_path, &previous_aux) == 0;
+    uint64_t previous_aux = 0U;
+    bool have_previous =
+        parallel_hash_state_files(output_directory, job_name, &previous_aux);
     int pages = 0, status = 0;
     for (int pass = 0; pass < HSTEX_PARALLEL_MAX_PASSES; ++pass) {
         parallel_clear_cache(cache_dir);
@@ -1602,9 +1648,9 @@ static int run_parallel_document(const char *format_file,
         if (status != 0) {
             break;
         }
-        uint64_t aux = 0xcbf29ce484222325ULL; /* FNV-1a offset basis */
-        if (parallel_hash_file(aux_path, &aux) != 0) {
-            break; /* no .aux at all -- a single pass is the whole story */
+        uint64_t aux = 0U;
+        if (!parallel_hash_state_files(output_directory, job_name, &aux)) {
+            break; /* no state file at all -- a single pass is the whole story */
         }
         if (have_previous && aux == previous_aux) {
             break; /* settled: this pass read the .aux a warm run will read */

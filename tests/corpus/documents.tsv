@@ -22,3 +22,6 @@ subeqn	latex	macros/latex/required/amsmath/subeqn.tex	247e1fd6c56390c2d04af3a26a
 technote	latex	macros/latex/required/amsmath/technote.tex	b6d7a71a0df4ecf0bb0a503e5442bcf9dd0715ee5999bc835bad5c31f79efddf	AMS documented-source class, short verbatim, and math notes
 tools-overview	latex	macros/latex/required/tools/tools-overview.tex	826c5027bb76edcd10b7ef9907c174f3408d77e258995d109735f4feb2b8a4f5	Tools-bundle overview using calc, hyperref, PDF strings, and tables
 ltxcheck	latex	macros/latex/base/ltxcheck.tex	0f4a3943b52216e07db302ce5479e3f08e76569a58bb1f0f13fce0d04c0e6290	Interactive LaTeX installation and file-lookup diagnostic	returns
+clsguide	latex	macros/latex/base/clsguide.tex	8b5d76501c28d0e147316c4f93796d9a5deb6efb506ed2a93e5110d12b2659f7	LaTeX for class and package writers, the current guide: 37 pages of lists, verbatim and cross-references
+fntguide	latex	macros/latex/base/fntguide.tex	fb6c382c944b7b642e6a98246e1fe79122ad397fa0026bc9a5115f24dfefe88c	LaTeX font selection guide, 45 pages of tables and font switching
+amsldoc	latex	macros/latex/required/amsmath/amsldoc.tex	c842a86ff194288d430697d7f501fcfece2da263ff9b66c8d32c752a8724e142	The amsmath user's guide, 44 pages of display mathematics and alignment

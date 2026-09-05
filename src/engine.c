@@ -14970,7 +14970,7 @@ static void move_roots(struct hstex_engine *engine, struct node_move *to)
     struct hstex_vbox_builder *const vboxes[] = {
         engine->page_builder, engine->contribution_builder,
         engine->active_vbox_builder, engine->display_rows,
-        engine->display_outer_vbox};
+        engine->display_alignment ? engine->display_outer_vbox : NULL};
     const size_t vbox_count = sizeof(vboxes) / sizeof(vboxes[0]);
     for (size_t index = 0U; index < vbox_count; ++index) {
         bool moved_already = false;
@@ -21791,9 +21791,16 @@ static void trace_command_traced(struct hstex_engine *engine,
     if (!character_run && hstex_token_is_control_sequence(token)) {
         const struct hstex_meaning *its = hstex_engine_meaning(
             engine, hstex_token_control_sequence_id(token));
-        character_run = its != NULL &&
-                        (its->command == (int)HSTEX_COMMAND_CHAR_GIVEN ||
-                         its->command == (int)HSTEX_COMMAND_CHAR);
+        character_run =
+            its != NULL &&
+            (its->command == (int)HSTEX_COMMAND_CHAR_GIVEN ||
+             its->command == (int)HSTEX_COMMAND_CHAR ||
+             /* So does one \\let to a letter or other character: it is that
+                character to the main loop. */
+             (its->command == (int)HSTEX_COMMAND_TOKEN_ALIAS &&
+              hstex_token_is_character(its->value.token) &&
+              (token_is_category(its->value.token, HSTEX_CAT_LETTER) ||
+               token_is_category(its->value.token, HSTEX_CAT_OTHER))));
     }
     if (character_run && engine->traced_character) {
         return;
@@ -25135,6 +25142,14 @@ static struct hstex_pdf_physical_font *pdf_physical_font_entry(
     return entry;
 }
 
+/* The resolution bitmap fonts are looked for and drawn at. */
+static int32_t pdf_pk_resolution(const struct hstex_engine *engine)
+{
+    int32_t resolution =
+        engine->integer_parameters[HSTEX_INTEGER_PDF_PK_RESOLUTION];
+    return resolution <= 0 ? 600 : resolution;
+}
+
 static int pdf_prepare_pk_font(struct hstex_engine *engine,
                                struct hstex_pdf_font *entry,
                                const struct hstex_font *font, char *error,
@@ -25143,11 +25158,7 @@ static int pdf_prepare_pk_font(struct hstex_engine *engine,
     if (entry->pk_font != NULL) {
         return 0;
     }
-    int32_t resolution =
-        engine->integer_parameters[HSTEX_INTEGER_PDF_PK_RESOLUTION];
-    if (resolution <= 0) {
-        resolution = 600;
-    }
+    int32_t resolution = pdf_pk_resolution(engine);
     if (resolution > 100000) {
         return set_error(error, error_capacity,
                          "invalid PDF bitmap-font resolution %d", resolution);
@@ -26840,29 +26851,54 @@ static int pdf_end_text(struct hstex_engine *engine, char *error,
    ends the run and is named as a place instead. See docs/DECISIONS.md,
    the-correction-an-array-cannot-carry. */
 #define HSTEX_PDF_OFFSET_LIMIT INT64_C(32767)
+/* PDFTEX'S OWN ARITHMETIC, SO THAT THE FILE SAYS THE SAME. pdfTeX keeps
+   the pen of its text where the file's arithmetic leaves it: a glyph
+   advances it by its width brought onto the raster the /Widths array is
+   written on -- ten-thousandths of the font's size -- and a correction moves
+   it by the thousandths the file names. Both come from one function,
+   divide_scaled, which divides two scaled values to a given number of
+   decimals, rounds half away from zero, and says what scaled value the
+   quotient stands for. Worked out any other way, the pen drifts from
+   pdfTeX's by a fraction of a raster unit per glyph, and a correction
+   rounds the other way once in a while: the `e' of "LaTeX Project Team."
+   sat 0.012pt off on the title pages of clsguide and fntguide. The size is
+   the font's exact size, as pdfTeX's pdf_font_size is, not the one the
+   file states. */
+/* 100bp in scaled points, pdfTeX's one_hundred_bp. */
+#define HSTEX_ONE_HUNDRED_BP INT64_C(6578176)
 
-static int64_t pdf_unit_numerator(const struct hstex_font *font)
+static int64_t pdf_divide_scaled(int64_t s, int64_t m, int digits,
+                                 int64_t *out)
 {
-    int64_t stated = pdf_bp_units(font->size, 4);
-    return stated * INT64_C(1644544);
-}
-
-/* The quotient taken downwards, so that a step worked out in scaled points
-   loses nothing on the way past zero. */
-static int64_t pdf_floor_division(int64_t numerator, int64_t denominator)
-{
-    int64_t quotient = numerator / denominator;
-    if (numerator % denominator != 0 && (numerator < 0) != (denominator < 0)) {
-        quotient -= 1;
+    int64_t sign = 1;
+    if (s < 0) {
+        sign = -sign;
+        s = -s;
     }
-    return quotient;
+    if (m < 0) {
+        sign = -sign;
+        m = -m;
+    }
+    if (m == 0) {
+        *out = 0;
+        return 0;
+    }
+    int64_t q = s / m;
+    int64_t r = s % m;
+    int64_t ten = 1;
+    for (int index = 0; index < digits; ++index) {
+        q = 10 * q + (10 * r) / m;
+        r = (10 * r) % m;
+        ten *= 10;
+    }
+    if (2 * r >= m) {
+        q += 1;
+        r -= m;
+    }
+    *out = sign * (s - r / ten); /* r / ten truncates toward zero, as Pascal's div */
+    return sign * q;
 }
 
-static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
-{
-    return numerator >= 0 ? (numerator + denominator / 2) / denominator
-                          : -((-numerator + denominator / 2) / denominator);
-}
 
 /* The size the file states for a font, in whole scaled points, taken towards
    the size the engine has: the file states it in ten-thousandths of a big
@@ -26871,21 +26907,11 @@ static int64_t pdf_round_division(int64_t numerator, int64_t denominator)
    docs/DECISIONS.md, the-width-a-file-states. */
 static int32_t pdf_stated_size(const struct hstex_font *font)
 {
-    int64_t numerator = pdf_unit_numerator(font);
-    int64_t denominator = HSTEX_PDF_UNIT_DENOMINATOR / 1000;
-    int64_t stated = numerator / denominator;
-    if (stated * denominator != numerator && stated < font->size) {
-        stated += 1;
-    }
-    return (int32_t)(stated == 0 ? 1 : stated);
-}
-
-static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
-{
-    int64_t width = (int64_t)packed_dimen(font->characters[code].width);
-    int64_t size = pdf_stated_size(font);
-    int64_t tenths = (width * 10000 + size / 2) / size;
-    return (int32_t)tenths;
+    /* pdfTeX's pdf_font_size: what the size the file states, to four
+       decimals of a big point, stands for in scaled points. */
+    int64_t out = 0;
+    (void)pdf_divide_scaled(font->size, HSTEX_ONE_HUNDRED_BP, 6, &out);
+    return (int32_t)(out == 0 ? 1 : out);
 }
 
 /* How far the file thinks the text has moved when it has set this character:
@@ -26894,15 +26920,58 @@ static int32_t pdf_glyph_units(const struct hstex_font *font, uint32_t code)
    the-text-position-in-the-file. */
 static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
 {
-    int64_t tenths = pdf_glyph_units(font, code);
-    int64_t stated = pdf_stated_size(font);
-    int64_t whole = tenths * stated / 10000;
-    int64_t rest = tenths * stated - whole * 10000;
     int64_t width = packed_dimen(font->characters[code].width);
-    if (rest != 0 && whole < width) {
-        whole += 1;
+    int64_t out = 0;
+    (void)pdf_divide_scaled(width, pdf_stated_size(font), 4, &out);
+    return (int32_t)out;
+}
+
+/* A bitmap font goes into the file as a Type 3 font drawn in a unit the
+   reference works out from the resolution and the stated size: 72 over the
+   resolution to five decimals past the file's, divided by the stated size in
+   big points to the file's decimals plus two, and rounded to a whole
+   hundred-thousandth. The reference's pk_scale_factor and get_pk_font_scale;
+   see docs/DECISIONS.md, the-width-a-bitmap-glyph-moves-the-pen. */
+static int64_t pdf_pk_font_scale(const struct hstex_font *font,
+                                 uint32_t resolution, int32_t digits)
+{
+    int64_t out = 0;
+    int64_t factor =
+        pdf_divide_scaled(72, (int64_t)resolution, 5 + digits, &out);
+    int64_t size = pdf_divide_scaled(pdf_stated_size(font),
+                                     HSTEX_ONE_HUNDRED_BP, digits + 2, &out);
+    if (size == 0) {
+        size = 1;
     }
-    return (int32_t)whole;
+    int64_t scale = pdf_divide_scaled(factor, size, 0, &out);
+    return scale == 0 ? 1 : scale;
+}
+
+/* The width the file states for a bitmap glyph, in hundredths of the Type 3
+   unit: the width over the stated size to seven decimals, over the scale,
+   rounded to a whole number. The reference's pk_char_width. */
+static int64_t pdf_pk_char_width(const struct hstex_font *font, int32_t width,
+                                 int64_t scale)
+{
+    int64_t out = 0;
+    int64_t seven = pdf_divide_scaled(width, pdf_stated_size(font), 7, &out);
+    return pdf_divide_scaled(seven, scale, 0, &out);
+}
+
+/* How far the file thinks the text has moved when it has set a bitmap glyph:
+   the reference multiplies the scale, the stated width and the stated size
+   in floating point and keeps the whole scaled points, cutting towards zero.
+   The reference's get_pk_char_width. */
+static int32_t pdf_pk_glyph_advance(const struct hstex_font *font,
+                                    uint32_t code, uint32_t resolution,
+                                    int32_t digits)
+{
+    int64_t scale = pdf_pk_font_scale(font, resolution, digits);
+    int32_t width = packed_dimen(font->characters[code].width);
+    double advance = ((double)scale / 100000.0) *
+                     ((double)pdf_pk_char_width(font, width, scale) / 100.0) *
+                     (double)pdf_stated_size(font);
+    return (int32_t)advance;
 }
 
 /* The correction the file writes to bring its own idea of where the text
@@ -26911,10 +26980,15 @@ static int32_t pdf_glyph_advance(const struct hstex_font *font, uint32_t code)
    size means, which is what its widths are worked out from as well. See
    docs/DECISIONS.md, the-text-position-in-the-file. */
 static int64_t pdf_text_offset(const struct hstex_font *font, int32_t text_h,
-                               int32_t h)
+                               int32_t h, int64_t *pen_after)
 {
-    int64_t difference = (int64_t)text_h - h;
-    return pdf_round_division(difference * 1000, pdf_stated_size(font));
+    /* pdfTeX: s = divide_scaled(cur_h - pen, size, 3), printed as -s, and the
+       pen moves by what s stands for. */
+    int64_t out = 0;
+    int64_t s = pdf_divide_scaled((int64_t)h - text_h, pdf_stated_size(font), 3,
+                                  &out);
+    *pen_after = (int64_t)text_h + out;
+    return -s;
 }
 
 /* Whether a step is long enough for the file to name at all: the file
@@ -26931,6 +27005,31 @@ static bool pdf_step_names_a_place(const struct hstex_engine *engine,
     }
     int64_t amount = (int64_t)step * 7200 * scale;
     return (amount < 0 ? -amount : amount) >= INT64_C(473628672);
+}
+
+/* Whether a font goes out as a bitmap font. The reference settles this from
+   the map the first time it uses the font, and the pen has to know it then:
+   a bitmap glyph moves the pen by a different rule from a scalable one. A
+   name the map does not have is a bitmap font; anything else is left to the
+   program's own preparation, which reports what is wrong with it. */
+static bool pdf_font_goes_as_bitmap(struct hstex_engine *engine,
+                                    struct hstex_pdf_font *entry,
+                                    const struct hstex_font *font)
+{
+    if (entry->kind == 0U) {
+        char *postscript = NULL;
+        char *encoding_file = NULL;
+        char *font_file = NULL;
+        char ignored[64];
+        int status =
+            pdf_font_map_entry(engine, font->name, &postscript, &encoding_file,
+                               &font_file, ignored, sizeof(ignored));
+        free(postscript);
+        free(encoding_file);
+        free(font_file);
+        entry->kind = status == 1 ? 2U : 1U;
+    }
+    return entry->kind == 2U;
 }
 
 static int pdf_place_physical_character(struct hstex_engine *engine,
@@ -26988,7 +27087,8 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
        thousandths of the stated size the file names the place afresh. See
        docs/DECISIONS.md, the-correction-an-array-cannot-carry. */
     if (!moved && h != engine->pdf_text_h) {
-        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h);
+        int64_t pen_after = 0;
+        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
         if (offset > HSTEX_PDF_OFFSET_LIMIT ||
             offset < -HSTEX_PDF_OFFSET_LIMIT) {
             moved = true;
@@ -27018,13 +27118,21 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
         /* The step is measured from the place the file's text stands at, not
            from the engine's own place; see docs/DECISIONS.md,
            the-text-position-in-the-file. */
-        int64_t across = pdf_bp_units(h - engine->pdf_line_h, digits);
+        /* As pdfTeX's pdf_set_text_pos: the step is named in big points to
+           the file's decimals, and the line's place moves by what the named
+           step stands for, from where the line's text began. */
+        int64_t across_out = 0;
+        int64_t across = pdf_divide_scaled(h - engine->pdf_line_h,
+                                           HSTEX_ONE_HUNDRED_BP, digits + 2,
+                                           &across_out);
         /* A place named for another reason -- a font of its own, or a
            correction the array cannot carry -- names no step down: the line
            the file's text is on has not moved. */
+        int64_t down_out = 0;
         int64_t down =
-            names ? pdf_bp_units((engine->pdf_height - v) - engine->pdf_line_v,
-                                 digits)
+            names ? pdf_divide_scaled((engine->pdf_height - v) - engine->pdf_line_v,
+                                      HSTEX_ONE_HUNDRED_BP, digits + 2,
+                                      &down_out)
                   : 0;
         char text[64];
         size_t length = pdf_format_units(text, sizeof(text), across, digits);
@@ -27044,20 +27152,8 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
            in scaled points from where the file's text stood, and the place it
            lands on is taken towards the engine's own; see docs/DECISIONS.md,
            the-text-position-in-the-file. */
-        int64_t scale = 1;
-        for (int32_t index = 0; index < digits; ++index) {
-            scale *= 10;
-        }
-        int64_t den = 7200 * scale;
-        int64_t whole = pdf_floor_division(across * INT64_C(473628672), den);
-        int64_t rest = across * INT64_C(473628672) - whole * den;
-        whole += engine->pdf_line_h;
-        engine->pdf_line_h = (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
-        whole = pdf_floor_division(down * INT64_C(473628672), den);
-        rest = down * INT64_C(473628672) - whole * den;
-        whole += engine->pdf_line_v;
-        int32_t up = engine->pdf_height - v;
-        engine->pdf_line_v = (int32_t)(whole + (rest != 0 && whole < up ? 1 : 0));
+        engine->pdf_line_h = (int32_t)(engine->pdf_line_h + across_out);
+        engine->pdf_line_v = (int32_t)(engine->pdf_line_v + down_out);
         engine->pdf_text_h = engine->pdf_line_h;
         engine->pdf_placed = true;
     }
@@ -27074,7 +27170,8 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
         engine->pdf_in_array = true;
     }
     if (h != engine->pdf_text_h) {
-        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h);
+        int64_t pen_after = engine->pdf_text_h;
+        int64_t offset = pdf_text_offset(font, engine->pdf_text_h, h, &pen_after);
         if (offset != 0) {
             char rendered[24];
             size_t rendered_length = pdf_decimal(rendered, offset);
@@ -27083,15 +27180,9 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
                           error_capacity) != 0) {
                 return -1;
             }
-            /* The correction moves the file's text by its own worth of
-               scaled points, and where that leaves it is taken towards the
-               engine's own place, the same way a step is. */
-            int64_t amount = offset * pdf_stated_size(font);
-            int64_t exact = (int64_t)engine->pdf_text_h * 1000 - amount;
-            int64_t whole = pdf_floor_division(exact, 1000);
-            int64_t rest = exact - whole * 1000;
-            engine->pdf_text_h =
-                (int32_t)(whole + (rest != 0 && whole < h ? 1 : 0));
+            /* The pen moves by what the correction stands for, as pdfTeX's
+               pdf_delta_h does. */
+            engine->pdf_text_h = (int32_t)pen_after;
         }
     }
     if (!engine->pdf_in_string) {
@@ -27116,7 +27207,12 @@ static int pdf_place_physical_character(struct hstex_engine *engine,
     if (pdf_bytes(engine, glyph, length, error, error_capacity) != 0) {
         return -1;
     }
-    engine->pdf_text_h += pdf_glyph_advance(font, code);
+    engine->pdf_text_h +=
+        pdf_font_goes_as_bitmap(engine, entry, font)
+            ? pdf_pk_glyph_advance(font, code,
+                                   (uint32_t)pdf_pk_resolution(engine),
+                                   pdf_digits(engine))
+            : pdf_glyph_advance(font, code);
     return 0;
 }
 
@@ -29798,6 +29894,33 @@ static int pdf_write_cmap(struct hstex_engine *engine, size_t object,
     return status;
 }
 
+/* The width the file states for a bitmap glyph, as the file prints it: the
+   reference's hundredths of the Type 3 unit, to two decimals. */
+static int pdf_type3_width_text(const struct hstex_font *font, size_t code,
+                                uint32_t resolution, int32_t digits,
+                                char text[64])
+{
+    int64_t scale = pdf_pk_font_scale(font, resolution, digits);
+    int32_t width = packed_dimen(font->characters[code].width);
+    (void)pdf_format_units(text, 64U, pdf_pk_char_width(font, width, scale),
+                           2);
+    return 0;
+}
+
+/* The Type 3 font's unit as the file prints it: the scale in
+   hundred-thousandths, to five decimals. */
+static int pdf_type3_matrix_text(const struct hstex_font *font,
+                                 uint32_t resolution, int32_t digits,
+                                 char text[64])
+{
+    (void)pdf_format_units(text, 64U,
+                           pdf_pk_font_scale(font, resolution, digits), 5);
+    if (text[0] == '0' && text[1] == '.') {
+        memmove(text, text + 1, strlen(text));
+    }
+    return 0;
+}
+
 /* The shared EC/T1 and OT1 maps are public, document-independent PDF
    resources.  Keeping their canonical text also preserves pdfTeX's entry
    grouping: that grouping is observable after stream decompression and is
@@ -30145,73 +30268,6 @@ static int pdf_write_font_widths(struct hstex_engine *engine,
                : 0;
 }
 
-static int pdf_type3_matrix_units(const struct hstex_font *font,
-                                  uint32_t resolution, uint64_t *units,
-                                  char *error, size_t error_capacity)
-{
-    if (font->size <= 0 || resolution == 0U) {
-        return set_error(error, error_capacity,
-                         "invalid Type 3 font scale");
-    }
-    uint64_t numerator = UINT64_C(7227) * UINT64_C(65536) * UINT64_C(1000);
-    uint64_t denominator = (uint64_t)resolution * (uint64_t)font->size;
-    *units = numerator / denominator;
-    uint64_t remainder = numerator % denominator;
-    if (remainder > denominator / 2U) {
-        ++*units;
-    }
-    if (*units == 0U || *units > (uint64_t)INT64_MAX) {
-        return set_error(error, error_capacity,
-                         "invalid Type 3 font scale");
-    }
-    return 0;
-}
-
-static int pdf_type3_width_text(const struct hstex_font *font, size_t code,
-                                uint32_t resolution, char text[64], char *error,
-                                size_t error_capacity)
-{
-    int32_t width = packed_dimen(font->characters[code].width);
-    bool negative = width < 0;
-    uint64_t matrix_units = 0U;
-    if (pdf_type3_matrix_units(font, resolution, &matrix_units, error,
-                               error_capacity) != 0) {
-        return -1;
-    }
-    uint64_t magnitude_width =
-        (uint64_t)(negative ? -(int64_t)width : (int64_t)width);
-    uint64_t numerator = magnitude_width * UINT64_C(10000000);
-    uint64_t denominator = (uint64_t)font->size * matrix_units;
-    uint64_t magnitude = numerator / denominator;
-    uint64_t remainder = numerator % denominator;
-    if (remainder > (denominator - 1U) / 2U) {
-        ++magnitude;
-    }
-    if (magnitude > (uint64_t)INT64_MAX) {
-        return set_error(error, error_capacity,
-                         "Type 3 font width is too large");
-    }
-    int64_t units = negative ? -(int64_t)magnitude : (int64_t)magnitude;
-    (void)pdf_format_units(text, 64U, units, 2);
-    return 0;
-}
-
-static int pdf_type3_matrix_text(const struct hstex_font *font,
-                                 uint32_t resolution, char text[64],
-                                 char *error, size_t error_capacity)
-{
-    uint64_t units = 0U;
-    if (pdf_type3_matrix_units(font, resolution, &units, error,
-                               error_capacity) != 0) {
-        return -1;
-    }
-    (void)pdf_format_units(text, 64U, (int64_t)units, 5);
-    if (text[0] == '0' && text[1] == '.') {
-        memmove(text, text + 1, strlen(text));
-    }
-    return 0;
-}
-
 static int pdf_type3_glyph_box(const struct hstex_pk_glyph *glyph,
                                int32_t box[4], char *error,
                                size_t error_capacity)
@@ -30254,8 +30310,8 @@ static int pdf_write_type3_widths(struct hstex_engine *engine,
         const struct hstex_pk_glyph *glyph = &entry->pk_font->glyphs[code];
         char width[64] = "0";
         if (pdf_font_code_used(entry->used, code) && glyph->present &&
-            pdf_type3_width_text(font, code, entry->pk_resolution, width,
-                                 error, error_capacity) != 0) {
+            pdf_type3_width_text(font, code, entry->pk_resolution,
+                                 pdf_digits(engine), width) != 0) {
             return -1;
         }
         if ((code != entry->first &&
@@ -30278,8 +30334,8 @@ static int pdf_write_type3_glyph(struct hstex_engine *engine,
     const struct hstex_pk_glyph *glyph = &entry->pk_font->glyphs[code];
     char width[64];
     int32_t box[4] = {0};
-    if (pdf_type3_width_text(font, code, entry->pk_resolution, width, error,
-                             error_capacity) != 0 ||
+    if (pdf_type3_width_text(font, code, entry->pk_resolution,
+                             pdf_digits(engine), width) != 0 ||
         pdf_type3_glyph_box(glyph, box, error, error_capacity) != 0) {
         return -1;
     }
@@ -30442,8 +30498,8 @@ static int pdf_write_type3_font(struct hstex_engine *engine,
     }
     char matrix[64];
     int32_t box[4];
-    if (pdf_type3_matrix_text(font, entry->pk_resolution, matrix, error,
-                              error_capacity) != 0 ||
+    if (pdf_type3_matrix_text(font, entry->pk_resolution, pdf_digits(engine),
+                              matrix) != 0 ||
         pdf_type3_font_box(entry, box, error, error_capacity) != 0) {
         return -1;
     }
@@ -32827,22 +32883,29 @@ static int scan_box_dimen_assignment(struct hstex_engine *engine,
         scan_dimension(engine, &value, error, error_capacity) != 0) {
         return -1;
     }
-    bool requested_global = engine->pending_global;
     engine->pending_global = false;
     engine->pending_macro_flags = 0U;
-    struct hstex_box box = engine->boxes[(size_t)index];
-    if (box.kind == HSTEX_BOX_VOID) {
+    /* THE BOX ITSELF IS ALTERED, NOT THE REGISTER. \wd, \ht and \dp change
+       the box that is in the register, as TeX's alter_box_dimen does, and
+       a group's end does not undo it: nothing was saved. Routed through the
+       register assignment, the change was local to the group, and LaTeX's
+       \@largefloatcheck -- which clamps a float taller than the page to the
+       page's height, inside the float's group -- came undone at \end{table}:
+       fntguide's tallest table stayed 585pt, fitted nowhere, and the run
+       ended in a hundred dead cycles at \clearpage. \global is accepted and
+       means nothing here, as in TeX. */
+    struct hstex_box *box = &engine->boxes[(size_t)index];
+    if (box->kind == HSTEX_BOX_VOID) {
         return 0;
     }
     if (subtype == (int32_t)HSTEX_BOX_DIMEN_HEIGHT) {
-        box.height = value;
+        box->height = value;
     } else if (subtype == (int32_t)HSTEX_BOX_DIMEN_DEPTH) {
-        box.depth = value;
+        box->depth = value;
     } else {
-        box.width = value;
+        box->width = value;
     }
-    return assign_box(engine, (uint32_t)index, box, requested_global, error,
-                      error_capacity);
+    return 0;
 }
 
 /* Protrusion and expansion settings belong to the font rather than to a
@@ -46640,6 +46703,12 @@ static int end_display_alignment(struct hstex_engine *engine, char *error,
 {
     struct hstex_vbox_builder *rows = engine->display_rows;
     engine->display_rows = NULL;
+    /* The outer list the display stood in was named here for the rows to
+       go into; it is often a box being built in a call of its own, which
+       returns when the display is over. Left named, it was walked as a root
+       at the next compaction, pointing into a stack frame that was gone:
+       amsldoc died at page nine. */
+    engine->display_outer_vbox = NULL;
     engine->display_alignment = false;
     engine->mode = HSTEX_MODE_VERTICAL;
     engine->inner_mode = false;
@@ -49115,6 +49184,7 @@ static int execute_alignment_inner(struct hstex_engine *engine, bool vertical,
             free(engine->display_rows->node_identifiers);
             free(engine->display_rows);
             engine->display_rows = NULL;
+            engine->display_outer_vbox = NULL;
         }
     }
     return status;
@@ -53225,9 +53295,21 @@ handle_token:
             !engine->alignment_token_from_template &&
             engine->alignment_entry != NULL &&
             !engine->alignment_entry->after_pushed;
+        /* A control sequence \\let to a letter or other character is that
+           character to the main loop, and stays in the word it follows:
+           the reference kerns `A\\v' with \\let\\v=V as it kerns AV, and sets
+           the fi ligature for `f\\i' with \\let\\i=i. csquotes measures its
+           quotation marks against the letter after them that way, and
+           hstex, ending the word at the control sequence, found no kern and
+           set clsguide's quotes 0.83pt wide of the reference. */
+        bool aliased_character =
+            meaning->command == HSTEX_COMMAND_TOKEN_ALIAS &&
+            hstex_token_is_character(meaning->value.token) &&
+            (token_is_category(meaning->value.token, HSTEX_CAT_LETTER) ||
+             token_is_category(meaning->value.token, HSTEX_CAT_OTHER));
         if (engine->has_pending_character && !ends_an_entry &&
             meaning->command != HSTEX_COMMAND_CHAR_GIVEN &&
-            meaning->command != HSTEX_COMMAND_CHAR &&
+            meaning->command != HSTEX_COMMAND_CHAR && !aliased_character &&
             /* \\noboundary ends the word itself, and without the character
                beyond its right end, so it must not be ended here first. */
             meaning->command != HSTEX_COMMAND_NO_BOUNDARY &&

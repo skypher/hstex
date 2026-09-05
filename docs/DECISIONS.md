@@ -1659,3 +1659,103 @@ validated and skipped, matching the PDF backend's existing treatment of
 ordinary DVI `\special` nodes. Recursive virtual fonts are supported with a
 fixed defensive depth limit, and malformed command streams fail rather than
 falling through to PK lookup.
+
+## The text position in the file
+
+Black-box pdfTeX 1.40.25 probes typeset centred lines, leaders and
+stretched and shrunk glue in cmr12, cmr10 scaled 1200, cmbx12 at 17.28pt and
+cmr10 at 10.95pt, and the `TJ` arrays were read back. The reference states a
+font's size in big points to four decimals, and every number it writes into
+a text array -- the corrections between glyphs and the widths its pen moves
+by -- is worked out from the whole scaled points that stated size means, not
+from the size the engine has. A correction is the difference between the
+engine's position and the pen in thousandths of the stated size, rounded
+half away from zero, and the pen then moves by what the printed number
+stands for, so two glue nodes of the same size can print as -250 and -251.
+A `Td` names the step from where the current text array began, to the
+file's decimals, and the line's position moves by what the printed step
+stands for. Public pdfTeX source (`pdftex.web` at the TeX Live 2023.0 tag,
+`divide_scaled`, `adv_char_width`, `pdf_begin_string`, `pdf_set_textmatrix`
+and `pdf_use_font`) was consulted to confirm the rounding and the order of
+the operations; HSTeX carries out the same integer arithmetic. Every text
+array in the four probes is byte-identical.
+
+## The width a bitmap glyph moves the pen
+
+When a font has no map entry the reference sets it as a Type 3 font drawn
+from PK bitmaps, and its pen then moves by a different rule. Measured with
+ecrm0800 as a bitmap font (cm-super not installed), for every lowercase
+letter at one-scaled-point steps: after `o` a `\kern` of 290sp is the first
+to draw a correction where the scalable rule predicts 254sp, after `n` 298
+against 246, after `i` 241 against 282 (3146 text arrays across the
+probes). Public source consulted: `pdftex.web` (TeX Live 2023.0,
+`adv_char_width`, the branch for fonts that are not scalable) and
+`writet3.c` (`get_pk_font_scale`, `pk_char_width`, `get_pk_char_width`, and
+the printing of the Type 3 `/FontMatrix` and `/Widths`). The unit of the
+Type 3 font is 72 over the resolution to five decimals past the file's,
+divided by the stated size in big points to the file's decimals plus two,
+rounded to a whole hundred-thousandth; a glyph's stated width is its width
+over the stated size to seven decimals, over that unit, rounded to a whole
+hundredth; and the pen moves by the unit times the stated width times the
+stated size, multiplied in floating point and cut to whole scaled points
+towards zero. HSTeX writes the font matrix and the widths from the same
+chain (its own derivation agreed with the reference on every font tried,
+but the reference's intermediate roundings are what it now follows) and
+moves its pen by that rule. Whether a font is a bitmap font is settled from
+the map the first time a glyph of it is set, as the reference settles it
+when it first uses the font; a checkpoint does not carry the answer and a
+resumed run settles it again. With this the 3146 probe arrays are
+byte-identical, and clsguide's 37 and fntguide's 45 pages agree with the
+reference.
+
+## Let-bound characters inside a word
+
+Black-box pdfTeX: with `\let\v=V`, `\hbox{A\v}` is 13.8889pt wide, as `AV`
+is, and with `\let\i=i`, `\hbox{f\i}` is 5.55557pt wide, as `fi` is; in
+ecrm1000 `\char16\x` with `\let\x=g` is 8.3313pt like `\char16 g`. A control
+sequence `\let` to a letter or other character is that character to the main
+loop and stays in the word it follows, kerned and ligated with what came
+before, and it is not traced on its own, as the reference's lookahead never
+returns to the big switch for it. HSTeX ended the word at the control
+sequence and measured 15.0pt, 5.83336pt and 9.16443pt. csquotes measures
+its quotation marks against the letter after them this way (`\csq@fixkern`
+puts the letter in `\csq@kernchar@ii` by `\futurelet`), so every opening
+quotation mark in clsguide stood 0.83pt wide of the reference's.
+
+## Box dimension assignments
+
+Black-box pdfTeX: `\setbox0\hbox{x}{\wd0=50pt}\the\wd0` is 50pt after the
+group has ended. `\wd`, `\ht` and `\dp` alter the box where it stands and
+are not undone when the group ends (TeX §1247 writes the dimension into the
+box node and saves nothing), a `\global` prefix changes nothing, and an
+assignment to a void box does nothing. HSTeX had restored the dimension at
+the end of the group; fntguide, which sets table widths this way, came out
+43 pages against the reference's 45.
+
+## The outer list of a display alignment
+
+amsldoc died at its ninth page. The vertical list a display alignment
+stands in was remembered by a pointer into the frame of the routine that
+built it, and once the display had ended the pointer stood on memory that
+had been reused; the next display read it. The pointer is cleared with the
+display's rows when the display ends, and the garbage roots consult it
+only while a display alignment is open. amsldoc's 44 pages agree with the
+reference.
+
+## The fixpoint over every state file
+
+The driver's pass loop compared the `.aux` a pass wrote with the one before
+it. A document whose table of contents was still moving while its `.aux`
+had settled stopped a pass early: clsguide's contents were a page behind.
+The loop now folds every file a pass leaves for the next -- `.aux`, `.toc`,
+`.lof`, `.lot`, `.out`, `.bbl`, `.ind`, `.nav`, `.snm`, `.brf`, `.gls`,
+`.glo` -- present or absent, into one reading, and a set left by a previous
+run counts as the reading before the first pass, so a settled document runs
+one pass (measured through the driver on testmath: 297ms for two passes
+where one is 150). A warm run resumes checkpoints taken against those files
+and its chapters read the `.toc` from disk as they go, so it stands only
+while the files are the ones the cache was built against: clsguide with its
+`.aux` and `.toc` removed had resumed the page-zero checkpoint, read an
+empty table of contents, and come back a page short after the one pass a
+settled document gets. When they have moved the run goes cold and to the
+fixpoint.
