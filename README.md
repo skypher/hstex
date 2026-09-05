@@ -18,7 +18,7 @@ already supported.
 | Strict corpus | 17/17 digest-pinned documents agree with the reference gates; 338 pages and 20,741 source lines |
 | Adversarial corpus | All six pinned stress cases agree across 98 pages; CI runs the suite strictly |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, both strict document corpora, and the corpus through `hstex-pdflatex` |
-| Measured performance | 3.26× median and 2.26× aggregate lower wall time than pdfTeX over the release corpus, faster on every document, and lower peak RSS on every document ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
+| Measured performance | 3.26× median and 2.26× aggregate lower wall time than pdfTeX over the release corpus, faster on every document, and lower peak RSS on every document; a 116-page microtype paper outside the corpus rebuilds warm in 306 ms against the reference's 1208 ms ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract; not met |
 | First release target | Linux x86-64 |
 

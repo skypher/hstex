@@ -131,6 +131,32 @@ preamble ("A settled document is one pass, and warm on its second run").
 The warm run of `amsldoc` runs `makeindex` through `\write18` as the
 reference does, in the same directory.
 
+### A long document outside the corpus
+
+The same warm-path measurement was taken, in a sitting of its own, on a
+116-page paper that is not in the corpus: an `amsart` article at 11pt in
+Palatino (`mathpazo`, `helvet`), with `microtype` -- so with font expansion
+and character protrusion on -- `hyperref`, `cleveref`, `mathtools`,
+`enumitem` and `booktabs`; 368 KB of source in 8,503 lines. The engine was
+`hstex` at `6ebb701`, built by `tools/build-pgo.sh` as above; the reference
+the same pdfTeX; the machine the one above, load average 0.93, 0.79, 0.47
+at the start. The reference was settled to its fixpoint (three passes)
+before the timed rebuilds; the HSTeX cold run built the document to its
+fixpoint and left the checkpoint cache the warm runs resume.
+
+| Document | Reference | HSTeX cold | HSTeX warm | Warm speedup | Agreement |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 116-page paper | 1207.6 ms | 2564.7 ms | 306.2 ms | 3.94× | agrees |
+
+Individual runs, in milliseconds: reference 1207.6, 1197.6, 1202.3, 1249.3,
+1197.1, 1216.8, 1237.8; HSTeX warm 299.6, 309.1, 307.0, 298.1, 306.2, 309.2,
+302.3. The warm output agrees with the reference on all nine semantic
+checks of `tests/corpus/compare-pdf.py`, including every font resource
+name on every page; the same document set in one process agrees as well.
+The paper is not published with the corpus, so this measurement cannot be
+repeated from the repository; it is reported for the size of document the
+corpus does not reach.
+
 ## Correctness at the same tree
 
 Both strict corpora agree with the reference: `tests/corpus/run-corpus.sh
