@@ -1065,6 +1065,13 @@ int main(int argument_count, char **arguments)
     if (engine == NULL || engine[0] == '\0') {
         beside = engine_beside(arguments[0]);
         engine = beside != NULL ? beside : "hstex";
+    } else if (strchr(engine, '/') != NULL) {
+        /* The engine is run from the format's directory as well as from
+           this one, so a path relative to here is made absolute first. */
+        beside = absolute_path(engine, error, sizeof(error));
+        if (beside != NULL) {
+            engine = beside;
+        }
     }
     char *format = NULL;
     if (build_or_load_format(engine, absolute_latex, cache, rebuild,

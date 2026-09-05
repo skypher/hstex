@@ -3756,6 +3756,18 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->job_name);
     free(engine->texmf_trees);
     engine->texmf_trees = NULL;
+    if (engine->format_mapping != NULL) {
+        if (!engine->format_mapping_shared) {
+            hstex_input_close(engine->format_mapping);
+        }
+        free(engine->format_mapping);
+        engine->format_mapping = NULL;
+    }
+    if (engine->checkpoint_mapping != NULL) {
+        hstex_input_close(engine->checkpoint_mapping);
+        free(engine->checkpoint_mapping);
+        engine->checkpoint_mapping = NULL;
+    }
     free(engine->shell_escape_commands);
     free(engine->pdf_trailer_id_seed);
     hstex_lexical_state_destroy(&engine->lexical_state);
@@ -5460,7 +5472,7 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
     }
     size_t consumed = 0U;
     if (hstex_engine_format_from_buffer(engine, raw, raw_length, &consumed,
-                                        error, error_capacity) != 0) {
+                                        true, error, error_capacity) != 0) {
         (void)fclose(in);
         return -1;
     }
@@ -5691,10 +5703,23 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
         return -1;
     }
     (void)fclose(in);
-    if (mapping.storage != HSTEX_INPUT_STORAGE_NONE) {
-        hstex_input_close(&mapping);
-    } else {
-        free(raw);
+    /* The bodies of the definitions read lie in these bytes still, so they
+       are the engine's now, for as long as it is. */
+    struct hstex_input *kept = malloc(sizeof(*kept));
+    if (kept != NULL) {
+        if (mapping.storage != HSTEX_INPUT_STORAGE_NONE) {
+            *kept = mapping;
+        } else {
+            memset(kept, 0, sizeof(*kept));
+            kept->data = raw;
+            kept->length = raw_length;
+            kept->storage = HSTEX_INPUT_STORAGE_OWNED;
+        }
+        if (engine->checkpoint_mapping != NULL) {
+            hstex_input_close(engine->checkpoint_mapping);
+            free(engine->checkpoint_mapping);
+        }
+        engine->checkpoint_mapping = kept;
     }
     engine->active_vbox_builder = engine->contribution_builder;
     engine->active_hbox_builder =

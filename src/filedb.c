@@ -710,3 +710,152 @@ const char *hstex_file_db_lookup(const struct hstex_file_db *database,
     }
     return found;
 }
+
+/* THE DATABASE AS AN IMAGE. Building it costs a run five milliseconds --
+   reading and hashing forty thousand lines of ls-R -- and it is the same
+   every run of the same installation, which is what a format already stands
+   for. So a format carries it built: eight words -- a tag, the width of an
+   entry, the slot count, the entry count, the byte count, the stamp, the
+   length of the tree list, and zero -- then the tree list, the slots, the
+   entries and the bytes, each beginning at a multiple of eight. Nothing in
+   it is a pointer, so a run points the database at the bytes where the
+   format lies and pays for the pages a lookup touches and no others. */
+#define HSTEX_FILE_DB_IMAGE_TAG UINT64_C(0x3162646c69663a58)
+#define HSTEX_FILE_DB_IMAGE_WORDS 8U
+
+static size_t image_align(size_t at)
+{
+    return (at + 7U) & ~(size_t)7U;
+}
+
+uint8_t *hstex_file_db_image(const char *trees, uint64_t stamp,
+                             size_t *length)
+{
+    const struct hstex_file_db *database = hstex_file_db_shared();
+    if (database == NULL || trees == NULL || trees[0] == '\0' ||
+        length == NULL || database->slot_capacity == 0U) {
+        return NULL;
+    }
+    size_t trees_length = strlen(trees) + 1U;
+    size_t head = HSTEX_FILE_DB_IMAGE_WORDS * sizeof(uint64_t);
+    size_t at_slots = image_align(head + trees_length);
+    size_t at_entries =
+        image_align(at_slots + database->slot_capacity * sizeof(uint32_t));
+    size_t at_bytes =
+        at_entries + database->entry_count * sizeof(*database->entries);
+    size_t total = image_align(at_bytes + database->byte_count);
+    uint8_t *image = calloc(total, 1U);
+    if (image == NULL) {
+        return NULL;
+    }
+    uint64_t words[HSTEX_FILE_DB_IMAGE_WORDS] = {
+        HSTEX_FILE_DB_IMAGE_TAG,
+        (uint64_t)sizeof(*database->entries),
+        (uint64_t)database->slot_capacity,
+        (uint64_t)database->entry_count,
+        (uint64_t)database->byte_count,
+        stamp,
+        (uint64_t)trees_length,
+        0U,
+    };
+    memcpy(image, words, sizeof(words));
+    memcpy(image + head, trees, trees_length);
+    memcpy(image + at_slots, database->slots,
+           database->slot_capacity * sizeof(uint32_t));
+    memcpy(image + at_entries, database->entries,
+           database->entry_count * sizeof(*database->entries));
+    memcpy(image + at_bytes, database->bytes, database->byte_count);
+    *length = total;
+    return image;
+}
+
+bool hstex_file_db_adopt_image(const uint8_t *image, size_t length,
+                               bool borrowed)
+{
+    size_t head = HSTEX_FILE_DB_IMAGE_WORDS * sizeof(uint64_t);
+    if (image == NULL || length < head || ((uintptr_t)image & 7U) != 0U ||
+        !environment_is_plain()) {
+        return false;
+    }
+    uint64_t words[HSTEX_FILE_DB_IMAGE_WORDS];
+    memcpy(words, image, sizeof(words));
+    if (words[0] != HSTEX_FILE_DB_IMAGE_TAG ||
+        words[1] != (uint64_t)sizeof(struct hstex_file_entry) ||
+        words[2] == 0U || (words[2] & (words[2] - 1U)) != 0U ||
+        words[3] == 0U || words[6] == 0U ||
+        words[2] > SIZE_MAX / 8U || words[3] > SIZE_MAX / 64U ||
+        words[4] > SIZE_MAX / 2U || words[6] > length - head) {
+        return false;
+    }
+    size_t slot_capacity = (size_t)words[2];
+    size_t entry_count = (size_t)words[3];
+    size_t byte_count = (size_t)words[4];
+    size_t trees_length = (size_t)words[6];
+    const char *trees = (const char *)image + head;
+    if (trees[trees_length - 1U] != '\0') {
+        return false;
+    }
+    size_t at_slots = image_align(head + trees_length);
+    size_t at_entries =
+        image_align(at_slots + slot_capacity * sizeof(uint32_t));
+    size_t at_bytes =
+        at_entries + entry_count * sizeof(struct hstex_file_entry);
+    if (at_entries < at_slots || at_bytes < at_entries ||
+        byte_count > length - at_bytes) {
+        return false;
+    }
+    /* Every entry names its bytes; one that does not is not an image. */
+    const struct hstex_file_entry *entries =
+        (const struct hstex_file_entry *)(const void *)(image + at_entries);
+    for (size_t index = 0U; index < entry_count; ++index) {
+        if (entries[index].path >= byte_count ||
+            entries[index].name >= byte_count ||
+            (size_t)entries[index].name_length >
+                byte_count - entries[index].name) {
+            return false;
+        }
+    }
+    int expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&shared_state, &expected, 1,
+                                                 memory_order_acq_rel,
+                                                 memory_order_acquire)) {
+        return false;
+    }
+    /* The image describes the trees as they were when the format was
+       built; the lists on disk may have moved on since, and then the
+       image is not taken and the lists are read as they always were. */
+    if (hstex_file_db_trees_stamp(trees) != words[5]) {
+        atomic_store_explicit(&shared_state, 0, memory_order_release);
+        return false;
+    }
+    const uint8_t *base = image;
+    if (!borrowed) {
+        size_t total = at_bytes + byte_count;
+        uint8_t *copy = malloc(total);
+        if (copy == NULL) {
+            atomic_store_explicit(&shared_state, 0, memory_order_release);
+            return false;
+        }
+        memcpy(copy, image, total);
+        base = copy;
+    }
+    /* Nothing here writes to the database once it is built, so pointing
+       it at bytes that cannot be written is sound; the cast only says so
+       to the compiler. */
+    shared_database.slots = (uint32_t *)(uintptr_t)(base + at_slots);
+    shared_database.slot_capacity = slot_capacity;
+    shared_database.entries =
+        (struct hstex_file_entry *)(uintptr_t)(base + at_entries);
+    shared_database.entry_count = entry_count;
+    shared_database.entry_capacity = entry_count;
+    shared_database.bytes = (uint8_t *)(uintptr_t)(base + at_bytes);
+    shared_database.byte_count = byte_count;
+    shared_database.byte_capacity = byte_count;
+    free(shared_trees);
+    shared_trees = strdup(trees);
+    free(offered_trees);
+    offered_trees = NULL;
+    shared_usable = true;
+    atomic_store_explicit(&shared_state, 2, memory_order_release);
+    return true;
+}

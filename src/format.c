@@ -45,8 +45,13 @@ struct format_stream {
     const uint8_t *bytes;
     size_t length;
     size_t at;
+    /* How much has been written, so that what needs aligning can be. */
+    size_t written;
     bool writing;
     bool failed;
+    /* Reading, leave the bodies of definitions where they lie in `bytes'
+       rather than copying them out: the bytes outlive the engine. */
+    bool in_place;
 };
 
 static void transfer(struct format_stream *stream, void *value, size_t length)
@@ -58,6 +63,7 @@ static void transfer(struct format_stream *stream, void *value, size_t length)
         if (fwrite(value, 1U, length, stream->file) != length) {
             stream->failed = true;
         }
+        stream->written += length;
         return;
     }
     if (length > stream->length - stream->at) {
@@ -309,14 +315,44 @@ static void *body_take(struct hstex_engine *engine, size_t bytes)
    cannot -- the block could not be grown -- it is asked for the way every
    other body read from a format used to be, and the record is not told it
    borrowed anything, so it gives that one back as it always did. */
+/* A body begins at a multiple of a token's width in the file, so that a run
+   reading the file where it lies can point at it. The count before it is
+   wider than a token, so what precedes a body settles nothing about where
+   it starts; the pad is written and skipped by position in the stream,
+   which both sides count the same way. */
+static void transfer_pad_tokens(struct format_stream *stream)
+{
+    if (stream->failed) {
+        return;
+    }
+    size_t at = stream->writing ? stream->written : stream->at;
+    size_t pad = (sizeof(hstex_token) - at % sizeof(hstex_token)) %
+                 sizeof(hstex_token);
+    if (pad == 0U) {
+        return;
+    }
+    if (stream->writing) {
+        uint8_t zeros[sizeof(hstex_token)] = {0};
+        transfer(stream, zeros, pad);
+        return;
+    }
+    if (pad > stream->length - stream->at) {
+        stream->failed = true;
+        return;
+    }
+    stream->at += pad;
+}
+
 static void transfer_body(struct format_stream *stream,
                           struct hstex_engine *engine, hstex_token **tokens,
                           size_t *count, uint8_t *borrowed, uint8_t bit)
 {
     if (stream->writing) {
-        void *base = (void *)*tokens;
-        transfer_array(stream, &base, count, NULL, sizeof(**tokens), false);
-        *tokens = base;
+        TRANSFER_VALUE(stream, *count);
+        if (*count != 0U) {
+            transfer_pad_tokens(stream);
+            transfer(stream, *tokens, *count * sizeof(**tokens));
+        }
         return;
     }
     TRANSFER_VALUE(stream, *count);
@@ -332,7 +368,23 @@ static void transfer_body(struct format_stream *stream,
         stream->failed = true;
         return;
     }
+    transfer_pad_tokens(stream);
     size_t bytes = *count * sizeof(**tokens);
+    if (stream->failed || bytes > stream->length - stream->at) {
+        stream->failed = true;
+        return;
+    }
+    /* WHERE IT LIES. A run that keeps the file mapped needs no copy of a
+       body: it is a run of tokens in the file exactly as it is in memory,
+       and nothing writes to a body once it is defined. The record is told
+       it borrowed the body, as it is for one cut from a block, and gives
+       it back to no one. Only the pages a run expands are ever read in. */
+    if (stream->in_place) {
+        *tokens = (hstex_token *)(uintptr_t)(stream->bytes + stream->at);
+        stream->at += bytes;
+        *borrowed = (uint8_t)(*borrowed | bit);
+        return;
+    }
     void *room = body_take(engine, bytes);
     if (room != NULL) {
         *borrowed = (uint8_t)(*borrowed | bit);
@@ -776,7 +828,38 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
              sizeof(hstex_format_magic));
     uint64_t layout = hstex_format_layout();
     transfer(&stream, &layout, sizeof(layout));
+    /* Where the filename database begins, filled in once it is written;
+       zero where the format carries none. */
+    long trailer_word = ftell(file);
+    uint64_t trailer_at = 0U;
+    transfer(&stream, &trailer_at, sizeof(trailer_at));
     transfer_format(&stream, engine);
+    if (!stream.failed && trailer_word >= 0) {
+        size_t image_length = 0U;
+        uint8_t *image = hstex_file_db_image(
+            engine->texmf_trees, engine->texmf_trees_stamp, &image_length);
+        if (image != NULL) {
+            long here = ftell(file);
+            while (here >= 0 && here % 8 != 0) {
+                if (fputc(0, file) == EOF) {
+                    here = -1;
+                    break;
+                }
+                ++here;
+            }
+            if (here > 0) {
+                trailer_at = (uint64_t)here;
+                transfer(&stream, image, image_length);
+                if (!stream.failed &&
+                    (fseek(file, trailer_word, SEEK_SET) != 0 ||
+                     fwrite(&trailer_at, sizeof(trailer_at), 1U, file) !=
+                         1U)) {
+                    stream.failed = true;
+                }
+            }
+            free(image);
+        }
+    }
     if (fclose(file) != 0 || stream.failed) {
         return format_error(error, error_capacity, "cannot write %s", path);
     }
@@ -796,14 +879,16 @@ int hstex_engine_format_to_file(struct hstex_engine *engine, FILE *file)
              sizeof(hstex_format_magic));
     uint64_t layout = hstex_format_layout();
     transfer(&stream, &layout, sizeof(layout));
+    uint64_t trailer_at = 0U;
+    transfer(&stream, &trailer_at, sizeof(trailer_at));
     transfer_format(&stream, engine);
     return stream.failed ? -1 : 0;
 }
 
 int hstex_engine_format_from_buffer(struct hstex_engine *engine,
                                     const uint8_t *bytes, size_t length,
-                                    size_t *consumed, char *error,
-                                    size_t error_capacity)
+                                    size_t *consumed, bool in_place,
+                                    char *error, size_t error_capacity)
 {
     if (engine == NULL || bytes == NULL) {
         return format_error(error, error_capacity, "invalid format buffer");
@@ -811,6 +896,8 @@ int hstex_engine_format_from_buffer(struct hstex_engine *engine,
     struct format_stream stream = {0};
     stream.bytes = bytes;
     stream.length = length;
+    stream.in_place =
+        in_place && ((uintptr_t)bytes % sizeof(hstex_token)) == 0U;
     char magic[sizeof(hstex_format_magic)];
     transfer(&stream, magic, sizeof(magic));
     if (stream.failed ||
@@ -825,6 +912,8 @@ int hstex_engine_format_from_buffer(struct hstex_engine *engine,
                             "checkpoint was written by a build laid out "
                             "differently");
     }
+    uint64_t trailer_at = 0U;
+    transfer(&stream, &trailer_at, sizeof(trailer_at));
     transfer_format(&stream, engine);
     if (stream.failed) {
         return format_error(error, error_capacity, "corrupt checkpoint format");
@@ -834,6 +923,42 @@ int hstex_engine_format_from_buffer(struct hstex_engine *engine,
     }
     hstex_file_db_offer_trees(engine->texmf_trees, engine->texmf_trees_stamp);
     return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
+}
+
+/* The filename database a format carries, taken where it lies. Taken, the
+   mapping is the engine's for the rest of the run; not taken -- no trailer,
+   a stamp the trees on disk no longer match, a database already built --
+   the mapping is let go here. */
+static bool adopt_carried_files(const struct hstex_input *mapped,
+                                uint64_t trailer_at)
+{
+    return trailer_at != 0U && trailer_at % 8U == 0U &&
+           trailer_at < mapped->length &&
+           hstex_file_db_adopt_image(
+               (const uint8_t *)mapped->data + trailer_at,
+               mapped->length - (size_t)trailer_at, true);
+}
+
+/* The mapping is the engine's from here on; taken by the database as well,
+   it is the process's, and the engine does not unmap it. */
+static void keep_mapping(struct hstex_engine *engine,
+                         const struct hstex_input *mapped, bool shared)
+{
+    struct hstex_input *kept = malloc(sizeof(*kept));
+    if (kept == NULL) {
+        /* Nowhere to keep the record of it: the pages stay mapped for the
+           process, which is what everything pointing into them needs. */
+        return;
+    }
+    *kept = *mapped;
+    if (engine->format_mapping != NULL) {
+        if (!engine->format_mapping_shared) {
+            hstex_input_close(engine->format_mapping);
+        }
+        free(engine->format_mapping);
+    }
+    engine->format_mapping = kept;
+    engine->format_mapping_shared = shared;
 }
 
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
@@ -856,6 +981,7 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
     struct format_stream stream = {0};
     stream.bytes = mapped.data;
     stream.length = mapped.length;
+    stream.in_place = ((uintptr_t)mapped.data % sizeof(hstex_token)) == 0U;
     char magic[sizeof(hstex_format_magic)];
     transfer(&stream, magic, sizeof(magic));
     if (stream.failed || memcmp(magic, hstex_format_magic, sizeof(magic)) != 0) {
@@ -872,6 +998,8 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                             "out differently; build the format again",
                             path);
     }
+    uint64_t trailer_at = 0U;
+    transfer(&stream, &trailer_at, sizeof(trailer_at));
     static const enum hstex_integer_parameter process_clock[] = {
         HSTEX_INTEGER_TIME,
         HSTEX_INTEGER_DAY,
@@ -893,13 +1021,47 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
         engine->integer_parameter_levels[process_clock[index]] =
             clock_levels[index];
     }
-    hstex_input_close(&mapped);
     if (stream.failed) {
+        /* Whatever was read points into this mapping; the engine is done
+           for, and its destruction gives back nothing that was borrowed. */
+        hstex_input_close(&mapped);
         return format_error(error, error_capacity, "%s is not a format",
                                path);
     }
+    keep_mapping(engine, &mapped, adopt_carried_files(&mapped, trailer_at));
     /* What this format was told about the installation, offered to the
        lookup before the first name is asked for. */
     hstex_file_db_offer_trees(engine->texmf_trees, engine->texmf_trees_stamp);
     return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
+}
+
+int hstex_engine_adopt_format_files(struct hstex_engine *engine,
+                                    const char *path)
+{
+    if (engine == NULL || path == NULL || engine->format_mapping != NULL) {
+        return -1;
+    }
+    struct hstex_input mapped;
+    char opened[256];
+    if (hstex_input_open(path, &mapped, opened, sizeof(opened)) != 0) {
+        return -1;
+    }
+    struct format_stream stream = {0};
+    stream.bytes = mapped.data;
+    stream.length = mapped.length;
+    char magic[sizeof(hstex_format_magic)];
+    transfer(&stream, magic, sizeof(magic));
+    uint64_t layout = 0U;
+    transfer(&stream, &layout, sizeof(layout));
+    uint64_t trailer_at = 0U;
+    transfer(&stream, &trailer_at, sizeof(trailer_at));
+    if (stream.failed ||
+        memcmp(magic, hstex_format_magic, sizeof(magic)) != 0 ||
+        layout != hstex_format_layout() ||
+        !adopt_carried_files(&mapped, trailer_at)) {
+        hstex_input_close(&mapped);
+        return -1;
+    }
+    keep_mapping(engine, &mapped, true);
+    return 0;
 }

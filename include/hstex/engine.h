@@ -1784,6 +1784,8 @@ enum hstex_interaction_mode {
     HSTEX_INTERACTION_ERROR_STOP,
 };
 
+struct hstex_input;
+
 struct hstex_engine {
     struct hstex_lexical_state lexical_state;
     struct hstex_source_stack sources;
@@ -1933,6 +1935,14 @@ struct hstex_engine {
        src/filedb.c. */
     char *texmf_trees;
     uint64_t texmf_trees_stamp;
+    /* The format this run reads, kept mapped for as long as the run uses
+       what lies in it: the bodies of its definitions, and the filename
+       database it carries. The database is the process's and not this
+       engine's, so a mapping it was taken from outlives the engine. */
+    struct hstex_input *format_mapping;
+    bool format_mapping_shared;
+    /* The checkpoint this run resumed from, kept for the same reason. */
+    struct hstex_input *checkpoint_mapping;
     /* An explicitly supplied \pdftrailerid seed.  A set, empty seed omits
        the ID; an unset seed selects pdfTeX's creation-date/output-name
        default. */
@@ -2673,7 +2683,7 @@ void hstex_engine_destroy(struct hstex_engine *engine);
    cannot read then lies under a key that build never looks in, and is
    rebuilt rather than offered and refused. See docs/DECISIONS.md,
    a-cached-format-a-build-cannot-read. */
-#define HSTEX_FORMAT_MAGIC "HSTEX format 3\n"
+#define HSTEX_FORMAT_MAGIC "HSTEX format 5\n"
 
 static inline uint64_t hstex_format_layout(void)
 {
@@ -2713,6 +2723,11 @@ int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
 /* Start the file finder now rather than at its first question, so that its
    start-up overlaps whatever is read next. */
 void hstex_engine_prestart_finder(struct hstex_engine *engine);
+/* Take the filename database a format carries without reading the rest of
+   it, for a run that starts from a checkpoint instead. Advisory: a run that
+   cannot builds the database as it always did. */
+int hstex_engine_adopt_format_files(struct hstex_engine *engine,
+                                    const char *path);
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                              char *error, size_t error_capacity);
 /* The whole run to disk at a page boundary, and a fresh engine taken up from

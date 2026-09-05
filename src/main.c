@@ -398,6 +398,9 @@ static int run_document_from_format(const char *format_file,
        already obeyed. Where taking it up fails for any reason the run
        starts from the format as it always did, so a stale or unreadable
        file costs the preamble and never the document. */
+    /* A chunk this run parks starts from a checkpoint, and takes the
+       filename database from the format by this name. */
+    (void)setenv("HSTEX_FORMAT_FILE", format_file, 1);
     /* The finder's start overlaps the format or preamble being read. */
     hstex_engine_prestart_finder(&engine);
     bool resumed = false;
@@ -435,6 +438,7 @@ static int run_document_from_format(const char *format_file,
             hstex_engine_push_input(&engine, aux_name, error, sizeof(error)) ==
                 0) {
             resumed = true;
+            (void)hstex_engine_adopt_format_files(&engine, format_file);
             (void)fprintf(stderr, "hstex: preamble taken up from %s\n",
                           preamble);
         } else {
@@ -514,6 +518,10 @@ static int resume_checkpoint_document(const char *checkpoint_file,
         return 1;
     }
     hstex_engine_prestart_finder(&engine);
+    const char *format_file = getenv("HSTEX_FORMAT_FILE");
+    if (format_file != NULL && format_file[0] != '\0') {
+        (void)hstex_engine_adopt_format_files(&engine, format_file);
+    }
     if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
         hstex_engine_set_output_directory(&engine, output_directory, error,
                                           sizeof(error)) != 0 ||

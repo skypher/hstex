@@ -2,6 +2,7 @@
 #define HSTEX_FILEDB_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 /* The filename databases an installation keeps beside its trees, read in
@@ -42,5 +43,18 @@ uint64_t hstex_file_db_trees_stamp(const char *trees);
    stamp still describes the trees on disk, so a stale list costs a child
    process rather than a wrong answer. Ignored once the database is built. */
 void hstex_file_db_offer_trees(const char *trees, uint64_t stamp);
+
+/* The database as one flat image for a format to carry, with the tree list
+   and stamp it was built from. What it holds is identifiers and offsets, so
+   a run can use it where it lies. NULL where there is no database. */
+uint8_t *hstex_file_db_image(const char *trees, uint64_t stamp,
+                             size_t *length);
+
+/* Take a carried image as the database, where its stamp still describes the
+   trees on disk and nothing has been built yet. Borrowed, the bytes must
+   outlive every lookup; otherwise they are copied. Says whether it was
+   taken. The image must be aligned to eight. */
+bool hstex_file_db_adopt_image(const uint8_t *image, size_t length,
+                               bool borrowed);
 
 #endif

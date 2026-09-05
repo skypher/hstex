@@ -1,6 +1,7 @@
 #ifndef HSTEX_INTERNAL_H
 #define HSTEX_INTERNAL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,9 +27,11 @@ int hstex_rebuild_glyph_unicode_slots(struct hstex_engine *engine,
    them from `bytes` and reports how many bytes it took in `*consumed`. The
    checkpoint keeps its own process clock rather than the reader's. */
 int hstex_engine_format_to_file(struct hstex_engine *engine, FILE *file);
+/* `in_place' leaves the bodies of definitions where they lie in `bytes',
+   which must then outlive the engine. */
 int hstex_engine_format_from_buffer(struct hstex_engine *engine,
                                     const uint8_t *bytes, size_t length,
-                                    size_t *consumed, char *error,
+                                    size_t *consumed, bool in_place, char *error,
                                     size_t error_capacity);
 
 #endif

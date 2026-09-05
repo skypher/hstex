@@ -172,6 +172,10 @@ as a size and residency change, which is what it demonstrably is.
 
 ## Where a body is kept
 
+(Since superseded for a format read from a mapping, whose bodies are
+left where they lie; see what-a-format-carries-built. The block remains
+for a stream that cannot be kept.)
+
 A definition's body is a run of tokens, and the engine keeps runs in free
 lists by length: the room a body is given is the least power of two that
 holds it, never fewer than eight, so that a body can be given back knowing
@@ -617,6 +621,53 @@ beside its own executable when there is one -- `/proc/self/exe` says where
 that is, and where there is no `/proc` the name it was run by does when
 that has a directory in it -- and names the variable when the engine it was
 given cannot be run.
+
+## What a format carries built, and what is read where it lies
+
+The floor of a LaTeX run -- an empty document, engine only -- was 40.7 ms.
+Two of its parts were paid for on every run and were the same on every run
+of the same installation.
+
+THE FILENAME DATABASE, BUILT. The in-process lookup was built from the
+`ls-R` files at the first name asked for: 42,000 lines read and hashed,
+5.5 ms between opening the document and asking for its class. That is what
+a format already stands for -- a format is keyed on the stamp of every
+`ls-R` its trees keep -- so a format now carries the database built, as a
+trailer after everything else, found by an offset in the header. Nothing in
+it is a pointer: slots are identifiers, entries are offsets, and the names
+and paths are one run of bytes, so the run points the database at the bytes
+where the format lies and pays for the pages a lookup touches and no others.
+The trailer carries its own stamp and is taken only while the stamp still
+describes the lists on disk; a run whose installation has moved on reads
+the lists as it always did. Checkpoints carry no trailer -- they are written
+often, and a run resuming one takes the database from the format by name
+instead -- and the driver's chunks are told the format's name in the
+environment for the same reason. The database is the process's and not the
+engine's: the driver compiles a document to its fixpoint in one process
+with an engine per pass, and the first engine's unmapping what the database
+pointed into killed the second. A mapping the database was taken from
+outlives the engine that made it. The format is 3.5 MB longer for the
+trailer, none of which a run reads unless it looks something up.
+
+THE BODIES, WHERE THEY LIE. Every definition's body was copied out of the
+mapped format into a block of the engine's own, 92,000 bodies a run. A body
+is a run of tokens in the file exactly as it is in memory, and nothing
+writes to a body once it is defined, so a run that keeps the format mapped
+points at them instead. Each body is written at a multiple of a token's
+width -- the count before it is wider than a token, so a pad is written and
+skipped by position, which both sides of the stream count the same way --
+and the record is told it borrowed the body, as it was for one cut from a
+block, so it gives it back to no one. A checkpoint's bodies are read the
+same way from the bytes the checkpoint was read from, which the engine now
+keeps. The mapping is read-only, so a write to a body would stop the run
+where it happened; every gate agrees.
+
+WHAT IT CAME TO. The database took the floor from 40.7 ms to 34.0; the
+bodies took 1,300 page faults out of a run and no time out of the floor, so
+the copy was never what the format's 9.5 ms were. Timing the transfer a
+section at a time put 2.7 ms in the definitions -- the record array and a
+count read per body -- and 3.5 ms between the registers and the fonts,
+which is where the next cut is.
 
 ## Reference-internal statistics
 
