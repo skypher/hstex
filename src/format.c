@@ -1,3 +1,6 @@
+/* MAP_ANONYMOUS is hidden by glibc under a strict POSIX request, which the
+   build makes; the default feature set is asked for here as well. */
+#define _DEFAULT_SOURCE 1
 #include "hstex/engine.h"
 
 #include "hstex/borrowed.h"
@@ -5,6 +8,13 @@
 #include "hstex/input.h"
 
 #include <sys/mman.h>
+
+/* BSD and Darwin spell it MAP_ANON, and glibc hides MAP_ANONYMOUS under a
+   strict POSIX request; a system with neither gets its banks zeroed by
+   hand as before. */
+#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
+#define MAP_ANONYMOUS MAP_ANON
+#endif
 #include "internal.h"
 
 #include <stdarg.h>
@@ -200,8 +210,12 @@ static void *bank_map(struct hstex_engine *engine, size_t bytes)
         sizeof(engine->mapped_banks) / sizeof(engine->mapped_banks[0])) {
         return calloc(bytes, 1U);
     }
+#ifdef MAP_ANONYMOUS
     void *bank = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#else
+    void *bank = MAP_FAILED;
+#endif
     if (bank == MAP_FAILED) {
         return calloc(bytes, 1U);
     }
