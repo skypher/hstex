@@ -46,7 +46,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential ninja-build python3-venv \
-            texlive-latex-base texlive-latex-recommended \
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
             texlive-fonts-recommended
           # Ubuntu 22.04 packages meson 0.61, well under the 1.3.0 this
           # project asks for, so meson comes from PyPI on every image.
@@ -192,7 +192,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential curl ninja-build python3-venv \
-            texlive-latex-base texlive-latex-recommended \
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
             texlive-fonts-recommended mupdf-tools poppler-utils
           python3 -m venv "$HOME/meson"
           "$HOME/meson/bin/pip" install --quiet --upgrade meson
