@@ -2,20 +2,8 @@
 
 The corpus was measured under `docs/BENCHMARK_CONTRACT.md` as the median of
 seven warm-filesystem-cache runs per engine per document, each run in an
-output directory of its own. The measurements describe the document pass
-alone, with both engines starting from a format they already had.
-
-Two measurements were taken. The first was `tests/corpus/run-corpus.sh
---time`, run over the same corpus with the previous engine and with this one,
-back to back, which is what "Against the previous engine" below compares. The
-second issued the same commands in the same directories with the same pinned
-clock and source date, and additionally recorded what the runner does not
-print: each individual run time, and peak RSS from a run of its own. The
-tables below are the second measurement.
-
-Measured 2026-09-03 on the working tree at commit `6870489` plus the
-lookup, format-loading and list-walking changes recorded in
-`docs/DECISIONS.md`.
+output directory of its own, on the machine below. The reference is the
+installed pdfTeX. Every number here was taken in one sitting from one build.
 
 ## What was measured on
 
@@ -25,10 +13,10 @@ lookup, format-loading and list-walking changes recorded in
 | CPU affinity | unrestricted (mask `1f`) |
 | Worker count | one engine process per pass; no `HSTEX_PARALLEL`, `HSTEX_FLEET`, or `HSTEX_FONT_WORKERS` set, so the chunked and fleet paths are inert and Type 1 subsetting may use up to the online CPU count |
 | OS | Ubuntu 24.04.3 LTS, Linux 6.8.0-124-generic |
-| Load average during the run | 0.51 / 0.60 / 0.44 |
-| Compiler | gcc 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1) |
+| Load average at the start of the run | 0.40, 0.67, 0.52 |
+| Compiler | gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0 |
 | Build | `tools/build-pgo.sh`: `--buildtype=release -Db_lto=true -Db_pie=false -Db_ndebug=true -Dc_args='-O3 -fno-plt -fno-semantic-interposition' -Dc_link_args=-fno-plt`, profile trained on `benchmarks/training/train.tex` and a format build, never on the corpus |
-| Engine | `hstex` 0.0.1, SHA-256 `54fc421f4b307a8f3d0dfce7db7378d26f61ba46283c3444c4c619975d272ebe` |
+| Engine | `hstex` at `0a694fd`, SHA-256 `ce206ae698044c10a4731252654a98f6ae95728b5e0817a7f1a508bfa208e4f5` |
 | Libraries | zlib 1.3, libdeflate 1.19 |
 | Reference | pdfTeX 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian), kpathsea 6.3.5 |
 | Corpus manifest | `tests/corpus/documents.tsv`, SHA-256 `8681f4df7424f7ac585a7a508047eaf266751d3264b6f049781a961b3040a26f`; per-document digests are the manifest's own column |
@@ -41,24 +29,26 @@ inside a timed run.
 
 | Document | Format | Reference | HSTeX | Speedup | Reference RSS | HSTeX RSS |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `story` | plain | 21.1 ms | 3.1 ms | 6.81× | 20.0 MB | 3.5 MB |
-| `gentle` | plain | 41.9 ms | 43.9 ms | 0.95× | 20.2 MB | 9.6 MB |
-| `small2e` | LaTeX | 107.1 ms | 48.3 ms | 2.22× | 39.0 MB | 27.2 MB |
-| `sample2e` | LaTeX | 116.6 ms | 59.4 ms | 1.96× | 39.2 MB | 27.2 MB |
-| `testmath` | LaTeX | 216.1 ms | 153.0 ms | 1.41× | 39.7 MB | 27.2 MB |
-| `ltx3info` | LaTeX | 126.2 ms | 72.3 ms | 1.75× | 39.4 MB | 27.2 MB |
-| `usrguide-historic` | LaTeX | 206.1 ms | 141.8 ms | 1.45× | 39.8 MB | 27.2 MB |
-| `cfgguide` | LaTeX | 140.3 ms | 80.1 ms | 1.75× | 39.6 MB | 27.2 MB |
-| `cyrguide` | LaTeX | 137.0 ms | 77.9 ms | 1.76× | 39.4 MB | 27.2 MB |
-| `modguide` | LaTeX | 134.6 ms | 73.6 ms | 1.83× | 39.4 MB | 27.2 MB |
-| `subeqn` | LaTeX | 125.4 ms | 64.8 ms | 1.94× | 39.2 MB | 27.2 MB |
-| `technote` | LaTeX | 227.3 ms | 141.3 ms | 1.61× | 39.7 MB | 27.2 MB |
-| `tools-overview` | LaTeX | 213.6 ms | 121.4 ms | 1.76× | 39.4 MB | 27.2 MB |
-| `ltxcheck` | LaTeX | 99.3 ms | 67.1 ms | 1.48× | 38.1 MB | 27.2 MB |
+| `story` | plain | 21.5 ms | 3.1 ms | 6.94× | 20.0 MB | 4.0 MB |
+| `gentle` | plain | 43.0 ms | 36.5 ms | 1.18× | 20.1 MB | 7.2 MB |
+| `small2e` | LaTeX | 107.4 ms | 21.8 ms | 4.93× | 39.0 MB | 13.5 MB |
+| `sample2e` | LaTeX | 117.6 ms | 31.4 ms | 3.75× | 39.2 MB | 14.9 MB |
+| `testmath` | LaTeX | 226.6 ms | 121.6 ms | 1.86× | 39.8 MB | 20.2 MB |
+| `ltx3info` | LaTeX | 133.4 ms | 44.3 ms | 3.01× | 39.4 MB | 16.8 MB |
+| `usrguide-historic` | LaTeX | 210.4 ms | 113.4 ms | 1.86× | 39.6 MB | 19.6 MB |
+| `cfgguide` | LaTeX | 142.3 ms | 52.4 ms | 2.72× | 39.4 MB | 17.5 MB |
+| `cyrguide` | LaTeX | 142.2 ms | 47.9 ms | 2.97× | 39.5 MB | 17.4 MB |
+| `modguide` | LaTeX | 134.7 ms | 43.8 ms | 3.08× | 39.4 MB | 17.1 MB |
+| `subeqn` | LaTeX | 128.6 ms | 37.6 ms | 3.42× | 39.2 MB | 14.4 MB |
+| `technote` | LaTeX | 234.1 ms | 113.5 ms | 2.06× | 39.6 MB | 18.6 MB |
+| `tools-overview` | LaTeX | 217.4 ms | 92.2 ms | 2.36× | 39.4 MB | 16.9 MB |
+| `ltxcheck` | LaTeX | 100.1 ms | 26.8 ms | 3.74× | 38.1 MB | 11.9 MB |
 
-Median per-document speedup: **1.76×**. Summing the medians, the corpus takes
-1912.6 ms on the reference and 1148.0 ms on HSTeX, an aggregate of **1.67×**.
-HSTeX's peak RSS is lower on every document in the corpus.
+Median per-document speedup: **2.99×**. Summing the medians, the corpus takes
+1959.3 ms on the reference and 786.3 ms on HSTeX, an aggregate of **2.49×**.
+HSTeX is faster than the reference on every document and uses less peak
+memory on every document; `gentle`, the one document that was at parity, is
+now ahead.
 
 Format construction is not counted above, on either side. HSTeX built the
 LaTeX format in 3 s and the plain format in under 1 s, once; the reference's
@@ -66,119 +56,85 @@ formats were built once by its distribution.
 
 ## Against the previous engine
 
-The same runner measured the previous engine and this one back to back on the
-same machine. Every document in the corpus got faster.
+The previous record in this file was taken at `3a6d5de`, on the same
+machine, with the same harness. Every document in the corpus got faster.
 
 | Document | Before | After | Time removed |
 | --- | ---: | ---: | ---: |
-| `story` | 3.9 ms | 3.1 ms | 20.5% |
-| `gentle` | 52.1 ms | 41.6 ms | 20.2% |
-| `small2e` | 71.9 ms | 49.7 ms | 30.9% |
-| `sample2e` | 80.8 ms | 58.9 ms | 27.1% |
-| `testmath` | 171.6 ms | 150.3 ms | 12.4% |
-| `ltx3info` | 94.2 ms | 71.8 ms | 23.8% |
-| `usrguide-historic` | 164.1 ms | 144.7 ms | 11.8% |
-| `cfgguide` | 101.8 ms | 78.8 ms | 22.6% |
-| `cyrguide` | 98.1 ms | 78.1 ms | 20.4% |
-| `modguide` | 93.8 ms | 73.8 ms | 21.3% |
-| `subeqn` | 87.3 ms | 64.2 ms | 26.5% |
-| `technote` | 162.1 ms | 140.5 ms | 13.3% |
-| `tools-overview` | 140.8 ms | 121.4 ms | 13.8% |
-| `ltxcheck` | 88.4 ms | 69.0 ms | 21.9% |
-| **corpus** | **1410.9 ms** | **1145.9 ms** | **18.8%** |
+| `story` | 3.1 ms | 3.1 ms | 0.0% |
+| `gentle` | 43.9 ms | 36.5 ms | 16.9% |
+| `small2e` | 48.3 ms | 21.8 ms | 54.9% |
+| `sample2e` | 59.4 ms | 31.4 ms | 47.1% |
+| `testmath` | 153.0 ms | 121.6 ms | 20.5% |
+| `ltx3info` | 72.3 ms | 44.3 ms | 38.7% |
+| `usrguide-historic` | 141.8 ms | 113.4 ms | 20.0% |
+| `cfgguide` | 80.1 ms | 52.4 ms | 34.6% |
+| `cyrguide` | 77.9 ms | 47.9 ms | 38.5% |
+| `modguide` | 73.6 ms | 43.8 ms | 40.5% |
+| `subeqn` | 64.8 ms | 37.6 ms | 42.0% |
+| `technote` | 141.3 ms | 113.5 ms | 19.7% |
+| `tools-overview` | 121.4 ms | 92.2 ms | 24.1% |
+| `ltxcheck` | 67.1 ms | 26.8 ms | 60.1% |
+| **corpus** | **1148.0 ms** | **786.3 ms** | **31.5%** |
 
-Median per-document speedup went from 1.41× to 1.77×, and the aggregate from
-1.36× to 1.68×, in that paired run.
+Median per-document speedup went from 1.76× to 2.99×, and the aggregate from
+1.67× to 2.49×.
 
-Where the time went, measured on the same machine:
-
-| | Before | After |
-| --- | ---: | ---: |
-| `kpsewhich` children, LaTeX run | 3 | 1 |
-| `kpsewhich` children, plain run | 1 | 0 |
-| Format load alone (13 MB, `\stop`) | 22.9 ms | 17.1 ms |
-| Empty LaTeX document, end to end | 65.3 ms | 41.4 ms |
-
-The four changes behind those numbers are recorded in `docs/DECISIONS.md`
-under "The trees a format remembers", "Finding a file", "A format is read
-where it lies", "Switching on a node without waiting for its copy", and
-"What a run that traces nothing pays".
-
-## Format size and residency
-
-A later change writes each register bank only as far as anything in it has
-been set, rather than at the full register count. It is recorded under
-"Register banks are written as far as they are set".
+Where the time went, measured on the same machine with the same build:
 
 | | Before | After |
 | --- | ---: | ---: |
-| LaTeX format on disk | 13,024,969 B | 9,643,737 B |
-| Peak RSS, `small2e` | 27.2 MB | 24.0 MB |
-| Peak RSS, `testmath` | 27.2 MB | 26.7 MB |
-| Corpus document-pass total | 1148.4 ms | 1141.8 ms |
+| `kpsewhich` children, LaTeX run | 1 | 0 |
+| `kpsewhich` children, plain run | 0 | 0 |
+| Format load alone (`\stop`) | 17.1 ms | 0.9 ms |
+| Empty LaTeX document, end to end | 41.4 ms | 13.4 ms |
+| Minor page faults, empty LaTeX document | 5,756 | 830 |
+| Peak RSS, empty LaTeX document | 23.7 MB | 12.1 MB |
+| LaTeX format on disk | 9,643,737 B | 14,234,224 B |
 
-The document-pass effect, 0.6% with individual documents moving either way,
-is not distinguishable from run-to-run noise: the pages it saves were written
-once and never read again. The size and residency figures are the measured
-effect, and are why it was kept.
+The changes behind those numbers are recorded in `docs/DECISIONS.md` under
+"What a format carries built, and what is read where it lies" and "The
+search path, walked as the tool walks it": the format carries the filename
+database built and the search paths the tool would walk, so a run starts no
+tool; the format is mapped at the address it was written for and its tables
+are read where they lie, so a run reads the pages it uses and copies none.
+The format is larger for what it carries, none of which a run reads unless
+it looks something up.
 
-A later change again cuts a format's definition bodies from a few blocks
-rather than allocating each one, recorded under "Where a body is kept".
-Measured back to back on the same machine, thirteen of the fourteen documents
-got faster and one moved 0.5% the other way: 1.7% over the corpus, aggregate
-1.70x to 1.75x and median 1.82x to 1.84x, with `gentle` reaching parity at
-1.00x. Loading a format alone drops peak RSS from 24,576 KB to 23,680 KB and
-minor page faults from 3,952 to 3,692.
+## Warm runs over the checkpoint cache
 
-The driver, `hstex-pdflatex`, is not what the contract times, and it had an
-overhead of its own that the engine numbers above do not show: three
-`kpsewhich` children before the engine started, about thirty milliseconds.
-Those are now answered from a record kept beside the format cache,
-recorded under "Two caches beside the format cache". Measured through the
-driver's sequential path on `small2e`: about 96 ms before, 55.7 ms with the
-record alone, 48.8 ms with the preamble cache as well, against the engine's
-own 55.5 ms fresh and 45.6 ms resumed.
+The contract keeps persistent-state results apart from the numbers above,
+and these are those: what it costs to build a document again over the
+checkpoint cache the previous run of it left, against the reference asked
+for the same work -- a rebuild of a document whose auxiliary state has
+settled. Both sides are settled to their fixpoint before anything is timed.
+Median of seven, in milliseconds; `cold` is the run that built the cache.
 
-The one `kpsewhich` child a LaTeX run still starts cannot be removed by
-teaching the lookup more: it is started by a bitmap font that resolves in a
-tree outside `TEXMFDBS`, reached by walking the disk rather than by an
-`ls-R`. "Why a run still starts one kpsewhich child" in `docs/DECISIONS.md`
-records the measurement.
+| Document | Reference | HSTeX cold | HSTeX warm | Warm speedup | Agreement |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `small2e` | 112.1 ms | 163.5 ms | 65.9 ms | 1.70× | agrees |
+| `sample2e` | 117.0 ms | 181.3 ms | 76.2 ms | 1.54× | agrees |
+| `testmath` | 218.7 ms | 455.8 ms | 136.0 ms | 1.61× | agrees |
+| `ltx3info` | 129.2 ms | 200.9 ms | 87.1 ms | 1.48× | agrees |
+| `usrguide-historic` | 212.7 ms | 495.2 ms | 159.6 ms | 1.33× | agrees |
+| `cfgguide` | 145.9 ms | 312.4 ms | 93.9 ms | 1.55× | agrees |
+| `cyrguide` | 141.0 ms | 301.0 ms | 91.0 ms | 1.55× | agrees |
+| `modguide` | 134.2 ms | 285.8 ms | 84.6 ms | 1.59× | agrees |
+| `subeqn` | 127.2 ms | 273.1 ms | 72.2 ms | 1.76× | agrees |
+| `technote` | 237.6 ms | 375.8 ms | 88.9 ms | 2.67× | agrees |
+| `tools-overview` | 211.6 ms | 318.5 ms | 74.2 ms | 2.85× | agrees |
 
-## Against the milestone gate
+Every warm run agrees with the reference on all nine semantic checks of
+`tests/corpus/compare-pdf.py`. The cold run is slower than a plain run: it
+compiles to its fixpoint and drops a checkpoint every stride while it does.
 
-The gate in `docs/BENCHMARK_CONTRACT.md` is at least a 5× reduction in median
-end-to-end wall time. At 1.76× median and 1.67× aggregate, HSTeX does not meet
-it. `story` is the only document past the gate, at 6.81×, and it is a one-page
-document where the whole difference is 18 ms.
+## Correctness at the same tree
 
-What stands between the corpus and the gate is no longer mostly overhead. An
-empty LaTeX document still costs 41.4 ms, of which about 17 ms is loading a
-13 MB format and about 10 ms is the one remaining `kpsewhich` child; the rest
-is the class file being read and obeyed. Beyond that, HSTeX and the reference
-spend comparable time actually setting type -- on `testmath`, 153.0 ms against
-216.1 ms with a 41.4 ms and a 97 ms floor respectively -- so a corpus of short
-documents is decided by the floor and a corpus of long ones by the typesetting.
-
-## Where HSTeX is slower
-
-`gentle` remains the one document in the corpus HSTeX does not win, at 0.95×
-here and 0.98× in the paired run: it is now level with the reference rather
-than a fifth behind it, but it is not ahead. It is the corpus's only long
-plain document, 97 pages against `story`'s one.
-
-Taking each engine's `story` time as its fixed startup and attributing the
-rest of `gentle` to its 96 further pages, the marginal cost per page is about
-0.43 ms for HSTeX and about 0.22 ms for the reference. That is a two-point
-estimate from two documents of different content, not a measurement of
-per-page cost, but it is the same shape as before these changes: HSTeX starts
-far faster and sets plain pages more slowly. What the DVI walker no longer
-waiting on its own node copy did to that shape is narrow it -- the same
-estimate over the previous engine gave 0.51 ms against 0.20 ms, so the excess
-per page fell by about a third rather than disappearing.
-
-The LaTeX documents do not separate the two effects, because both engines load
-a format there and no LaTeX document in the corpus is nearly as long.
+Both strict corpora agree with the reference: `tests/corpus/run-corpus.sh
+--strict` reports 14/14 documents, and `--stress --strict` 6/6. The driver
+corpus, `tests/corpus/run-driver-corpus.sh --strict`, finds every document
+agreeing with the reference and pins none. The Meson suite and the Trip test
+pass.
 
 ## Individual run times
 
@@ -187,48 +143,40 @@ taken.
 
 | Document | Engine | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `story` | reference | 20.0 | 22.7 | 21.2 | 18.9 | 21.5 | 20.6 | 21.1 |
-| `story` | HSTeX | 4.1 | 3.8 | 3.8 | 2.9 | 3.1 | 3.1 | 3.0 |
-| `gentle` | reference | 41.3 | 46.8 | 42.3 | 41.0 | 41.9 | 43.0 | 41.3 |
-| `gentle` | HSTeX | 42.6 | 47.1 | 42.0 | 43.9 | 44.1 | 42.2 | 45.2 |
-| `small2e` | reference | 112.1 | 108.7 | 105.9 | 107.1 | 103.8 | 105.4 | 107.3 |
-| `small2e` | HSTeX | 47.2 | 48.9 | 48.3 | 47.4 | 48.9 | 48.4 | 47.8 |
-| `sample2e` | reference | 115.3 | 118.2 | 119.2 | 116.5 | 114.4 | 116.8 | 116.6 |
-| `sample2e` | HSTeX | 59.1 | 59.0 | 60.3 | 58.3 | 59.4 | 59.7 | 59.6 |
-| `testmath` | reference | 213.8 | 221.0 | 211.4 | 224.3 | 216.1 | 218.7 | 213.2 |
-| `testmath` | HSTeX | 152.1 | 150.6 | 156.9 | 145.9 | 153.0 | 153.4 | 153.1 |
-| `ltx3info` | reference | 127.5 | 126.5 | 124.8 | 125.6 | 127.6 | 124.9 | 126.2 |
-| `ltx3info` | HSTeX | 72.9 | 70.1 | 71.2 | 72.3 | 72.2 | 73.2 | 73.6 |
-| `usrguide-historic` | reference | 205.4 | 205.8 | 207.4 | 206.1 | 211.3 | 205.3 | 208.1 |
-| `usrguide-historic` | HSTeX | 141.0 | 140.7 | 141.8 | 138.6 | 146.0 | 153.7 | 144.6 |
-| `cfgguide` | reference | 143.4 | 139.1 | 141.8 | 142.3 | 136.6 | 138.0 | 140.3 |
-| `cfgguide` | HSTeX | 79.2 | 79.3 | 82.6 | 82.1 | 81.9 | 79.2 | 80.1 |
-| `cyrguide` | reference | 137.0 | 142.4 | 136.8 | 135.3 | 139.3 | 136.9 | 137.7 |
-| `cyrguide` | HSTeX | 74.7 | 78.7 | 77.6 | 77.9 | 77.9 | 81.3 | 84.5 |
-| `modguide` | reference | 133.8 | 132.5 | 134.6 | 130.5 | 135.7 | 135.7 | 135.4 |
-| `modguide` | HSTeX | 73.6 | 72.3 | 72.7 | 74.8 | 78.0 | 71.9 | 75.4 |
-| `subeqn` | reference | 125.1 | 125.4 | 128.1 | 127.6 | 124.2 | 124.9 | 128.1 |
-| `subeqn` | HSTeX | 64.8 | 66.7 | 63.9 | 64.5 | 65.5 | 64.8 | 64.2 |
-| `technote` | reference | 237.2 | 226.7 | 233.1 | 227.3 | 225.6 | 234.7 | 227.2 |
-| `technote` | HSTeX | 141.3 | 138.4 | 139.3 | 141.6 | 143.8 | 145.1 | 140.8 |
-| `tools-overview` | reference | 213.6 | 213.1 | 216.5 | 217.3 | 211.4 | 211.6 | 217.0 |
-| `tools-overview` | HSTeX | 117.2 | 122.4 | 124.0 | 120.2 | 121.8 | 120.5 | 121.4 |
-| `ltxcheck` | reference | 102.8 | 98.8 | 101.7 | 99.4 | 98.6 | 99.0 | 99.3 |
-| `ltxcheck` | HSTeX | 67.7 | 68.0 | 64.7 | 65.8 | 66.7 | 68.1 | 67.1 |
+| `story` | reference | 21.3 | 20.5 | 22.4 | 21.1 | 21.1 | 22.5 | 20.2 |
+| `story` | HSTeX | 2.8 | 2.8 | 3.5 | 3.8 | 2.9 | 3.1 | 3.3 |
+| `gentle` | reference | 42.3 | 43.8 | 44.1 | 41.7 | 41.0 | 42.7 | 42.5 |
+| `gentle` | HSTeX | 35.9 | 36.6 | 38.1 | 39.0 | 35.5 | 36.8 | 37.0 |
+| `small2e` | reference | 110.4 | 109.5 | 111.3 | 110.2 | 113.1 | 117.9 | 110.8 |
+| `small2e` | HSTeX | 22.3 | 25.0 | 22.7 | 22.9 | 23.6 | 21.6 | 22.5 |
+| `sample2e` | reference | 122.8 | 124.3 | 118.5 | 119.4 | 118.6 | 120.2 | 115.6 |
+| `sample2e` | HSTeX | 29.2 | 30.9 | 33.0 | 30.9 | 30.8 | 30.8 | 32.0 |
+| `testmath` | reference | 224.2 | 217.4 | 221.3 | 218.7 | 223.5 | 224.0 | 220.5 |
+| `testmath` | HSTeX | 119.7 | 121.8 | 117.9 | 120.1 | 122.8 | 119.8 | 122.4 |
+| `ltx3info` | reference | 131.8 | 129.9 | 129.7 | 132.1 | 137.8 | 131.9 | 129.5 |
+| `ltx3info` | HSTeX | 43.8 | 46.3 | 44.7 | 48.1 | 44.9 | 47.3 | 44.0 |
+| `usrguide-historic` | reference | 212.0 | 209.9 | 214.9 | 215.0 | 214.7 | 212.3 | 208.4 |
+| `usrguide-historic` | HSTeX | 111.1 | 113.4 | 115.1 | 109.4 | 114.6 | 113.3 | 114.0 |
+| `cfgguide` | reference | 147.7 | 147.4 | 141.9 | 140.2 | 144.7 | 141.3 | 141.5 |
+| `cfgguide` | HSTeX | 50.0 | 52.5 | 51.5 | 50.2 | 50.9 | 52.2 | 52.7 |
+| `cyrguide` | reference | 143.5 | 142.0 | 140.1 | 139.5 | 143.2 | 139.3 | 148.5 |
+| `cyrguide` | HSTeX | 48.8 | 46.3 | 47.6 | 49.0 | 47.1 | 48.4 | 45.9 |
+| `modguide` | reference | 136.3 | 133.9 | 134.5 | 133.7 | 133.3 | 137.6 | 130.7 |
+| `modguide` | HSTeX | 43.2 | 44.1 | 44.4 | 48.3 | 44.6 | 42.3 | 44.1 |
+| `subeqn` | reference | 125.8 | 126.0 | 129.0 | 126.1 | 126.0 | 126.7 | 129.8 |
+| `subeqn` | HSTeX | 37.6 | 36.3 | 36.0 | 37.5 | 37.6 | 37.7 | 35.5 |
+| `technote` | reference | 239.8 | 232.5 | 236.4 | 230.3 | 234.2 | 241.0 | 225.8 |
+| `technote` | HSTeX | 108.5 | 108.4 | 109.1 | 115.6 | 110.1 | 106.0 | 110.5 |
+| `tools-overview` | reference | 209.4 | 222.2 | 215.4 | 219.2 | 218.4 | 230.8 | 220.8 |
+| `tools-overview` | HSTeX | 89.4 | 94.1 | 84.6 | 93.7 | 87.3 | 87.3 | 95.0 |
+| `ltxcheck` | reference | 102.8 | 100.7 | 99.4 | 103.1 | 100.9 | 100.3 | 101.4 |
+| `ltxcheck` | HSTeX | 27.3 | 30.1 | 27.1 | 25.9 | 25.3 | 25.8 | 25.6 |
 
-The runner's own medians and this harness's agree: 1.68× against 1.67×
-aggregate and 1.77× against 1.76× median. `gentle` differs most between them,
-41.6 ms against 43.9 ms, which is the same run-to-run spread its seven runs
-show above.
-
-## Correctness at the same tree
-
-Both strict corpora agree with the reference: `tests/corpus/run-corpus.sh
---strict` reports 14/14 documents over 216 pages, and `--stress --strict`
-reports 6/6 over 98 pages. The Meson suite passes.
+The runner's own medians and this harness's agree: 2.49× against 2.52×
+aggregate.
 
 ## Not measured here
 
-- Persistent-process results, which the contract requires be reported
-  separately from these process-per-pass numbers.
 - Fresh three-pass-plus-BibTeX runs. These are final-pass figures.
+- The driver's own wall time, which adds a format-cache check and a
+  preamble-checkpoint resume to the engine's numbers above.

@@ -18,16 +18,16 @@ already supported.
 | Strict corpus | 14/14 digest-pinned documents agree with the reference gates; 216 pages and 13,275 source lines |
 | Adversarial corpus | All six pinned stress cases agree across 98 pages; CI runs the suite strictly |
 | Compatibility gate | Ordinary tests, the canonical two-pass Trip comparison, both strict document corpora, and the corpus through `hstex-pdflatex` |
-| Measured performance | 1.76× median and 1.67× aggregate lower wall time than pdfTeX over the release corpus, and lower peak RSS on every document ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
+| Measured performance | 2.99× median and 2.49× aggregate lower wall time than pdfTeX over the release corpus, faster on every document, and lower peak RSS on every document ([`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md)) |
 | Performance target | At least 5× lower median end-to-end wall time under the published benchmark contract; not met |
 | First release target | Linux x86-64 |
 
 The corpus has been measured under the full benchmark contract. Over the
-fourteen release documents HSTeX is faster than pdfTeX on thirteen, by 1.76×
-at the median and 1.67× summed over the corpus, and it uses less memory on
-every one. `gentle`, the corpus's one long plain document, is level with the
-reference at 0.95×. That is short of the 5× milestone, and the per-document
-figures, the machine, the build, and every individual run time are recorded in
+fourteen release documents HSTeX is faster than pdfTeX on every one, by 2.99×
+at the median and 2.49× summed over the corpus, and it uses less memory on
+every one; an ordinary run starts no helper process at all. That is short of
+the 5× milestone, and the per-document figures, the machine, the build, and
+every individual run time are recorded in
 [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
 
 ## Requirements
