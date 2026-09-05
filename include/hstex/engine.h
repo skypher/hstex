@@ -1943,6 +1943,11 @@ struct hstex_engine {
     bool format_mapping_shared;
     /* The checkpoint this run resumed from, kept for the same reason. */
     struct hstex_input *checkpoint_mapping;
+    /* Register banks a format read took from the kernel already zero, a
+       page at a time as they are set, rather than zeroed by hand. */
+    void *mapped_banks[16];
+    size_t mapped_bank_bytes[16];
+    size_t mapped_bank_count;
     /* An explicitly supplied \pdftrailerid seed.  A set, empty seed omits
        the ID; an unset seed selects pdfTeX's creation-date/output-name
        default. */
@@ -2683,7 +2688,7 @@ void hstex_engine_destroy(struct hstex_engine *engine);
    cannot read then lies under a key that build never looks in, and is
    rebuilt rather than offered and refused. See docs/DECISIONS.md,
    a-cached-format-a-build-cannot-read. */
-#define HSTEX_FORMAT_MAGIC "HSTEX format 5\n"
+#define HSTEX_FORMAT_MAGIC "HSTEX format 7\n"
 
 static inline uint64_t hstex_format_layout(void)
 {

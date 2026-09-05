@@ -662,12 +662,47 @@ same way from the bytes the checkpoint was read from, which the engine now
 keeps. The mapping is read-only, so a write to a body would stop the run
 where it happened; every gate agrees.
 
-WHAT IT CAME TO. The database took the floor from 40.7 ms to 34.0; the
-bodies took 1,300 page faults out of a run and no time out of the floor, so
-the copy was never what the format's 9.5 ms were. Timing the transfer a
-section at a time put 2.7 ms in the definitions -- the record array and a
-count read per body -- and 3.5 ms between the registers and the fonts,
-which is where the next cut is.
+WHAT IT CAME TO, AND WHAT THE REST WAS. The database took the floor from
+40.7 ms to 34.0; the bodies took 1,300 page faults out of a run and no time
+out of the floor, so the copy was never what the format's 9.5 ms were.
+Timing the transfer a section at a time, then profiling with frame
+pointers so that a page fault could be charged to the code that took it,
+found the format read at 42% of the engine's CPU and named the rest:
+
+- The register banks, 2 ms. Twelve `calloc`s of 32,768 registers -- 128 KB
+  to 1.2 MB each -- were carved from heap a run had already used and given
+  back, and zeroed by hand: 66 microseconds per 128 KB, 674 for the bank of
+  boxes. Pinning the allocator's mapping threshold did not move them, since
+  a freed chunk that fits is reused before the threshold is consulted. They
+  are now anonymous mappings of their own, zero from the kernel and paid for
+  a page at a time as registers are set; a prefix of 257 touches three.
+- The fonts, 1.4 ms, of which 1.35 was `\fontdimen`. expl3 keeps its
+  integer arrays as the dimensions of dummy fonts -- `\c__fp_exp_intarray`
+  is `cmr10 at 0.00002pt` -- and thirty-seven such fonts carry a megabyte of
+  tables, copied out one font at a time. A font's metrics are read where
+  they lie; its dimensions too, with the room they had, since a run may set
+  one.
+- The control-sequence table and the meaning hash, 1.1 ms to copy and
+  1.4 ms more to grow: read with only what was in them, the first name a
+  document added copied the table out again. Both are read where they lie,
+  and a table is written with the room it had as well as what was in it,
+  the tail zero, so the run grows into the same room before it must copy.
+
+Reading a table where it lies and then setting an entry needs the mapping
+to take the write: formats and checkpoints are now mapped private and
+writable, so a written page is the run's own copy and never reaches the
+file. What points into a mapping -- or into a bank -- is never given back to
+the allocator or grown in place: a small registry of borrowed ranges stands
+behind `hstex_release` and `hstex_grow`, and every free and every growth of
+a transferred table goes through them; a missed one would abort the run,
+which is the failure to have. The mapping is let go last in an engine's
+destruction, after the lexical state whose symbol table lives in it -- the
+driver's second pass in a process found that out.
+
+The floor is 27.3 ms, from 34.0; the format read 4.9 ms, from 9.5; a run
+takes 2,375 page faults where it took 5,756. What remains of the read is the
+definition records, 3 MB copied so that the body pointers can be written
+into them.
 
 ## Reference-internal statistics
 

@@ -1,5 +1,6 @@
 #include "hstex/engine.h"
 
+#include "hstex/borrowed.h"
 #include "hstex/filedb.h"
 #include "hstex/input.h"
 
@@ -25,6 +26,7 @@
 #include <string.h>
 #include <regex.h>
 #include <signal.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -640,8 +642,9 @@ static int reserve_meanings(struct hstex_engine *engine, size_t required,
                          "meaning-table allocation overflow");
     }
     size_t old_capacity = engine->meaning_capacity;
-    void *allocation = realloc(engine->meanings,
-                               capacity * sizeof(*engine->meanings));
+    void *allocation = hstex_grow(engine->meanings,
+                                  old_capacity * sizeof(*engine->meanings),
+                                  capacity * sizeof(*engine->meanings));
     if (allocation == NULL) {
         return set_error(error, error_capacity,
                          "meaning-table allocation failed");
@@ -836,7 +839,9 @@ static int reserve_font_dimens(struct hstex_font *font, size_t required,
         }
         capacity *= 2U;
     }
-    void *allocation = realloc(font->dimens, capacity * sizeof(*font->dimens));
+    void *allocation = hstex_grow(font->dimens,
+                                  font->dimen_capacity * sizeof(*font->dimens),
+                                  capacity * sizeof(*font->dimens));
     if (allocation == NULL) {
         return set_error(error, error_capacity,
                          "fontdimen allocation failed");
@@ -870,8 +875,9 @@ static int reserve_hyphen_nodes(struct hstex_engine *engine, size_t required,
                          "hyphen-trie allocation overflow");
     }
     size_t old_capacity = engine->hyphen_node_capacity;
-    void *allocation = realloc(engine->hyphen_nodes,
-                               capacity * sizeof(*engine->hyphen_nodes));
+    void *allocation = hstex_grow(engine->hyphen_nodes,
+                                  old_capacity * sizeof(*engine->hyphen_nodes),
+                                  capacity * sizeof(*engine->hyphen_nodes));
     if (allocation == NULL) {
         return set_error(error, error_capacity,
                          "hyphen-trie allocation failed");
@@ -1190,7 +1196,7 @@ static int load_tfm_parameters(struct hstex_engine *engine,
                 size);
         }
     }
-    free(font->characters);
+    hstex_release(font->characters);
     font->characters = characters;
 
     /* The ligature and kerning program, and the kerns it refers to. */
@@ -1250,9 +1256,9 @@ static int load_tfm_parameters(struct hstex_engine *engine,
         }
     }
 
-    free(font->lig_kern);
-    free(font->kerns);
-    free(font->extensibles);
+    hstex_release(font->lig_kern);
+    hstex_release(font->kerns);
+    hstex_release(font->extensibles);
     font->lig_kern = lig_kern;
     font->lig_kern_count = (size_t)fields[8];
     font->kerns = kerns;
@@ -1351,15 +1357,15 @@ static int find_or_create_font(struct hstex_engine *engine, const char *name,
         engine->integer_parameters[HSTEX_INTEGER_DEFAULT_SKEW_CHAR];
     if (strcmp(name, "nullfont") == 0) {
         if (reserve_font_dimens(font, 7U, error, error_capacity) != 0) {
-            free(font->name);
+            hstex_release(font->name);
             memset(font, 0, sizeof(*font));
             return -1;
         }
         font->dimen_count = 7U;
     } else if (load_tfm_parameters(engine, font, name, size, error,
                                    error_capacity) != 0) {
-        free(font->name);
-        free(font->dimens);
+        hstex_release(font->name);
+        hstex_release(font->dimens);
         memset(font, 0, sizeof(*font));
         return -1;
     }
@@ -3609,42 +3615,42 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     }
     for (size_t index = 0U; index < engine->font_count; ++index) {
         destroy_virtual_font(engine->fonts[index].virtual_font);
-        free(engine->fonts[index].name);
-        free(engine->fonts[index].pdf_attribute);
-        free(engine->fonts[index].dimens);
-        free(engine->fonts[index].characters);
-        free(engine->fonts[index].lig_kern);
-        free(engine->fonts[index].kerns);
-        free(engine->fonts[index].extensibles);
+        hstex_release(engine->fonts[index].name);
+        hstex_release(engine->fonts[index].pdf_attribute);
+        hstex_release(engine->fonts[index].dimens);
+        hstex_release(engine->fonts[index].characters);
+        hstex_release(engine->fonts[index].lig_kern);
+        hstex_release(engine->fonts[index].kerns);
+        hstex_release(engine->fonts[index].extensibles);
     }
     free(engine->soft_names);
     free(engine->spec_pages);
     free(engine->taint_map);
-    free(engine->meanings);
+    hstex_release(engine->meanings);
     free(engine->macros);
     free(engine->saves);
     free(engine->conditionals);
-    free(engine->counts);
-    free(engine->count_levels);
-    free(engine->dimens);
-    free(engine->dimen_levels);
-    free(engine->glues);
-    free(engine->glue_levels);
-    free(engine->muglues);
-    free(engine->muglue_levels);
-    free(engine->token_registers);
-    free(engine->token_register_levels);
-    free(engine->boxes);
-    free(engine->box_levels);
+    hstex_release(engine->counts);
+    hstex_release(engine->count_levels);
+    hstex_release(engine->dimens);
+    hstex_release(engine->dimen_levels);
+    hstex_release(engine->glues);
+    hstex_release(engine->glue_levels);
+    hstex_release(engine->muglues);
+    hstex_release(engine->muglue_levels);
+    hstex_release(engine->token_registers);
+    hstex_release(engine->token_register_levels);
+    hstex_release(engine->boxes);
+    hstex_release(engine->box_levels);
     free(engine->nodes);
     free(engine->list_items);
     free(engine->insert_details);
     free(engine->lost_characters);
     free(engine->token_lists);
     free(engine->fonts);
-    free(engine->hyphen_roots);
-    free(engine->hyphen_nodes);
-    free(engine->hyphen_values);
+    hstex_release(engine->hyphen_roots);
+    hstex_release(engine->hyphen_nodes);
+    hstex_release(engine->hyphen_values);
     free(engine->hyphen_exceptions);
     free(engine->hyphen_exception_data);
     if (engine->page_builder != NULL) {
@@ -3756,21 +3762,31 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->job_name);
     free(engine->texmf_trees);
     engine->texmf_trees = NULL;
+    free(engine->shell_escape_commands);
+    free(engine->pdf_trailer_id_seed);
+    hstex_lexical_state_destroy(&engine->lexical_state);
+    /* LAST: what was read where it lies -- the format, a checkpoint, the
+       register banks -- is let go only once everything pointing into it has
+       been given back or skipped. */
     if (engine->format_mapping != NULL) {
         if (!engine->format_mapping_shared) {
+            hstex_borrowed_forget(engine->format_mapping->data);
             hstex_input_close(engine->format_mapping);
         }
         free(engine->format_mapping);
         engine->format_mapping = NULL;
     }
     if (engine->checkpoint_mapping != NULL) {
+        hstex_borrowed_forget(engine->checkpoint_mapping->data);
         hstex_input_close(engine->checkpoint_mapping);
         free(engine->checkpoint_mapping);
         engine->checkpoint_mapping = NULL;
     }
-    free(engine->shell_escape_commands);
-    free(engine->pdf_trailer_id_seed);
-    hstex_lexical_state_destroy(&engine->lexical_state);
+    for (size_t bank = 0U; bank < engine->mapped_bank_count; ++bank) {
+        hstex_borrowed_forget(engine->mapped_banks[bank]);
+        (void)munmap(engine->mapped_banks[bank], engine->mapped_bank_bytes[bank]);
+    }
+    engine->mapped_bank_count = 0U;
     memset(engine, 0, sizeof(*engine));
 }
 
@@ -4202,7 +4218,7 @@ static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
     if (is_raw) {
         (void)fclose(in);
         if (packed_length != (size_t)original ||
-            hstex_input_open(path, mapping, error, error_capacity) != 0 ||
+            hstex_input_open_private(path, mapping, error, error_capacity) != 0 ||
             mapping->length != sizeof(header) + packed_length) {
             hstex_input_close(mapping);
             return set_error(error, error_capacity, "corrupt checkpoint %s",
@@ -5716,10 +5732,12 @@ int hstex_engine_resume_checkpoint(struct hstex_engine *engine,
             kept->storage = HSTEX_INPUT_STORAGE_OWNED;
         }
         if (engine->checkpoint_mapping != NULL) {
+            hstex_borrowed_forget(engine->checkpoint_mapping->data);
             hstex_input_close(engine->checkpoint_mapping);
             free(engine->checkpoint_mapping);
         }
         engine->checkpoint_mapping = kept;
+        hstex_borrowed_register(kept->data, kept->length);
     }
     engine->active_vbox_builder = engine->contribution_builder;
     engine->active_hbox_builder =

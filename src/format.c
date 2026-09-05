@@ -1,7 +1,10 @@
 #include "hstex/engine.h"
 
+#include "hstex/borrowed.h"
 #include "hstex/filedb.h"
 #include "hstex/input.h"
+
+#include <sys/mman.h>
 #include "internal.h"
 
 #include <stdarg.h>
@@ -185,8 +188,31 @@ static size_t used_prefix(const void *base, size_t count, size_t size,
 }
 
 /* One register bank: `prefix' elements in the file, `capacity' in memory. */
-static void transfer_registers(struct format_stream *stream, void **base,
-                               size_t capacity, size_t prefix, size_t size,
+/* A bank of registers, zero from the kernel and paid for a page at a time
+   as it is set. Taken from the heap it came from whatever a run had given
+   back, and was zeroed by hand: the bank of boxes cost half a millisecond. */
+static void *bank_map(struct hstex_engine *engine, size_t bytes)
+{
+    if (engine->mapped_bank_count ==
+        sizeof(engine->mapped_banks) / sizeof(engine->mapped_banks[0])) {
+        return calloc(bytes, 1U);
+    }
+    void *bank = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (bank == MAP_FAILED) {
+        return calloc(bytes, 1U);
+    }
+    engine->mapped_banks[engine->mapped_bank_count] = bank;
+    engine->mapped_bank_bytes[engine->mapped_bank_count] = bytes;
+    ++engine->mapped_bank_count;
+    hstex_borrowed_register(bank, bytes);
+    return bank;
+}
+
+static void transfer_registers(struct format_stream *stream,
+                               struct hstex_engine *engine, void **base,
+                               size_t capacity, size_t existing_capacity,
+                               size_t prefix, size_t size,
                                const struct format_hole *holes,
                                size_t hole_count)
 {
@@ -213,19 +239,27 @@ static void transfer_registers(struct format_stream *stream, void **base,
         }
         return;
     }
-    free(*base);
-    *base = NULL;
+    /* The engine already holds a bank of this size, zero throughout: it was
+       taken at initialisation and nothing has been set in it. Giving it
+       back and taking another cost every bank a mapping and an unmapping,
+       and the bank of boxes half a millisecond; what was written goes into
+       the one there is. */
     if (capacity == 0U) {
+        hstex_release(*base);
+        *base = NULL;
         return;
     }
     if (capacity > SIZE_MAX / size) {
         stream->failed = true;
         return;
     }
-    *base = calloc(capacity, size);
-    if (*base == NULL) {
-        stream->failed = true;
-        return;
+    if (*base == NULL || capacity != existing_capacity) {
+        hstex_release(*base);
+        *base = bank_map(engine, capacity * size);
+        if (*base == NULL) {
+            stream->failed = true;
+            return;
+        }
     }
     transfer(stream, *base, prefix * size);
 }
@@ -320,19 +354,18 @@ static void *body_take(struct hstex_engine *engine, size_t bytes)
    wider than a token, so what precedes a body settles nothing about where
    it starts; the pad is written and skipped by position in the stream,
    which both sides count the same way. */
-static void transfer_pad_tokens(struct format_stream *stream)
+static void transfer_pad(struct format_stream *stream, size_t width)
 {
     if (stream->failed) {
         return;
     }
     size_t at = stream->writing ? stream->written : stream->at;
-    size_t pad = (sizeof(hstex_token) - at % sizeof(hstex_token)) %
-                 sizeof(hstex_token);
+    size_t pad = (width - at % width) % width;
     if (pad == 0U) {
         return;
     }
     if (stream->writing) {
-        uint8_t zeros[sizeof(hstex_token)] = {0};
+        uint8_t zeros[16] = {0};
         transfer(stream, zeros, pad);
         return;
     }
@@ -343,19 +376,125 @@ static void transfer_pad_tokens(struct format_stream *stream)
     stream->at += pad;
 }
 
+static void transfer_pad_tokens(struct format_stream *stream)
+{
+    transfer_pad(stream, sizeof(hstex_token));
+}
+
+/* An array nothing writes to once it is read -- a font's metrics, the
+   hyphenation trie -- which a run reading the file where it lies points at
+   rather than copies. Written at an alignment of eight, so that any record
+   in it is aligned. Elsewhere it is read as any array is. */
+static void transfer_array_in_place(struct format_stream *stream,
+                                    void **base, size_t *count, size_t size,
+                                    bool owned)
+{
+    TRANSFER_VALUE(stream, *count);
+    if (stream->failed) {
+        return;
+    }
+    transfer_pad(stream, 8U);
+    if (stream->writing) {
+        transfer(stream, *base, *count * size);
+        return;
+    }
+    if (owned) {
+        hstex_release(*base);
+    }
+    *base = NULL;
+    if (*count == 0U) {
+        return;
+    }
+    if (*count > SIZE_MAX / size) {
+        stream->failed = true;
+        return;
+    }
+    size_t bytes = *count * size;
+    if (stream->failed || bytes > stream->length - stream->at) {
+        stream->failed = true;
+        return;
+    }
+    if (stream->in_place) {
+        *base = (void *)(uintptr_t)(stream->bytes + stream->at);
+        stream->at += bytes;
+        return;
+    }
+    *base = malloc(bytes);
+    if (*base == NULL) {
+        stream->failed = true;
+        return;
+    }
+    transfer(stream, *base, bytes);
+}
+
+/* A TABLE THE RUN GROWS, READ WHERE IT LIES. Written with the room it had
+   as well as what was in it, the tail zero, so that a run pointing at it
+   has the same room to grow into before it must copy the table out; a
+   table read with only what was in it copied itself out at the first name
+   or meaning a document added. Written at an alignment of eight. */
+static void transfer_table_in_place(struct format_stream *stream,
+                                    void **base, size_t *count,
+                                    size_t *capacity, size_t size, bool owned)
+{
+    TRANSFER_VALUE(stream, *count);
+    TRANSFER_VALUE(stream, *capacity);
+    if (stream->failed) {
+        return;
+    }
+    if (*capacity < *count || (*capacity != 0U && *capacity > SIZE_MAX / size)) {
+        stream->failed = true;
+        return;
+    }
+    transfer_pad(stream, 8U);
+    if (stream->writing) {
+        transfer(stream, *base, *count * size);
+        static const uint8_t zeros[4096];
+        size_t tail = (*capacity - *count) * size;
+        while (tail != 0U && !stream->failed) {
+            size_t piece = tail < sizeof(zeros) ? tail : sizeof(zeros);
+            transfer(stream, (void *)(uintptr_t)(const void *)zeros, piece);
+            tail -= piece;
+        }
+        return;
+    }
+    if (owned) {
+        hstex_release(*base);
+    }
+    *base = NULL;
+    if (*capacity == 0U) {
+        return;
+    }
+    size_t bytes = *capacity * size;
+    if (bytes > stream->length - stream->at) {
+        stream->failed = true;
+        return;
+    }
+    if (stream->in_place) {
+        *base = (void *)(uintptr_t)(stream->bytes + stream->at);
+        stream->at += bytes;
+        return;
+    }
+    *base = malloc(bytes);
+    if (*base == NULL) {
+        stream->failed = true;
+        return;
+    }
+    transfer(stream, *base, bytes);
+}
+
 static void transfer_body(struct format_stream *stream,
                           struct hstex_engine *engine, hstex_token **tokens,
                           size_t *count, uint8_t *borrowed, uint8_t bit)
 {
+    /* How long the body is was written with the record it belongs to,
+       and is in the record already when this is reached. */
     if (stream->writing) {
-        TRANSFER_VALUE(stream, *count);
         if (*count != 0U) {
             transfer_pad_tokens(stream);
             transfer(stream, *tokens, *count * sizeof(**tokens));
         }
         return;
     }
-    TRANSFER_VALUE(stream, *count);
     if (stream->failed) {
         return;
     }
@@ -448,7 +587,7 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
         name_length = strlen(font->name) + 1U;
     }
     void *name = stream->writing ? (void *)font->name : NULL;
-    transfer_array(stream, &name, &name_length, NULL, 1U, false);
+    transfer_array_in_place(stream, &name, &name_length, 1U, false);
     font->name = name;
     size_t attribute_length = 0U;
     if (stream->writing && font->pdf_attribute != NULL) {
@@ -462,24 +601,25 @@ static void transfer_font(struct format_stream *stream, struct hstex_font *font)
         characters = (size_t)HSTEX_FONT_CHARACTER_COUNT;
     }
     void *metrics = stream->writing ? (void *)font->characters : NULL;
-    transfer_array(stream, &metrics, &characters, NULL,
-                   sizeof(*font->characters), false);
+    transfer_array_in_place(stream, &metrics, &characters,
+                            sizeof(*font->characters), false);
     font->characters = metrics;
     void *lig_kern = stream->writing ? (void *)font->lig_kern : NULL;
-    transfer_array(stream, &lig_kern, &font->lig_kern_count, NULL,
-                   sizeof(*font->lig_kern), false);
+    transfer_array_in_place(stream, &lig_kern, &font->lig_kern_count,
+                            sizeof(*font->lig_kern), false);
     font->lig_kern = lig_kern;
     void *kerns = stream->writing ? (void *)font->kerns : NULL;
-    transfer_array(stream, &kerns, &font->kern_count, NULL,
-                   sizeof(*font->kerns), false);
+    transfer_array_in_place(stream, &kerns, &font->kern_count,
+                            sizeof(*font->kerns), false);
     font->kerns = kerns;
     void *extensibles = stream->writing ? (void *)font->extensibles : NULL;
-    transfer_array(stream, &extensibles, &font->extensible_count, NULL,
-                   sizeof(*font->extensibles), false);
+    transfer_array_in_place(stream, &extensibles, &font->extensible_count,
+                            sizeof(*font->extensibles), false);
     font->extensibles = extensibles;
     void *dimens = stream->writing ? (void *)font->dimens : NULL;
-    transfer_array(stream, &dimens, &font->dimen_count, &font->dimen_capacity,
-                   sizeof(*font->dimens), false);
+    transfer_table_in_place(stream, &dimens, &font->dimen_count,
+                            &font->dimen_capacity, sizeof(*font->dimens),
+                            false);
     font->dimens = dimens;
     TRANSFER_VALUE(stream, font->design_size);
     TRANSFER_VALUE(stream, font->identifier_cs);
@@ -510,17 +650,20 @@ static void transfer_format(struct format_stream *stream,
 {
     struct hstex_symbol_table *symbols = &engine->lexical_state.symbols;
     void *entries = symbols->entries;
-    transfer_array(stream, &entries, &symbols->entry_count,
-                   &symbols->entry_capacity, sizeof(*symbols->entries), true);
+    transfer_table_in_place(stream, &entries, &symbols->entry_count,
+                            &symbols->entry_capacity,
+                            sizeof(*symbols->entries), true);
     symbols->entries = entries;
     void *slots = symbols->slots;
     size_t slot_capacity = symbols->slot_capacity;
-    transfer_array(stream, &slots, &slot_capacity, &symbols->slot_capacity,
-                   sizeof(*symbols->slots), true);
+    transfer_array_in_place(stream, &slots, &slot_capacity,
+                            sizeof(*symbols->slots), true);
     symbols->slots = slots;
+    symbols->slot_capacity = slot_capacity;
     void *bytes = symbols->bytes;
-    transfer_array(stream, &bytes, &symbols->byte_count,
-                   &symbols->byte_capacity, sizeof(*symbols->bytes), true);
+    transfer_table_in_place(stream, &bytes, &symbols->byte_count,
+                            &symbols->byte_capacity,
+                            sizeof(*symbols->bytes), true);
     symbols->bytes = bytes;
     TRANSFER_VALUE(stream, engine->lexical_state.catcodes);
     TRANSFER_VALUE(stream, engine->lexical_state.end_line_character);
@@ -529,9 +672,10 @@ static void transfer_format(struct format_stream *stream,
 
     void *meanings = engine->meanings;
     size_t meaning_capacity = engine->meaning_capacity;
-    transfer_array(stream, &meanings, &meaning_capacity,
-                   &engine->meaning_capacity, sizeof(*engine->meanings), true);
+    transfer_array_in_place(stream, &meanings, &meaning_capacity,
+                            sizeof(*engine->meanings), true);
     engine->meanings = meanings;
+    engine->meaning_capacity = meaning_capacity;
 
     TRANSFER_VALUE(stream, engine->macro_free_list);
     TRANSFER_VALUE(stream, engine->macro_definitions);
@@ -616,7 +760,8 @@ static void transfer_format(struct format_stream *stream,
     for (size_t index = 0U;
          index < sizeof(registers) / sizeof(registers[0]) && !stream->failed;
          ++index) {
-        transfer_registers(stream, registers[index].base, register_capacity,
+        transfer_registers(stream, engine, registers[index].base,
+                           register_capacity, engine->count_capacity,
                            register_prefix, registers[index].size,
                            registers[index].holes,
                            registers[index].hole_count);
@@ -686,17 +831,22 @@ static void transfer_format(struct format_stream *stream,
         hyphen_root_count = 256U;
     }
     void *hyphen_roots = engine->hyphen_roots;
-    transfer_array(stream, &hyphen_roots, &hyphen_root_count, NULL,
-                   sizeof(*engine->hyphen_roots), true);
+    transfer_array_in_place(stream, &hyphen_roots, &hyphen_root_count,
+                            sizeof(*engine->hyphen_roots), true);
     engine->hyphen_roots = hyphen_roots;
     void *hyphen_nodes = engine->hyphen_nodes;
-    transfer_array(stream, &hyphen_nodes, &engine->hyphen_node_count,
-                   &engine->hyphen_node_capacity, sizeof(*engine->hyphen_nodes), true);
+    transfer_array_in_place(stream, &hyphen_nodes, &engine->hyphen_node_count,
+                            sizeof(*engine->hyphen_nodes), true);
+    if (!stream->writing) {
+        engine->hyphen_node_capacity = engine->hyphen_node_count;
+    }
     engine->hyphen_nodes = hyphen_nodes;
     void *hyphen_values = engine->hyphen_values;
-    transfer_array(stream, &hyphen_values, &engine->hyphen_value_count,
-                   &engine->hyphen_value_capacity,
-                   sizeof(*engine->hyphen_values), true);
+    transfer_array_in_place(stream, &hyphen_values, &engine->hyphen_value_count,
+                            sizeof(*engine->hyphen_values), true);
+    if (!stream->writing) {
+        engine->hyphen_value_capacity = engine->hyphen_value_count;
+    }
     engine->hyphen_values = hyphen_values;
     TRANSFER_VALUE(stream, engine->hyphen_pattern_count);
     void *hyphen_exceptions = engine->hyphen_exceptions;
@@ -953,12 +1103,14 @@ static void keep_mapping(struct hstex_engine *engine,
     *kept = *mapped;
     if (engine->format_mapping != NULL) {
         if (!engine->format_mapping_shared) {
+            hstex_borrowed_forget(engine->format_mapping->data);
             hstex_input_close(engine->format_mapping);
         }
         free(engine->format_mapping);
     }
     engine->format_mapping = kept;
     engine->format_mapping_shared = shared;
+    hstex_borrowed_register(kept->data, kept->length);
 }
 
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
@@ -975,7 +1127,7 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
        against this run twice. */
     struct hstex_input mapped;
     char opened[256];
-    if (hstex_input_open(path, &mapped, opened, sizeof(opened)) != 0) {
+    if (hstex_input_open_private(path, &mapped, opened, sizeof(opened)) != 0) {
         return format_error(error, error_capacity, "cannot read %s", path);
     }
     struct format_stream stream = {0};
@@ -1043,7 +1195,7 @@ int hstex_engine_adopt_format_files(struct hstex_engine *engine,
     }
     struct hstex_input mapped;
     char opened[256];
-    if (hstex_input_open(path, &mapped, opened, sizeof(opened)) != 0) {
+    if (hstex_input_open_private(path, &mapped, opened, sizeof(opened)) != 0) {
         return -1;
     }
     struct format_stream stream = {0};

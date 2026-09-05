@@ -18,6 +18,11 @@ struct hstex_input {
 
 int hstex_input_open(const char *path, struct hstex_input *input,
                      char *error, size_t error_capacity);
+/* The same, mapped private and writable: what the run writes into it is
+   its own copy of the page and never reaches the file. For a format or a
+   checkpoint read where it lies, some of whose tables the run then sets. */
+int hstex_input_open_private(const char *path, struct hstex_input *input,
+                             char *error, size_t error_capacity);
 void hstex_input_close(struct hstex_input *input);
 const char *hstex_input_storage_name(enum hstex_input_storage storage);
 

@@ -1,3 +1,4 @@
+#include "hstex/borrowed.h"
 #include "hstex/symbol.h"
 
 #include "internal.h"
@@ -72,7 +73,9 @@ static int reserve_entries(struct hstex_symbol_table *table, size_t required,
         return set_error(error, error_capacity,
                          "control-sequence entry allocation overflow");
     }
-    void *allocation = realloc(table->entries, capacity * sizeof(*table->entries));
+    void *allocation = hstex_grow(table->entries,
+                                  table->entry_capacity * sizeof(*table->entries),
+                                  capacity * sizeof(*table->entries));
     if (allocation == NULL) {
         return set_error(error, error_capacity,
                          "control-sequence entry allocation failed");
@@ -107,7 +110,7 @@ static int reserve_bytes(struct hstex_symbol_table *table, size_t required,
         }
         capacity *= 2U;
     }
-    void *allocation = realloc(table->bytes, capacity);
+    void *allocation = hstex_grow(table->bytes, table->byte_capacity, capacity);
     if (allocation == NULL) {
         return set_error(error, error_capacity,
                          "control-sequence name allocation failed");
@@ -174,7 +177,7 @@ static int rehash(struct hstex_symbol_table *table, size_t capacity, char *error
                                 entry->byte_length, NULL);
         table->slots[slot] = (uint32_t)(index + 1U);
     }
-    free(old_slots);
+    hstex_release(old_slots);
     return 0;
 }
 
@@ -203,9 +206,9 @@ void hstex_symbols_destroy(struct hstex_symbol_table *table)
     if (table == NULL) {
         return;
     }
-    free(table->entries);
-    free(table->slots);
-    free(table->bytes);
+    hstex_release(table->entries);
+    hstex_release(table->slots);
+    hstex_release(table->bytes);
     memset(table, 0, sizeof(*table));
 }
 
