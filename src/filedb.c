@@ -690,24 +690,24 @@ const char *hstex_file_db_lookup(const struct hstex_file_db *database,
     uint64_t hash = name_hash((const uint8_t *)name, length);
     size_t slot = (size_t)hash & (database->slot_capacity - 1U);
     const char *found = NULL;
-    uint32_t where = 0U;
     while (database->slots[slot] != 0U) {
         const struct hstex_file_entry *entry =
             &database->entries[database->slots[slot] - 1U];
         if ((size_t)entry->name_length == length &&
-            memcmp(database->bytes + entry->name, name, length) == 0) {
+            memcmp(database->bytes + entry->name, name, length) == 0 &&
+            /* A copy where the tool would not look for the name -- TeX
+               Live 2025 keeps a cmr10.tfm among pdfTeX's test documents --
+               is not a second answer, and does not make the one where it
+               does look ambiguous. */
+            kind_is_searched(name, entry->where)) {
             if (found != NULL) {
                 return NULL; /* held twice: the tool knows which is meant */
             }
             found = (const char *)(database->bytes + entry->path);
-            where = entry->where;
         }
         slot = (slot + 1U) & (database->slot_capacity - 1U);
     }
     if (found == NULL) {
-        return NULL;
-    }
-    if (!kind_is_searched(name, where)) {
         return NULL;
     }
     struct stat status;

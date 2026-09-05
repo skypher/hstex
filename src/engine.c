@@ -24882,11 +24882,15 @@ static int pdf_reserve_shared_cmap(struct hstex_engine *engine,
                                     error_capacity);
     free(postscript);
     free(font_file);
-    /* A font node can precede the map-file input that defines its encoding.
-       Only cache a completed lookup so a later node gets the same retry that
-       pdfTeX performs once the map entry has become available. */
+    /* A name the map does not have will not appear in it: the map is read
+       once and nothing adds to it (there is no \\pdfmapfile or \\pdfmapline
+       here; one would have to clear this table). Remembering the miss
+       matters: clsguide sets some sixty thousand glyphs of bitmap fonts,
+       and a scan of the whole map for each of them was three seconds of a
+       run that takes a quarter of one. */
     if (status == 1) {
         free(encoding_file);
+        engine->pdf_cmap_font_checked[identifier] = 2U;
         return 0;
     }
     if (status != 0) {

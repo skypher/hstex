@@ -43,12 +43,17 @@ int main(int argument_count, char **arguments)
         return 0;
     }
 
-    /* A name it answers is a file that is there to be read. */
+    /* A name it answers is a file that is there to be read. The names are
+       asked the way the engine asks, along the tool's search path for the
+       name's kind: a bare lookup says nothing about a name a tree holds
+       twice, and TeX Live 2025 holds latex.ltx, article.cls and size10.clo
+       under tex/latex-dev as well as tex/latex. */
     static const char *const asked[] = {"latex.ltx", "article.cls", "cmr10.tfm",
                                         "size10.clo", NULL};
     int answered = 0;
     for (size_t index = 0U; asked[index] != NULL; ++index) {
-        const char *path = hstex_file_db_lookup(database, asked[index]);
+        bool settled = false;
+        const char *path = hstex_file_db_resolve(database, asked[index], &settled);
         if (path == NULL) {
             continue; /* an installation need not carry it */
         }

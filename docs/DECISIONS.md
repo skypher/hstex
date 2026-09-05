@@ -1770,3 +1770,31 @@ writes 425786 and 466570 bytes, level 6 119ms and 120ms for 417147 and
 compression is worth some six milliseconds of a run, and the file the
 default level writes is the smallest, so the level stays what the document
 asks for.
+
+## A font the map does not have
+
+A character node asks, once per font, whether the map names an encoding for
+the font, so that a shared CMap can be reserved for it; the answer was kept
+only when the map had an entry, on the reasoning that a map read later
+might supply one. The map is read once and nothing adds to it -- there is
+no `\pdfmapfile` or `\pdfmapline` here -- so a miss is final, and the retry
+was a scan of the whole map for every glyph of a font the map does not
+know. Measured on clsguide, whose T1 fonts are bitmap fonts on a machine
+without cm-super: 3288ms, of which 92% was that scan and its `memchr`,
+against 143ms with the miss remembered; fntguide 3900ms against 202ms. The
+miss is remembered in the same table as a completed lookup, and anything
+that ever adds to the map must clear that table.
+
+## Names a list holds where the tool would not look
+
+The bare lookup in the file database answered nothing for a name held
+twice, since the tool's search path decides between copies. TeX Live 2025
+keeps a `cmr10.tfm` among pdfTeX's test documents under `doc/`, and holds
+`latex.ltx`, `article.cls` and `size10.clo` under `tex/latex-dev` as well as
+`tex/latex`; on the ubuntu-26.04 runners every name the test asked came back
+unanswered. A copy where the tool would not look for a name's kind is not a
+second answer and does not make the one where it does look ambiguous, so
+the lookup now weighs only the copies the kind is searched under. Names a
+searched tree does hold twice, as `latex.ltx` is with `tex/latex-dev`
+present, are still the search path's to settle, and the test asks them the
+way the engine does, along that path.
