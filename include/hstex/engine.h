@@ -1015,6 +1015,9 @@ struct hstex_pdf_physical_font {
     size_t file_object;
     size_t descriptor_object;
     char subset_tag[7];
+    /* The program file's content, hashed: the key its disassembly and its
+       subsets are kept under in the cache beside the format. */
+    uint64_t type1_key;
 };
 
 struct hstex_dvi_move {
@@ -1942,6 +1945,9 @@ struct hstex_engine {
        engine's, so a mapping it was taken from outlives the engine. */
     struct hstex_input *format_mapping;
     bool format_mapping_shared;
+    /* Where the format was read from; the cache of Type 1 work lies
+       beside it. */
+    char *format_path;
     /* The checkpoint this run resumed from, kept for the same reason. */
     struct hstex_input *checkpoint_mapping;
     /* Register banks a format read took from the kernel already zero, a

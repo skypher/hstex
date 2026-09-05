@@ -1282,6 +1282,8 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                                path);
     }
     keep_mapping(engine, &mapped, false);
+    free(engine->format_path);
+    engine->format_path = strdup(path);
     (void)hstex_engine_adopt_format_files(engine, path);
     /* What this format was told about the installation, offered to the
        lookup before the first name is asked for. */

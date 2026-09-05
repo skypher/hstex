@@ -3773,6 +3773,8 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->job_name);
     free(engine->texmf_trees);
     engine->texmf_trees = NULL;
+    free(engine->format_path);
+    engine->format_path = NULL;
     free(engine->shell_escape_commands);
     free(engine->pdf_trailer_id_seed);
     hstex_lexical_state_destroy(&engine->lexical_state);
@@ -24945,6 +24947,120 @@ static void pdf_builtin_encoding(struct hstex_pdf_physical_font *entry)
     }
 }
 
+
+/* THE TYPE 1 WORK A RUN DOES AGAIN. Decrypting and disassembling a font
+   program, and assembling the subset of it a document uses, is a twelfth
+   of a long document's time, and the same font program and the same
+   glyphs give the same bytes every run. Both are kept beside the format --
+   under `type1/` in its directory, which is the driver's cache -- keyed by
+   the program's content and, for a subset, by its glyphs; a directory that
+   cannot be written costs nothing but the work. Bump the version when
+   what either step produces changes. */
+#define HSTEX_TYPE1_CACHE_VERSION 1U
+
+static uint64_t type1_hash_bytes(uint64_t hash, const uint8_t *bytes,
+                                 size_t length)
+{
+    for (size_t index = 0U; index < length; ++index) {
+        hash ^= bytes[index];
+        hash *= UINT64_C(0x100000001b3);
+    }
+    return hash;
+}
+
+/* The directory the work is kept in, settled once from the format's place
+   before any font is prepared; the subsetting runs on worker threads,
+   which only read it. */
+static char type1_cache_root[1200];
+
+static void type1_cache_prepare(const struct hstex_engine *engine)
+{
+    if (type1_cache_root[0] != '\0') {
+        return;
+    }
+    const char *format = engine->format_path != NULL
+                             ? engine->format_path
+                             : getenv("HSTEX_FORMAT_FILE");
+    if (format == NULL || format[0] == '\0') {
+        return;
+    }
+    const char *slash = strrchr(format, '/');
+    int written = slash == NULL
+                      ? snprintf(type1_cache_root, sizeof(type1_cache_root), "./type1")
+                      : snprintf(type1_cache_root, sizeof(type1_cache_root),
+                                 "%.*s/type1", (int)(slash - format), format);
+    if (written <= 0 || (size_t)written >= sizeof(type1_cache_root)) {
+        type1_cache_root[0] = '\0';
+    }
+}
+
+static bool type1_cache_path(const char *name, char *out, size_t capacity)
+{
+    if (type1_cache_root[0] == '\0') {
+        return false;
+    }
+    int written = snprintf(out, capacity, "%s/%s", type1_cache_root, name);
+    return written > 0 && (size_t)written < capacity;
+}
+
+static uint8_t *type1_cache_read(const char *name, size_t *length)
+{
+    char path[1400];
+    if (!type1_cache_path(name, path, sizeof(path))) {
+        return NULL;
+    }
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return NULL;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        (void)fclose(file);
+        return NULL;
+    }
+    long size = ftell(file);
+    if (size < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        (void)fclose(file);
+        return NULL;
+    }
+    uint8_t *bytes = malloc((size_t)size + 1U);
+    if (bytes == NULL || fread(bytes, 1U, (size_t)size, file) != (size_t)size) {
+        free(bytes);
+        (void)fclose(file);
+        return NULL;
+    }
+    (void)fclose(file);
+    bytes[size] = 0U;
+    *length = (size_t)size;
+    return bytes;
+}
+
+static void type1_cache_write(const char *name, const uint8_t *bytes,
+                              size_t length)
+{
+    char path[1400];
+    char temporary[1480];
+    if (!type1_cache_path(name, path, sizeof(path))) {
+        return;
+    }
+    (void)mkdir(type1_cache_root, 0755);
+    /* Beside its name and moved into place whole; worker threads may write
+       at once, so the temporary name carries the thread as well. */
+    if (snprintf(temporary, sizeof(temporary), "%s.%ld.%lx.tmp", path,
+                 (long)getpid(), (unsigned long)pthread_self()) >=
+        (int)sizeof(temporary)) {
+        return;
+    }
+    FILE *file = fopen(temporary, "wb");
+    if (file == NULL) {
+        return;
+    }
+    bool ok = fwrite(bytes, 1U, length, file) == length;
+    ok = fclose(file) == 0 && ok;
+    if (!ok || rename(temporary, path) != 0) {
+        (void)unlink(temporary);
+    }
+}
+
 static struct hstex_pdf_physical_font *pdf_physical_font_entry(
     struct hstex_engine *engine, const char *file, const char *postscript,
     char *error, size_t error_capacity)
@@ -24990,10 +25106,23 @@ static struct hstex_pdf_physical_font *pdf_physical_font_entry(
     size_t length = 0U;
     int status = read_whole_path(path, &font_program, &font_program_length,
                                  error, error_capacity);
+    char cache_name[64];
     if (status == 0) {
+        entry->type1_key = type1_hash_bytes(
+            UINT64_C(0xcbf29ce484222325) ^ HSTEX_TYPE1_CACHE_VERSION,
+            font_program, font_program_length);
+        (void)snprintf(cache_name, sizeof(cache_name), "%016" PRIx64 ".dis",
+                       entry->type1_key);
+        type1_cache_prepare(engine);
+        disassembly = type1_cache_read(cache_name, &length);
+    }
+    if (status == 0 && disassembly == NULL) {
         status = hstex_type1_disassemble(
             font_program, font_program_length, &disassembly, &length, error,
             error_capacity);
+        if (status == 0) {
+            type1_cache_write(cache_name, disassembly, length);
+        }
     }
     free(font_program);
     free(path);
@@ -25889,6 +26018,36 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     qsort(font->glyphs, font->glyph_count, sizeof(*font->glyphs),
           compare_pdf_glyph_names);
     pdf_type1_subset_tag(font);
+    /* The subset kept from an earlier run of the same glyphs: three sizes,
+       then the program. */
+    uint64_t glyph_key = UINT64_C(0xcbf29ce484222325);
+    for (size_t index = 0U; index < font->glyph_count; ++index) {
+        glyph_key = type1_hash_bytes(glyph_key, (const uint8_t *)font->glyphs[index],
+                                     strlen(font->glyphs[index]) + 1U);
+    }
+    char subset_name[80];
+    (void)snprintf(subset_name, sizeof(subset_name), "%016" PRIx64 "-%016" PRIx64 ".sub",
+                   font->type1_key, glyph_key);
+    if (font->type1_key != 0U) {
+        size_t kept_length = 0U;
+        uint8_t *kept = type1_cache_read(subset_name, &kept_length);
+        if (kept != NULL) {
+            uint64_t sizes[3];
+            if (kept_length >= sizeof(sizes)) {
+                memcpy(sizes, kept, sizeof(sizes));
+                if (sizes[0] == kept_length - sizeof(sizes) &&
+                    sizes[1] <= sizes[0] && sizes[2] <= sizes[0]) {
+                    font->program_length = (size_t)sizes[0];
+                    font->length1 = (size_t)sizes[1];
+                    font->length2 = (size_t)sizes[2];
+                    memmove(kept, kept + sizeof(sizes), font->program_length);
+                    font->program = kept;
+                    return 0;
+                }
+            }
+            free(kept);
+        }
+    }
     const char *source = font->disassembly;
     const char *encoding = strstr(source, "/Encoding ");
     const char *eexec = strstr(source, "currentfile eexec\n");
@@ -26121,6 +26280,19 @@ static int pdf_subset_type1(struct hstex_pdf_physical_font *font, char *error,
     if (status == 0) {
         status = pdf_type1_assemble(font, subset.bytes, subset.count, error,
                                    error_capacity);
+    }
+    if (status == 0 && font->type1_key != 0U && font->program != NULL) {
+        size_t total = 3U * sizeof(uint64_t) + font->program_length;
+        uint8_t *record = malloc(total);
+        if (record != NULL) {
+            uint64_t sizes[3] = {(uint64_t)font->program_length,
+                                 (uint64_t)font->length1,
+                                 (uint64_t)font->length2};
+            memcpy(record, sizes, sizeof(sizes));
+            memcpy(record + sizeof(sizes), font->program, font->program_length);
+            type1_cache_write(subset_name, record, total);
+            free(record);
+        }
     }
     free(subset.bytes);
     return status;

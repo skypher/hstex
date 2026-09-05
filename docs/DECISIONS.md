@@ -757,6 +757,25 @@ file's absence no longer says the checkpoint has not been started; the
 `.aux` is pushed again at `\end{document}`, and a second write there would
 have put the end of the document by as the preamble. A run puts it by once.
 
+## The Type 1 work a run does again
+
+Profiled with frame pointers on testmath, the `memcmp`, `strlen` and
+`memmove` that stood at eleven percent of a long document's time were all
+in one place: the Type 1 pipeline. Decrypting and disassembling each font
+program, then assembling the subset of it the document uses, is a twelfth
+of the run -- and the same program with the same glyphs gives the same
+bytes every run.
+
+Both are now kept beside the format, under `type1/` in its directory, which
+is the driver's cache: a disassembly keyed by the program's content, a
+subset keyed by the program and its glyphs, each written beside its name
+and moved into place whole, the subsetting running on worker threads that
+may write at once. A directory that cannot be written costs nothing but the
+work. The version in the key is bumped when what either step produces
+changes. testmath runs in 118 ms with the cache warm, from 137; the cache
+for it is 3 MB over 58 files, and the output agrees with the settled
+reference on every check.
+
 ## What a format carries built, and what is read where it lies
 
 The floor of a LaTeX run -- an empty document, engine only -- was 40.7 ms.
