@@ -60,37 +60,66 @@ int main(int argument_count, char **arguments)
     }
     check(answered > 0, "answered nothing at all for a LaTeX installation");
     if (answered == 0) {
-        /* Say what the database was built from, so a failure on another
+        /* Say what the database was built from, and where each name asked
+           for stands in the lists themselves, so a failure on another
            installation can be read from its log alone. */
         const char *trees = hstex_file_db_trees();
         (void)fprintf(stderr, "test_filedb: trees: %s\n",
                       trees == NULL ? "(none)" : trees);
         const char *cursor = trees;
         while (cursor != NULL && *cursor != '\0') {
-            const char *end = strchr(cursor, ':');
-            size_t length = end == NULL ? strlen(cursor) : (size_t)(end - cursor);
-            const char *tree = cursor;
-            if (length >= 2U && tree[0] == '!' && tree[1] == '!') {
-                tree += 2;
-                length -= 2U;
+            while (*cursor == '{' || *cursor == ',' || *cursor == ' ' ||
+                   *cursor == ':' || *cursor == ';') {
+                ++cursor;
             }
+            if (*cursor == '\0' || *cursor == '}') {
+                break;
+            }
+            if (cursor[0] == '!' && cursor[1] == '!') {
+                cursor += 2;
+            }
+            const char *end = cursor;
+            while (*end != '\0' && *end != ',' && *end != '}' && *end != ':' &&
+                   *end != ';') {
+                ++end;
+            }
+            size_t length = (size_t)(end - cursor);
             char path[1200];
             if (length < sizeof(path) - 6U) {
-                memcpy(path, tree, length);
+                memcpy(path, cursor, length);
                 memcpy(path + length, "/ls-R", 6U);
-                struct stat status;
-                if (stat(path, &status) == 0) {
-                    (void)fprintf(stderr, "test_filedb: %s: %lld bytes\n", path,
-                                  (long long)status.st_size);
-                } else {
+                FILE *list = fopen(path, "r");
+                if (list == NULL) {
                     (void)fprintf(stderr, "test_filedb: %s: %s\n", path,
                                   strerror(errno));
+                } else {
+                    char line[1200];
+                    char directory[1200] = "";
+                    long lines = 0;
+                    while (fgets(line, sizeof(line), list) != NULL) {
+                        ++lines;
+                        size_t n = strlen(line);
+                        while (n != 0U && (line[n - 1U] == '\n' || line[n - 1U] == '\r')) {
+                            line[--n] = '\0';
+                        }
+                        if (n != 0U && line[n - 1U] == ':') {
+                            memcpy(directory, line, n + 1U);
+                            continue;
+                        }
+                        for (size_t index = 0U; asked[index] != NULL; ++index) {
+                            if (strcmp(line, asked[index]) == 0) {
+                                (void)fprintf(stderr, "test_filedb: %s holds %s under %s\n",
+                                              path, line, directory);
+                            }
+                        }
+                    }
+                    (void)fprintf(stderr, "test_filedb: %s: %ld lines\n", path, lines);
+                    (void)fclose(list);
                 }
             }
-            cursor = end == NULL ? cursor + length + (tree - cursor) : end + 1;
+            cursor = end;
         }
     }
-
     /* A metric is answered from where metrics live, an input from where
        inputs live, and the documentation that sits beside them is not an
        answer to either. */
