@@ -675,8 +675,9 @@ static int reserve_macros(struct hstex_engine *engine, size_t required,
         return set_error(error, error_capacity, "macro allocation overflow");
     }
     size_t old_capacity = engine->macro_capacity;
-    void *allocation = realloc(engine->macros,
-                               capacity * sizeof(*engine->macros));
+    void *allocation = hstex_grow(engine->macros,
+                                  old_capacity * sizeof(*engine->macros),
+                                  capacity * sizeof(*engine->macros));
     if (allocation == NULL) {
         return set_error(error, error_capacity, "macro allocation failed");
     }
@@ -3627,7 +3628,7 @@ void hstex_engine_destroy(struct hstex_engine *engine)
     free(engine->spec_pages);
     free(engine->taint_map);
     hstex_release(engine->meanings);
-    free(engine->macros);
+    hstex_release(engine->macros);
     free(engine->saves);
     free(engine->conditionals);
     hstex_release(engine->counts);
@@ -4218,7 +4219,10 @@ static int checkpoint_inflate_buffer(const char *path, uint8_t **out_raw,
     if (is_raw) {
         (void)fclose(in);
         if (packed_length != (size_t)original ||
-            hstex_input_open_private(path, mapping, error, error_capacity) != 0 ||
+            hstex_input_open_private_at(
+                path, mapping,
+                (void *)(HSTEX_FORMAT_BASE - sizeof(header)), error,
+                error_capacity) != 0 ||
             mapping->length != sizeof(header) + packed_length) {
             hstex_input_close(mapping);
             return set_error(error, error_capacity, "corrupt checkpoint %s",

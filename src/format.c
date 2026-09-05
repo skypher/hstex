@@ -55,6 +55,9 @@ struct format_stream {
     /* Reading, leave the bodies of definitions where they lie in `bytes'
        rather than copying them out: the bytes outlive the engine. */
     bool in_place;
+    /* Reading, `bytes' begins at HSTEX_FORMAT_BASE: the pointers written
+       into the definition records are right as they are. */
+    bool at_base;
 };
 
 static void transfer(struct format_stream *stream, void *value, size_t length)
@@ -482,6 +485,94 @@ static void transfer_table_in_place(struct format_stream *stream,
     transfer(stream, *base, bytes);
 }
 
+/* THE DEFINITION RECORDS, WRITTEN FOR AN ADDRESS. The records are the one
+   array of a format that holds pointers -- to the bodies, which follow the
+   records in the file -- and a run reading the file where it lies had to
+   write every pointer, which touched every page of three megabytes: the
+   copy it was meant to save. So the pointers are written as they will be
+   when the file is mapped at HSTEX_FORMAT_BASE, and the record is written
+   already saying that its bodies are borrowed; mapped there, the array is
+   used as it is. Written with the room it had, tail zero, as a table the
+   run grows. Read anywhere else, the pointers are settled by the body
+   transfer as before. */
+static void transfer_macros(struct format_stream *stream,
+                            struct hstex_engine *engine)
+{
+    size_t count = engine->macro_count;
+    size_t capacity = engine->macro_capacity;
+    TRANSFER_VALUE(stream, count);
+    TRANSFER_VALUE(stream, capacity);
+    if (stream->failed) {
+        return;
+    }
+    if (capacity < count || capacity > SIZE_MAX / sizeof(*engine->macros)) {
+        stream->failed = true;
+        return;
+    }
+    transfer_pad(stream, 8U);
+    size_t bytes = capacity * sizeof(*engine->macros);
+    if (stream->writing) {
+        /* Where each body will begin: after the records, each at a token's
+           alignment, in the order the bodies are written below. */
+        size_t at = stream->written + bytes;
+        for (size_t index = 0U; index < count && !stream->failed; ++index) {
+            struct hstex_macro record = engine->macros[index];
+            hstex_token **bodies[2] = {&record.parameter_text,
+                                       &record.replacement};
+            const size_t counts[2] = {record.parameter_count_tokens,
+                                      record.replacement_count};
+            const uint8_t bits[2] = {(uint8_t)HSTEX_MACRO_PARAMETER_BORROWED,
+                                     (uint8_t)HSTEX_MACRO_REPLACEMENT_BORROWED};
+            record.bodies_borrowed = 0U;
+            for (size_t which = 0U; which < 2U; ++which) {
+                *bodies[which] = NULL;
+                if (counts[which] == 0U) {
+                    continue;
+                }
+                at = (at + sizeof(hstex_token) - 1U) &
+                     ~(sizeof(hstex_token) - 1U);
+                *bodies[which] =
+                    (hstex_token *)(uintptr_t)(HSTEX_FORMAT_BASE + at);
+                record.bodies_borrowed =
+                    (uint8_t)(record.bodies_borrowed | bits[which]);
+                at += counts[which] * sizeof(hstex_token);
+            }
+            transfer(stream, &record, sizeof(record));
+        }
+        static const uint8_t zeros[4096];
+        size_t tail = (capacity - count) * sizeof(*engine->macros);
+        while (tail != 0U && !stream->failed) {
+            size_t piece = tail < sizeof(zeros) ? tail : sizeof(zeros);
+            transfer(stream, (void *)(uintptr_t)(const void *)zeros, piece);
+            tail -= piece;
+        }
+        return;
+    }
+    hstex_release(engine->macros);
+    engine->macros = NULL;
+    engine->macro_count = count;
+    engine->macro_capacity = capacity;
+    if (capacity == 0U) {
+        return;
+    }
+    if (bytes > stream->length - stream->at) {
+        stream->failed = true;
+        return;
+    }
+    if (stream->in_place) {
+        engine->macros =
+            (struct hstex_macro *)(uintptr_t)(stream->bytes + stream->at);
+        stream->at += bytes;
+        return;
+    }
+    engine->macros = malloc(bytes);
+    if (engine->macros == NULL) {
+        stream->failed = true;
+        return;
+    }
+    transfer(stream, engine->macros, bytes);
+}
+
 static void transfer_body(struct format_stream *stream,
                           struct hstex_engine *engine, hstex_token **tokens,
                           size_t *count, uint8_t *borrowed, uint8_t bit)
@@ -498,8 +589,10 @@ static void transfer_body(struct format_stream *stream,
     if (stream->failed) {
         return;
     }
-    *tokens = NULL;
-    *borrowed = (uint8_t)(*borrowed & (uint8_t)~bit);
+    if (!(stream->in_place && stream->at_base)) {
+        *tokens = NULL;
+        *borrowed = (uint8_t)(*borrowed & (uint8_t)~bit);
+    }
     if (*count == 0U) {
         return;
     }
@@ -517,11 +610,15 @@ static void transfer_body(struct format_stream *stream,
        body: it is a run of tokens in the file exactly as it is in memory,
        and nothing writes to a body once it is defined. The record is told
        it borrowed the body, as it is for one cut from a block, and gives
-       it back to no one. Only the pages a run expands are ever read in. */
+       it back to no one. Only the pages a run expands are ever read in.
+       At the address the file was written for the record already says
+       all this, and nothing is written into it. */
     if (stream->in_place) {
-        *tokens = (hstex_token *)(uintptr_t)(stream->bytes + stream->at);
+        if (!stream->at_base) {
+            *tokens = (hstex_token *)(uintptr_t)(stream->bytes + stream->at);
+            *borrowed = (uint8_t)(*borrowed | bit);
+        }
         stream->at += bytes;
-        *borrowed = (uint8_t)(*borrowed | bit);
         return;
     }
     void *room = body_take(engine, bytes);
@@ -679,21 +776,8 @@ static void transfer_format(struct format_stream *stream,
 
     TRANSFER_VALUE(stream, engine->macro_free_list);
     TRANSFER_VALUE(stream, engine->macro_definitions);
+    transfer_macros(stream, engine);
     size_t macro_count = engine->macro_count;
-    void *macros = engine->macros;
-    static const struct format_hole macro_holes[] = {
-        FORMAT_ADDRESS(hstex_macro, parameter_text),
-        FORMAT_ADDRESS(hstex_macro, replacement),
-        /* Where a body was cut from is this run's business and not the
-           file's; it is written as nothing and settled again on the way in. */
-        FORMAT_FIELD(hstex_macro, bodies_borrowed),
-    };
-    transfer_array_cleared(stream, &macros, &macro_count,
-                           &engine->macro_capacity, sizeof(*engine->macros),
-                           true, macro_holes,
-                           sizeof(macro_holes) / sizeof(*macro_holes));
-    engine->macros = macros;
-    engine->macro_count = macro_count;
     for (size_t index = 0U; index < macro_count && !stream->failed; ++index) {
         struct hstex_macro *macro = &engine->macros[index];
         transfer_body(stream, engine, &macro->parameter_text,
@@ -1048,6 +1132,7 @@ int hstex_engine_format_from_buffer(struct hstex_engine *engine,
     stream.length = length;
     stream.in_place =
         in_place && ((uintptr_t)bytes % sizeof(hstex_token)) == 0U;
+    stream.at_base = stream.in_place && (uintptr_t)bytes == HSTEX_FORMAT_BASE;
     char magic[sizeof(hstex_format_magic)];
     transfer(&stream, magic, sizeof(magic));
     if (stream.failed ||
@@ -1127,13 +1212,15 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
        against this run twice. */
     struct hstex_input mapped;
     char opened[256];
-    if (hstex_input_open_private(path, &mapped, opened, sizeof(opened)) != 0) {
+    if (hstex_input_open_private_at(path, &mapped, (void *)HSTEX_FORMAT_BASE,
+                                    opened, sizeof(opened)) != 0) {
         return format_error(error, error_capacity, "cannot read %s", path);
     }
     struct format_stream stream = {0};
     stream.bytes = mapped.data;
     stream.length = mapped.length;
     stream.in_place = ((uintptr_t)mapped.data % sizeof(hstex_token)) == 0U;
+    stream.at_base = (uintptr_t)mapped.data == HSTEX_FORMAT_BASE;
     char magic[sizeof(hstex_format_magic)];
     transfer(&stream, magic, sizeof(magic));
     if (stream.failed || memcmp(magic, hstex_format_magic, sizeof(magic)) != 0) {
@@ -1180,22 +1267,31 @@ int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
         return format_error(error, error_capacity, "%s is not a format",
                                path);
     }
-    keep_mapping(engine, &mapped, adopt_carried_files(&mapped, trailer_at));
+    keep_mapping(engine, &mapped, false);
+    (void)hstex_engine_adopt_format_files(engine, path);
     /* What this format was told about the installation, offered to the
        lookup before the first name is asked for. */
     hstex_file_db_offer_trees(engine->texmf_trees, engine->texmf_trees_stamp);
     return hstex_rebuild_glyph_unicode_slots(engine, error, error_capacity);
 }
 
+/* The mapping the filename database was taken from: the process's, since
+   the database is, and never let go. An engine's own mapping of the format
+   is at the address the file was written for and goes with the engine, so
+   the database cannot share it -- the next engine in the process wants that
+   address. */
+static struct hstex_input files_mapping;
+static bool files_mapping_kept;
+
 int hstex_engine_adopt_format_files(struct hstex_engine *engine,
                                     const char *path)
 {
-    if (engine == NULL || path == NULL || engine->format_mapping != NULL) {
+    if (engine == NULL || path == NULL || files_mapping_kept) {
         return -1;
     }
     struct hstex_input mapped;
     char opened[256];
-    if (hstex_input_open_private(path, &mapped, opened, sizeof(opened)) != 0) {
+    if (hstex_input_open(path, &mapped, opened, sizeof(opened)) != 0) {
         return -1;
     }
     struct format_stream stream = {0};
@@ -1214,6 +1310,7 @@ int hstex_engine_adopt_format_files(struct hstex_engine *engine,
         hstex_input_close(&mapped);
         return -1;
     }
-    keep_mapping(engine, &mapped, true);
+    files_mapping = mapped;
+    files_mapping_kept = true;
     return 0;
 }

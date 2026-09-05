@@ -699,10 +699,36 @@ which is the failure to have. The mapping is let go last in an engine's
 destruction, after the lexical state whose symbol table lives in it -- the
 driver's second pass in a process found that out.
 
-The floor is 27.3 ms, from 34.0; the format read 4.9 ms, from 9.5; a run
-takes 2,375 page faults where it took 5,756. What remains of the read is the
-definition records, 3 MB copied so that the body pointers can be written
-into them.
+The floor was then 27.3 ms, from 34.0; the format read 4.9 ms, from 9.5;
+a run took 2,375 page faults where it took 5,756. What remained of the read
+was the definition records, 1.9 ms of the 3.1: three megabytes copied so
+that the body pointers could be written into them, and reading them where
+they lie would have written every pointer into every page, which is the
+copy by another name.
+
+THE ADDRESS A FORMAT IS WRITTEN FOR. The records are the one array of a
+format that holds pointers. So the pointers are written as they will be
+when the file is mapped at one fixed address -- `HSTEX_FORMAT_BASE`,
+sixteen terabytes up a 47-bit address space -- and a run asks for the
+mapping there. The address is a hint and not a demand: where it is free,
+which it is on every run seen, the records are used as they are and nothing
+is written into a page of them; where it is not, or on a system whose
+address space does not reach it, the mapping lands elsewhere and the body
+transfer settles the pointers as it did before, at the cost it had before.
+A record is written already saying its bodies are borrowed, since where the
+file lies they are; the records are written with the room they had, tail
+zero, so a document's definitions go into the same room. A raw checkpoint
+asks for the address less its own header, so that its format section
+begins at the base, and a checkpoint read from a buffer that is not there
+is relocated like any other.
+
+The filename database can no longer share the engine's mapping, since the
+next engine in the process wants the address: it is taken from a mapping of
+the process's own, kept for the process.
+
+The format read is 0.5 ms, from 9.5; the empty-document floor 26.4 ms, from
+40.7; a run takes 1,792 page faults where it took 5,756. The format is
+14.2 MB, of which a run reads the pages it uses.
 
 ## Reference-internal statistics
 

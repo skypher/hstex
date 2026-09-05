@@ -77,7 +77,8 @@ static int read_small_file(int file_descriptor, const char *path, size_t length,
 }
 
 static int open_input(const char *path, struct hstex_input *input,
-                      bool writable, char *error, size_t error_capacity)
+                      bool writable, void *hint, char *error,
+                      size_t error_capacity)
 {
     if (path == NULL || input == NULL) {
         return set_error(error, error_capacity,
@@ -111,7 +112,7 @@ static int open_input(const char *path, struct hstex_input *input,
 
     size_t length = (size_t)status.st_size;
     if (length >= (size_t)HSTEX_MMAP_THRESHOLD) {
-        void *mapping = mmap(NULL, length,
+        void *mapping = mmap(hint, length,
                              writable ? PROT_READ | PROT_WRITE : PROT_READ,
                              MAP_PRIVATE, file_descriptor, 0);
         int saved_errno = errno;
@@ -164,11 +165,18 @@ const char *hstex_input_storage_name(enum hstex_input_storage storage)
 int hstex_input_open(const char *path, struct hstex_input *input,
                      char *error, size_t error_capacity)
 {
-    return open_input(path, input, false, error, error_capacity);
+    return open_input(path, input, false, NULL, error, error_capacity);
 }
 
 int hstex_input_open_private(const char *path, struct hstex_input *input,
                              char *error, size_t error_capacity)
 {
-    return open_input(path, input, true, error, error_capacity);
+    return open_input(path, input, true, NULL, error, error_capacity);
+}
+
+int hstex_input_open_private_at(const char *path, struct hstex_input *input,
+                                void *hint, char *error,
+                                size_t error_capacity)
+{
+    return open_input(path, input, true, hint, error, error_capacity);
 }

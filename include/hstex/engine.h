@@ -2688,7 +2688,13 @@ void hstex_engine_destroy(struct hstex_engine *engine);
    cannot read then lies under a key that build never looks in, and is
    rebuilt rather than offered and refused. See docs/DECISIONS.md,
    a-cached-format-a-build-cannot-read. */
-#define HSTEX_FORMAT_MAGIC "HSTEX format 7\n"
+#define HSTEX_FORMAT_MAGIC "HSTEX format 8\n"
+/* THE ADDRESS A FORMAT IS WRITTEN FOR. The pointers in its definition
+   records are written as if the stream began here, and a run maps the file
+   here when the address is free -- which on a 47-bit address space it
+   nearly always is -- so that the records are used where they lie without a
+   pointer being written. A mapping that lands elsewhere is relocated. */
+#define HSTEX_FORMAT_BASE ((uintptr_t)0x100000000000ULL)
 
 static inline uint64_t hstex_format_layout(void)
 {
