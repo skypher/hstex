@@ -6296,10 +6296,15 @@ static char *resolve_with_kpsewhich_option(const char *filename, bool make_pk)
         (void)close(descriptors[1]);
         return NULL;
     }
-    char *arguments[4] = {program, name, NULL, NULL};
+    /* Asked as pdflatex asks: the program name orders the search path, and
+       where a name is held under both tex/latex and tex/generic the
+       reference takes the first and a tool asked by its own name the
+       second. */
+    char progname[] = "-progname=pdflatex";
+    char *arguments[5] = {program, progname, name, NULL, NULL};
     if (make_pk) {
-        arguments[1] = make_pk_option;
-        arguments[2] = name;
+        arguments[2] = make_pk_option;
+        arguments[3] = name;
     }
     int spawned =
         posix_spawn_file_actions_addclose(&actions, descriptors[0]) != 0 ||
@@ -6567,10 +6572,11 @@ static bool finder_start(struct hstex_engine *engine)
     char program[] = "stdbuf";
     char by_the_line[] = "-oL";
     char tool[] = "kpsewhich";
+    char progname[] = "-progname=pdflatex";
     char interactive[] = "-interactive";
     char marker[sizeof(hstex_finder_marker)];
     memcpy(marker, hstex_finder_marker, sizeof(marker));
-    char *const arguments[] = {program,     by_the_line, tool,
+    char *const arguments[] = {program,     by_the_line, tool, progname,
                                interactive, marker,      NULL};
     pid_t child = 0;
     int spawned =
@@ -6618,6 +6624,20 @@ static bool finder_start(struct hstex_engine *engine)
     }
     finder->generation = engine->external_file_generation;
     return true;
+}
+
+/* Start the finder before it is asked anything. The tool's own start --
+   reading and hashing every ls-R, a quarter of a short run -- then overlaps
+   the format being read instead of following it; measured on an empty
+   document, the first question waited twelve milliseconds for a tool started
+   when it was asked. Every run of the corpus asks it something, so nothing
+   is started that would not have been. */
+void hstex_engine_prestart_finder(struct hstex_engine *engine)
+{
+    if (engine != NULL && engine->finder.questions == NULL &&
+        !engine->finder.broken) {
+        (void)finder_start(engine);
+    }
 }
 
 /* Where the tool says a file is, asked of the one that is already running.

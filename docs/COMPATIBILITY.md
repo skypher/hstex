@@ -58,8 +58,12 @@ document has no `.aux` yet and cannot put its preamble by. `HSTEX_NO_PARALLEL=1`
 compiles sequentially without the checkpoint cache, and
 `HSTEX_NO_PREAMBLE_CACHE=1` leaves the preamble cache alone.
 
-`HSTEX_ENGINE=/absolute/path/to/hstex` selects a particular engine binary,
-which is useful for testing an unpacked build alongside an installed release.
+`HSTEX_ENGINE=/absolute/path/to/hstex` selects a particular engine binary.
+Unset, the driver runs the `hstex` beside its own executable when there is
+one -- a build directory and an installation both keep the two together --
+and otherwise the `hstex` on `PATH`. An engine that cannot be run is
+reported as such, naming the variable, rather than as a failed format
+build.
 
 ## Supported command-line contract
 

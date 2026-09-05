@@ -2710,6 +2710,9 @@ static inline uint64_t hstex_format_identity(void)
    See docs/DECISIONS.md, the-format-a-run-starts-from. */
 int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
                               char *error, size_t error_capacity);
+/* Start the file finder now rather than at its first question, so that its
+   start-up overlaps whatever is read next. */
+void hstex_engine_prestart_finder(struct hstex_engine *engine);
 int hstex_engine_read_format(struct hstex_engine *engine, const char *path,
                              char *error, size_t error_capacity);
 /* The whole run to disk at a page boundary, and a fresh engine taken up from

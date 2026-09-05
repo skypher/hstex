@@ -398,6 +398,8 @@ static int run_document_from_format(const char *format_file,
        already obeyed. Where taking it up fails for any reason the run
        starts from the format as it always did, so a stale or unreadable
        file costs the preamble and never the document. */
+    /* The finder's start overlaps the format or preamble being read. */
+    hstex_engine_prestart_finder(&engine);
     bool resumed = false;
     const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
     if (preamble != NULL && preamble[0] != '\0' &&
@@ -511,6 +513,7 @@ static int resume_checkpoint_document(const char *checkpoint_file,
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
+    hstex_engine_prestart_finder(&engine);
     if ((mkdir(output_directory, 0700) != 0 && errno != EEXIST) ||
         hstex_engine_set_output_directory(&engine, output_directory, error,
                                           sizeof(error)) != 0 ||

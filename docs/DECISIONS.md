@@ -585,6 +585,39 @@ Every measured PDF had SHA-256
 `1b9be60d6142c3bbe9bfad669e9863007034517b2e42dbfef44bf57233482def`.
 This is a targeted result, not the full-corpus headline benchmark.
 
+## Asking as pdflatex asks, and asking early
+
+Two changes to the one `kpsewhich` a run still starts, and one to how the
+driver finds the engine.
+
+ASKED EARLY. The finder was started at its first question, which on every
+document in the corpus comes after the format is read; an empty document
+opened its class file twelve milliseconds after asking for it, waiting on a
+tool that had just been started. The finder is now started before the format
+is read, so the tool's own start overlaps it, and the class file is opened a
+millisecond after the question. Every run of the corpus asks it something,
+so nothing is started that would not have been. This did not move the floor
+of an empty run by much -- the format's own cost is the larger part, and is
+taken up under the-format-a-run-starts-from -- but it takes the finder out
+of the critical path.
+
+ASKED AS PDFLATEX. Every `kpsewhich` a run starts, the finder and the
+one-shot ones alike, and the driver's own, is now asked with
+`-progname=pdflatex`. The program name orders the search path: pdflatex's
+`TEXINPUTS` is `tex/{latex,generic,}//`, and a tool asked by its own name
+searches `tex/{kpsewhich,generic,latex,}//`. Where one name is held under
+both `tex/latex` and `tex/generic`, the reference takes the first and the
+tool as it was asked took the second. Every gate agrees before and after; the
+change is to what would happen on an installation where such a name exists.
+
+THE ENGINE BESIDE THE DRIVER. Run from a build directory without
+`HSTEX_ENGINE` set, the driver looked for `hstex` on `PATH`, found none,
+and reported `native format build exited 127`. It now runs the `hstex`
+beside its own executable when there is one -- `/proc/self/exe` says where
+that is, and where there is no `/proc` the name it was run by does when
+that has a directory in it -- and names the variable when the engine it was
+given cannot be run.
+
 ## Reference-internal statistics
 
 Reference log totals for strings, string characters, memory words, control

@@ -245,7 +245,8 @@ static int run_captured(char *const arguments[], char **answer, char *error,
 static int query_kpsewhich(const char *argument, char **answer, char *error,
                            size_t capacity)
 {
-    char *const command[] = {"kpsewhich", (char *)argument, NULL};
+    char *const command[] = {"kpsewhich", "-progname=pdflatex",
+                             (char *)argument, NULL};
     return run_captured(command, answer, error, capacity);
 }
 
@@ -452,6 +453,36 @@ static int format_fingerprint(const char *latex_ltx, const char *config,
     }
     *fingerprint = hash;
     return 0;
+}
+
+/* The engine beside this program, where there is one. A build directory and
+   an installation both keep hstex and hstex-pdflatex together, and a driver
+   run from either should not need PATH to find its own engine. Linux says
+   where the program is; elsewhere the name it was run by says, when that
+   has a directory in it. */
+static char *engine_beside(const char *run_as)
+{
+    char here[HSTEX_DRIVER_PATH_CAPACITY];
+    ssize_t length = readlink("/proc/self/exe", here, sizeof(here) - 1U);
+    if (length > 0) {
+        here[length] = '\0';
+    } else if (run_as != NULL && strchr(run_as, '/') != NULL &&
+               strlen(run_as) < sizeof(here)) {
+        (void)strcpy(here, run_as);
+    } else {
+        return NULL;
+    }
+    char *slash = strrchr(here, '/');
+    if (slash == NULL) {
+        return NULL;
+    }
+    *slash = '\0';
+    char *candidate = join_path(here, "hstex");
+    if (candidate != NULL && access(candidate, X_OK) != 0) {
+        free(candidate);
+        candidate = NULL;
+    }
+    return candidate;
 }
 
 static char *cache_root(const char *requested, char *error, size_t capacity)
@@ -778,7 +809,12 @@ static int build_or_load_format(const char *engine, const char *latex_ltx,
         free(directory);
         free(temporary);
         free(ready);
-        if (status > 0 && error[0] == '\0') {
+        if (status == 127 && error[0] == '\0') {
+            (void)snprintf(error, capacity,
+                           "cannot run the engine `%s': not found or not "
+                           "executable (set HSTEX_ENGINE to the hstex binary)",
+                           engine);
+        } else if (status > 0 && error[0] == '\0') {
             (void)snprintf(error, capacity, "native format build exited %d", status);
         }
         return -1;
@@ -1025,8 +1061,10 @@ int main(int argument_count, char **arguments)
         return 1;
     }
     const char *engine = getenv("HSTEX_ENGINE");
+    char *beside = NULL;
     if (engine == NULL || engine[0] == '\0') {
-        engine = "hstex";
+        beside = engine_beside(arguments[0]);
+        engine = beside != NULL ? beside : "hstex";
     }
     char *format = NULL;
     if (build_or_load_format(engine, absolute_latex, cache, rebuild,
@@ -1111,7 +1149,14 @@ int main(int argument_count, char **arguments)
                              (char *)document, (char *)output_directory, job_name,
                              NULL};
     int status = run_engine(command, NULL, log_path, error, sizeof(error));
-    if (status < 0) {
+    if (status == 127) {
+        (void)fprintf(stderr,
+                      "hstex-pdflatex: cannot run the engine `%s': not found "
+                      "or not executable (set HSTEX_ENGINE to the hstex "
+                      "binary)\n",
+                      engine);
+        status = 1;
+    } else if (status < 0) {
         (void)fprintf(stderr, "hstex-pdflatex: %s\n", error);
         status = 1;
     }
@@ -1121,5 +1166,6 @@ int main(int argument_count, char **arguments)
     free(absolute_latex);
     free(job_name);
     installation_record_free(&known);
+    free(beside);
     return status;
 }
