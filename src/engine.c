@@ -954,6 +954,7 @@ static int reserve_hyphen_exceptions(struct hstex_engine *engine,
 static char *resolve_with_kpsewhich(const char *filename);
 static char *resolve_pk_with_kpsewhich(const char *filename);
 static char *resolve_file(struct hstex_engine *engine, const char *filename);
+static char *output_path(struct hstex_engine *engine, const char *filename);
 static void destroy_virtual_font(struct hstex_virtual_font *font);
 
 static uint16_t read_big_endian_u16(const uint8_t *bytes)
@@ -4587,6 +4588,26 @@ static void checkpoint_write_pdf_state(FILE *out,
             ckpt_write_str(out, stack->values[value]);
         }
     }
+    /* THE OBJECTS PACKED AND NOT YET WRITTEN. Small objects go into an
+       object stream that reaches the file only when it fills or the run
+       ends; a checkpoint taken while some are waiting -- the page-zero one,
+       after \begin{document}, where hyperref has just made a title and an
+       action for every bookmark in the .out -- carried their numbers in the
+       outline records and nothing else. A run resumed from it wrote
+       outlines pointing at objects that were never in its file: every
+       bookmark of technote came out with no title and no destination on a
+       warm --parallel run. What is waiting is carried here. */
+    uint64_t packed = (uint64_t)engine->pdf_packed_object_count;
+    uint64_t packed_number = (uint64_t)engine->pdf_packed_object_number;
+    (void)fwrite(&packed, sizeof(packed), 1U, out);
+    (void)fwrite(&packed_number, sizeof(packed_number), 1U, out);
+    for (size_t index = 0U; index < engine->pdf_packed_object_count; ++index) {
+        const struct hstex_pdf_packed_object *object =
+            &engine->pdf_packed_objects[index];
+        uint64_t number = (uint64_t)object->number;
+        (void)fwrite(&number, sizeof(number), 1U, out);
+        ckpt_write_bytes(out, object->content, object->content_length);
+    }
 }
 
 /* Read the PDF-backend state back into the engine, for a tiling resume. `in` is
@@ -5248,6 +5269,37 @@ static int checkpoint_read_pdf_state(FILE *in, size_t length,
         stack->count = (size_t)count;
     }
     engine->color_stack_count = (size_t)stacks;
+    /* The objects packed and not yet written, where the section carries
+       them; a section written before they were is shorter and has none. */
+    long here = ftell(in);
+    if (here >= 0 && (uint64_t)(here - start) + 2U * sizeof(uint64_t) <=
+                         (uint64_t)length) {
+        uint64_t packed = 0U;
+        uint64_t packed_number = 0U;
+        if (fread(&packed, sizeof(packed), 1U, in) != 1U ||
+            fread(&packed_number, sizeof(packed_number), 1U, in) != 1U ||
+            packed > sizeof(engine->pdf_packed_objects) /
+                         sizeof(engine->pdf_packed_objects[0])) {
+            return set_error(error, error_capacity,
+                             "corrupt checkpoint pdf state");
+        }
+        for (size_t index = 0U; index < engine->pdf_packed_object_count; ++index) {
+            free(engine->pdf_packed_objects[index].content);
+        }
+        memset(engine->pdf_packed_objects, 0, sizeof(engine->pdf_packed_objects));
+        for (size_t index = 0U; index < (size_t)packed; ++index) {
+            uint64_t number = 0U;
+            if (fread(&number, sizeof(number), 1U, in) != 1U ||
+                ckpt_read_bytes(in, &engine->pdf_packed_objects[index].content,
+                                &engine->pdf_packed_objects[index].content_length) != 0) {
+                return set_error(error, error_capacity,
+                                 "corrupt checkpoint pdf state");
+            }
+            engine->pdf_packed_objects[index].number = (size_t)number;
+        }
+        engine->pdf_packed_object_count = (size_t)packed;
+        engine->pdf_packed_object_number = (size_t)packed_number;
+    }
     /* Anything the writer added beyond what this reader knows is skipped, so the
        section stays self-framing as it grows. */
     long consumed = ftell(in) - start;
@@ -5813,9 +5865,35 @@ static void note_file_open(struct hstex_engine *engine, const char *path)
        cold run's env; a few hundred opens, so append-and-close is cheap. */
     const char *sources_log = getenv("HSTEX_CKPT_SOURCES");
     if (sources_log != NULL) {
+        /* WHAT WAS READ, NOT WHAT WAS LEFT. The file is hashed here, as it
+           is being opened, and the hash goes into the log: hashing it when
+           the run ended recorded a .out that the run had created empty,
+           read empty, and then filled -- so the next run, reading it full,
+           looked warm and resumed pages typeset without a bookmark in them.
+           Measured on technote. FNV-1a, as the driver's record hashes. */
+        uint64_t hash = 0xcbf29ce484222325ULL;
+        FILE *read = fopen(path, "rb");
+        bool hashed = read != NULL;
+        if (read != NULL) {
+            uint8_t buffer[65536];
+            size_t got;
+            while ((got = fread(buffer, 1U, sizeof(buffer), read)) != 0U) {
+                for (size_t index = 0U; index < got; ++index) {
+                    hash ^= buffer[index];
+                    hash *= 0x100000001b3ULL;
+                }
+            }
+            hashed = !ferror(read);
+            (void)fclose(read);
+        }
         FILE *log = fopen(sources_log, "ab");
         if (log != NULL) {
-            (void)fprintf(log, "%d\t%s\n", engine->shipped_pages, path);
+            if (hashed) {
+                (void)fprintf(log, "%d\t%" PRIu64 "\t%s\n", engine->shipped_pages,
+                              hash, path);
+            } else {
+                (void)fprintf(log, "%d\t%s\n", engine->shipped_pages, path);
+            }
             (void)fclose(log);
         }
     }
@@ -6776,6 +6854,40 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
     char *path = listed != NULL ? strdup(listed)
                  : settled      ? NULL
                                 : finder_ask(engine, filename);
+    /* A STATE FILE THAT WAS NOT THERE. What a pass leaves for the next --
+       the .aux, the .out -- is read at the start of a run, and a run whose
+       .out did not exist yet typeset its pages without the bookmarks. The
+       checkpoint cache records what a run read so a later run can tell
+       whether it may resume; a file that was looked for and absent is
+       recorded as absent, so that the run in which it appears is not taken
+       for warm. Measured on technote: every bookmark came out empty on a
+       warm --parallel run until this. */
+    if (path == NULL) {
+        const char *sources_log = getenv("HSTEX_CKPT_SOURCES");
+        const char *dot = strrchr(filename, '.');
+        static const char *const state[] = {
+            ".aux", ".toc", ".lof", ".lot", ".out", ".bbl", ".ind", ".nav",
+            ".snm", ".brf", ".gls", ".glo", NULL};
+        bool is_state = false;
+        for (size_t which = 0U; dot != NULL && state[which] != NULL; ++which) {
+            is_state = is_state || strcmp(dot, state[which]) == 0;
+        }
+        if (sources_log != NULL && is_state) {
+            /* Under the name the run would have opened it by -- in its
+               output directory -- so that the note and a later reading of
+               the same file are one record, whose first line is the note. */
+            char *where = strchr(filename, '/') == NULL
+                              ? output_path(engine, filename)
+                              : NULL;
+            FILE *log = fopen(sources_log, "ab");
+            if (log != NULL) {
+                (void)fprintf(log, "%d\t!\t%s\n", engine->shipped_pages,
+                              where != NULL ? where : filename);
+                (void)fclose(log);
+            }
+            free(where);
+        }
+    }
     if (entry != NULL) {
         free(entry->path);
         entry->path = path == NULL ? NULL : strdup(path);
@@ -55031,6 +55143,43 @@ static void maybe_write_checkpoint(struct hstex_engine *engine)
         if (hstex_engine_write_checkpoint(engine, path, err, sizeof(err)) == 0) {
             engine->checkpoint_zero_done = true;
             record_checkpoint_position(engine, stride_dir, 0);
+            /* WHAT THE PREAMBLE PUT IN THE PDF. A warm run's first chunk
+               resumes this checkpoint and tiles into a fresh file at the byte
+               the run had reached, and for most documents that byte is zero:
+               the file is opened at the first page. hyperref opens it at
+               \begin{document}, writing a title and an action for every
+               bookmark in the .out, and a warm run of technote lost every
+               one of them -- the bytes before the checkpoint were in no
+               file. They are kept here, and laid into the shared PDF before
+               the chunks start. */
+            if (engine->pdf_written != 0U && engine->pdf_file != NULL &&
+                engine->output_name != NULL) {
+                (void)pdf_flush(engine, err, sizeof(err));
+                (void)fflush(engine->pdf_file);
+                char prefix_path[600];
+                (void)snprintf(prefix_path, sizeof(prefix_path),
+                               "%s/prefix.pdf", stride_dir);
+                FILE *from = fopen(engine->output_name, "rb");
+                FILE *to = from != NULL ? fopen(prefix_path, "wb") : NULL;
+                if (from != NULL && to != NULL) {
+                    size_t left = engine->pdf_written;
+                    uint8_t buffer[65536];
+                    while (left != 0U) {
+                        size_t want = left < sizeof(buffer) ? left : sizeof(buffer);
+                        size_t got = fread(buffer, 1U, want, from);
+                        if (got == 0U || fwrite(buffer, 1U, got, to) != got) {
+                            break;
+                        }
+                        left -= got;
+                    }
+                }
+                if (from != NULL) {
+                    (void)fclose(from);
+                }
+                if (to != NULL) {
+                    (void)fclose(to);
+                }
+            }
         } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
             (void)fprintf(stderr, "CKPT page-0 declined: %s\n", err);
         }

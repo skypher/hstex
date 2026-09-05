@@ -1021,6 +1021,26 @@ static int run_parallel_warm(const char *format_file, const char *document_path,
                    job_name);
     FILE *shared = fopen(shared_pdf, "wb"); /* create empty for the chunks */
     if (shared != NULL) {
+        /* What the preamble had put in the PDF before the page-zero
+           checkpoint, kept beside it by the cold run; the first chunk
+           resumes past those bytes and would otherwise leave them unwritten.
+           See src/engine.c, what-the-preamble-put-in-the-pdf. */
+        if (have_zero) {
+            char prefix_path[600];
+            (void)snprintf(prefix_path, sizeof(prefix_path), "%s/prefix.pdf",
+                           cache_dir);
+            FILE *prefix = fopen(prefix_path, "rb");
+            if (prefix != NULL) {
+                uint8_t buffer[65536];
+                size_t got;
+                while ((got = fread(buffer, 1U, sizeof(buffer), prefix)) != 0U) {
+                    if (fwrite(buffer, 1U, got, shared) != got) {
+                        break;
+                    }
+                }
+                (void)fclose(prefix);
+            }
+        }
         (void)fclose(shared);
     }
     (void)setenv("HSTEX_TILE", shared_pdf, 1);
@@ -1110,6 +1130,9 @@ static void parallel_record_sources(const char *cache_dir)
     struct source_note {
         char path[1024];
         int page;
+        bool absent;
+        bool hashed;   /* the hash below is the content as first read */
+        uint64_t hash;
     } *notes = NULL;
     size_t count = 0U, capacity = 0U;
     char line[1200];
@@ -1121,6 +1144,23 @@ static void parallel_record_sources(const char *cache_dir)
         *tab = '\0';
         int page = (int)strtol(line, NULL, 10);
         char *path = tab + 1;
+        /* Three fields: the page, the content as read (a hash, or `!' for a
+           file looked for and absent), the path. Two: an older log, hashed
+           at the end as before. */
+        bool absent = false;
+        bool hashed = false;
+        uint64_t hash = 0U;
+        char *second = strchr(path, '\t');
+        if (second != NULL) {
+            *second = '\0';
+            if (strcmp(path, "!") == 0) {
+                absent = true;
+            } else {
+                hashed = true;
+                hash = strtoull(path, NULL, 10);
+            }
+            path = second + 1;
+        }
         size_t length = strlen(path);
         while (length > 0U && (path[length - 1U] == '\n' ||
                                path[length - 1U] == '\r')) {
@@ -1140,6 +1180,8 @@ static void parallel_record_sources(const char *cache_dir)
             if (page < notes[index].page) {
                 notes[index].page = page;
             }
+            /* The first reading is the one that counts: what the run began
+               with is what the next run must find again, absent or not. */
             continue;
         }
         if (count == capacity) {
@@ -1154,6 +1196,9 @@ static void parallel_record_sources(const char *cache_dir)
         }
         (void)snprintf(notes[count].path, sizeof(notes[count].path), "%s", path);
         notes[count].page = page;
+        notes[count].absent = absent;
+        notes[count].hashed = hashed;
+        notes[count].hash = hash;
         ++count;
     }
     (void)fclose(log);
@@ -1161,7 +1206,13 @@ static void parallel_record_sources(const char *cache_dir)
     if (out != NULL) {
         for (size_t index = 0U; index < count; ++index) {
             uint64_t hash = 0xcbf29ce484222325ULL;
-            if (parallel_hash_file(notes[index].path, &hash) != 0) {
+            if (notes[index].absent) {
+                /* Absent when the run began: a run that finds it is not
+                   warm, whatever it holds. */
+                hash = UINT64_MAX;
+            } else if (notes[index].hashed) {
+                hash = notes[index].hash;
+            } else if (parallel_hash_file(notes[index].path, &hash) != 0) {
                 continue;
             }
             (void)fprintf(out, "%d\t%" PRIu64 "\t%s\n", notes[index].page, hash,
@@ -1265,9 +1316,14 @@ static int parallel_changed_files(const char *cache_dir,
             file_path[--length] = '\0';
         }
         uint64_t current = 0xcbf29ce484222325ULL;
-        if ((parallel_hash_file(file_path, &current) != 0 ||
-             current != stored) &&
-            length < sizeof(changed[0].path)) {
+        bool moved;
+        if (stored == UINT64_MAX) {
+            moved = access(file_path, R_OK) == 0;
+        } else {
+            moved = parallel_hash_file(file_path, &current) != 0 ||
+                    current != stored;
+        }
+        if (moved && length < sizeof(changed[0].path)) {
             (void)snprintf(changed[count].path, sizeof(changed[count].path),
                            "%s", file_path);
             changed[count].first_page = page;

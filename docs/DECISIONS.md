@@ -659,6 +659,46 @@ start of this work.
 `HSTEX_NO_FILE_DB=1`, and any of the tool's own search variables in the
 environment, still hand every name to the tool as before.
 
+## What a warm run of technote lost, and what the cache had not kept
+
+Measured through the warm-path harness, which builds a document again over
+the checkpoint cache its previous run left: every bookmark of `technote`
+came out with no title and no destination on a warm `--parallel` run, while
+the same run through the driver, and the sequential run, agreed with the
+reference in full. The engine from before this session did the same, so
+the fault was old. Three things were wrong, found in the order below.
+
+WHAT THE PREAMBLE PUT IN THE PDF. A warm run's first chunk resumes the
+page-zero checkpoint, taken after `\begin{document}`, and tiles into a
+fresh shared PDF at the byte the run had reached; for most documents that
+byte is zero, since the file is opened at the first page. hyperref opens it
+at `\begin{document}` and writes a title object and an action object for
+every bookmark in the `.out`, so the checkpoint's byte was past them -- and
+the bytes before it were in no file. The outline records pointed at objects
+that were never written: `mutool` repaired the cross-reference table and
+found them null. The cold run now keeps those bytes as `prefix.pdf` beside
+the page-zero checkpoint, and the warm run lays them into the shared PDF
+before the chunks start. This was the fault; the two below were found on
+the way and are kept because they are right.
+
+WHAT WAS READ, NOT WHAT WAS LEFT. The cache's record of what the cold run
+read was hashed when the run ended. The cold run creates its `.out` empty
+at `\begin{document}`, reads it empty, fills it, and would have recorded it
+full; the next run, reading it full, looked warm. Each file is now hashed as
+it is opened, in the engine, and the first reading is the one recorded. A
+state file -- `.aux`, `.out`, and their kind -- that a run looked for and
+did not find is recorded as absent, under the name it would have been
+opened by, so a run that finds it is not taken for warm.
+
+THE OBJECTS PACKED AND NOT YET WRITTEN. Small objects wait in an object
+stream until it fills; a checkpoint carried their numbers in whatever
+referred to them and not the objects. They are carried now.
+
+The harness itself had settled its reference with two passes, as the
+driver gate once did, and reported four documents differing on that
+account; it settles the reference to its fixpoint now, and the one
+document that still differed was technote, above.
+
 ## What a format carries built, and what is read where it lies
 
 The floor of a LaTeX run -- an empty document, engine only -- was 40.7 ms.
