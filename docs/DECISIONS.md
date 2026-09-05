@@ -729,6 +729,34 @@ The cold run of testmath takes 314 ms, from 507; the warm run 128, against
 the reference's 215 for one pass. What remains of the cold run is the two
 passes themselves.
 
+## A settled document is one pass, and warm on its second run
+
+Two more things the driver's path paid for on every run of a document,
+found while timing it.
+
+ONE PASS ON THE FIXPOINT. The cold run compiles until the `.aux` it reads
+is the `.aux` it wrote, and began with no reading to compare against, so a
+document whose `.aux` was already settled -- every run after the first --
+still ran twice, the second pass only to confirm the first. The `.aux` a
+previous run left is now the reading before the first pass: a pass that
+reads it and writes it back unchanged is standing on the fixpoint. A warm
+run of testmath through the driver is 130 ms, from 297, against the
+reference's 222 for a pass that leaves the references to the user.
+
+WARM ON THE SECOND RUN. The cache's validity hash folded in every file in
+the document's directory whose name is a source's -- and the state files,
+`.aux` and its kind, were counted among them. When the output directory is
+the document's, as the driver's is, the `.aux` the first run created made
+the second run look edited, and a document was cold twice before it was
+warm. State files are left out of that hash: they are read at the start of
+a run and the source record keeps them as they were read, which is the
+check that means something.
+
+AND THE PREAMBLE CHECKPOINT, ONCE. With checkpoints written by a child, the
+file's absence no longer says the checkpoint has not been started; the
+`.aux` is pushed again at `\end{document}`, and a second write there would
+have put the end of the document by as the preamble. A run puts it by once.
+
 ## What a format carries built, and what is read where it lies
 
 The floor of a LaTeX run -- an empty document, engine only -- was 40.7 ms.

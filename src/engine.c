@@ -3836,8 +3836,11 @@ static void put_by_preamble_before(struct hstex_engine *engine,
                                    const char *path)
 {
     const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
+    /* Once a run: the .aux is pushed again at \end{document}, and a child
+       may still be writing the checkpoint the first push started, so the
+       file's absence would say to write the end of the document over it. */
     if (preamble == NULL || preamble[0] == '\0' || engine->job_name == NULL ||
-        access(preamble, F_OK) == 0) {
+        engine->preamble_checkpoint_put || access(preamble, F_OK) == 0) {
         return;
     }
     const char *base = strrchr(path, '/');
@@ -3848,8 +3851,9 @@ static void put_by_preamble_before(struct hstex_engine *engine,
         return;
     }
     char why[256];
-    if (hstex_engine_write_checkpoint(engine, preamble, why, sizeof(why)) != 0 &&
-        getenv("HSTEX_CKPT_DEBUG") != NULL) {
+    if (hstex_engine_write_checkpoint(engine, preamble, why, sizeof(why)) == 0) {
+        engine->preamble_checkpoint_put = true;
+    } else if (getenv("HSTEX_CKPT_DEBUG") != NULL) {
         (void)fprintf(stderr, "CKPT preamble declined: %s\n", why);
     }
 }

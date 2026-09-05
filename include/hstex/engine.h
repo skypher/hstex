@@ -2572,6 +2572,9 @@ struct hstex_engine {
        engine is destroyed, before anything reads the cache. */
     pid_t checkpoint_writers[64];
     size_t checkpoint_writer_count;
+    /* The preamble checkpoint has been put by this run -- by a child that
+       may still be writing it, so the file's presence cannot say so. */
+    bool preamble_checkpoint_put;
     /* Chunks parked at page boundaries and released together; see
        docs/DECISIONS.md, a-checkpoint-inside-a-file. */
     int32_t parallel_chunk;

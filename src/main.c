@@ -740,7 +740,13 @@ static int parallel_validity_hash(const char *format_file,
     }
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (!parallel_is_source_name(entry->d_name)) {
+        /* What a pass leaves for the next -- the .aux and its kind -- is
+           not folded in here: it is read at the start of a run and the
+           source record keeps it as it was read. Folded in, an .aux that
+           appeared between the first run and the second made the second
+           look edited, and a document was cold twice before it was warm. */
+        if (!parallel_is_source_name(entry->d_name) ||
+            parallel_is_state_name(entry->d_name)) {
             continue;
         }
         uint64_t one = 0xcbf29ce484222325ULL;
@@ -1575,8 +1581,13 @@ static int run_parallel_document(const char *format_file,
        of checkpoints each pass. The pass that reads an .aux identical to the
        previous one is standing on the fixpoint, and its checkpoints are the
        ones the warm run reproduces exactly. */
-    uint64_t previous_aux = 0U;
-    bool have_previous = false;
+    /* The .aux a previous run left counts as the reading before the first
+       pass: a pass that reads it and writes it back unchanged is standing on
+       the fixpoint already, and a warm run of a settled document is one
+       pass, not a pass and a pass to confirm it. Measured on testmath
+       through the driver: 297 ms for two passes where one is 150. */
+    uint64_t previous_aux = 0xcbf29ce484222325ULL;
+    bool have_previous = parallel_hash_file(aux_path, &previous_aux) == 0;
     int pages = 0, status = 0;
     for (int pass = 0; pass < HSTEX_PARALLEL_MAX_PASSES; ++pass) {
         parallel_clear_cache(cache_dir);
