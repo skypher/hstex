@@ -1690,10 +1690,17 @@ static int test_output_file_keeps_finder(void)
             }
         }
     }
+    /* A file the run wrote is found on disk, and the tool -- where one was
+       started at all; a name the search path settles starts none -- is the
+       same one afterwards, its generation current. */
+    bool finder_settled =
+        finder_child <= 0
+            ? engine.finder.child <= 0
+            : (engine.finder.child == finder_child &&
+               engine.finder.generation == engine.external_file_generation);
     if (result != HSTEX_ENGINE_EOF || output_count != sizeof(output) ||
-        memcmp(output, "MT", sizeof(output)) != 0 || finder_child <= 0 ||
-        engine.finder.child != finder_child || engine.file_generation == 0U ||
-        engine.finder.generation != engine.external_file_generation) {
+        memcmp(output, "MT", sizeof(output)) != 0 ||
+        engine.file_generation == 0U || !finder_settled) {
         status = 1;
     }
     if (status != 0) {

@@ -401,8 +401,6 @@ static int run_document_from_format(const char *format_file,
     /* A chunk this run parks starts from a checkpoint, and takes the
        filename database from the format by this name. */
     (void)setenv("HSTEX_FORMAT_FILE", format_file, 1);
-    /* The finder's start overlaps the format or preamble being read. */
-    hstex_engine_prestart_finder(&engine);
     bool resumed = false;
     const char *preamble = getenv("HSTEX_PREAMBLE_CKPT");
     if (preamble != NULL && preamble[0] != '\0' &&
@@ -517,7 +515,6 @@ static int resume_checkpoint_document(const char *checkpoint_file,
         (void)fprintf(stderr, "hstex: %s\n", error);
         return 1;
     }
-    hstex_engine_prestart_finder(&engine);
     const char *format_file = getenv("HSTEX_FORMAT_FILE");
     if (format_file != NULL && format_file[0] != '\0') {
         (void)hstex_engine_adopt_format_files(&engine, format_file);

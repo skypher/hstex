@@ -2688,7 +2688,7 @@ void hstex_engine_destroy(struct hstex_engine *engine);
    cannot read then lies under a key that build never looks in, and is
    rebuilt rather than offered and refused. See docs/DECISIONS.md,
    a-cached-format-a-build-cannot-read. */
-#define HSTEX_FORMAT_MAGIC "HSTEX format 8\n"
+#define HSTEX_FORMAT_MAGIC "HSTEX format 9\n"
 /* THE ADDRESS A FORMAT IS WRITTEN FOR. The pointers in its definition
    records are written as if the stream began here, and a run maps the file
    here when the address is free -- which on a 47-bit address space it
@@ -2731,9 +2731,6 @@ static inline uint64_t hstex_format_identity(void)
    See docs/DECISIONS.md, the-format-a-run-starts-from. */
 int hstex_engine_write_format(struct hstex_engine *engine, const char *path,
                               char *error, size_t error_capacity);
-/* Start the file finder now rather than at its first question, so that its
-   start-up overlaps whatever is read next. */
-void hstex_engine_prestart_finder(struct hstex_engine *engine);
 /* Take the filename database a format carries without reading the rest of
    it, for a run that starts from a checkpoint instead. Advisory: a run that
    cannot builds the database as it always did. */

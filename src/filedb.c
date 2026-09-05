@@ -23,11 +23,13 @@
 
 #include "hstex/input.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <spawn.h>
@@ -55,6 +57,7 @@ enum {
     HSTEX_FILE_UNDER_AFM = 5U,
     HSTEX_FILE_UNDER_ENC = 6U,
     HSTEX_FILE_UNDER_MAP = 7U,
+    HSTEX_FILE_UNDER_PK = 8U,
 };
 
 /* A place is a directory under a tree's root, and each holds one kind of
@@ -390,7 +393,7 @@ static int load_tree(struct hstex_file_db *database, const char *tree)
 
 /* What the tool says a variable is worth. One child at the first question
    answers where the trees are; the questions after it cost none. */
-static char *ask_variable(const char *variable)
+static char *ask_tool(const char *option_a, const char *option_b)
 {
     int descriptors[2];
     /* Not inherited by any other child: see open_private_pipe in
@@ -414,16 +417,8 @@ static char *ask_variable(const char *variable)
         return NULL;
     }
     char program[] = "kpsewhich";
-    char *question = malloc(strlen(variable) + 13U);
-    if (question == NULL) {
-        (void)posix_spawn_file_actions_destroy(&actions);
-        (void)close(descriptors[0]);
-        (void)close(descriptors[1]);
-        return NULL;
-    }
-    memcpy(question, "--var-value=", 12U);
-    memcpy(question + 12U, variable, strlen(variable) + 1U);
-    char *const arguments[] = {program, question, NULL};
+    char *const arguments[] = {program, (char *)(uintptr_t)(const void *)option_a,
+                               (char *)(uintptr_t)(const void *)option_b, NULL};
     pid_t child = 0;
     int spawned =
         posix_spawn_file_actions_addclose(&actions, descriptors[0]) != 0 ||
@@ -433,7 +428,6 @@ static char *ask_variable(const char *variable)
             ? -1
             : posix_spawnp(&child, program, &actions, NULL, arguments, environ);
     (void)posix_spawn_file_actions_destroy(&actions);
-    free(question);
     (void)close(descriptors[1]);
     if (spawned != 0) {
         (void)close(descriptors[0]);
@@ -470,6 +464,19 @@ static char *ask_variable(const char *variable)
     }
     answer[held] = '\0';
     return held == 0U ? NULL : strdup(answer);
+}
+
+static char *ask_variable(const char *variable)
+{
+    char *question = malloc(strlen(variable) + 13U);
+    if (question == NULL) {
+        return NULL;
+    }
+    memcpy(question, "--var-value=", 12U);
+    memcpy(question + 12U, variable, strlen(variable) + 1U);
+    char *answer = ask_tool(question, NULL);
+    free(question);
+    return answer;
 }
 
 /* The variables that put a directory of the caller's in front of the
@@ -720,8 +727,55 @@ const char *hstex_file_db_lookup(const struct hstex_file_db *database,
    entries and the bytes, each beginning at a multiple of eight. Nothing in
    it is a pointer, so a run points the database at the bytes where the
    format lies and pays for the pages a lookup touches and no others. */
-#define HSTEX_FILE_DB_IMAGE_TAG UINT64_C(0x3162646c69663a58)
+#define HSTEX_FILE_DB_IMAGE_TAG UINT64_C(0x3262646c69663a58)
 #define HSTEX_FILE_DB_IMAGE_WORDS 8U
+
+/* THE SEARCH PATHS, ONE PER KIND, AS THE TOOL EXPANDS THEM. Asked of the
+   tool once, when a format is built, and carried in the format: colon-
+   separated elements, a `!!' on one that is answered from its list, `//'
+   on one whose directory is searched through. Indexed by the kind a name is
+   looked for under (HSTEX_FILE_UNDER_*); an empty or absent path leaves the
+   name to the tool as before. */
+enum { HSTEX_FILE_KIND_COUNT = 9 };
+static const char *const hstex_file_kind_names[HSTEX_FILE_KIND_COUNT] = {
+    NULL, "tex", "tfm", "vf", "type1 fonts", "afm", "enc files", "map", "pk",
+};
+static char *search_paths[HSTEX_FILE_KIND_COUNT];
+static bool search_paths_asked;
+
+static const char *search_path_for(uint32_t kind)
+{
+    if (kind == 0U || kind >= (uint32_t)HSTEX_FILE_KIND_COUNT) {
+        return NULL;
+    }
+    return search_paths[kind];
+}
+
+/* Asked of the tool, for a format being written. */
+static void ask_search_paths(void)
+{
+    if (search_paths_asked) {
+        return;
+    }
+    search_paths_asked = true;
+    for (uint32_t kind = 1U; kind < (uint32_t)HSTEX_FILE_KIND_COUNT; ++kind) {
+        if (search_paths[kind] != NULL) {
+            continue;
+        }
+        char option[64];
+        (void)snprintf(option, sizeof(option), "-show-path=%s",
+                       hstex_file_kind_names[kind]);
+        char *answer = ask_tool("-progname=pdflatex", option);
+        if (answer != NULL) {
+            size_t length = strlen(answer);
+            while (length != 0U && (answer[length - 1U] == '\n' ||
+                                    answer[length - 1U] == '\r')) {
+                answer[--length] = '\0';
+            }
+        }
+        search_paths[kind] = answer;
+    }
+}
 
 static size_t image_align(size_t at)
 {
@@ -738,7 +792,15 @@ uint8_t *hstex_file_db_image(const char *trees, uint64_t stamp,
     }
     size_t trees_length = strlen(trees) + 1U;
     size_t head = HSTEX_FILE_DB_IMAGE_WORDS * sizeof(uint64_t);
-    size_t at_slots = image_align(head + trees_length);
+    /* The search paths follow the trees: one string per kind, empty where
+       the tool would not say, each ended by a zero. */
+    ask_search_paths();
+    size_t paths_length = 0U;
+    for (uint32_t kind = 1U; kind < (uint32_t)HSTEX_FILE_KIND_COUNT; ++kind) {
+        paths_length += (search_paths[kind] != NULL ? strlen(search_paths[kind]) : 0U) + 1U;
+    }
+    size_t at_paths = head + trees_length;
+    size_t at_slots = image_align(at_paths + paths_length);
     size_t at_entries =
         image_align(at_slots + database->slot_capacity * sizeof(uint32_t));
     size_t at_bytes =
@@ -756,10 +818,20 @@ uint8_t *hstex_file_db_image(const char *trees, uint64_t stamp,
         (uint64_t)database->byte_count,
         stamp,
         (uint64_t)trees_length,
-        0U,
+        (uint64_t)paths_length,
     };
     memcpy(image, words, sizeof(words));
     memcpy(image + head, trees, trees_length);
+    {
+        size_t at = at_paths;
+        for (uint32_t kind = 1U; kind < (uint32_t)HSTEX_FILE_KIND_COUNT;
+             ++kind) {
+            const char *path = search_paths[kind] != NULL ? search_paths[kind] : "";
+            size_t piece = strlen(path) + 1U;
+            memcpy(image + at, path, piece);
+            at += piece;
+        }
+    }
     memcpy(image + at_slots, database->slots,
            database->slot_capacity * sizeof(uint32_t));
     memcpy(image + at_entries, database->entries,
@@ -791,11 +863,14 @@ bool hstex_file_db_adopt_image(const uint8_t *image, size_t length,
     size_t entry_count = (size_t)words[3];
     size_t byte_count = (size_t)words[4];
     size_t trees_length = (size_t)words[6];
+    size_t paths_length = (size_t)words[7];
     const char *trees = (const char *)image + head;
-    if (trees[trees_length - 1U] != '\0') {
+    if (trees[trees_length - 1U] != '\0' ||
+        paths_length > length - head - trees_length) {
         return false;
     }
-    size_t at_slots = image_align(head + trees_length);
+    size_t at_paths = head + trees_length;
+    size_t at_slots = image_align(at_paths + paths_length);
     size_t at_entries =
         image_align(at_slots + slot_capacity * sizeof(uint32_t));
     size_t at_bytes =
@@ -855,7 +930,300 @@ bool hstex_file_db_adopt_image(const uint8_t *image, size_t length,
     shared_trees = strdup(trees);
     free(offered_trees);
     offered_trees = NULL;
+    /* The search paths the image carries, where it carries them and they
+       are whole: one zero-ended string per kind. */
+    if (paths_length != 0U && base[at_paths + paths_length - 1U] == 0U) {
+        const char *at = (const char *)base + at_paths;
+        const char *end = at + paths_length;
+        for (uint32_t kind = 1U; kind < (uint32_t)HSTEX_FILE_KIND_COUNT && at < end;
+             ++kind) {
+            free(search_paths[kind]);
+            search_paths[kind] = at[0] != '\0' ? strdup(at) : NULL;
+            at += strlen(at) + 1U;
+        }
+        search_paths_asked = true;
+    }
     shared_usable = true;
     atomic_store_explicit(&shared_state, 2, memory_order_release);
     return true;
+}
+
+/* WALKING THE SEARCH PATH. What the tool does for a name, done here: the
+   name's kind from its suffix -- none known means `tex', for which the tool
+   tries the name with `.tex' appended first -- then each element of that
+   kind's path in order. `.' is the working directory. An element marked
+   `!!' is a tree with a list, and is answered from the database, which
+   holds every list: the name is held there, under that element's
+   directory, once, or more than once, or not at all. Any other element is a
+   directory searched on disk, through its subdirectories where the element
+   ends in `//', and a directory that is not there answers nothing. The
+   first element with the name wins; an element holding it more than once
+   is left to the tool, which knows which it means. Directories walked are
+   walked once for the process. */
+struct walked_directory {
+    char *root;
+    char **paths;
+    size_t count;
+};
+static struct walked_directory *walked;
+static size_t walked_count;
+
+static void walk_into(struct walked_directory *record, const char *directory,
+                      size_t depth)
+{
+    if (depth > 32U) {
+        return;
+    }
+    DIR *listing = opendir(directory);
+    if (listing == NULL) {
+        return;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(listing)) != NULL) {
+        if (entry->d_name[0] == '.' &&
+            (entry->d_name[1] == '\0' ||
+             (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+        size_t length = strlen(directory) + 1U + strlen(entry->d_name) + 1U;
+        char *path = malloc(length);
+        if (path == NULL) {
+            continue;
+        }
+        (void)snprintf(path, length, "%s/%s", directory, entry->d_name);
+        struct stat status;
+        if (stat(path, &status) != 0) {
+            free(path);
+            continue;
+        }
+        if (S_ISDIR(status.st_mode)) {
+            walk_into(record, path, depth + 1U);
+            free(path);
+            continue;
+        }
+        if (!S_ISREG(status.st_mode)) {
+            free(path);
+            continue;
+        }
+        char **grown = realloc(record->paths,
+                               (record->count + 1U) * sizeof(*record->paths));
+        if (grown == NULL) {
+            free(path);
+            continue;
+        }
+        record->paths = grown;
+        record->paths[record->count++] = path;
+    }
+    (void)closedir(listing);
+}
+
+static const struct walked_directory *walk_directory(const char *root)
+{
+    for (size_t index = 0U; index < walked_count; ++index) {
+        if (strcmp(walked[index].root, root) == 0) {
+            return &walked[index];
+        }
+    }
+    struct walked_directory *grown =
+        realloc(walked, (walked_count + 1U) * sizeof(*walked));
+    if (grown == NULL) {
+        return NULL;
+    }
+    walked = grown;
+    struct walked_directory *record = &walked[walked_count];
+    memset(record, 0, sizeof(*record));
+    record->root = strdup(root);
+    if (record->root == NULL) {
+        return NULL;
+    }
+    ++walked_count;
+    walk_into(record, root, 0U);
+    return record;
+}
+
+/* The kind the tool would take a name for, from its suffix: a bitmap font
+   ends in its resolution and `pk', and a suffix the tool does not know --
+   or none -- is looked for as `tex', with `.tex' tried first. */
+static uint32_t kind_of_name(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    if (dot != NULL) {
+        for (size_t index = 0U; hstex_file_kinds[index].suffix != NULL; ++index) {
+            if (strcmp(dot, hstex_file_kinds[index].suffix) == 0) {
+                return hstex_file_kinds[index].where;
+            }
+        }
+        const char *digits = dot + 1;
+        while (*digits >= '0' && *digits <= '9') {
+            ++digits;
+        }
+        if (digits > dot + 1 && strcmp(digits, "pk") == 0) {
+            return (uint32_t)HSTEX_FILE_UNDER_PK;
+        }
+    }
+    return (uint32_t)HSTEX_FILE_UNDER_TEX;
+}
+
+/* The entries holding `name' under `directory', by count, and the path of
+   the last one seen. */
+static size_t held_under(const struct hstex_file_db *database,
+                         const char *name, const char *directory,
+                         const char **path_out)
+{
+    size_t length = strlen(name);
+    size_t directory_length = strlen(directory);
+    uint64_t hash = name_hash((const uint8_t *)name, length);
+    size_t slot = (size_t)hash & (database->slot_capacity - 1U);
+    size_t held = 0U;
+    while (database->slots[slot] != 0U) {
+        const struct hstex_file_entry *entry =
+            &database->entries[database->slots[slot] - 1U];
+        if ((size_t)entry->name_length == length &&
+            memcmp(database->bytes + entry->name, name, length) == 0) {
+            const char *path = (const char *)(database->bytes + entry->path);
+            if (strncmp(path, directory, directory_length) == 0 &&
+                path[directory_length] == '/') {
+                ++held;
+                *path_out = path;
+            }
+        }
+        slot = (slot + 1U) & (database->slot_capacity - 1U);
+    }
+    return held;
+}
+
+/* `directory/name' into `into', or false where it does not fit. */
+static bool join_into(char *into, size_t capacity, const char *directory,
+                      const char *name)
+{
+    size_t directory_length = strlen(directory);
+    size_t name_length = strlen(name);
+    if (directory_length + 1U + name_length + 1U > capacity) {
+        return false;
+    }
+    memcpy(into, directory, directory_length);
+    into[directory_length] = '/';
+    memcpy(into + directory_length + 1U, name, name_length + 1U);
+    return true;
+}
+
+static bool is_regular_file(const char *path)
+{
+    struct stat status;
+    return stat(path, &status) == 0 && S_ISREG(status.st_mode) &&
+           access(path, R_OK) == 0;
+}
+
+const char *hstex_file_db_resolve(const struct hstex_file_db *database,
+                                  const char *name, bool *settled)
+{
+    static char found[4096];
+    *settled = false;
+    if (database == NULL || name == NULL || name[0] == '\0' ||
+        strchr(name, '/') != NULL) {
+        return NULL;
+    }
+    uint32_t kind = kind_of_name(name);
+    const char *path = search_path_for(kind);
+    if (path == NULL || path[0] == '\0') {
+        return hstex_file_db_lookup(database, name);
+    }
+    /* What the tool tries, in order: for a `tex' name without its suffix,
+       the name with `.tex' first. */
+    const char *variants[2];
+    size_t variant_count = 0U;
+    char with_suffix[4096];
+    size_t name_length = strlen(name);
+    if (kind == (uint32_t)HSTEX_FILE_UNDER_TEX &&
+        (name_length < 4U || strcmp(name + name_length - 4U, ".tex") != 0) &&
+        name_length + 5U <= sizeof(with_suffix)) {
+        (void)snprintf(with_suffix, sizeof(with_suffix), "%s.tex", name);
+        variants[variant_count++] = with_suffix;
+    }
+    variants[variant_count++] = name;
+    const char *at = path;
+    while (*at != '\0') {
+        const char *end = strchr(at, ':');
+        size_t length = end != NULL ? (size_t)(end - at) : strlen(at);
+        const char *element = at;
+        at = end != NULL ? end + 1 : at + length;
+        bool listed = length >= 2U && element[0] == '!' && element[1] == '!';
+        if (listed) {
+            element += 2;
+            length -= 2U;
+        }
+        bool recursive = length >= 2U && element[length - 2U] == '/' &&
+                         element[length - 1U] == '/';
+        while (length > 1U && element[length - 1U] == '/') {
+            --length;
+        }
+        if (length == 0U || length >= sizeof(found)) {
+            continue;
+        }
+        char directory[4096];
+        memcpy(directory, element, length);
+        directory[length] = '\0';
+        if (strcmp(directory, ".") == 0) {
+            for (size_t which = 0U; which < variant_count; ++which) {
+                if (strlen(variants[which]) < sizeof(found) &&
+                    is_regular_file(variants[which])) {
+                    memcpy(found, variants[which], strlen(variants[which]) + 1U);
+                    *settled = true;
+                    return found;
+                }
+            }
+            continue;
+        }
+        if (listed) {
+            for (size_t which = 0U; which < variant_count; ++which) {
+                const char *held = NULL;
+                size_t count = held_under(database, variants[which], directory, &held);
+                if (count == 1U) {
+                    if (!is_regular_file(held)) {
+                        continue; /* the list is older than the tree */
+                    }
+                    *settled = true;
+                    return held;
+                }
+                if (count > 1U) {
+                    return NULL; /* held twice there: the tool knows which */
+                }
+            }
+            continue;
+        }
+        struct stat status;
+        if (stat(directory, &status) != 0 || !S_ISDIR(status.st_mode)) {
+            continue;
+        }
+        if (!recursive) {
+            for (size_t which = 0U; which < variant_count; ++which) {
+                if (join_into(found, sizeof(found), directory, variants[which]) &&
+                    is_regular_file(found)) {
+                    *settled = true;
+                    return found;
+                }
+            }
+            continue;
+        }
+        const struct walked_directory *record = walk_directory(directory);
+        if (record == NULL) {
+            return NULL;
+        }
+        for (size_t which = 0U; which < variant_count; ++which) {
+            size_t variant_length = strlen(variants[which]);
+            for (size_t index = 0U; index < record->count; ++index) {
+                const char *candidate = record->paths[index];
+                size_t candidate_length = strlen(candidate);
+                if (candidate_length > variant_length &&
+                    candidate[candidate_length - variant_length - 1U] == '/' &&
+                    strcmp(candidate + candidate_length - variant_length,
+                           variants[which]) == 0) {
+                    *settled = true;
+                    return candidate;
+                }
+            }
+        }
+    }
+    *settled = true;
+    return NULL;
 }

@@ -594,16 +594,14 @@ This is a targeted result, not the full-corpus headline benchmark.
 Two changes to the one `kpsewhich` a run still starts, and one to how the
 driver finds the engine.
 
-ASKED EARLY. The finder was started at its first question, which on every
-document in the corpus comes after the format is read; an empty document
-opened its class file twelve milliseconds after asking for it, waiting on a
-tool that had just been started. The finder is now started before the format
-is read, so the tool's own start overlaps it, and the class file is opened a
-millisecond after the question. Every run of the corpus asks it something,
-so nothing is started that would not have been. This did not move the floor
-of an empty run by much -- the format's own cost is the larger part, and is
-taken up under the-format-a-run-starts-from -- but it takes the finder out
-of the critical path.
+ASKED EARLY, AND THEN NOT. The finder was for a while started before the
+format was read, so that the tool's start would overlap it. It did not:
+starting the finder reads the tool's answer to the marker name, which the
+tool gives only once it has read every `ls-R`, so the wait moved to the
+front of the run rather than out of it -- and onto plain runs, which never
+asked the tool anything and now paid ten milliseconds to start one. The
+early start is gone; what removed the wait is below, under
+the-search-path-walked-as-the-tool-walks-it.
 
 ASKED AS PDFLATEX. Every `kpsewhich` a run starts, the finder and the
 one-shot ones alike, and the driver's own, is now asked with
@@ -621,6 +619,45 @@ beside its own executable when there is one -- `/proc/self/exe` says where
 that is, and where there is no `/proc` the name it was run by does when
 that has a directory in it -- and names the variable when the engine it was
 given cannot be run.
+
+## The search path, walked as the tool walks it
+
+Every LaTeX run of the corpus started one `kpsewhich`, kept for the run and
+asked three things an empty document needs: `article.cls`, which the lists
+hold twice (`tex/latex/base` and `tex/latex-dev/base`), so the in-process
+lookup declined it; the `.aux`, which is in no list; and `cmr10.vf`, which
+is in none either. Each was a question the lookup could not settle, and the
+first cost the wait for the tool to read its lists -- ten milliseconds, a
+third of an empty run's floor, and every millisecond of the difference
+between the engine's own start and the tool's.
+
+What settles them is the tool's own rule, carried in the format. A format
+now carries, beside the filename database, the search path for each kind
+of file as the tool expands it for pdflatex -- `tex`, `tfm`, `vf`, Type 1,
+`afm`, `enc`, `map`, and bitmap `pk` -- asked of the tool once, when the
+format is built. A name's kind is what the tool would take it for from its
+suffix: a bitmap font ends in its resolution and `pk`; a suffix the tool
+does not know, or none, is `tex`, for which the tool tries the name with
+`.tex` appended before the name itself. The lookup then walks that kind's
+path in the tool's order: `.` is the working directory; an element marked
+`!!` is a tree with a list, and is answered from the database, which holds
+every list, filtered to the element's directory; any other element is a
+directory searched on disk, through its subdirectories where the element
+ends in `//`, and one that is not there answers nothing. The first element
+holding the name wins. An element holding it more than once is left to the
+tool, which knows which it means, and so is a run whose format carries no
+paths.
+
+So `article.cls` is settled by `tex/latex//` before `tex//` is reached;
+the `.aux` and `cmr10.vf` are settled as absent, every element of their
+paths having been walked; and `tcrm1000.600pk` is found where the tool
+finds it, under a tree without a list, by walking that tree once. Measured
+on the corpus through the driver: no document starts a tool at all. The
+empty-document floor is 14.8 ms, from 26.4 before this and 40.7 at the
+start of this work.
+
+`HSTEX_NO_FILE_DB=1`, and any of the tool's own search variables in the
+environment, still hand every name to the tool as before.
 
 ## What a format carries built, and what is read where it lies
 

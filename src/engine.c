@@ -6673,20 +6673,6 @@ static bool finder_start(struct hstex_engine *engine)
     return true;
 }
 
-/* Start the finder before it is asked anything. The tool's own start --
-   reading and hashing every ls-R, a quarter of a short run -- then overlaps
-   the format being read instead of following it; measured on an empty
-   document, the first question waited twelve milliseconds for a tool started
-   when it was asked. Every run of the corpus asks it something, so nothing
-   is started that would not have been. */
-void hstex_engine_prestart_finder(struct hstex_engine *engine)
-{
-    if (engine != NULL && engine->finder.questions == NULL &&
-        !engine->finder.broken) {
-        (void)finder_start(engine);
-    }
-}
-
 /* Where the tool says a file is, asked of the one that is already running.
    A question it cannot be asked -- an empty name, a name with a line end in
    it, the marker itself -- is put to a tool of its own. */
@@ -6784,8 +6770,12 @@ static char *resolve_file(struct hstex_engine *engine, const char *filename)
        Anything the run itself has written is looked for on disk before
        this is reached, and a name the lists cannot settle goes to the tool
        as it always did. See src/filedb.c. */
-    const char *listed = hstex_file_db_lookup(hstex_file_db_shared(), filename);
-    char *path = listed != NULL ? strdup(listed) : finder_ask(engine, filename);
+    bool settled = false;
+    const char *listed =
+        hstex_file_db_resolve(hstex_file_db_shared(), filename, &settled);
+    char *path = listed != NULL ? strdup(listed)
+                 : settled      ? NULL
+                                : finder_ask(engine, filename);
     if (entry != NULL) {
         free(entry->path);
         entry->path = path == NULL ? NULL : strdup(path);

@@ -7,8 +7,10 @@ format cache, while the installed distribution supplies `latex.ltx`, package
 inputs, fonts, metrics, encodings, and maps.
 
 The overlay never reads a pdfTeX `.fmt` file and never bundles TeX Live
-implementation material. It resolves inputs with `kpsewhich`, the same
-public lookup interface used by the engine.
+implementation material. It resolves inputs by the search paths `kpsewhich`
+reports when a format is built -- the installation's `ls-R` lists, and its
+other directories walked on disk -- and asks `kpsewhich` itself only where
+those cannot settle a name, so an ordinary run starts no tool at all.
 
 ## Install
 

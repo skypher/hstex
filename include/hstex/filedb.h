@@ -22,6 +22,16 @@ const struct hstex_file_db *hstex_file_db_shared(void);
 const char *hstex_file_db_lookup(const struct hstex_file_db *database,
                                  const char *name);
 
+/* Where a name is, walking the search path the tool would walk for the
+   name's kind: the working directory, then each element in order, a tree
+   with a list answered from the list and any other directory from disk.
+   `settled' says the answer is final -- found, or not to be found by that
+   path either -- and false says the tool must be asked: the path is not
+   known, or one element holds the name more than once. What is returned
+   points at memory the database keeps. */
+const char *hstex_file_db_resolve(const struct hstex_file_db *database,
+                                  const char *name, bool *settled);
+
 /* WHERE THE TREES ARE, WITHOUT A CHILD TO SAY SO. Learning the list costs a
    child process, and the list is a property of the installation rather than
    of a run: a format carries the one its build was given, and a run that is
